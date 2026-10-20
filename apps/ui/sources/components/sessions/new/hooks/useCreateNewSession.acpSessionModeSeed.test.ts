@@ -63,6 +63,8 @@ installNewSessionScreenModelCommonModuleMocks({
 type HarnessOptions = Readonly<{
   storageState?: Record<string, unknown>;
   promptTemplateBehavior?: 'insert' | 'insert_and_send';
+  /** The Home's prompt-library rows never answer (a saturated server); everything else responds. */
+  promptLibraryRowsNeverAnswer?: boolean;
 }>;
 let currentHarnessOptions: HarnessOptions | undefined;
 async function createHarness() {
@@ -100,6 +102,9 @@ async function createHarness() {
       const sessionRows = target.origin === 'https://server-b' ? temporaryDestinationSessions : createdSessions;
       const artifactResponse = artifactBoundary.handle(path, init);
       if (artifactResponse) return await artifactResponse;
+      if (currentHarnessOptions?.promptLibraryRowsNeverAnswer && path.startsWith('/v1/account/entity-rows/prompt-library')) {
+        return await new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true }));
+      }
       const promptLibraryResponse = await promptLibraryBoundary.handle(path, init);
       if (promptLibraryResponse) return promptLibraryResponse;
       if (path === '/v1/features' || path === '/v1/features/authenticated') {
@@ -473,6 +478,24 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     expect(getSessionComposerDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.composer.text.value)
       .toBe('reviewed prompt');
     await hook.unmount();
+  });
+
+  it('launches a prompt that cannot be an invocation without waiting for the prompt-library catalog', async () => {
+    const { useCreateNewSession, sessionSpawnNewRpcSpy } = await setupHarness({ promptLibraryRowsNeverAnswer: true });
+    let handleCreateSession: null | (() => Promise<void>) = null;
+    function Test() {
+      handleCreateSession = useCreateNewSession(buildCreateSessionHookParams({
+        promptStore: createNewSessionPromptStore('hello'),
+      }) as any).handleCreateSession as () => Promise<void>;
+      return React.createElement('View');
+    }
+    await renderScreen(React.createElement(Test));
+
+    await act(async () => { void handleCreateSession?.(); });
+
+    await vi.waitFor(() => expect(sessionSpawnNewRpcSpy, JSON.stringify(modalAlertSpy.mock.calls)).toHaveBeenCalledWith(
+      expect.objectContaining({ initialInput: { text: 'hello' } }),
+    ));
   });
 
   it('creates through the strict V2 Action with its existing attempt identity and initial input', async () => {

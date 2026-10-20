@@ -577,6 +577,11 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         inputMode,
     });
     const focusedOptionId = focus.focusedOptionId;
+    const highlightedOptionRef = React.useRef<SelectionListOption | undefined>(undefined);
+    highlightedOptionRef.current = focusedOptionId === null ? undefined : findOptionById(focusedOptionId);
+    React.useEffect(() => {
+        if (focus.hasExplicitRowFocus) highlightedOptionRef.current?.onHighlight?.();
+    }, [currentStep.id, focus.hasExplicitRowFocus, focusedOptionId]);
 
     // One highlighted row: the row under the pointer takes the roving focus, so the list never paints a
     // hover row beside a keyboard row. Only a real pointer movement does it: rows sliding under a resting

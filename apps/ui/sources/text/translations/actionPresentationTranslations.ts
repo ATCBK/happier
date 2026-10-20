@@ -586,7 +586,7 @@ const en = {
         connectedServices_accounts_revoke: "Revoke connected account",
         connectedServices_accounts_default_set: "Set connected-account default",
         connectedServices_accounts_purposeDefault_set: "Choose Agent sign-in default",
-        connectedServices_purposes_default_set: "Choose Resource connected-account default",
+        connectedServices_purposes_default_set: "Choose default connected account",
         connectedServices_pools_create: "Create connected-service pool",
         connectedServices_pools_patch: "Edit connected-service pool",
         connectedServices_pools_delete: "Delete connected-service pool",

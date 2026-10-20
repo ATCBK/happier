@@ -7,7 +7,6 @@ import type { AutomationRunPluginEventTriggerEvidenceV1 } from '@happier-dev/pro
 
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
@@ -673,16 +672,21 @@ function ThenRows(props: Readonly<{
                         <PromptAgentRows testID={props.testID} then={then} onChange={props.onChange}
                             machineId={props.machineId} serverId={props.serverId} directory={props.directory} />
                     ) : null}
-                    <FieldItem label={t('workflows.triggers.then.promptLabel')}>
-                        <FieldTextInput
-                            testID={`${props.testID}-prompt`}
-                            value={then.prompt}
-                            multiline
-                            placeholder={t('workflows.triggers.then.promptPlaceholder')}
-                            accessibilityLabel={t('workflows.triggers.then.promptLabel')}
-                            onChangeText={(prompt) => props.onChange({ ...then, prompt })}
-                        />
-                    </FieldItem>
+                    <Item
+                        title={t('workflows.triggers.then.promptLabel')}
+                        showChevron={false}
+                        accessoryLayout="stacked"
+                        rightElement={(
+                            <FieldTextInput
+                                testID={`${props.testID}-prompt`}
+                                value={then.prompt}
+                                multiline
+                                placeholder={t('workflows.triggers.then.promptPlaceholder')}
+                                accessibilityLabel={t('workflows.triggers.then.promptLabel')}
+                                onChangeText={(prompt) => props.onChange({ ...then, prompt })}
+                            />
+                        )}
+                    />
                 </>
             );
         case 'doAction':

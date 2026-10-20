@@ -13,12 +13,14 @@ import { createPluginReloadController, type PluginReloadController } from '@/plu
 import { createRequesterSessionRuntimeContextResolver, releaseUnretainedRequesterSessionRuntimeContext,
   resolveRequesterSessionBootstrapFromCustody } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
+import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import { createInstalledProjectAgentLaunchFixture } from './installedProjectAgentLaunchFixture';
 
 export async function createInstalledProjectAgentDaemonFixture(readControl: () => Parameters<typeof startDaemonControlServer>[0] | null, bundledAgentId?: string, unassociated = false,
   authoredPlugin?: Parameters<typeof createAuthoredAdmittedPluginRuntimeFixture>[0]['plugins'][number],
   controller?: PluginReloadController,
-  requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>) {
+  requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>
+    & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv'>) {
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
   const fixture = await createInstalledProjectAgentLaunchFixture({ accountActionCredentials });
@@ -72,7 +74,9 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     },
   });
   const daemon = await startDaemonSessionControlRuntime({ machineId: 'machine', serverId: 'session-home', serverBaseUrl: 'https://session-home.test',
+    resolveCurrentMachineExecutionOriginContext: requesterOptions?.resolveCurrentMachineExecutionOriginContext,
     externalActionAccountId: 'custodian', credentials: { token: 'custodian-token', encryption: null }, api: {} as never,
+    deviceLocalSecretStorage: await readOrCreateDeviceLocalSecretStorage({ path: join(f.directory, 'fixture-device-secret') }),
     pluginRuntimeController: plugin.controller, connectedServiceRuntimeRegistry,
     daemonSessionMutationCustody: { stageTranscriptMessage: async () => { throw new Error('No transcript mutation'); },
       stageTranscriptEvent: async () => ({ persisted: true, delivered: true }) },
@@ -86,7 +90,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
         [...pidToTrackedSession.values()].map(session => session.requesterSessionRuntimeContext));
     },
     connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: async () => {},
-    requestShutdown() {}, processEnv: { NODE_ENV: 'test' } });
+    requestShutdown() {}, processEnv: { NODE_ENV: 'test', ...requesterOptions?.processEnv } });
   onTestFinished(() => daemon.stopControlServer());
   createRequesterRuntime = async bootstrap => {
     requesterRecoveryStage = 'runtime';
@@ -113,7 +117,8 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     { sessionId, runner, retainedAgent, trackedSession: tracked, invocationContext: tracked.runnerAgentInvocationContext!,
       isCurrent: async () => true, signal }));
   const operationBase = (invocationId = 'cold-invocation') => ({ invocationId, requestId: `request-${++sequence}` });
-  return { ...fixture, signal, cwd, dispatch, operationBase, sessionId, retainedAgent, requester, runner, tracked, plugin, pidToTrackedSession,
+  return { ...fixture, signal, cwd, dispatch, operationBase, sessionId, retainedAgent, requester, runner, tracked, plugin, pidToTrackedSession, daemon,
+    resolveRequesterRuntime,
     readRequesterRecoveryStage: () => requesterRecoveryStage,
     async replaceRequesterRuntime() {
       await tracked.requesterSessionRuntimeContext?.dispose();

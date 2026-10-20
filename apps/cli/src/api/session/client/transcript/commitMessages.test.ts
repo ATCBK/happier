@@ -6,6 +6,7 @@ import { API_TOKEN_FULL_GRANT_V1, AccountApiTokensCreateActionOutputV1Schema } f
 import type { TranscriptRawAgentEventV1 } from '@happier-dev/protocol';
 import { commitRuntimeSessionEvent } from '@/agent/runtime/session/transcripts/publishRuntimeSessionEvent';
 import { prepareSessionEventMessageViaPort } from './sendMessages';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, type SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import type { RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import {
   prepareCommittedAgentMessageViaPort,
@@ -33,6 +34,21 @@ function createTranscriptSendPort(): SessionClientTranscriptSendPort {
 }
 
 describe('commitMessages', () => {
+  it('reuses a capability notice identity across runner retries while keeping distinct failures', () => {
+    const items: SessionCapabilityNoticeV1['items'] = [
+      { kind: 'mcp_server', itemId: 'mcp-1', name: 'Tracker', code: 'mcp_unavailable', detail: 'catalog_unavailable' },
+      { kind: 'skill', itemId: 'skill-1', name: 'Review', code: 'skills_unavailable', detail: 'content_unreadable' },
+    ];
+    const prepare = (noticeItems: SessionCapabilityNoticeV1['items']) => prepareSessionEventMessageViaPort(
+      createTranscriptSendPort(), { type: 'message', message: 'Capability preparation failed',
+        [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1, items: noticeItems } });
+    const first = prepare(items);
+    const retried = prepare([...items].reverse());
+    expect(retried.localId).toBe(first.localId);
+    expect(prepare([{ ...items[0], detail: 'permission_denied' }, items[1]]).localId).not.toBe(first.localId);
+    expect(prepareSessionEventMessageViaPort(createTranscriptSendPort(), { type: 'message', message: 'Ordinary event' }).localId)
+      .not.toBe(prepareSessionEventMessageViaPort(createTranscriptSendPort(), { type: 'message', message: 'Ordinary event' }).localId);
+  });
   it.each(['claude', 'codex'] as const)('projects correlated Action results before %s transcript normalization and sealing', async provider => {
     for (const tool of ['account_api_tokens_create', 'action_execute']) {
       const port = createTranscriptSendPort();

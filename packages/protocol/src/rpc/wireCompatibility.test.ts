@@ -144,6 +144,8 @@ describe('rpc wire compatibility', () => {
 
   it('classifies and parses session-write socket RPC authorization context', () => {
     expect(SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE).toBe('session.write');
+    expect(resolveSocketRpcSessionWriteAuthorizationMethod('machine-1:daemon.sessionRunner.restart.confirmedBackground'))
+      .toBe('daemon.sessionRunner.restart.confirmedBackground');
     expect(resolveSocketRpcSessionWriteAuthorizationMethod(
       RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART,
     )).toBe(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART);

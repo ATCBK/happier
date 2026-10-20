@@ -775,6 +775,10 @@ describe('Codex public Agent External Sessions contribution', () => {
       const activeServerDir = join(root, 'active-server');
       const contribution = createCodexExternalSessionsContribution({ env });
       const source = { kind: 'codexHome', home: 'user' } as const;
+      expect(await contribution.resolveSource({ source, ...invocation(), includeAccountingSource: false })).toEqual({
+        ok: true,
+        value: { source: { kind: 'codexHome', home: 'user', homePath: codexHome }, transcriptMediaReadRoots: [codexHome] },
+      });
       const resolvedSource = await contribution.resolveSource({ source, ...invocation() });
       expect(resolvedSource).toEqual({
         ok: true,
@@ -786,6 +790,7 @@ describe('Codex public Agent External Sessions contribution', () => {
             rootField: 'homePath',
             resourceKey: expect.stringMatching(/^codex:accounting:[A-Za-z0-9_-]{43}$/u),
             accountingSources: ['codex-native-accounting'],
+            discoveredFileCount: 2,
             changeObservation: 'watch_file_changes',
             watchFileChanges: {
               files: [firstFile, join(sessionsDir, `rollout-2026-07-23T09-00-00-${secondSessionId}.jsonl`)],

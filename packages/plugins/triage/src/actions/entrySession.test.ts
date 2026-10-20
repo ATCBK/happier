@@ -23,6 +23,8 @@ import {
     testkitLocator,
 } from '../corpus/testkit/observations.test-support.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
+import { SessionServerStartSpawnDraftV1Schema, SessionSpawnNewInputV2Schema } from '@happier-dev/plugin-sdk/sessions';
+import { projectTriageNewSessionDestinationV1 } from '../ui/header/newSessionDestination.js';
 import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
 import { startTriageEntrySession } from './entrySession.js';
 import {
@@ -342,10 +344,30 @@ describe('the Session-start Action a mounted header can actually press', () => {
         ] });
         const handler = registeredHandler(TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1);
         const entryRef = testkitEntryRef({ kindId: 'issue' });
+        const recipe = SessionServerStartSpawnDraftV1Schema.parse({
+            ...NEW_DESTINATION.spawn,
+            directory: { kind: 'path', path: '/projects/example' },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            modelSelection: { v: 1, updatedAt: 12, ref: {
+                agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6.1-sol',
+            } },
+            agentModeId: 'default',
+            configuration: { mode: { value: 'default', updatedAtMs: 12 }, model: { value: 'gpt-6.1-sol', updatedAtMs: 12 },
+                permissionIntent: { value: 'default', updatedAtMs: 12 }, options: { reasoning_effort: { value: 'low', updatedAtMs: 12 } } },
+            connectedServices: { v: 2, bindingsByServiceId: {
+                'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'connected-codex' },
+            } },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
+            allowedTools: [], unlistedTools: 'ask',
+            organizationPlacement: { folderId: null, tagIds: [] },
+        });
+        const projected = projectTriageNewSessionDestinationV1({
+            workspaceMode: 'repository', creationKey: NEW_DESTINATION.creationKey, settlement: recipe,
+        });
+        if (projected.status !== 'settled') throw new Error('Recipe was refused');
         const input = TriageStartEntrySessionInputV1Schema.parse({
             ...START_INPUT_BASE, entryRef, orchestrate: true, workspaceMode: 'repository',
-            destination: { ...NEW_DESTINATION,
-                materialization: { kind: 'selectedProject', directory: '/projects/example' } },
+            destination: projected.destination,
             delivery: { kind: 'send', text: 'Plan this issue before implementing it.',
                 idempotencyKey: 'orchestrate-delivery', attachments: [{ entryRef,
                     display: START_INPUT_BASE.display, sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID, title: 'Issue 17' }] },
@@ -356,6 +378,8 @@ describe('the Session-start Action a mounted header can actually press', () => {
         expect(result).toMatchObject({ type: 'opened', disposition: 'rejoined', delivery: 'accepted' });
         const spawns = invoker.callsFor('session.spawn_new');
         expect(spawns[1]?.input).toEqual(spawns[0]?.input);
+        expect(spawns[0]?.input).toMatchObject(recipe);
+        expect(SessionSpawnNewInputV2Schema.safeParse(spawns[0]?.input).success).toBe(true);
         expect(spawns[0]?.input).toMatchObject({ roleId: 'orchestrator', initialTriggers: [{
             target: { kind: 'workflow', ref: 'builtin:plan-with-a-panel' },
             inputs: { request: input.delivery?.text }, onComplete: { kind: 'originating_session' },

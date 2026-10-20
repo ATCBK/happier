@@ -49,6 +49,7 @@ import {
     resolveExternalUrlTargetFromInput,
     selectActiveBrowserView,
     selectBrowserToolbarModel,
+    selectBrowserViewDisplayHost,
 } from '@/sync/domains/browser/shell';
 import type { BrowserLaunchpadRow } from '@/sync/domains/browser/targets';
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
@@ -566,6 +567,7 @@ export function BrowserShell(props: Readonly<{
             density={controlMetrics.addressDensity}
             trailingAction={phone ? 'none' : 'copy'}
             formatWhileBlurred
+            displayHost={selectBrowserViewDisplayHost(activeView)}
             value={activeView?.pendingUrl ?? activeView?.currentUrl
                 ?? (firstUseConnecting ? streamedChrome?.firstUseTargetUrl : undefined) ?? ''}
             disabled={activeView ? !toolbar.canNavigate : !props.onNavigateInPlace}

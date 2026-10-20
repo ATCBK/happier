@@ -41,6 +41,7 @@ import { machinesRoutes } from '../routes/machines/machinesRoutes';
 import { featuresRoutes } from '../routes/features/featuresRoutes';
 import { registerAutomationV3Routes } from '../routes/automations/registerAutomationV3Routes';
 import { artifactsRoutes } from '../routes/artifacts/artifactsRoutes';
+import { registerStoredContentPublicShareRoutes } from '../routes/share/registerStoredContentPublicShareRoutes';
 import { createExternalActionDaemonDispatcher, resolveCurrentSessionMachineFromServer } from './externalActionDispatcher';
 import { buildRpcMethodRoom } from './rpc/rpcMethodRoom';
 import { machineUpdateHandler } from './machineUpdateHandler';
@@ -54,6 +55,11 @@ import { verifyExternalActionExecutionAuthorizationCurrent, createExternalAction
 import { createActionSettingsProvider } from '../../../../../cli/src/settings/actionsSettingsProvider';
 import { createCliApprovalsArtifactStore } from '../../../../../cli/src/session/actions/approvals/artifactStore';
 import { runWithServerHttpBaseUrl } from '../../../../../cli/src/api/client/serverHttpBaseUrl';
+import { createCliActionDeps } from '../../../../../cli/src/session/actions/createCliActionDeps';
+import { createMemoryDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 describe('original external Session Action currentness composition', () => {
     let harness: LightSqliteHarness;
@@ -69,13 +75,17 @@ describe('original external Session Action currentness composition', () => {
         { kind: 'terminal', accountMode: 'e2ee', sessionMode: 'plain', runConsent: 'waived' },
         { kind: 'account', accountMode: 'plain', sessionMode: 'plain', runConsent: 'waived' },
         { kind: 'terminal', accountMode: 'e2ee', sessionMode: 'e2ee', runConsent: 'waived', publisherGap: true },
-    ] as const)('sends through real daemon execution for $kind, $accountMode Account, $sessionMode Session, $runConsent Run consent, publisher gap $publisherGap', async scenario => {
+        { kind: 'account', accountMode: 'plain', sessionMode: 'plain', runConsent: 'waived', memoryExposure: true },
+        { kind: 'account', accountMode: 'e2ee', sessionMode: 'e2ee', runConsent: 'waived', memoryExposure: true },
+    ] as const)('sends through real daemon execution for $kind, $accountMode Account, $sessionMode Session, $runConsent Run consent, publisher gap $publisherGap, memory exposure $memoryExposure', async scenario => {
         const { kind, accountMode, sessionMode, runConsent } = scenario;
         const publisherGap = 'publisherGap' in scenario && scenario.publisherGap;
+        const memoryExposure = 'memoryExposure' in scenario && scenario.memoryExposure;
         const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(17) };
         const contentKey = nacl.box.keyPair.fromSecretKey(material.machineKey).publicKey;
         const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(
-            accountMode === 'plain' ? 23 : kind === 'terminal' ? 22 : runConsent === 'ask' ? 20 : 18));
+            memoryExposure ? accountMode === 'plain' ? 27 : 28
+                : accountMode === 'plain' ? 23 : kind === 'terminal' ? 22 : runConsent === 'ask' ? 20 : 18));
         const account = await db.account.create({ data: {
             encryptionMode: accountMode, publicKey: Buffer.from(signing.publicKey).toString('hex'),
             contentPublicKey: contentKey, contentPublicKeySig: signAccountContentKeyBindingV1({
@@ -132,7 +142,8 @@ describe('original external Session Action currentness composition', () => {
             return payload;
         });
         app.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
-            if (request.url.startsWith('/v1/account/encryption/currentness') || request.url.startsWith('/v2/sessions/')) {
+            if (request.url.startsWith('/v1/account/encryption/currentness') || request.url.startsWith('/v2/sessions/')
+                || request.url.startsWith('/v1/artifacts/') || request.url.startsWith('/v1/public-shares?')) {
                 httpReads.push({ path: request.url, status: reply.statusCode,
                     signed: typeof request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] === 'string',
                     bearer: request.headers.authorization !== undefined });
@@ -151,6 +162,7 @@ describe('original external Session Action currentness composition', () => {
         featuresRoutes(app);
         registerAutomationV3Routes(app);
         artifactsRoutes(app);
+        registerStoredContentPublicShareRoutes(app);
         const io = new Server(app.server, { path: '/v1/updates', transports: ['websocket'] });
         const presence = createSessionPublisherPresence();
         let receivingSocket: import('socket.io').Socket | undefined;
@@ -289,6 +301,51 @@ describe('original external Session Action currentness composition', () => {
             daemon.connect(); publisher.connect(); await connected; await ready;
             expect(await resolveCurrentSessionMachineFromServer({ io, presence, accountId: account.id, sessionId: session.id }))
                 .toBe(machineId);
+            if (memoryExposure) {
+                const created = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createMemoryDocInLibrary({
+                    store: approverStore.promptLibraryStore, randomId: randomUUID, sourceSessionRef: null,
+                    request: { title: 'Private proposal memory', text: 'Retained seed' },
+                }));
+                const actionId = 'approval.request.create';
+                const origin = { v: 1 as const, caller: { kind: 'session' as const, sessionId: session.id, starterDepth: 0, turnDepth: 0 },
+                    sourceTurnId: 'memory-proposal-turn', callerPermissionMode: null, requestId: 'private-memory-proposal' };
+                const source = { machineId, installationId };
+                const proposalInput = { actionId: 'memory.remember',
+                        actionArgs: { ref: { kind: 'doc', artifactId: created.artifactId },
+                            expectedRevision: { headerVersion: 1, bodyVersion: 1 }, text: 'Proposed fact' },
+                        summary: 'Remember a fact', createdBy: { surface: 'agent' } };
+                const proposalTarget = { kind: 'machine' as const, machineId };
+                const proposal = accountMode === 'e2ee' ? sealExternalActionRequestV2({ material, randomBytes: nacl.randomBytes,
+                    binding: { serverIdentityId: homeId, accountId: account.id, actionId, requestId: origin.requestId,
+                        target: proposalTarget, authentication: { kind, tokenEpoch: account.tokenEpoch } }, input: proposalInput })
+                    : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId,
+                        target: proposalTarget, input: proposalInput });
+                const minted = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                    headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId, envelope: proposal,
+                        sessionActionOrigin: origin, sessionActionSource: source,
+                        installationProof: signMachineInstallationProof({ privateKey: installation.secretKey,
+                            payload: { version: 1, accountId: account.id, ...source, externalActionOrigin: {
+                                homeId, actionId, requestId: origin.requestId,
+                                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(proposal), origin } } }) } });
+                expect(minted.statusCode, minted.body).toBe(200);
+                const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+                const host = createCliActionDeps({ token: daemonToken, credentials, sessionId: session.id, mode: 'plain', ctx: null,
+                    serverId: 'qa8-profile', serverIdentityId: homeId, serverHttpBaseUrl,
+                    externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: installationId });
+                const before = httpReads.length;
+                const beforeArtifact = await db.artifact.findUniqueOrThrow({ where: { id: created.artifactId } });
+                expect(await host.memoryLibrary!.readExposure(created.artifactId, { surface: 'agent', authority: 'account_automation',
+                    serverId: homeId, externalActionExecutionAuthorization: authorization, externalActionTarget: authorization.binding.target }))
+                    .toMatchObject({ grants: { artifactId: created.artifactId, access: 'owner', grants: [] }, publicShares: { publicShares: [] } });
+                expect(httpReads.slice(before)).toEqual([
+                    { path: `/v1/artifacts/${created.artifactId}/access/grants`, status: 200, signed: true, bearer: false },
+                    { path: `/v1/public-shares?subjectKind=artifact&subjectId=${created.artifactId}`, status: 200, signed: true, bearer: false },
+                ]);
+                const afterArtifact = await db.artifact.findUniqueOrThrow({ where: { id: created.artifactId } });
+                expect({ header: afterArtifact.header, body: afterArtifact.body, headerVersion: afterArtifact.headerVersion, bodyVersion: afterArtifact.bodyVersion })
+                    .toEqual({ header: beforeArtifact.header, body: beforeArtifact.body, headerVersion: beforeArtifact.headerVersion, bodyVersion: beforeArtifact.bodyVersion });
+                return;
+            }
             if (publisherGap) {
                 expect((await presence.closePublisher({ socket: publisherSocket! })).status).toBe('closed');
                 publisher.disconnect();

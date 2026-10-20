@@ -136,6 +136,9 @@ export function createApiSessionClientFixture(options?: {
 
     return {
         keepAlive() {},
+        prepareForClose() {},
+        retireUndispatchedProviderInput() {},
+        markPendingProviderInputDispatched() {},
         async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
         },
@@ -210,6 +213,12 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             metadata = updater(metadata);
             events.emit('metadata-updated');
         },
+        hasOwnerMetadataAuthority: () => true,
+        async updateMetadataAsCurrentPublisher(updater: (current: Metadata) => Metadata) {
+            // This generic transport fixture uses the caller's metadata view;
+            // production enforces publisher currentness at the Home boundary.
+            fixture.updateMetadata(current => updater(current as Metadata) as TMetadata);
+        },
         updateAgentState(updater: (current: AgentState) => AgentState) {
             agentState = updater(agentState);
         },
@@ -255,6 +264,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         async refreshSessionSnapshotFromServerBestEffort() {},
         async disposeExecutionRuns() {},
         observeProviderInputSettlement() {},
+        markPendingProviderInputDispatched() {},
         confirmUserMessageLocallyConsumed() {},
         getMetadataSnapshot() {
             return metadata;
@@ -266,6 +276,8 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             closed = true;
             events.emit('local-closed');
         },
+        prepareForClose() {},
+        retireUndispatchedProviderInput() {},
         on(event: string, listener: (...args: unknown[]) => void) {
             return events.on(event, listener);
         },

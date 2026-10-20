@@ -195,7 +195,7 @@ Email omits this field. GitHub declares `{ maximum: 65536, unit:
 'unicodeCodePoints' }` for its native comment limit. Both use the same setup
 schema; absence does not authorize a caller to invent a default ceiling.
 
-The `setup` Action's input is contributor-defined; all other role inputs and
+The `setup` and optional `setupRemediation` Action inputs are contributor-defined; other role inputs and
 all role results use the final Channels role contract. Setup returns either
 that result or the bounded Channels `requiresRemediation` outcome. Setup input is
 transient and may collect provider-specific choices or one-time handoffs. It
@@ -206,6 +206,16 @@ request remains authoritative. The setup result must echo that exact reference
 (or `null` for a credentialless provider); Channels compares it before testing
 or persistence. Setup input must never claim host identity, machine identity,
 execution origin, or carry long-lived credential material.
+
+In 0.3 development source, UI, CLI, Agent and MCP callers request a setup repair
+through Channels' `connection/setup-remediate-v1` Action. Its closed input carries
+the current `providerSelection`, opaque `providerRemediationInput`, and outer
+`credentialRef`. Channels resolves that selection's current `setupRemediation`
+role and invokes the same provider handler with the exact selected account.
+The UI passes the remediation form's fresh selection carrier through this intent;
+it then re-runs prepare after a confirmed repair. Off, Ask and Allowed remain
+the user's per-Action policy. An unknown repair outcome requires a safe prepare
+recheck before another mutation.
 
 When `supportedTransports` includes `durablePush`, the setup result must carry
 exactly one same-provider `webhookContributionRef`. That reference is
@@ -320,7 +330,7 @@ without promising cross-machine file delivery or storing bytes in Collections.
 | Role | Cardinality | Input | Result | Action facts |
 | --- | --- | --- | --- | --- |
 | `setup` | required | contributor-defined | Channels setup result/remediation | `surface: plugin`, `danger: safe` |
-| `setupRemediation` | optional; usable only after `setup` returns `requiresRemediation` | contributor-defined | Channels remediation effect evidence | `surface: plugin`, `danger: writesRemote`, host confirmation required |
+| `setupRemediation` | optional; setup repair after `setup` returns `requiresRemediation` | contributor-defined | Channels remediation effect evidence | `surfaces: plugin, ui`, `danger: writesRemote`, approval follows Action policy |
 | `connectionTest` | required | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `endpointResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `principalResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
@@ -338,8 +348,9 @@ delivery and calls the Channels observation-ingest Action.
 
 The setup Action's ordinary static metadata is the setup presentation: title,
 description, icon/brand projection, and transient Action input hints. The
-optional `setupRemediation` Action owns the equivalent remediation presentation
-and its required host-rendered confirmation. Channels does not add a provider
+optional `setupRemediation` Action owns the equivalent remediation form presentation
+and consequence copy. Channels' public repair intent and the provider Action use
+the shared approval policy. Channels does not add a provider
 descriptor, picker registry, setup-specific metadata bag, or Action search. A
 provider that needs a second independently selectable offering needs a
 separately approved protocol/cardinality amendment.

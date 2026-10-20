@@ -10,11 +10,11 @@ import { DocEditProposalDispositionV1Schema, type DocEditProposalDispositionV1 }
 import { DiscussionMessageRefV1Schema, type DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import { resolveDiscussionContextInTx } from '@/app/discussions/access';
-import { readDocEditProposalInTx, setDocEditProposalDispositionInTx, type StoredDocEditProposal } from '@/app/discussions/docEditProposals';
+import { acquireDiscussionMutationAccountsInTx, resolveDiscussionAudienceInTx, resolveDiscussionContextInTx } from '@/app/discussions/access';
+import { discoverDocEditProposalSourceInTx, readDocEditProposalInTx, setDocEditProposalDispositionInTx, type StoredDocEditProposal } from '@/app/discussions/docEditProposals';
 import type { DiscussionFailureCode } from '@/app/discussions/serviceTypes';
-import { inTx, type Tx } from '@/storage/inTx';
-import { projectPlainArtifactSharingResourceV1, readArtifactForCallerInTx, type ArtifactForCaller } from './artifactAccessService';
+import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
+import { acquireArtifactPublicationLocksInTx, projectPlainArtifactSharingResourceV1, readArtifactForCallerInTx, type ArtifactForCaller } from './artifactAccessService';
 import { updateArtifactTx, type UpdateArtifactResult } from './artifactWriteService';
 
 type SettledDisposition = Exclude<DocEditProposalDispositionV1, { state: 'open' }>;
@@ -137,8 +137,21 @@ export async function decideArtifactEditProposalInTx(tx: Tx, input: ArtifactEdit
     const denied = admitPresentPerson(input);
     if (denied) return denied;
     if (!DiscussionMessageRefV1Schema.safeParse(input.proposalRef).success) return { ok: false, error: 'doc_edit_proposal_invalid' };
+    const source = await discoverDocEditProposalSourceInTx(tx, input.proposalRef);
+    if (source) {
+        // The Artifact owner selects the strongest quota intent and admits the
+        // complete sorted union before either Artifact or proposal row locking.
+        await acquireArtifactPublicationLocksInTx(tx, source.ref.artifactId, [input.actorAccountId,
+            ...await resolveDiscussionAudienceInTx(tx, input.proposalRef.discussion.discussionId)]);
+    } else {
+        await acquireDiscussionMutationAccountsInTx(tx, { actorAccountId: input.actorAccountId,
+            discussionId: input.proposalRef.discussion.discussionId });
+    }
     const stored = await readDocEditProposalInTx(tx, input);
     if (!stored.ok) return stored;
+    if (stored.value.source.ref.artifactId !== source?.ref.artifactId) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
     const doc = await admitArtifactEditProposalDecisionDocInTx(tx, { ...input,
         discussionId: input.proposalRef.discussion.discussionId }, stored.value.source);
     if (!doc.ok) return doc;

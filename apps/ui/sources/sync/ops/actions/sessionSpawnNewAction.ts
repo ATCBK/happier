@@ -332,7 +332,9 @@ export async function dispatchSessionSpawnNewToMachine(params: Readonly<{
                 transportScope: record?.scope === 'active' || record?.scope === 'scoped' ? record.scope : 'unknown',
             },
         });
-        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error)) {
+        // A scoped-rpc socket recycled after the emit clears the acknowledgement with
+        // RPC_OUTCOME_UNKNOWN: like a timeout, the daemon may already be creating the Session.
+        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error) || code === RPC_ERROR_CODES.OUTCOME_UNKNOWN) {
             return issued
                 ? { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' }
                 : { type: 'error', code: 'spawn_failed', retryable: true };

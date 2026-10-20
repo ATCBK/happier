@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJiti } from 'jiti';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
 import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
@@ -119,7 +120,6 @@ import { createMutableApiSessionClientFixture } from '@/testkit/backends/session
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { runTerminalRemoteSessionModeLoop } from '@/agent/runtime/session/loop/runTerminalRemoteSessionModeLoop';
 import { bindProcessLogger, Logger, logger } from '@/ui/logger';
-import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createRuntimeOverrideSynchronizers, createRuntimeOverrideTarget } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -6148,6 +6148,60 @@ describe('native Agent session host adapter', () => {
         await created.operations.resetOrDisposeRuntime();
     });
 
+    it.each([
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false },
+        { mode: 'custom', modes: [{ id: 'custom', name: 'Custom' }], currentModeId: 'build', accepted: true },
+        { mode: 'custom', modes: null, currentModeId: null, accepted: true },
+        { mode: 'custom', modes: [], currentModeId: 'custom', accepted: true },
+    ])('admits external native mode $mode against its observed inventory ($accepted)', async ({ mode, modes, currentModeId, accepted }) => {
+        const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+        const dispose = vi.fn();
+        const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(async () => ({
+            status: 'applied', changed: ['mode'],
+        }));
+        const open: AgentSessionRuntimeFactory['open'] = async (_request, context) => {
+            // Native inventory is produced at the external plugin boundary and consumed through the real host binding.
+            context.session.services.modes.bind({
+                read: () => ({ modes, currentModeId }),
+                subscribe: () => ({ dispose() {} }),
+            });
+            return { send, updateConfiguration, watch: () => ({ dispose() {} }), dispose };
+        };
+        const agentId = 'acme-native-mode-admission';
+        const contributions = createExternalContributionFixtures(agentId);
+        const plan = await createNativeAgentRuntimeSessionPlan({
+            runtime: { sessions: { open } }, lease: createLease(agentId),
+            backend: contributions.backend, agent: contributions.agent,
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true },
+            createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/repo',
+                backendTarget: { kind: 'backend', backendId: agentId }, sessionModeId: mode }),
+        });
+        if (!plan.config.createSessionRuntime) throw new Error('Expected native Session factory');
+        const admission = plan.config.createSessionRuntime({ directory: '/repo', metadata: {},
+            machineId: 'machine-1', session: createNativeSessionClientTestPort('native-mode-admission'),
+            transcriptSession: {}, messageBuffer: {}, mcpServers: {}, permissionHandler: {},
+            getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
+        } as never);
+        if (!accepted) {
+            await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+            await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
+            expect(send).not.toHaveBeenCalled();
+            expect(dispose).toHaveBeenCalledOnce();
+            return;
+        }
+        const created = await admission;
+        try {
+            await created.operations.sendTurnPrompt('continue', { localId: 'native-mode-input' });
+            expect(send).toHaveBeenCalledOnce();
+            if (modes !== null && modes.length > 0) {
+                await expect(created.operations.updateSessionRuntimeConfig({ modeId: 'missing' }))
+                    .resolves.toMatchObject({ status: 'failed', reason: 'native_agent_session_mode_unavailable' });
+                expect(updateConfiguration).not.toHaveBeenCalled();
+            }
+        } finally { await created.operations.resetOrDisposeRuntime(); }
+    });
+
     it('delegates the host compact command once to the native session with stripped instructions', async () => {
         const compact = vi.fn<NonNullable<AgentSessionRuntime['compact']>>(async () => ({ status: 'admitted' }));
         const session: AgentSessionRuntime = {
@@ -9944,6 +9998,40 @@ describe('native Agent session host adapter', () => {
         expect(disposeRuntimeScope).toHaveBeenCalledOnce();
     });
 
+    it('preserves native send refusal codes without logging private diagnostic content', async () => {
+        // The native Session is the external plugin boundary; the host admission path stays real.
+        const session: AgentSessionRuntime = {
+            send: async () => ({
+                status: 'unavailable',
+                retryable: false,
+                diagnostic: {
+                    code: 'external_input_custody_unknown', severity: 'error',
+                    message: 'private provider response', details: { privateValue: 'private native detail' },
+                },
+            }),
+            watch: () => ({ dispose() {} }),
+            dispose() {},
+        };
+        const fileLog = vi.spyOn(logger, 'infoFile');
+        const runtime = createNativeAgentSessionOperations(session, 'session-send-refusal');
+        try {
+            await expect(runtime.sendTurnPrompt('private prompt', {
+                localId: 'input-send-refusal', turnId: 'turn-send-refusal',
+            })).rejects.toThrow("status 'unavailable'");
+            const returns = fileLog.mock.calls.filter(([name, facts]) => name === '[NativeAgentSession] Turn phase'
+                && (facts as { phase?: string }).phase === 'send_returned');
+            expect(returns).toEqual([[expect.any(String), expect.objectContaining({
+                phase: 'send_returned', sessionId: 'session-send-refusal', turnId: 'turn-send-refusal',
+                localId: 'input-send-refusal', status: 'unavailable',
+                diagnosticCode: 'external_input_custody_unknown', retryable: false,
+            })]]);
+            expect(JSON.stringify(returns)).not.toContain('private');
+        } finally {
+            await runtime.resetOrDisposeRuntime('session_closed');
+            fileLog.mockRestore();
+        }
+    });
+
     it('times the first admitted foreground assistant text without counting reasoning or sidechains', async () => {
         // Native events are the external Agent boundary; admission/invariants remain real.
         const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
@@ -12926,6 +13014,27 @@ describe('native Agent session host adapter', () => {
             issue: { code: 'native_delivery_failed_after_effect', severity: 'error' },
             duplicateRisk: 'likely',
         }]);
+    });
+
+    it('keeps disposal before native dispatch distinct from an uncertain native send', async () => {
+        const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+        let admissionSignal: AbortSignal | undefined;
+        const runtime = createNativeAgentSessionOperations({ send, watch: () => ({ dispose() {} }), dispose: async () => {} },
+            'session-1', undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], undefined, undefined,
+            async (_witness, { signal }) => {
+                admissionSignal = signal;
+                return await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+            });
+        const outcomes: unknown[] = [];
+        runtime.setOnPromptDeliveryOutcome(outcome => outcomes.push(outcome));
+        const sending = runtime.sendTurnPrompt('initial marker', { localId: 'initial-input', turnId: 'initial-turn' });
+        const rejected = expect(sending).rejects.toThrow('retired before dispatch');
+        await vi.waitFor(() => expect(admissionSignal).toBeDefined());
+        await runtime.resetOrDisposeRuntime('host_shutdown');
+        await rejected;
+        expect(send).not.toHaveBeenCalled();
+        expect(outcomes).toEqual([expect.objectContaining({ type: 'input-rejected-before-provider', localId: 'initial-input',
+            reason: 'host_retired_before_dispatch', retryable: true, retireLocalCustodyAfterDurableBlock: true })]);
     });
 
     it('publishes unresolved input custody before waiting for native disposal', async () => {

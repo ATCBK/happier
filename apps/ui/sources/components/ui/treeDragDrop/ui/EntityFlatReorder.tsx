@@ -13,6 +13,7 @@ import { usePopoverScrollSourceRef } from '@/components/ui/popover/PopoverScroll
 import { t } from '@/text';
 import { isHoverCapablePrimaryPointer } from '@/utils/platform/webMobileHeuristics';
 import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '../entityDragGestureAdapter';
+import { ENTITY_DROP_UNCHANGED_CODES } from '../entityDropNoChange';
 import { useEntityDragDestinations, useEntityDragDropRuntime, useEntityDragDropSnapshot, useEntityDragSource, useEntityDragSourceState, useEntityDropTarget } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime, EntityDragCarry } from '../entityDragDropTypes';
 import { useTreeDropRegistry } from '../registry/useTreeDropRegistry';
@@ -86,7 +87,7 @@ async function executeEntityReorderAction(effect: EntityDropEffectV1,
 }
 
 export function entityReorderRefused(code: string): EntityDropAdmissionV1 {
-    return { status: 'refused', reason: { code, message: t(code === 'same-position' ? 'entityDragDrop.reasons.noChange' : 'entityDragDrop.reasons.gone') } };
+    return { status: 'refused', reason: { code, message: t(ENTITY_DROP_UNCHANGED_CODES.has(code) ? 'entityDragDrop.reasons.noChange' : 'entityDragDrop.reasons.gone') } };
 }
 
 export function entityReorderPreview(position: AnchoredListPositionV1, items: EntityFlatReorderBinding['items']): import('@happier-dev/protocol/plugins/ui').EntityDropPreviewV1 {
@@ -110,7 +111,7 @@ type FlatContext = Readonly<{
     landedItemId: string | null;
 }>;
 const FlatContext = React.createContext<FlatContext | null>(null);
-type LandedMove = Readonly<{ itemId: string; position: AnchoredListPositionV1; order: readonly string[] }>;
+type LandedMove = Readonly<{ itemId: string; position: AnchoredListPositionV1; order: readonly string[]; index: number }>;
 
 function projectMove(binding: EntityFlatReorderBinding, itemId: string, position: AnchoredListPositionV1) {
     return binding.projectMove ? binding.projectMove(itemId, position)
@@ -147,6 +148,7 @@ export function EntityFlatReorderList(props: Readonly<{
     const viewportHeight = useSharedValue(0);
     const scrollOffsetY = useSharedValue(0);
     const contentHeight = useSharedValue(0);
+    const viewportBounds = React.useRef<WindowBounds | null>(null);
     const registry = useTreeDropRegistry(runtime.refresh);
     const [organizing, setOrganizing] = React.useState(props.initialOrganizing === true);
     const inheritedScroll = usePopoverScrollSourceRef();
@@ -158,7 +160,7 @@ export function EntityFlatReorderList(props: Readonly<{
         const scroll = scrollRef?.current;
         const dom = webScrollNode(scroll);
         const viewport = await measureWindowBounds(dom ?? scroll ?? null);
-        if (viewport) { viewportTopY.value = viewport.y; viewportHeight.value = viewport.height; }
+        if (viewport) { viewportBounds.current = viewport; viewportTopY.value = viewport.y; viewportHeight.value = viewport.height; }
         if (typeof dom?.scrollTop === 'number') scrollOffsetY.value = dom.scrollTop;
         else if (latest.current.scrollMetrics) scrollOffsetY.value = latest.current.scrollMetrics.offsetY.value;
         else if (typeof latest.current.scrollOffsetY === 'number') scrollOffsetY.value = latest.current.scrollOffsetY;
@@ -185,16 +187,31 @@ export function EntityFlatReorderList(props: Readonly<{
     }, [measure, scrollRef]);
     useTreeDropAutoscroll({ isActive, pointerY, viewportTopY, viewportHeight, scrollOffsetY, contentHeight, scrollToOffset });
     React.useEffect(() => {
+        // An admitted place in this list engages the edge zones. They stay engaged over the scroller's own trailing
+        // space (padding, a row after the list, a header), which is no drop place, until the carry ends, leaves the
+        // viewport, or lands on another list's place or one this list refuses.
+        let engaged = false;
         const update = () => {
             const snapshot = runtime.getSnapshot();
-            isActive.value = snapshot.phase === 'carrying' && snapshot.admission?.status === 'allowed'
+            const inList = snapshot.targetId !== null
                 && latest.current.binding.items.some(item => rowTargetId({ id }, item.id) === snapshot.targetId);
-            // Only the selected target's runtime callback supplies pointer coordinates.
+            if (snapshot.phase !== 'carrying') engaged = false;
+            else if (inList) engaged = snapshot.admission?.status === 'allowed';
+            else if (snapshot.targetId !== null) engaged = false;
+            const pointer = runtime.getPointer();
+            const viewport = viewportBounds.current;
+            const inTrailingSpace = engaged && !inList && pointer !== null && viewport !== null
+                && pointer.x >= viewport.x && pointer.x <= viewport.x + viewport.width
+                && pointer.y >= viewport.y && pointer.y <= viewport.y + viewport.height;
+            isActive.value = engaged && (inList || inTrailingSpace);
+            // A selected place's runtime callback supplies the pointer; only trailing space reads it directly.
             if (!isActive.value) pointerY.value = null;
+            else if (inTrailingSpace) pointerY.value = pointer.y;
         };
         update();
         const semantic = runtime.subscribe(update);
-        return () => { semantic(); isActive.value = false; pointerY.value = null; };
+        const frames = runtime.subscribePointer(update);
+        return () => { semantic(); frames(); isActive.value = false; pointerY.value = null; };
     }, [runtime, id, isActive, pointerY]);
     React.useEffect(() => {
         if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -322,10 +339,16 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             const admission = latest.current.binding.resolve(source, position);
             if (admission.status === 'allowed') {
                 const order = projectMove(latest.current.binding, source, position);
-                if (order) latest.current.admittedMoves.set(admission.effect, { itemId: source, position, order });
+                if (order) latest.current.admittedMoves.set(admission.effect, { itemId: source, position, order, index: order.indexOf(source) });
             }
             return admission;
-        }, execute: effect => latest.current.binding.execute(effect), autoscroll: context.autoscroll });
+        },
+        getDestinationKey: (_context, admission) => {
+            const move = latest.current.admittedMoves.get(admission.effect);
+            // Two neighboring row edges can describe the same resulting gap.
+            return move ? JSON.stringify([context.id, move.index]) : null;
+        },
+        execute: effect => latest.current.binding.execute(effect), autoscroll: context.autoscroll });
     React.useEffect(() => () => registry.unregisterRow(id), [registry, id]);
     const adapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
     const endStarted = React.useRef(false);

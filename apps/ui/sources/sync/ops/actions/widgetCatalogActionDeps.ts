@@ -165,7 +165,7 @@ export function createWidgetCatalogActionDepsV1(account: LazyActionAccountContex
             account.assertCurrent();
             return [...candidates, ...authored, ...placed].map(candidate => ({ definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
                 sizeDeclaration: candidate.sizeDeclaration,
-                fields: [...candidate.inputs?.fields ?? []], availability: candidate.sourceDefinition
+                fields: [...candidate.inputs?.fields ?? []], ...(candidate.inputSchema ? { inputSchema: candidate.inputSchema } : {}), availability: candidate.sourceDefinition
                     && !candidates.some(current => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(current), candidate.sourceDefinition!))
                     ? 'unavailable' as const : 'available' as const,
                 instanceCount: read.instances.filter(entry => isSameWidgetDefinitionV1(entry.instance.definition, widgetCandidateDefinitionV1(candidate))).length }));

@@ -10,6 +10,7 @@ import type {
     BrowserDiagnosticsReleaseObjectGroupResultV1,
 } from '@happier-dev/protocol';
 import type { BrowserAutomationControlService } from '@/sync/domains/browser/automation';
+import type { BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 
 export type BrowserDiagnosticsMessageRejectionReason =
     | 'collector_mismatch'
@@ -158,6 +159,12 @@ export type WebIframeEngineConfig = Readonly<{
     csp?: string;
     onLoad?: () => void;
     onError?: () => void;
+    /** A relay preview's documents report their own history and loading; no other framed page can. */
+    onNavigationStateChange?: (navigationState: BrowserFrameNavigationState) => void;
+    /** The relay proxy refused the preview's document; the frame shows that state in place of the page. */
+    onPreviewRefused?: (reasonCode: BrowserPreviewRefusalReasonCode) => void;
+    /** Closes the page from a terminal frame state (an ended preview). */
+    onClosePage?: () => void;
     /**
      * An opaque Artifact guest cannot expose its loaded URL to the host. Its
      * first load is the declared entry; every later load retires the frame.

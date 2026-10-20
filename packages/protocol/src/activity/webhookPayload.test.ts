@@ -99,6 +99,31 @@ describe('machine vitals Inbox notices', () => {
 });
 
 describe('buildActivityWebhookPayload', () => {
+  it('keeps Discussion Follow navigation bound to the exact committed C3 message reference', () => {
+    const original = { kind: 'discussion' as const, discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'message' };
+    const follow = { original, event: { kind: 'person_wrote' as const } };
+    const payload = buildActivityWebhookPayload({ channelId: 'hook', createdAt: 1, topic: 'follow_update',
+      content: { title: 'A person wrote in the discussion', body: '' }, follow });
+    expect(ActivityWebhookPayloadV1Schema.parse(payload)).toMatchObject({ follow, navigation: { message: original } });
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload,
+      navigation: { message: { ...original, messageId: 'another-message' } } }).success).toBe(false);
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload, navigation: { sessionId: 'unrelated-parent' } }).success).toBe(false);
+  });
+  it.each([
+    { source: { kind: 'execution_run' as const, sessionId: 'c111111111111111111111111', runId: 'execution' }, terminalEventId: 'terminal' },
+    { source: { kind: 'workflow_run' as const, runId: 'workflow' }, revision: 3 },
+  ])('preserves exact Run originals through webhook and private Inbox consumers', original => {
+    const follow = { original, event: { kind: 'failed_or_stopped' as const } };
+    const notice = { topic: 'follow_update' as const, follow };
+    const payload = buildActivityWebhookPayload({ channelId: 'run-hook', createdAt: 1, topic: notice.topic,
+      content: { title: 'Run failed or stopped', body: '' }, follow });
+    expect(ActivityWebhookPayloadV1Schema.parse(payload)).toMatchObject({ follow, navigation: { source: original.source } });
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload,
+      navigation: { source: { ...original.source, runId: 'another-run' } } }).success).toBe(false);
+    const content = { v: 1, source: { kind: 'host', topic: notice.topic }, type: 'update', resolved: false, notice };
+    const header = { ...content, kind: 'account_notice.v1', title: 'Run failed', status: 'open' };
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify(content) })).toEqual(header);
+  });
   it('carries one strict Follow original without private rules or forwarded human text', () => {
     const follow = { event: { kind: 'person_wrote' as const }, sourceMessage: { localId: 'human-original', seq: 3 } };
     const payload = buildActivityWebhookPayload({ channelId: 'follow-hook', createdAt: 1, topic: 'follow_update',

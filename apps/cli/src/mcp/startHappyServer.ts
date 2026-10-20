@@ -34,6 +34,7 @@ import { z } from 'zod/mini';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type { SessionClientServerBinding } from '@/api/session/client/transport/sessionClientTransport';
+import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import { DaemonPluginToolCatalogUnavailableError } from './pluginToolCatalogError';
 import { createSessionMcpToolInventory } from './server/sessionMcpToolInventory';
 import { SessionCapabilityNoticeV1Schema, SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
@@ -106,10 +107,7 @@ export type HappyMcpSessionClient = {
      * exact Session. A Session-scoped runtime (a Runner) has no Account
      * material, so this is what opens its own Board.
      */
-    getStoredContentEncryptionContext?(): Readonly<{
-        mode: 'plain' | 'e2ee';
-        ctx?: Readonly<{ encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey' }>;
-    }>;
+    getStoredContentEncryptionContext?: SessionClientPort['getStoredContentEncryptionContext'];
 };
 
 type HappySessionToolRuntimeOptions = Readonly<{

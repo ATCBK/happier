@@ -3,9 +3,10 @@ import {
     type ActionSurfaces,
     type ActionsSettingsV1,
 } from '@happier-dev/protocol';
-import { setActionAudiencePolicy } from '@happier-dev/protocol/actions';
+import { applyActionPolicyMutation } from '@happier-dev/protocol/actions/actionAudiencePolicy';
+import type { ActionPolicySetInput } from '@happier-dev/protocol/actions/actionPolicyActionFamily';
 
-import { getActionSettingsTargetPreferenceSelected, setActionTargetSelected } from './actionSettingsTargetSelection';
+import { getActionSettingsTargetPreferenceSelected } from './actionSettingsTargetSelection';
 import {
     getActionTargetApprovalOverride,
     getActionTargetApprovalPolicy,
@@ -142,7 +143,8 @@ export function resolveActionSettingsTargetControlState(
     };
 }
 
-export function applyActionSettingsTargetControlState(params: ApplyActionSettingsTargetControlStateParams): ActionsSettingsV1 {
+/** Translate the displayed target choice into one admitted semantic policy intent. */
+export function resolveActionSettingsTargetPolicyInput(params: ApplyActionSettingsTargetControlStateParams): ActionPolicySetInput {
     let value = params.value;
     if (value === 'ask_first' || value === 'allowed') {
         const inheritedSettings = setActionTargetApprovalRequired({ ...params, approvalRequired: null });
@@ -151,90 +153,20 @@ export function applyActionSettingsTargetControlState(params: ApplyActionSetting
         if ((value === 'ask_first') === inheritedPolicy.approvalRequiredByPolicy) value = 'default';
     }
     const target = resolveActionSettingsTargetDefinition(params);
-    if (target.kind === 'surface' && value !== 'on') {
+    if (target.kind === 'surface') {
+        if (value === 'on') return { actionId: params.actionId,
+            change: { kind: 'audience_enabled', audience: target.surface, enabled: true } };
         const mode = value === 'allowed' && !getActionTargetApprovalPolicy(params).approvalWaivable ? 'default' : value;
-        return setActionAudiencePolicy(params.settings, params.actionId, target.surface, mode);
+        return { actionId: params.actionId, audience: target.surface, mode };
     }
-    if (value === 'off') {
-        const next = setActionTargetSelected({
-            settings: params.settings,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            selected: false,
-        });
-        return setActionTargetApprovalRequired({
-            settings: next,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            approvalRequired: null,
-        });
+    if (target.placement === 'slash_command' && value !== 'on') {
+        return { actionId: params.actionId,
+            change: { kind: 'placement_policy', placement: target.placement, mode: value } };
     }
+    return { actionId: params.actionId,
+        change: { kind: 'placement', placement: target.placement, enabled: value !== 'off' } };
+}
 
-    if (value === 'ask_first') {
-        const selected = setActionTargetSelected({
-            settings: params.settings,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            selected: true,
-        });
-        if (isActionSettingsApprovalAction(params.actionId) || !resolveActionSettingsApprovalSurface(
-            params.actionId,
-            params.targetId,
-            params.target,
-        )) {
-            return selected;
-        }
-        return setActionTargetApprovalRequired({
-            settings: selected,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            approvalRequired: true,
-        });
-    }
-
-    if (value === 'default') {
-        const selected = setActionTargetSelected({
-            settings: params.settings,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            selected: true,
-        });
-        return setActionTargetApprovalRequired({
-            settings: selected,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            approvalRequired: null,
-        });
-    }
-
-    if (value === 'allowed') {
-        const selected = setActionTargetSelected({
-            settings: params.settings,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            selected: true,
-        });
-        return setActionTargetApprovalRequired({
-            settings: selected,
-            actionId: params.actionId,
-            targetId: params.targetId,
-            ...(params.target ? { target: params.target } : {}),
-            approvalRequired: false,
-        });
-    }
-
-    return setActionTargetSelected({
-        settings: params.settings,
-        actionId: params.actionId,
-        targetId: params.targetId,
-        ...(params.target ? { target: params.target } : {}),
-        selected: true,
-    });
+export function applyActionSettingsTargetControlState(params: ApplyActionSettingsTargetControlStateParams): ActionsSettingsV1 {
+    return applyActionPolicyMutation(params.settings, resolveActionSettingsTargetPolicyInput(params)).settings;
 }

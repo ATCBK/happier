@@ -1,7 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import type { Tx } from "@/storage/inTx";
 import { resolveStructuralSessionAccessForSessionsInTx, type EffectiveSessionAccess } from "./sessionAccess";
-import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
+import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx, resolveAccessTransitionProjectionSessionIdsInTx } from "./sessionAccessTransitionEffects";
+import { readSessionAccountCursorAudienceInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 export type SessionAccessMembershipChange =
     | Readonly<{ kind: "teamMembership" | "teamRole"; teamId: string }>
@@ -36,6 +37,29 @@ function buildAffectedSessionPredicates(
     });
 }
 
+async function readAffectedSessionIdsInTx(tx: Tx, input: Readonly<{
+    accountIds: readonly string[];
+    changes: readonly SessionAccessMembershipChange[];
+}>): Promise<string[]> {
+    const predicates = buildAffectedSessionPredicates(input.changes);
+    return predicates.length === 0 || input.accountIds.length === 0
+        ? []
+        : (await tx.session.findMany({ where: { OR: predicates }, select: { id: true } })).map(row => row.id);
+}
+
+/** Pure admission census before a Team writer takes actor or Team resource locks. */
+export async function readSessionAccessMembershipChangeAudienceInTx(tx: Tx, input: Readonly<{
+    accountIds: readonly string[];
+    changes: readonly SessionAccessMembershipChange[];
+    additionalAdmissionAccountIds?: readonly string[];
+}>): Promise<Readonly<{ sessionIds: readonly string[]; accountIds: readonly string[] }>> {
+    const affected = await readAffectedSessionIdsInTx(tx, input);
+    const projectionSessionIds = await resolveAccessTransitionProjectionSessionIdsInTx(tx, affected);
+    const audience = await readSessionAccountCursorAudienceInTx(tx, projectionSessionIds,
+        [...input.accountIds, ...(input.additionalAdmissionAccountIds ?? [])]);
+    return { sessionIds: audience.projectionSessionIds, accountIds: audience.accountIds };
+}
+
 /**
  * Capture before the native membership mutation destroys its old access facts.
  *
@@ -48,10 +72,7 @@ export async function captureSessionAccessMembershipImpactsInTx(tx: Tx, input: R
     changes: readonly SessionAccessMembershipChange[];
 }>): Promise<ReadonlyMap<string, SessionAccessMembershipImpact>> {
     const accountIds = [...new Set(input.accountIds)];
-    const predicates = buildAffectedSessionPredicates(input.changes);
-    const sessionIds = predicates.length === 0 || accountIds.length === 0
-        ? []
-        : (await tx.session.findMany({ where: { OR: predicates }, select: { id: true } })).map(row => row.id);
+    const sessionIds = await readAffectedSessionIdsInTx(tx, { ...input, accountIds });
     // Native Team/Group mutations may publish their Team projection inside
     // mutate, so acquire Session owners and readers before that first write.
     await acquireSessionAccessTransitionCursorLocksInTx(tx, sessionIds, accountIds);

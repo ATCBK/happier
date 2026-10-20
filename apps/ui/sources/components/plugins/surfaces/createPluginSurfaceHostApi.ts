@@ -224,7 +224,7 @@ export type CreatePluginSurfaceHostApiInput = Readonly<{
      */
     isMethodAvailable?: (method: PluginUiHostMethodV1) => boolean;
     /** Host-private context for an existing provenance-tagged unavailable result. */
-    resolveUnavailableMessage?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => string | undefined;
+    resolveUnavailableError?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => PluginUiHostApiErrorPayloadV1 | undefined;
     /** Positive host readiness observation; unrelated or settled refusals remain terminal. */
     isConnectionPending?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => boolean;
     /** Called once when the mount retires this host API. */
@@ -285,9 +285,9 @@ export function createPluginSurfaceHostApi(
         const error = readPluginSurfaceHostApiErrorPayload(result);
         if (error?.code !== 'unavailable') return result;
         const pending = input.isConnectionPending?.(error, request) === true;
-        const message = error.message ?? input.resolveUnavailableMessage?.(error, request);
-        return !pending && message === error.message ? result : createPluginSurfaceHostApiError(error.code,
-            pending ? [...error.diagnostics, 'plugin_surface_connection_pending'] : error.diagnostics, message);
+        const resolved = input.resolveUnavailableError?.(error, request) ?? error;
+        return !pending && resolved === error ? result : createPluginSurfaceHostApiError(resolved.code,
+            pending ? [...resolved.diagnostics, 'plugin_surface_connection_pending'] : resolved.diagnostics, resolved.message);
     };
     const resolveLiveInstalledMethods = (): readonly PluginUiHostMethodV1[] => {
         // A retired mount cannot serve even its locally synthesized context.
@@ -350,7 +350,7 @@ export function createPluginSurfaceHostApi(
             const invoke = handler ?? input.fallback;
             if (invoke) {
                 const result = invoke(request, options);
-                if (!input.resolveUnavailableMessage && !input.isConnectionPending) return result;
+                if (!input.resolveUnavailableError && !input.isConnectionPending) return result;
                 return result instanceof Promise
                     ? result.then(value => enrichUnavailable(value, request))
                     : enrichUnavailable(result, request);

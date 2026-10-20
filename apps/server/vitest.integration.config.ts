@@ -34,6 +34,7 @@ export default defineConfig({
       'sources/app/api/routes/connect/qualifiedConnectedAccounts/usagePageProjection.composed.integration.spec.ts',
       'sources/app/session/sessionSharedActionConfirmation.sqlite.composed.integration.spec.ts',
       'sources/app/automations/automationCrudService.composed.integration.spec.ts',
+      'sources/app/workflows/workflowRunAttention.composed.integration.spec.ts',
       'sources/app/discussions/discussionExternalComposer.sqlite.composed.integration.spec.ts',
       ...(process.env.HAPPIER_IROH_REQUIRE_NODE_ADDON === '1' ? [] : [homeIrohRealIntegrationTest]),
     ],

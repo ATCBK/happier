@@ -23,7 +23,16 @@ describe('agent install failure presentation', () => {
             title: 'agentInstallJob.machineUnreachable', body: 'agentInstallJob.unreachableBody',
         });
         expect(presentAgentInstallJobRpcFailure(new AgentInstallJobRpcError('invalid_response'))).toMatchObject({
-            title: 'agentInstallJob.failed', body: 'agentInstallJob.failedBody',
+            title: 'agentInstallJob.jobUnavailable', body: 'agentInstallJob.jobMissingBody',
+        });
+        expect(presentAgentInstallJobRpcFailure(new AgentInstallJobRpcError('server_unreachable'))).toMatchObject({
+            title: 'agentInstallJob.jobUnavailable', body: 'agentInstallJob.jobMissingBody',
+        });
+        expect(presentAgentInstallJobRpcFailure(new AgentInstallJobRpcError('install_unavailable'))).toMatchObject({
+            title: 'agentInstallJob.jobUnavailable', body: 'agentInstallJob.jobMissingBody',
+        });
+        expect(presentAgentInstallJobRpcFailure(new Error('Unacknowledged request'))).toMatchObject({
+            title: 'agentInstallJob.jobUnavailable', body: 'agentInstallJob.jobMissingBody',
         });
         expect(presentAgentInstallJobRpcFailure(new AgentInstallJobRpcError('job_not_found'))).toMatchObject({
             title: 'agentInstallJob.jobMissing', body: 'agentInstallJob.jobMissingBody',

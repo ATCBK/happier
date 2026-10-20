@@ -943,6 +943,14 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   serverRequired(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE, 'durable_session_write', 'Guard notices commit Session metadata and transcript receipts through the current owner on the authenticated exact-Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, 'auth', 'Native Agent tool calls execute inside the live Session authority boundary and stay on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   {
+    ...actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY, 'durable_session_write', 'Explicit replies publish through the exact admitted receiving Session and its current publisher.', 'session.message.reply', SESSION_SERVER_REQUIRED_SCOPE),
+    sharedMachineAccess: 'custodian_only',
+  } satisfies MachineRpcRoutePolicyV1,
+  serverRequired(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, 'auth', 'Discussion Agent posts retain the current authenticated Session publisher and original Discussion custody.', SESSION_SERVER_REQUIRED_SCOPE),
+  serverRequired(SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1, 'auth', 'Reply observation changes only the original request through the authenticated source Session publisher.', SESSION_SERVER_REQUIRED_SCOPE),
+  actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE, 'durable_session_write', 'Questions are raised by the admitted Session through its canonical request owner.', 'session.needs_you.raise', SESSION_SERVER_REQUIRED_SCOPE),
+  actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1, 'durable_session_write', 'Structured question responses retain the authenticated responder and canonical question decision owner.', 'session.user_action.answer', SESSION_SERVER_REQUIRED_SCOPE),
+  {
     ...serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'auth', 'Daemon catalog invalidation is an exact Session-owner freshness signal; it grants no executable admission and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
     sharedMachineAccess: 'custodian_only',
   } satisfies MachineRpcRoutePolicyV1,
@@ -1049,9 +1057,6 @@ export function resolveMachineRpcRoutePolicy(method: string): MachineRpcRoutePol
 export function resolveMachineRpcExternalActionEffectV1(method: string,
   binding?: ExternalActionExecutionAuthorizationV1['binding'],
   selectedTarget?: Readonly<{ machineId: string; installationId: string }>): string | null {
-  // Archiving an active Session stops it before retrying the archive write;
-  // this consumed phase retains the original archive root and its approval.
-  if (binding?.actionId === 'session.archive' && method === RPC_METHODS.STOP_SESSION) return binding.actionId;
   if (method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN) {
     return binding && (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec'
       || binding.actionId === 'projects.service.relocate')

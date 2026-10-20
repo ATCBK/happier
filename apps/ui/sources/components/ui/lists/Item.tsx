@@ -54,6 +54,7 @@ import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOptica
 import { useListPresentation } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
 import { HAPPIER_RADIUS_V1 } from '@happier-dev/plugin-ui/environment';
+import { resolveHappierRowTitleMetaPlacement } from '@happier-dev/plugin-ui/advanced';
 import { useSectionLeadingColumn } from './sectionLeadingColumn';
 import {
     HAPPIER_COLLECTION_LIST_METRICS,
@@ -69,7 +70,6 @@ import {
     useHappierPageSection,
     useHappierMaterialColorResolver,
     HAPPIER_ROW_TITLE_META_GAP_PX,
-    resolveHappierRowTitleMetaPlacement,
 } from '@happier-dev/plugin-ui/presentation';
 
 /** A title that carries a search match is the content of its row, so it wraps to this many lines rather than clipping the match. */
@@ -258,6 +258,13 @@ export interface ItemProps {
      * field selects), using the row's own width in pages, grouped sections and popovers.
      */
     accessoryLayout?: 'inline' | 'stacked' | 'adaptive';
+    /**
+     * How much of the row an inline accessory may take. `half` (default) holds it to half the row so a
+     * long value never squeezes the label. `row` is for trailing facts and marks that must never be cut
+     * (a picker row's free space, CLI glyphs, star and selected check): the accessory takes what it needs
+     * and the label gives way with an ellipsis.
+     */
+    accessoryMaxWidth?: 'half' | 'row';
     /**
      * The adaptive accessory is a page select field. In a narrow row (a pane column or a phone) where
      * the label's column and the field's narrowest trigger still fit, the field drops to its content
@@ -696,6 +703,7 @@ export const Item = React.memo<ItemProps>((props) => {
         keepChevronWithRightElement = false,
         rightElementOutsidePressable = false,
         accessoryLayout = 'inline',
+        accessoryMaxWidth = 'half',
         fieldAccessory = false,
         fieldAccessorySiblingPx,
         showDivider = true,
@@ -1453,7 +1461,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 // narrow-row and half-row rules decided that), so the box is not held to half the
                 // content width as well: that second cap clipped a 240px field in a ~490px dialog row
                 // past the sheet's trailing inset.
-                !stackContentAccessory && (adaptiveAccessory || fieldMaxWidthPx !== null) ? styles.rightSectionField : null,
+                !stackContentAccessory && (adaptiveAccessory || fieldMaxWidthPx !== null || accessoryMaxWidth === 'row') ? styles.rightSectionField : null,
                 detailInlineMaxWidthPx !== null ? { maxWidth: detailInlineMaxWidthPx } : null,
                 firstLineTrailingStyle]}>
                 {copyFeedback.isCopied() ? (
@@ -1557,12 +1565,16 @@ export const Item = React.memo<ItemProps>((props) => {
     // `text` starts on the title's edge, also when the row has no glyph of its own but its section reserves the column.
     // A menu row's title edge is its own padding plus the menu glyph box, not the page row's.
     const menuBottomText = bottomElementInset === 'text' && isMenuRow && (icon != null || leftElement != null);
+    // A list row (a collection rail) with a glyph: the title's edge is the row's own padding, the glyph box and its gap.
+    const listBottomTextStart = bottomElementInset === 'text' && !isPageRow && !isMenuRow && icon != null && leftElement == null
+        ? ITEM_ROW_PADDING_HORIZONTAL[resolvedIconDensity] + (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight
+        : null;
     const bottomTextInset = bottomElementInset === 'text' && isPageRow && (icon != null || leftElement != null || reservesLeadingColumn)
         ? PAGE_LIST_METRICS.rowLeadingColumnPx + resolvedIconMarginRight
         : 0;
     const bottomPaddingLeft = menuBottomText
         ? MENU_ROW_METRICS.paddingHorizontalPx + MENU_ROW_METRICS.iconBoxSizePx + MENU_ROW_METRICS.iconMarginRightPx
-        : PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset;
+        : listBottomTextStart ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset;
     const bottom = bottomElement ? <View style={{ paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingLeft: bottomPaddingLeft, paddingBottom: PAGE_LIST_METRICS.rowPaddingVerticalPx }}>{bottomElement}</View> : null;
     const content = React.useMemo(() => (
         <>
@@ -1748,7 +1760,7 @@ export const Item = React.memo<ItemProps>((props) => {
                             // A stacked page operation sits above the row's bottom padding.
                             stackAccessory ? [styles.rightSectionStacked, containerPadding, styles.splitRightSectionStacked] : null,
                             // The same rule as the row's own right section: measured inline, not halved again.
-                            !stackAccessory && adaptiveAccessory ? styles.rightSectionField : null,
+                            !stackAccessory && (adaptiveAccessory || accessoryMaxWidth === 'row') ? styles.rightSectionField : null,
                             stackedLabelEdgeStyle,
                         ]}
                         pointerEvents={sharedItemBehavior.secondaryActionsEnabled ? 'auto' : 'none'}

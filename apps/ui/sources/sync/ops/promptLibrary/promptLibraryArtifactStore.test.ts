@@ -22,6 +22,8 @@ import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSyst
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createDeferred } from '@/dev/testkit';
+import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { encodeBase64 } from '@/encryption/base64';
 
 // The third-party markdown renderer is outside this Artifact-only journey.
 vi.mock(
@@ -40,6 +42,7 @@ afterEach(async () => {
   fixture = undefined;
   resetRuntimeFetch();
   vi.restoreAllMocks();
+  resetServerFeaturesClientForTests();
 });
 
 async function home(
@@ -75,8 +78,78 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it('prepares addressed skill reach from independent current catalog and content reads before writing', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const catalogRequested = createDeferred<void>();
+    const releaseCatalog = createDeferred<void>();
+    let holdCatalog = true;
+    let contentRequested = false;
+    let wroteRules = false;
+    const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
+      entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
+      handleRequest: async (path, init) => {
+        if (path === '/v1/artifacts/current' || path === '/v1/artifacts/read') contentRequested = true;
+        if (path === '/v1/account/entity-rows/prompt-library' && holdCatalog) {
+          catalogRequested.resolve();
+          await releaseCatalog.promise;
+        }
+        if (path === '/v1/account/entity-rows/prompt-library/skill-rules' && init?.method === 'POST') wroteRules = true;
+        return catalog.handle(path, init);
+      },
+    });
+    const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+    await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      const pending = executeDefaultActionInCapturedAccount(account, 'skills.rules.set', {
+        items: [{ skillId: 'current' }], change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } },
+      }, { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId });
+      try {
+        await catalogRequested.promise;
+        await vi.waitFor(() => expect(contentRequested).toBe(true));
+        expect(wroteRules).toBe(false);
+      } finally {
+        holdCatalog = false;
+        releaseCatalog.resolve();
+        await pending;
+      }
+      expect(await pending).toMatchObject({ ok: true, result: { ok: true, items: [
+        expect.objectContaining({ skillId: 'current', rules: [expect.objectContaining({ enabled: true })] }),
+      ] } });
+      expect(wroteRules).toBe(true);
+    }, { serverId: f.home.id });
+  });
+  it.each([true, false])('reads Skills through captured filtered pages with truthful unclassified fallback (%s)', async hasUnclassified => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const inventoryQueries: string[] = [];
+    const contentRequests: string[] = [];
+    const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
+      entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
+      handleRequest: async (path, init) => {
+        if (path === '/v1/artifacts/current' || path === '/v1/artifacts/read') contentRequests.push(path);
+        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
+          inventoryQueries.push(path);
+          const rows = f.boundary.list();
+          const headers = rows.map(({ body: _body, ...row }) => row);
+          return Response.json(new URL(path, 'https://home.test').searchParams.has('kind')
+            ? { items: headers, hasUnclassified } : headers);
+        }
+        return catalog.handle(path, init);
+      },
+    });
+    const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+    await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      const result = await executeDefaultActionInCapturedAccount(account, 'skills.list', {},
+        { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId });
+      expect(result).toMatchObject({ ok: true, result: { items: expect.arrayContaining([expect.objectContaining({ skillId: 'current' })]) } });
+    }, { serverId: f.home.id });
+    expect(inventoryQueries).toEqual(hasUnclassified
+      ? ['/v1/artifacts?limit=500&kind=skill', '/v1/artifacts?limit=500']
+      : ['/v1/artifacts?limit=500&kind=skill']);
+    expect(contentRequests).toEqual(['/v1/artifacts/read']);
+  });
   it.each(['complete', 'incomplete', 'unreadable', 'failed', 'different-account', 'different-credentials', 'cancelled'] as const)(
-    'joins only an eligible cold inventory attempt through skills.list (%s)', async scenario => {
+    'joins only an eligible cold inventory attempt through the unfiltered store (%s)', async scenario => {
       const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
       const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
       resetPromptLibraryCatalogEngineForTests();
@@ -84,10 +157,10 @@ describe('UI qualified prompt-library Artifact authority', () => {
       const catalog = createPromptLibraryCatalogBoundary();
       const inventoryRequested = createDeferred<void>();
       const releaseInventory = createDeferred<void>();
-      const catalogRequested = createDeferred<void>();
       let inventoryGets = 0;
       const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
-        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
+        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET'
+          && !new URL(path, 'https://home.test').searchParams.has('kind')) {
           inventoryGets += 1;
           if (inventoryGets === 1) {
             inventoryRequested.resolve();
@@ -96,15 +169,12 @@ describe('UI qualified prompt-library Artifact authority', () => {
             if (scenario === 'unreadable') return Response.json(f.boundary.list().map(row => ({ ...row, header: 'invalid header' })));
           }
         }
-        const result = await catalog.handle(path, init);
-        if (path === '/v1/account/entity-rows/prompt-library') catalogRequested.resolve();
-        return result;
+        return catalog.handle(path, init);
       } });
       storage.setState({ artifacts: {}, artifactsLoaded: false });
       const controller = new AbortController();
-      await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      await withUiPromptLibraryArtifactStore(async (store, account) => {
         const { fetchAndApplyArtifactsList } = await import('@/sync/engine/artifacts/syncArtifacts');
-        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
         const basis = storage.getState().artifacts;
         const params = { credentials: scenario === 'different-credentials' ? { token: 'restricted-credential' } : account.credentials,
           inventoryScope: scenario === 'different-account' ? { ...account.accountLifetime.scope, accountId: 'another-account' } : account.accountLifetime.scope,
@@ -113,27 +183,22 @@ describe('UI qualified prompt-library Artifact authority', () => {
           applyArtifacts: (rows: DecryptedArtifact[], source?: 'inventory') => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) };
         const inventory = fetchAndApplyArtifactsList(params).catch(error => error);
         await inventoryRequested.promise;
-        const action = executeDefaultActionInCapturedAccount(account, 'skills.list', {},
-          { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId,
-            signal: controller.signal });
+        const action = store.list!({ signal: controller.signal });
         try {
-          await Promise.race([catalogRequested.promise, action.then(result => {
-            throw new Error(`Action settled before inventory release: ${JSON.stringify(result)}`);
-          })]);
           if (scenario === 'different-account' || scenario === 'different-credentials') {
-            // The unrelated attempt stays held while the captured Action finishes.
-            expect(await action).toMatchObject({ ok: true });
+            // The unrelated attempt stays held while the captured list finishes.
+            expect(await action).toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(2);
           } else if (scenario === 'cancelled') {
             controller.abort();
             const outcome = await action.catch((error: unknown) => error);
-            expect(outcome).not.toMatchObject({ ok: true });
+            expect(outcome).not.toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(1);
             expect(storage.getState().artifactsLoaded).toBe(false);
           } else {
             releaseInventory.resolve();
             await inventory;
-            expect(await action).toMatchObject({ ok: true });
+            expect(await action).toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(scenario === 'complete' ? 1 : 2);
           }
         } finally {

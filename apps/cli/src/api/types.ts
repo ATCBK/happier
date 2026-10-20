@@ -11,6 +11,15 @@ import { ActionRequestAttributionV1Schema } from '@happier-dev/protocol/actions/
 import type { SessionCapabilityMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2 } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { DISCUSSION_AGENT_POST_EVENT_V1, type DiscussionAgentPublisherPublicationV1, type DiscussionAgentPublisherResponseV1 } from '@happier-dev/protocol/discussions/api';
+import {
+  SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,
+  SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
+  type SessionMessageReplyMutationV1,
+  type SessionMessageReplyMutationResultV1,
+  type SessionMessageReplySourceTurnReleaseV1,
+  type SessionMessageReplySourceTurnReleaseResultV1,
+} from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { SentFromSchema } from '@happier-dev/protocol/sentFrom';
 import type {
   AcceptedPendingSettlementRequestV1,
@@ -174,6 +183,18 @@ export interface ServerToClientEvents {
  * Socket events from client to server
  */
 export interface ClientToServerEvents {
+  [DISCUSSION_AGENT_POST_EVENT_V1]: (
+    data: DiscussionAgentPublisherPublicationV1,
+    cb: (answer: DiscussionAgentPublisherResponseV1) => void,
+  ) => void;
+  [SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1]: (
+    data: SessionMessageReplyMutationV1,
+    cb: (answer: SessionMessageReplyMutationResultV1) => void,
+  ) => void;
+  [SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1]: (
+    data: SessionMessageReplySourceTurnReleaseV1,
+    cb: (answer: SessionMessageReplySourceTurnReleaseResultV1) => void,
+  ) => void;
   'machine-update-metadata': (
     data: import('@happier-dev/protocol/machines/metadataUpdate').MachineUpdateMetadataRequest,
     cb?: (answer: import('@happier-dev/protocol/machines/metadataUpdate').MachineUpdateMetadataResponse) => void,
@@ -495,6 +516,7 @@ export const CreateSessionResponseSchema = z.object({
     seq: z.number(),
     createdAt: z.number(),
     updatedAt: z.number(),
+    archivedAt: z.optional(z.nullable(z.number())),
     metadata: z.string(),
     metadataVersion: z.number(),
     agentState: z.nullable(z.string()),
@@ -962,6 +984,8 @@ export type AgentState = {
            * is projected; callers must treat it as opaque.
            */
           permissionResponseClaimV1?: unknown
+          /** Shared source facts captured when this request was first published. */
+          happierFollowRuleEvidenceV1?: unknown
         }
       }
       completedRequests?: {

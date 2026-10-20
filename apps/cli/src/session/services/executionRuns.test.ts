@@ -1575,6 +1575,30 @@ describe('waitForExecutionRun', () => {
         vi.useRealTimers();
     });
 
+    it.each([
+        { ok: false, errorCode: 'permission_denied', error: 'Run access was refused' },
+        { errorCode: 'permission_denied', error: 'Run access was refused' },
+        { ok: false, code: 'permission_denied', message: 'Run access was refused' },
+    ])('preserves an owner refusal instead of reporting an invalid wait result: %j', async response => {
+        // Registered Action failures, RPC admission failures, and shared-observer
+        // read failures use the existing transport/service envelopes respectively.
+        callSessionRpc.mockResolvedValueOnce(response);
+        await expect(waitForExecutionRun({ token: 'token', sessionId: 'sess-1',
+            mode: 'plain', ctx: null, runId: 'run_1', timeoutMs: null,
+        })).resolves.toEqual({ ok: false, code: 'permission_denied', message: 'Run access was refused' });
+        expect(callSessionRpc).toHaveBeenCalledOnce();
+        expect(listExecutionRunMarkers).not.toHaveBeenCalled();
+        expect(readRawSessionHistoryRows).not.toHaveBeenCalled();
+    });
+
+    it('continues rejecting malformed successful observations', async () => {
+        callSessionRpc.mockResolvedValueOnce({ ok: true, status: 'succeeded',
+            result: { run: createRun({ runId: 'run_1', status: 'running', startedAtMs: 1 }) } });
+        await expect(waitForExecutionRun({ token: 'token', sessionId: 'sess-1',
+            mode: 'plain', ctx: null, runId: 'run_1', timeoutMs: null,
+        })).resolves.toMatchObject({ ok: false, code: 'execution_run_wait_result_invalid' });
+    });
+
     it('waits through one event-driven daemon RPC when timeoutMs is null', async () => {
         const succeededRun = createRun({ runId: 'run_1', status: 'succeeded', startedAtMs: 1 });
         const completedResult = {

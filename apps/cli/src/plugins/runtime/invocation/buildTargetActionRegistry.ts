@@ -483,6 +483,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                 },
                 purposes: snapshot.purposes,
                 bindings: snapshot.bindings,
+                ...(input.recordOperationCredentialUse ? { recordOperationCredentialUse: input.recordOperationCredentialUse } : {}),
             });
             if (!input.isCurrent()) {
                 lease.dispose();

@@ -3,18 +3,19 @@ import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/us
 import { useSessionConversationsAvailability } from '@/components/sessions/conversations/useSessionConversationsAvailability';
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
-import type { DiscussionRepositorySnapshot } from '@/sync/ops/discussions/discussionRepository';
+import type { DiscussionRepositoryAttentionSnapshot } from '@/sync/ops/discussions/discussionRepository';
 import type { InboxDiscussionSource, InboxItem } from '@/components/inbox/inboxItems';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
 const emptySnapshot = () => null;
 const emptySubscribe = () => () => {};
 
-/** Open-Inbox demand adapter. N2 retains list paging, access, messages and private read custody. */
-export function useInboxDiscussionSource(serverId: string | null) {
+/** Shared attention demand only. N2 retains paging, access, messages and private read custody. */
+export function useInboxDiscussionAttention(serverId: string | null) {
     const available = useSessionConversationsAvailability(serverId ?? '');
     const serverIds = React.useMemo(() => available && serverId ? [serverId] : [], [available, serverId]);
     const bindings = useServerCredentialAccountScopeBindings(serverIds);
@@ -23,17 +24,10 @@ export function useInboxDiscussionSource(serverId: string | null) {
         scope: binding.scope, address: { serverId: binding.scope.serverId }, accountLifetime: binding,
         client: createDiscussionClient({ scope: binding.scope, availability: 'available' }),
     }) : null, [available, binding]);
-    const snapshot: DiscussionRepositorySnapshot | null = React.useSyncExternalStore(
-        repository?.subscribe ?? emptySubscribe, repository?.getSnapshot ?? emptySnapshot, repository?.getSnapshot ?? emptySnapshot);
-    const attention = binding?.isCurrent() ? snapshot?.attention : null;
-    const sessionAddresses = React.useMemo(() => binding ? [...new Set((attention?.discussions ?? [])
-        .flatMap(entry => entry.occurrences.flatMap(({ message }) => message.content
-            ? [...readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds,
-                ...(message.producerV1 ? [message.producerV1.sessionId] : [])] : [])))]
-        .map(sessionId => ({ serverId: binding.scope.serverId, sessionId })) : [], [binding, attention?.discussions]);
-    const sessionTitles = useSessionDisplayNameProjections(sessionAddresses, readableSessionDisplayTitle);
-    const sessionDisplayNames = React.useMemo(() => new Map(sessionAddresses.map((address, index) =>
-        [address.sessionId, sessionTitles[index] ?? null] as const)), [sessionAddresses, sessionTitles]);
+    const getAttention = React.useCallback(() => binding?.isCurrent() && repository
+        ? repository.getSnapshot().attention : null, [binding, repository]);
+    const attention: DiscussionRepositoryAttentionSnapshot | null = React.useSyncExternalStore(
+        repository?.subscribe ?? emptySubscribe, getAttention, emptySnapshot);
     React.useEffect(() => {
         if (!repository || !binding?.isCurrent()) return;
         const controller = new AbortController();
@@ -43,7 +37,25 @@ export function useInboxDiscussionSource(serverId: string | null) {
         return () => { controller.abort(); retirement.dispose(); unmount(); };
     }, [binding, repository]);
     const source = React.useMemo<InboxDiscussionSource | null>(() => binding?.isCurrent() && attention
-        ? { scope: binding.scope, entries: attention.discussions, sessionDisplayNames } : null, [binding, attention?.discussions, sessionDisplayNames]);
+        ? { scope: binding.scope, entries: attention.discussions } : null, [binding, attention?.discussions]);
+    return { available, binding, repository, attention, source };
+}
+
+/** Open-Inbox detail joins are deliberately absent from the always-mounted badge. */
+export function useInboxDiscussionSource(serverId: string | null) {
+    const { available, binding, repository, attention, source: attentionSource } = useInboxDiscussionAttention(serverId);
+    const sessionAddresses = React.useMemo(() => binding ? [...new Set((attention?.discussions ?? [])
+        .flatMap(entry => entry.occurrences.flatMap(({ message }) => message.content
+            ? [...readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds,
+                ...(message.producerV1 ? [message.producerV1.sessionId] : [])] : [])))]
+        .map(sessionId => ({ serverId: binding.scope.serverId, sessionId })) : [], [binding, attention?.discussions]);
+    // A Discussion message names the Sessions it mentions from encrypted content: demanded like visible list rows.
+    useSessionContentDemand(sessionAddresses, { tag: 'inbox.hydrateDiscussionSessions', hydrate: 'unsettled' });
+    const sessionTitles = useSessionDisplayNameProjections(sessionAddresses, readableSessionDisplayTitle);
+    const sessionDisplayNames = React.useMemo(() => new Map(sessionAddresses.map((address, index) =>
+        [address.sessionId, sessionTitles[index] ?? null] as const)), [sessionAddresses, sessionTitles]);
+    const source = React.useMemo<InboxDiscussionSource | null>(() => attentionSource
+        ? { ...attentionSource, sessionDisplayNames } : null, [attentionSource, sessionDisplayNames]);
     const coverage = !available || !binding || !attention ? 'unavailable' : attention.status !== 'ready' || attention.incomplete || attention.nextCursor !== null
         ? 'partial' : 'complete';
     const markOpened = React.useCallback(async (item: InboxItem) => {

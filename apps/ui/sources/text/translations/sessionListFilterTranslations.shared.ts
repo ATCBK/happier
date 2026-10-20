@@ -22,6 +22,8 @@ export const en = {
     filtersNoOptions: 'No filters available', filtersClear: 'Clear filters', filtersDone: 'Done', filtersArchived: 'Archived',
     filtersNeedsMeOnly: 'Needs me only', filtersNeedsMeOnlyDescription: 'Sessions waiting on you', filtersSourceHappier: 'Happier',
     filtersMoreTags: ({ count }: { count: number }) => `+ ${count} more`,
+    filtersStatus: 'Status', filtersStatusFailed: 'Failed', filtersProject: 'Project', filtersProjectIs: 'Is', filtersProjectIsNot: "Isn't",
+    filtersProjectNot: ({ names }: { names: string }) => `Project isn't ${names}`,
     filtersResultCount: ({ count }: { count: number }) => count === 1 ? `1 item` : `${count} items`,
     queryInitialLoadingTitle: 'Loading sessions…', queryUpdatingTitle: 'Updating sessions…',
     querySomeHomesUnavailableTitle: 'Some Homes are unavailable', querySomeHomesUnavailableDescription: 'Showing what Happier can reach. Retry when those Homes are back online.',

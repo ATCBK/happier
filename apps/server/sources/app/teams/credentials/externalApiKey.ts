@@ -16,7 +16,9 @@ import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '@happier-dev/pr
 import { parseAuthenticationEvidenceSnapshot, resolveCurrentAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { getActivePrismaRuntime } from "@/storage/prisma";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -46,7 +48,7 @@ const SUMMARY_SELECT = {
     id: true, resourceId: true, teamMembershipId: true, label: true, displayPrefix: true,
     createdAt: true, lastUsedAt: true, expiresAt: true, authenticationEvidence: true,
     membership: { select: { accountId: true } },
-    resource: { select: { team: { select: { id: true, authenticationPolicy: true } } } },
+    resource: { select: { custodianAccountId: true, team: { select: { id: true, authenticationPolicy: true } } } },
 } as const;
 
 export type CreateTeamCredentialExternalApiKeyResult =
@@ -184,6 +186,15 @@ export async function createTeamCredentialExternalApiKeyInTx(
     const { actorAccountId, authentication, ...credentialInput } = input;
     const parsed = TeamCredentialExternalApiKeyCreateInputV1Schema.safeParse(credentialInput);
     if (!parsed.success) return { ok: false, error: "invalid_resource_input" };
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({
+        where: { id: parsed.data.resourceId }, select: { custodianAccountId: true, teamId: true },
+    });
+    if (resourceIdentity) {
+        await acquireTeamMembershipAccountAdmissionInTx(tx, {
+            teamId: resourceIdentity.teamId, accountIds: [actorAccountId, resourceIdentity.custodianAccountId],
+            membershipIds: [parsed.data.teamMembershipId],
+        });
+    }
     const now = new Date(nowInput.getTime());
     const expiresAt = validExpiry(parsed.data.expiresAt, now);
     if (expiresAt === undefined) return { ok: false, error: "invalid_resource_input" };
@@ -196,6 +207,9 @@ export async function createTeamCredentialExternalApiKeyInTx(
     if (managed.status === "forbidden") return { ok: false, error: "resource_forbidden" };
     if (managed.status === "unqualified") return { ok: false, error: managed.error };
     const resource = managed.resource;
+    if (resource.custodianAccountId !== resourceIdentity?.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     if (resource.sessionUsePolicy !== "personal_allowed") return { ok: false, error: "session_policy_incompatible" };
 
     const membership = await tx.teamMembership.findFirst({
@@ -271,11 +285,20 @@ export async function authorizeTeamCredentialExternalApiKeyInTx(
     const { actorAccountId, authentication, ...keyInput } = input;
     const parsed = TeamCredentialExternalApiKeyAuthorizeInputV1Schema.safeParse(keyInput);
     if (!parsed.success) return { ok: false, error: "invalid_resource_input" };
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({
+        where: { id: parsed.data.resourceId }, select: { custodianAccountId: true, teamId: true },
+    });
+    if (resourceIdentity) {
+        await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [actorAccountId, resourceIdentity.custodianAccountId] });
+    }
     const row = await tx.teamCredentialExternalApiKey.findFirst({
         where: { id: parsed.data.keyId, resourceId: parsed.data.resourceId }, select: SUMMARY_SELECT,
     });
     if (!row || row.membership.accountId !== actorAccountId || (row.expiresAt !== null && row.expiresAt <= new Date())) {
         return { ok: false, error: "resource_forbidden" };
+    }
+    if (row.resource.custodianAccountId !== resourceIdentity?.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     }
     const entitlement = await resolveTeamCredentialEntitlementInTx(tx, { resourceId: row.resourceId, accountId: actorAccountId });
     if (!entitlement.ok || !entitlement.mayBroker) return { ok: false, error: "resource_forbidden" };
@@ -301,6 +324,8 @@ export async function revokeTeamCredentialExternalApiKeyInTx(
     input: Readonly<{ actorAccountId: string; resourceId: string; keyId: string; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<RevokeTeamCredentialExternalApiKeyResult> {
     if (!input.resourceId.trim() || !input.keyId.trim()) return { ok: false, error: "invalid_resource_input" };
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId }, select: { teamId: true } });
+    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
     const managed = await resolveManagedResourceInTx(tx, input);
     if (managed.status === "missing") return { ok: false, error: "resource_not_found" };
     if (managed.status === "forbidden") return { ok: false, error: "resource_forbidden" };
@@ -322,6 +347,8 @@ export async function revokeAllTeamCredentialExternalApiKeysInTx(
     input: Readonly<{ actorAccountId: string; resourceId: string; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<RevokeAllTeamCredentialExternalApiKeysResult> {
     if (!input.resourceId.trim()) return { ok: false, error: "invalid_resource_input" };
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId }, select: { teamId: true } });
+    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
     const managed = await resolveManagedResourceInTx(tx, input);
     if (managed.status === "missing") return { ok: false, error: "resource_not_found" };
     if (managed.status === "forbidden") return { ok: false, error: "resource_forbidden" };
@@ -386,6 +413,15 @@ export async function resolveCurrentTeamCredentialExternalApiKeyAuthorityInTx(
     } else {
         keyId = input.keyId;
     }
+    const identity = await tx.teamCredentialExternalApiKey.findUnique({
+        where: { id: keyId },
+        select: { teamMembershipId: true, resource: { select: { custodianAccountId: true, teamId: true } } },
+    });
+    if (!identity) return { ok: false, reason: "operation_not_current" };
+    await acquireTeamMembershipAccountAdmissionInTx(tx, {
+        teamId: identity.resource.teamId,
+        accountIds: [identity.resource.custodianAccountId], membershipIds: [identity.teamMembershipId],
+    });
     const row = await tx.teamCredentialExternalApiKey.findUnique({
         where: { id: keyId },
         select: {
@@ -406,6 +442,9 @@ export async function resolveCurrentTeamCredentialExternalApiKeyAuthorityInTx(
             membership: { select: { accountId: true, status: true, account: { select: { status: true } } } },
         },
     });
+    if (row && row.resource.custodianAccountId !== identity.resource.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     const now = new Date(nowInput.getTime());
     if (!row || (suppliedSecret !== null && !digestMatches(row.secretDigest, suppliedSecret))
         || (row.expiresAt !== null && row.expiresAt <= now)

@@ -173,7 +173,7 @@ describe('mounted canonical Work reads', () => {
             actionOperations: createActionOperationSelectors().selectForSession(operations.getSnapshot(),
                 { serverId: 'home-a', accountId: 'account-a', sessionId: 'lead' }),
             describeOperationStatus: () => 'Running',
-            managedRuns: [{ run: { id: 'run-a', state: 'running' }, title: 'Review', word: 'Running', needsAttention: true }],
+            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null }, title: 'Review', word: 'Running', needsAttention: true }],
             ownTriggerRunIds: new Set(), describeAgentStatus: () => '', describeProgress: () => '',
         });
         const remove = registerMountedWorkReadOwner({

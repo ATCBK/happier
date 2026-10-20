@@ -171,6 +171,17 @@ describe('createCodexNativeSessionControls', () => {
     });
   });
 
+  it.each([{}, { goal: undefined }])('does not turn an unobserved native Goal response %j into a clear', async response => {
+    clientMocks.request.mockResolvedValueOnce(response);
+    const publish = vi.fn(async () => ({ status: 'applied' as const, revision: 'unexpected-clear', sourceSequence: 1 }));
+    await expect(createCodexNativeSessionControls().goals.get({
+      ...context(), goalSource: { publish },
+    } as AgentSessionGoalControlContext)).resolves.toMatchObject({
+      status: 'unavailable', diagnostic: { code: 'codex_goal_payload_invalid' },
+    });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it('uses provider RPC evidence for rollback, continuation, goal, catalog, and usage controls', async () => {
     clientMocks.request.mockImplementation(async (method: string) => {
       if (method === 'thread/read') return { thread: { turns: [] } };

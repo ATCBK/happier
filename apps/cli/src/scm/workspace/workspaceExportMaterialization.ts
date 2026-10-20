@@ -244,6 +244,76 @@ async function resolveWorkspaceExportMaterializationTargetPath(params: Readonly<
     return await resolveWorkspaceMaterializationTargetPath(params);
 }
 
+/**
+ * The one rollback for a not-yet-committed materialization, shared by the live
+ * custody and the one rebuilt from its receipt. Only the object this custody
+ * left at the target (the bound promotion, or the original before anything
+ * replaced it) is ever removed; anything else stays for manual recovery.
+ * Rollback before the promotion was bound therefore restores the backup, or
+ * the absence, without touching a foreign object.
+ */
+async function rollbackMaterializedTarget(input: Readonly<{
+    targetPath: string;
+    previousTargetPath?: string;
+    receipt: WorkspaceTargetMaterializationReceiptV1;
+    receiptPath?: string;
+}>): Promise<void> {
+    const { receipt } = input;
+    const currentTargetIdentity = await readObjectIdentityOrAbsent(input.targetPath);
+    if (currentTargetIdentity) {
+        const expectedTargetIdentity = receipt.promotedTargetIdentity ?? receipt.originalTargetIdentity;
+        if (!expectedTargetIdentity
+            || !workspaceSyncRootObjectIdentitiesEqual(currentTargetIdentity, expectedTargetIdentity)) {
+            throw materializationRecoveryError('Target pathname is occupied by another filesystem object');
+        }
+    }
+    if (input.previousTargetPath) {
+        if (!receipt.expectedBackupIdentity) {
+            throw materializationRecoveryError('Backup identity is unavailable');
+        }
+        await assertObjectIdentity(input.previousTargetPath, receipt.expectedBackupIdentity);
+    }
+    if (currentTargetIdentity) {
+        await rm(input.targetPath, { recursive: true, force: true });
+    }
+    if (input.previousTargetPath) {
+        await rename(input.previousTargetPath, input.targetPath);
+    }
+    if (input.receiptPath) await rm(input.receiptPath, { force: true });
+}
+
+/**
+ * Rolls a failed materialization back and reports the failure that caused it.
+ * A rollback that itself needs manual recovery keeps its typed code, but never
+ * replaces the original failure's message.
+ */
+export async function abortWorkspaceTargetMaterializationAfterFailure(
+    custody: Pick<WorkspaceExportMaterializationCustody, 'abort'> | undefined,
+    failure: unknown,
+): Promise<void> {
+    try {
+        await custody?.abort();
+    } catch (rollbackError) {
+        const rollbackCode = (rollbackError as { code?: unknown }).code;
+        throw Object.assign(
+            new AggregateError(
+                [failure, rollbackError],
+                failure instanceof Error
+                    ? failure.message
+                    : rollbackError instanceof Error
+                        ? rollbackError.message
+                        : 'Workspace target rollback requires manual recovery',
+                { cause: failure },
+            ),
+            {
+                code: typeof rollbackCode === 'string'
+                    ? rollbackCode
+                    : 'workspace_target_materialization_manual_recovery',
+            },
+        );
+    }
+}
+
 export async function beginWorkspaceTargetMaterialization(input: Readonly<{
     targetPath: string;
     backupDirectoryPrefix: string;
@@ -357,21 +427,12 @@ export async function beginWorkspaceTargetMaterialization(input: Readonly<{
         },
         abort: async () => {
             if (settled) return;
-            if (!receipt.promotedTargetIdentity) {
-                throw materializationRecoveryError('Promoted target identity was not bound');
-            }
-            await assertObjectIdentity(input.targetPath, receipt.promotedTargetIdentity);
-            if (previousTargetPath) {
-                if (!receipt.expectedBackupIdentity) {
-                    throw materializationRecoveryError('Backup identity is unavailable');
-                }
-                await assertObjectIdentity(previousTargetPath, receipt.expectedBackupIdentity);
-            }
-            await rm(input.targetPath, { recursive: true, force: true });
-            if (previousTargetPath) {
-                await rename(previousTargetPath, input.targetPath);
-            }
-            if (input.receiptPath) await rm(input.receiptPath, { force: true });
+            await rollbackMaterializedTarget({
+                targetPath: input.targetPath,
+                ...(previousTargetPath ? { previousTargetPath } : {}),
+                receipt,
+                ...(input.receiptPath ? { receiptPath: input.receiptPath } : {}),
+            });
             settled = true;
         },
     });
@@ -475,27 +536,12 @@ export async function rehydrateWorkspaceTargetMaterialization(input: Readonly<{
         },
         abort: async () => {
             if (settled) return;
-            const currentTargetIdentity = await readObjectIdentityOrAbsent(targetPath);
-            if (currentTargetIdentity) {
-                const expectedTargetIdentity = validatedReceipt.promotedTargetIdentity ?? validatedReceipt.originalTargetIdentity;
-                if (!expectedTargetIdentity
-                    || !workspaceSyncRootObjectIdentitiesEqual(currentTargetIdentity, expectedTargetIdentity)) {
-                    throw materializationRecoveryError('Target pathname is occupied by another filesystem object');
-                }
-            }
-            if (previousTargetPath) {
-                if (!validatedReceipt.expectedBackupIdentity) {
-                    throw materializationRecoveryError('Backup identity is unavailable');
-                }
-                await assertObjectIdentity(previousTargetPath, validatedReceipt.expectedBackupIdentity);
-            }
-            if (currentTargetIdentity) {
-                await rm(targetPath, { recursive: true, force: true });
-            }
-            if (previousTargetPath) {
-                await rename(previousTargetPath, targetPath);
-            }
-            if (input.receiptPath) await rm(input.receiptPath, { force: true });
+            await rollbackMaterializedTarget({
+                targetPath,
+                ...(previousTargetPath ? { previousTargetPath } : {}),
+                receipt: validatedReceipt,
+                ...(input.receiptPath ? { receiptPath: input.receiptPath } : {}),
+            });
             settled = true;
         },
     });
@@ -714,31 +760,10 @@ export async function materializeWorkspaceExportArtifactsWithScmWorkspace(params
         });
         await params.assertCanContinue?.();
     } catch (error) {
-        let rollbackError: unknown;
-        try {
-            await targetMaterialization?.custody.abort();
-        } catch (cause) {
-            rollbackError = cause;
-        }
+        const rollback = await abortWorkspaceTargetMaterializationAfterFailure(targetMaterialization?.custody, error)
+            .then(() => undefined, (rollbackFailure: unknown) => rollbackFailure);
         await cleanupWorkspaceStaging({ rootDirectory: stagingRoot.rootDirectory }).catch(() => undefined);
-        if (rollbackError !== undefined) {
-            const rollbackCode = (rollbackError as { code?: unknown }).code;
-            throw Object.assign(
-                new AggregateError(
-                    [error, rollbackError],
-                    rollbackError instanceof Error
-                        ? rollbackError.message
-                        : 'Workspace target rollback requires manual recovery',
-                    { cause: error },
-                ),
-                {
-                    code: typeof rollbackCode === 'string'
-                        ? rollbackCode
-                        : 'workspace_target_materialization_manual_recovery',
-                },
-            );
-        }
-        throw error;
+        throw rollback ?? error;
     }
 
     await cleanupWorkspaceStaging({ rootDirectory: stagingRoot.rootDirectory }).catch(() => undefined);

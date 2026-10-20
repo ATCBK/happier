@@ -19,3 +19,8 @@ export function createAcceptedExternalSessionTailCursorSyncBoundary(
         ...overrides,
     };
 }
+
+/** Surfaces that show Sessions demand their content; a fixture settles that demand without a Home. */
+export function createSessionListHydrationSyncBoundary(): Pick<SyncPublicApi, 'hydrateSessionListRows'> {
+    return { hydrateSessionListRows: async () => undefined };
+}

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { normalizeRawMessage } from '@happier-dev/session-core/raw';
+import { readUnsupportedContentMeta } from '@happier-dev/session-core/messages';
 
 import { MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES, MessageActionDurableResolutionV1Schema, MessageActionReferenceV1Schema, projectMessageActionProvenanceCategoryV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
@@ -59,11 +61,25 @@ function resolveTextSnapshot(params: Readonly<{
 }>): MessageActionResolutionV1 {
   const decrypted = readRecord(params.currentMessage.decryptedContent);
   const content = readRecord(decrypted?.content);
+  if (decrypted?.role !== params.role) return ineligible();
+
+  // Plain text already is a disclosure. Native envelopes use the transcript's
+  // normalizer so ACP/output text is identical to the text rendered and copied,
+  // without disclosing tool payloads or unsupported-content placeholders.
+  const normalized = content?.type === 'text' ? null : normalizeRawMessage(
+    params.currentMessage.messageId, null, 0, params.currentMessage.decryptedContent,
+    { seq: params.currentMessage.seq, messageRole: params.role },
+  );
+  const visibleText = content?.type === 'text' && typeof content.text === 'string'
+    ? content.text
+    : normalized?.role === params.role && !readUnsupportedContentMeta(normalized.meta) && !normalized.structuredPresentation
+      ? normalized.role === 'user' ? normalized.content.text
+        : normalized.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
+      : null;
   if (
-    decrypted?.role !== params.role
-    || content?.type !== 'text'
-    || typeof content.text !== 'string'
-    || textEncoder.encode(content.text).byteLength > MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES
+    visibleText === null
+    || (content?.type !== 'text' && visibleText.length === 0)
+    || textEncoder.encode(visibleText).byteLength > MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES
   ) {
     return ineligible();
   }
@@ -77,7 +93,7 @@ function resolveTextSnapshot(params: Readonly<{
       role: params.role,
       contentCategory: 'text',
       seq: params.currentMessage.seq,
-      visibleText: content.text,
+      visibleText,
       structuredPresentationSummary: null,
       provenanceCategory: projectMessageActionProvenanceCategoryV1(
         readSessionMessageProvenanceV1(decrypted?.meta, 'stored'),

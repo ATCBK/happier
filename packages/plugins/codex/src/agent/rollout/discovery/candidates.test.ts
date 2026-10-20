@@ -30,7 +30,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const { appendFile, mkdir, mkdtemp, stat, writeFile, utimes } = await import('node:fs/promises');
+const { appendFile, mkdir, mkdtemp, rename, stat, writeFile, utimes } = await import('node:fs/promises');
 
 const {
   compareCodexRolloutCandidateEntries,
@@ -344,7 +344,7 @@ describe('Codex rollout candidate discovery', () => {
     ).toBe(Date.parse('2026-07-23T15:00:00.000Z'));
   });
 
-  it('fences the scan cursor when the container it resumes from changes', async () => {
+  it('continues the scan when the resume container gains an older file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-rollout-candidate-fence-'));
     const { codexHome } = await writeReverseChronologyCorpus(root);
     const dayDir = join(codexHome, 'sessions', '2026', '07', '23');
@@ -367,8 +367,15 @@ describe('Codex rollout candidate discovery', () => {
     );
 
     const second = await scanCodexRolloutCandidateChunk({ ...request, after: first.nextBoundary });
-    expect(second.sourceChanged).toBe(true);
-    expect(second.entries).toEqual([]);
+    expect(second.sourceChanged).toBeUndefined();
+    expect(second.scanned).toBeGreaterThan(first.scanned);
+    if (!second.nextBoundary) throw new Error('expected continuation to the added older rollout');
+    const third = await scanCodexRolloutCandidateChunk({ ...request, after: second.nextBoundary });
+    expect(third.sourceChanged).toBeUndefined();
+    expect(third.entries.map(({ remoteSessionId }) => remoteSessionId)).toEqual([addedId]);
+    expect(third.nextBoundary).toBeNull();
+    expect(new Set([...first.entries, ...second.entries, ...third.entries].map(({ remoteSessionId }) => remoteSessionId)).size)
+      .toBe(5);
   });
 
   it('survives a new rollout in a day directory the cursor does not resume from', async () => {
@@ -422,14 +429,22 @@ describe('Codex rollout candidate discovery', () => {
     expect(second.entries.map((entry) => entry.remoteSessionId))
       .toContain('229999999-0000-0000-0000-000000000000');
 
-    // The genuine fence is intact: a mutation INSIDE the resume container still
-    // invalidates typed, because the cursor's own anchor may have moved.
+    // Even inside the resume container, a new file above the filename frontier
+    // cannot move the anchor. It will be discovered by the next fresh scan.
     const insideId = '239999999-0000-0000-0000-000000000000';
     await writeFile(
       join(codexHome, 'sessions', '2026', '07', '23', `rollout-2026-07-23T09-00-00-${insideId}.jsonl`),
       sessionMetaLine({ id: insideId, timestamp: '2026-07-23T09:00:00.000Z', cwd: '/repo/live' }),
       'utf8',
     );
+    const continued = await scanCodexRolloutCandidateChunk({ ...request, after: boundary });
+    expect(continued.sourceChanged).toBeUndefined();
+    expect(continued.entries.map(({ remoteSessionId }) => remoteSessionId)).not.toContain(insideId);
+
+    // A replaced physical container does invalidate the old traversal identity.
+    const resumeDir = join(codexHome, 'sessions', '2026', '07', '23');
+    await rename(resumeDir, `${resumeDir}-old`);
+    await mkdir(resumeDir);
     const fenced = await scanCodexRolloutCandidateChunk({ ...request, after: boundary });
     expect(fenced.sourceChanged).toBe(true);
     expect(fenced.entries).toEqual([]);

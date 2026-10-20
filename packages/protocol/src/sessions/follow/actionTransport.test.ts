@@ -3,8 +3,30 @@ import { describe, expect, it } from 'vitest';
 import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
 import { isSessionFollowActionHttpRequestV1, parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from './actionTransport.js';
 import { sealSessionFollowRuleContentV1 } from './sessionFollowRuleContentCodecV1.js';
+import { pageFollowListV1 } from './sessionFollowListV1.js';
 
 describe('signed Follow HTTP purposes', () => {
+  it('continues exact source keys after removal and binds the cursor to its admitted list', () => {
+    const rows = ['source-c', 'source-a', 'source-b'];
+    const first = pageFollowListV1({ rows, scope: 'receiver', limit: 1, key: row => row });
+    expect(first.rows).toEqual(['source-a']);
+    expect(first.continuation).toEqual(expect.any(String));
+    expect(pageFollowListV1({ rows: ['source-b', 'source-c'], scope: 'receiver',
+      cursor: first.continuation, key: row => row })).toEqual({ rows: ['source-b', 'source-c'] });
+    expect(() => pageFollowListV1({ rows, scope: 'other-receiver', cursor: first.continuation, key: row => row })).toThrow();
+    expect(pageFollowListV1({ rows, scope: 'receiver', key: row => row })).toEqual({ rows: ['source-a', 'source-b', 'source-c'] });
+  });
+  it('carries source-owned list continuation through the exact signed request and strict response', () => {
+    const input = { direction: 'followers' as const, source: { kind: 'session' as const, sessionId: 'source' },
+      cursor: 'source-page', limit: 2 };
+    const request = resolveSessionFollowActionRequest('follow.list', input);
+    expect(request).toEqual({ method: 'GET', path: '/v2/sessions/source/follows/followers?cursor=source-page&limit=2' });
+    const wire = { ...request, routeInput: { sourceSessionId: 'source', cursor: 'source-page', limit: 2 }, sessionRouteSessionId: 'source' };
+    expect(isSessionFollowActionHttpRequestV1('follow.list', wire)).toBe(true);
+    expect(isSessionFollowActionHttpRequestV1('follow.list', { ...wire, routeInput: { ...wire.routeInput, cursor: 'other' } })).toBe(false);
+    const payload = { follows: [], sources: [], rules: [], peopleCount: 0, coverage: 'partial', continuation: 'next-page' };
+    expect(parseSessionFollowActionResponse('follow.list', input, payload)).toEqual(payload);
+  });
   it('binds a reverse read and its strict private census to the exact source', () => {
     const input = { direction: 'followers' as const, source: { kind: 'session' as const, sessionId: 'source' } };
     const request = resolveSessionFollowActionRequest('follow.list', input);

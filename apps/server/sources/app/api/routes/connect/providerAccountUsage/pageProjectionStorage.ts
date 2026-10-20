@@ -39,22 +39,35 @@ export async function readProviderAccountUsagePageProjection(
     // checks coverage for the caller's range; both use this same prefix owner.
     const demand = params.projection ?? projection.demand;
     if (projection.demand.range.startAtMs > demand.range.startAtMs) return missing('range');
-    const where = { accountId: params.accountId, recordId: params.recordId,
-        observedAt: { gte: new Date(projection.demand.range.startAtMs), lt: new Date(projection.demand.range.endAtMs) } };
     // A changed prefix needs a full backfill. Appending only a tail would lose
     // a late/backdated accepted observation or retain a removed witness.
     if (!await hasAcceptedPrefix(params, projection, storage)) return missing('prefix');
-    const total = await storage.providerAccountUsageHistory.count({ where: { ...where,
-        observedAt: { gte: where.observedAt.gte, lt: new Date(Math.max(projection.demand.range.endAtMs, demand.range.endAtMs)) } } });
-    const complete = total === projection.observationCount;
+    const frontier = projection.frontier;
+    // The accepted prefix already proves the count through its frontier. Only
+    // an observation after that frontier can make the requested range incomplete.
+    // Bound the timestamp at the frontier as well as the tie-break predicate so
+    // the existing record/time index can seek directly to the remaining tail.
+    const tail = await storage.providerAccountUsageHistory.findFirst({ where: {
+        accountId: params.accountId, recordId: params.recordId,
+        observedAt: { gte: new Date(Math.max(projection.demand.range.startAtMs, frontier?.observedAtMs ?? projection.demand.range.startAtMs)),
+            lt: new Date(Math.max(projection.demand.range.endAtMs, demand.range.endAtMs)) },
+        ...(frontier ? { OR: [
+            { observedAt: { gt: new Date(frontier.observedAtMs) } },
+            { observedAt: new Date(frontier.observedAtMs), id: { gt: frontier.id } },
+        ] } : {}),
+    }, orderBy: [{ observedAt: 'asc' }, { id: 'asc' }], select: { id: true } });
+    const complete = tail === null;
     const held = params.heldProjection;
     // Revalidate the caller's actual prefix, not merely the current writer's
     // frontier. Backdated/removed witnesses require the ordinary full read.
     const prefix = held && held.contentMode === projection.content.t
         && held.demand.range.startAtMs === projection.demand.range.startAtMs
         && held.observationCount <= projection.observationCount
-        && await hasAcceptedPrefix(params, held, storage)
-        ? { held, complete: total === held.observationCount,
+        && (held.demand.range.endAtMs === projection.demand.range.endAtMs
+            && sameCoverage(held, projection.observationCount, frontier
+                ? { id: frontier.id, observedAt: new Date(frontier.observedAtMs) } : null)
+            || await hasAcceptedPrefix(params, held, storage))
+        ? { held, complete: complete && held.observationCount === projection.observationCount,
             published: { demand: projection.demand, frontier: projection.frontier,
                 observationCount: projection.observationCount, contentMode: projection.content.t } }
         : undefined;
@@ -97,6 +110,10 @@ export async function writeProviderAccountUsagePageProjection(
             kind: 'provider_account_usage_page_projection', ciphertext: retained.data.content.c }))) {
         // Accepted history determines the document. Ciphertext changes when
         // another client seals the same facts; it is not a material revision.
+        if (retained.data.recordId === value.recordId
+            && retained.data.demand.range.startAtMs === value.demand.range.startAtMs
+            && retained.data.demand.range.endAtMs === value.demand.range.endAtMs
+            && sameCoverage(retained.data, count, last)) return retained.data;
         const existing = await readProviderAccountUsagePageProjection({ accountId: params.accountId,
             recordId: value.recordId, projection: value.demand }, storage, row);
         if (existing.complete && existing.projection) return existing.projection;

@@ -10,6 +10,7 @@ import { DiscussionMessageContentV1StoredSchema, readDiscussionMentionedParticip
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { DiscussionAddressingV1Schema } from '@happier-dev/protocol/discussions/references';
+import { DiscussionInitialParticipantsV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionAccessRecipientCensusResponseV1Schema, DiscussionRecipientKeyEnvelopeCommitResponseV1Schema } from '@happier-dev/protocol/discussions/access';
 import { runResourceRecipientKeyPreparationV1 } from '@happier-dev/protocol/teams/resourceRecipientKeyPreparationV1';
 import type { ActionExecutorContext, ActionExecutorDeps, StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol';
@@ -30,6 +31,7 @@ import { DiscussionSecondOpinionStartInputV1Schema } from '@happier-dev/protocol
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewResponseV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 
 function failure(code: string) {
   return { ok: false as const, errorCode: code, error: code };
@@ -134,8 +136,15 @@ export function createDiscussionActionDeps(options: Readonly<{
       return DiscussionOpenedSummaryV1Schema.parse({ ...row, ...first, title: title.success ? title.data.title : null });
     }
 
+    const root = SignedRootActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
+    // Roster reads prepare the original operation, including the current
+    // answer-policy check before an addressed post/reply. Home admits their
+    // exact route under that root; they never become a second signed effect.
+    const effectActionId = actionId === 'discussion.participants.list' && root.success
+      && (getActionSpec(root.data).sessionTarget || root.data === 'discussion.post' || root.data === 'discussion.reply')
+      ? root.data : actionId;
     const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
-      context, effectActionId: actionId, method, path, ...(body === undefined ? {} : { body }),
+      context, effectActionId, method, path, ...(body === undefined ? {} : { body }),
       daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
       ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
       ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),
@@ -246,6 +255,7 @@ export function createDiscussionActionDeps(options: Readonly<{
       }
       if (actionId === 'discussion.create') {
         const args = DiscussionCreateInputV1Schema.parse(parsed.data);
+        const participants = args.participants === undefined ? undefined : DiscussionInitialParticipantsV1Schema.parse(args.participants);
         const creationLocalId = args.creationLocalId ?? omittedLocalId('creation');
         const localId = args.firstMessage.localId ?? omittedLocalId('first_message');
         const currentness = await fetchAccountEncryptionCurrentness({
@@ -268,9 +278,9 @@ export function createDiscussionActionDeps(options: Readonly<{
         const crypto = cryptoContext(key);
         const body = buildDiscussionMutationRequestBodyV1({
           kind: 'create', creationLocalId, titleContent: sealSessionStoredContent({ ...crypto, payload: title }),
-          creationEqualityEvidenceV1: equality(serializeDiscussionMutationEqualityIntentV1({ kind: 'create', title, firstMessage, anchor: args.anchor, participants: args.participants })),
+          creationEqualityEvidenceV1: equality(serializeDiscussionMutationEqualityIntentV1({ kind: 'create', title, firstMessage, anchor: args.anchor, participants })),
           ...(args.anchor === undefined ? {} : { anchor: args.anchor }),
-          ...(args.participants === undefined ? {} : { participants: args.participants }),
+          ...(participants === undefined ? {} : { participants }),
           ...(key.mode === 'e2ee' ? { dataEncryptionKey: key.dataEncryptionKey,
             expectedOwnerContentPublicKeyFingerprint: currentness.contentKeyFingerprint ?? undefined } : {}),
           firstMessage: { ...firstMessage, authoredContent: firstMessage.content, content: sealSessionStoredContent({ ...crypto, payload: firstMessage.content }),
@@ -292,7 +302,7 @@ export function createDiscussionActionDeps(options: Readonly<{
         } else value = DiscussionCreateResponseV1Schema.parse(await request(bound, body));
         // The create transaction already includes every chosen grant. Key
         // delivery then uses the admitted resource census, never a fake one.
-        if (key.mode === 'e2ee' && args.participants?.length) {
+        if (key.mode === 'e2ee' && participants?.some(participant => participant.kind === 'account')) {
           try { await prepareRecipients(value.discussion, key); }
           catch { return failure('outcome_unknown'); }
         }

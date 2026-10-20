@@ -9,11 +9,11 @@ import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/acti
 import { type PluginCollectionRelationV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { type PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isPrismaErrorCode } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 
 import {
@@ -1679,6 +1679,11 @@ export async function updateIndexReadinessInTx(input: Readonly<{
     });
 }
 
+type UpdatedPluginCollectionMutationResult = Extract<PluginCollectionMutationResultV1, { status: "updated" }>;
+type PluginCollectionMutationInTxResult =
+    | Exclude<PluginCollectionMutationResultV1, UpdatedPluginCollectionMutationResult>
+    | (Omit<UpdatedPluginCollectionMutationResult, "changeCursor"> & TransactionResult<PluginCollectionMutationResultV1>);
+
 async function mutatePluginCollectionAfterAdmissionInTx(input: Readonly<{
     tx: Tx;
     accountId: string;
@@ -1694,7 +1699,7 @@ async function mutatePluginCollectionAfterAdmissionInTx(input: Readonly<{
      * collections keep their exact hints.
      */
     physicallyRetiresRequestedRow?: boolean;
-}>): Promise<PluginCollectionMutationResultV1> {
+}>): Promise<PluginCollectionMutationInTxResult> {
     const resolved = input.resolved;
     const operations = input.request.operations;
     const rowIds = operations.map((operation) => operation.rowId);
@@ -1725,7 +1730,9 @@ async function mutatePluginCollectionAfterAdmissionInTx(input: Readonly<{
         }))
         .filter((conflict): conflict is NonNullable<typeof conflict> => conflict !== null);
     if (conflicts.length > 0) {
-        return PluginCollectionMutationResultV1Schema.parse({ status: "conflict", conflicts });
+        const result = { status: "conflict" as const, conflicts };
+        PluginCollectionMutationResultV1Schema.parse(result);
+        return result;
     }
 
     let beforeQuotaUsage: Awaited<ReturnType<typeof readPluginCollectionAccountUsageInTx>>;
@@ -1960,7 +1967,7 @@ async function mutatePluginCollectionAfterAdmissionInTx(input: Readonly<{
             resolved: collection.resolved,
         });
     }
-    let changeCursor = 0;
+    let publication: AccountChangePublication | undefined;
     const orderedChanges = [...changesByCollection.values()].sort((left, right) => (
         left.resolved.contract.pluginId.localeCompare(right.resolved.contract.pluginId)
         || left.resolved.contract.collectionId.localeCompare(right.resolved.contract.collectionId)
@@ -1987,18 +1994,18 @@ async function mutatePluginCollectionAfterAdmissionInTx(input: Readonly<{
                 revision: Math.max(...rows.map(([, revision]) => revision)),
                 full: true as const,
             };
-        changeCursor = await markAccountChanged(input.tx, {
+        publication = await markAccountChanged(input.tx, {
             accountId: input.accountId,
             kind: "pluginDomain",
             entityId: buildPluginDomainAccountChangeEntityId(hint),
             hint,
         });
     }
-    return PluginCollectionMutationResultV1Schema.parse({
-        status: "updated",
-        results,
-        changeCursor,
-    });
+    const result = { status: "updated" as const, results };
+    return Object.assign(transactionResult(() => PluginCollectionMutationResultV1Schema.parse({
+        ...result,
+        changeCursor: publication?.resolveCursor() ?? 0,
+    })), result);
 }
 
 async function mutatePluginCollectionInTx(input: Readonly<{
@@ -2008,12 +2015,12 @@ async function mutatePluginCollectionInTx(input: Readonly<{
     deployment: PluginDataCollectionsCapabilities;
     authentication: SessionAccessAuthentication | undefined;
     physicallyRetiresRequestedRow?: boolean;
-}>): Promise<PluginCollectionMutationResultV1> {
+}>): Promise<PluginCollectionMutationInTxResult> {
     // Collection mutations share the Account-first transition fence with every
     // mode-bound writer. The returned currentness is the sole encryption-mode
     // authority for this transaction; do not re-read Account through a second
     // local mode path after the fence.
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
     if (fence.status === "account_not_found") {
         throw new PluginCollectionMutationOperationError("collection_unavailable");
     }
@@ -2075,7 +2082,7 @@ export async function forgetPluginCollection(input: Readonly<{
 }>): Promise<PluginCollectionForgetResultV1> {
     const request = PluginCollectionForgetRequestV1Schema.parse(input.request);
     return await inTx(async (tx) => {
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "exclusive");
         if (fence.status === "account_not_found") {
             throw new PluginCollectionMutationOperationError("collection_unavailable");
         }

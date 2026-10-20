@@ -2484,6 +2484,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET,
             payload: { sourceKey: 'managed:blink' },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.root.findAllByType('Image')[0]?.props.source).toBe('data:image/png;base64,AQID');
         expect(JSON.stringify(screen.root.findAllByType('Image')[0]?.props)).not.toContain('/Users/');

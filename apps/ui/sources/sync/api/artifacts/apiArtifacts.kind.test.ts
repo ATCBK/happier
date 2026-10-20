@@ -1,0 +1,50 @@
+import { describe, expect, it } from 'vitest';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { createArtifact, fetchArtifactListPage, restoreArtifactRevision, updateArtifact } from './apiArtifacts';
+import { decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
+
+const row = { id: 'skill', ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
+    header: 'header', headerVersion: 2, body: 'body', bodyVersion: 3,
+    dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 0, createdAt: 1, updatedAt: 1 } as const;
+
+describe('Artifact coarse-kind transport', () => {
+    it('sends coarse kind for queries, writes and binary uploads', async () => {
+        const paths: string[] = [];
+        const writes: Record<string, unknown>[] = [];
+        const uploads: unknown[] = [];
+        const request = async (path: string, init?: RequestInit) => {
+            paths.push(path);
+            if ((init?.method ?? 'GET') === 'GET') return Response.json({ items: [{ ...row, kind: 'skill' }], hasUnclassified: true });
+            if (path === '/v1/artifacts/content/upload') {
+                const wire = new Uint8Array(await new Response(init?.body).arrayBuffer());
+                uploads.push(decodeArtifactUploadMetadataV1(wire.subarray(0, wire.indexOf(10))));
+                return Response.json(uploads.length === 1 ? row : { success: true });
+            }
+            writes.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+            return Response.json(path === '/v1/artifacts' ? row : { success: true, headerVersion: 3, bodyVersion: 4 });
+        };
+        const options = { request, retry: 'none' as const, serverId: 'kind-api-home' };
+        const page = await fetchArtifactListPage({ token: 't' }, { ...options, coarseKind: 'skill', limit: 500 });
+        expect(paths[0]).toBe('/v1/artifacts?limit=500&kind=skill');
+        expect(page.hasUnclassified).toBe(true);
+        await createArtifact({ token: 't' }, { id: 'skill', kind: 'skill', header: 'header', body: 'body',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }, options);
+        await updateArtifact({ token: 't' }, 'skill', { kind: 'skill', header: 'header', expectedHeaderVersion: 2 }, options);
+        await restoreArtifactRevision({ token: 't' }, { artifactId: 'skill', kind: 'prompt', header: 'restored-header',
+            bodyVersion: 1, expectedRevision: { headerVersion: 2, bodyVersion: 3 } }, options);
+        expect(writes.map(write => write.kind)).toEqual(['skill', 'skill', 'prompt']);
+        const blob = { blobId: '00000000-0000-4000-8000-000000000002', content: { t: 'plain' as const, v: 'AA==' } };
+        await createArtifact({ token: 't' }, { id: '00000000-0000-4000-8000-000000000001', kind: 'plugin_ui',
+            header: 'header', body: 'body', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, blob }, options);
+        await updateArtifact({ token: 't' }, '00000000-0000-4000-8000-000000000001', { kind: 'plugin_ui',
+            header: 'header', expectedHeaderVersion: 2, body: 'body', expectedBodyVersion: 3, blob }, options);
+        expect(uploads.map(input => input && typeof input === 'object' ? Reflect.get(input, 'artifactKind') : undefined))
+            .toEqual(['plugin_ui', 'plugin_ui']);
+    });
+
+    it('refuses filtered responses without completeness metadata', async () => {
+        await expect(fetchArtifactListPage({ token: 't' }, { serverId: 'kind-api-home', coarseKind: 'skill', retry: 'none',
+            request: async () => Response.json({ items: [row] }) })).rejects.toMatchObject({ code: 'artifact_content_unavailable' });
+    });
+
+});

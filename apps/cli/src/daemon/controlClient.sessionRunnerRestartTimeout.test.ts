@@ -4,6 +4,7 @@ import { once } from 'node:events';
 
 import {
   requestDaemonSessionRunnerRestart,
+  requestDaemonSessionRunnerRestartConfirmedBackground,
   requestDaemonSessionRunnerRestartV2,
   restartAllDaemonSessionRunners,
   type DaemonControlRequestOptions,
@@ -15,6 +16,9 @@ const restartRequest = { sessionId: 'session', mode: 'force_current_cli', reason
 const cases = [
   { name: 'single', path: '/session-runners/restart',
     request: (options: DaemonControlRequestOptions) => requestDaemonSessionRunnerRestart(restartRequest, options),
+    result: { ok: true, status: 'restarted', sessionId: 'session' } },
+  { name: 'confirmed background', path: '/session-runners/restart-confirmed-background',
+    request: (options: DaemonControlRequestOptions) => requestDaemonSessionRunnerRestartConfirmedBackground(restartRequest, options),
     result: { ok: true, status: 'restarted', sessionId: 'session' } },
   { name: 'provider recovery', path: '/session-runners/restart-v2',
     request: (options: DaemonControlRequestOptions) => requestDaemonSessionRunnerRestartV2({

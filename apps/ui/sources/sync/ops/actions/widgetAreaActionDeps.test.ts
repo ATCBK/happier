@@ -73,6 +73,8 @@ it('uses a stable Project key without a Source through the actual Account Artifa
         artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
         defaultLayout: { v: 1 as const, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
     });
+    // The checkout is admitted against the Account's Project rows, never against page context alone.
+    boundary.setWorkspaceRefs([checkout]);
     const account = await captureLazyActionAccountContext(connection.home.id);
     try {
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');

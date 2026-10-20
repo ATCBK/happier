@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
+import { isBrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
 
@@ -20,7 +21,8 @@ export function BrowserStatusBar(props: Readonly<{
     testID?: string;
 }>): React.ReactElement | null {
     const lastError = props.view?.lastError;
-    if (!lastError) {
+    // A relay preview's refusal replaced the page: the frame's own state card says it, once.
+    if (!lastError || isBrowserPreviewRefusalReasonCode(lastError)) {
         return null;
     }
     const copy = resolveReasonCopy({ reasonCode: lastError, kind: 'browserStatus' });

@@ -224,9 +224,15 @@ export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSc
   presentUserIntent: z.optional(z.literal('confirmed')),
 }).check(z.superRefine((request, context) => {
   validatePluginActionDaemonDispatch(request, context);
-  if (request.resolveClientMessageContext && request.invocation?.kind !== 'hostPresentedMessage') {
-    context.addIssue({ code: 'custom', path: ['resolveClientMessageContext'],
-      message: 'Client Message context requires the host-presented Message carrier.' });
+  if (request.resolveClientMessageContext) {
+    if (request.invocation?.kind !== 'hostPresentedMessage' && !isAutomatedClientActionInvocation(request)) {
+      context.addIssue({ code: 'custom', path: ['resolveClientMessageContext'],
+        message: 'Client Message context requires host-presented Message intent or an automated client Action binding.' });
+    }
+    if (!request.messageActionReference || (request.sessionId !== undefined && request.sessionId !== request.messageActionReference.sessionId)) {
+      context.addIssue({ code: 'custom', path: ['messageActionReference'],
+        message: 'Client Message context requires its exact committed Message reference and Session.' });
+    }
   }
   if (request.presentUserIntent !== undefined
     && request.executionSurface !== 'ui'

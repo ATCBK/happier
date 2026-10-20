@@ -4,6 +4,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 import tweetnacl from 'tweetnacl';
+import fastify from 'fastify';
+import { Server } from 'socket.io';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ClientToServerEvents, ServerToClientEvents } from '@/api/types';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { handleActionsCommand } from '@/cli/commands/actions';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 const externalActionTargetResolverMocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -25,6 +41,7 @@ import {
   ActionsSettingsV1Schema,
   ApprovalExecutionOriginV1Schema,
   ExternalActionExecutionAuthorizationV1Schema,
+  FeaturesResponseSchema,
   accountSettingsParse,
   ApiTokenGrantV1Schema,
   buildQualifiedPluginContributionKey,
@@ -46,6 +63,7 @@ import {
   type TargetActionApprovalRequestV1,
   type WorkflowDefinitionV1,
   type PluginActionContributionV2,
+  type PluginHostAccessRequestV2,
 } from '@happier-dev/protocol';
 import {
   createActionExecutor,
@@ -62,6 +80,7 @@ import type {
   JsonValue,
   PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
@@ -211,6 +230,7 @@ function createExternalActionRuntime(
     inputHints?: { fields: readonly { path: string; title: string; widget: 'secret' }[] };
     onInput?: (input: JsonValue) => void;
     confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
+    hostAccess?: readonly PluginHostAccessRequestV2[];
   }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
   const localId = actionOptions.localId ?? 'inspect';
@@ -234,6 +254,7 @@ function createExternalActionRuntime(
       engines: { happier: '^1.0.0' },
       runtime: { apiVersion: 1 },
       entrypoints: { daemon: './daemon.mjs' },
+      ...(actionOptions.hostAccess ? { hostAccess: { required: actionOptions.hostAccess } } : {}),
       contributes: {
         actions: (actionOptions.overlappingTool ? ['inspect', 'actions/inspect'] : [localId]).map((id) => ({
           id,
@@ -243,6 +264,7 @@ function createExternalActionRuntime(
           surfaces: actionOptions.surfaces ?? ['cli'],
           execution: { target: 'daemon' },
           dangerLevel,
+          ...(actionOptions.hostAccess ? { hostAccess: actionOptions.hostAccess.map(request => request.id) } : {}),
           ...(actionOptions.inputSchema === undefined ? {} : { inputSchema: actionOptions.inputSchema }),
           ...(actionOptions.resultSchema === undefined ? {} : { resultSchema: actionOptions.resultSchema }),
           ...(actionOptions.inputHints === undefined ? {} : { inputHints: actionOptions.inputHints }),
@@ -486,6 +508,145 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
+  it.each(['current', 'wrong-home', 'stale-source'] as const)('decides target approvals through the real CLI and exact daemon (%s)', async mode => {
+    const scratch = await mkdtemp(join(tmpdir(), 'happier-fx45-'));
+    const effectPath = join(scratch, 'target-effect.json');
+    const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account-1', session: 'terminal', tokenEpoch: 7,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null, credentialProvenance: 'stored_session' } as const;
+    const app = fastify();
+    const sockets = new Server<ClientToServerEvents, ServerToClientEvents>(app.server, { path: '/v1/updates' });
+    const rows = new Map<string, Record<string, unknown>>();
+    const calls: string[] = [];
+    const packets: unknown[] = [];
+    const features = FeaturesResponseSchema.parse({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: mode === 'wrong-home' ? 'srv_wrong_fx45' : 'srv_fx45' } } });
+    app.get('/v1/features', async () => features);
+    app.get('/v1/features/authenticated', async request => {
+      expect(request.headers.authorization).toBe(`Bearer ${token}`);
+      return features;
+    });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+    app.get('/v1/account/profile', async () => ({ id: 'account-1' }));
+    app.get('/v1/machines/machine-local', async () => ({ machine: { id: 'machine-local', active: true,
+      kind: 'persistent', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      revokedAt: null, replacedByMachineId: null } }));
+    app.get<{ Params: { id: string } }>('/v1/artifacts/:id', async (request, reply) =>
+      rows.get(request.params.id) ?? reply.code(404).send({ error: 'not_found' }));
+    app.post<{ Body: { id: string; header: string; body: string; dataEncryptionKey: string } }>('/v1/artifacts', async request => {
+      const row = { ...request.body, ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain',
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+      rows.set(row.id, row);
+      return row;
+    });
+    app.post<{ Params: { id: string }; Body: { header: string; body: string; expectedHeaderVersion: number;
+      expectedBodyVersion: number } }>('/v1/artifacts/:id', async request => {
+      const previous = rows.get(request.params.id)!;
+      expect(request.body.expectedHeaderVersion).toBe(previous.headerVersion);
+      expect(request.body.expectedBodyVersion).toBe(previous.bodyVersion);
+      const row = { ...previous, header: request.body.header, body: request.body.body,
+        headerVersion: request.body.expectedHeaderVersion + 1, bodyVersion: request.body.expectedBodyVersion + 1 };
+      rows.set(request.params.id, row);
+      return { success: true, headerVersion: row.headerVersion, bodyVersion: row.bodyVersion };
+    });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture Home');
+    const serverApiUrl = `http://127.0.0.1:${address.port}`;
+    let effects = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', async () => {
+      effects++;
+      await writeFile(effectPath, JSON.stringify({ applied: true }));
+    }, undefined, () => ({ serverId: 'server-external', machineId: 'machine-local' }), undefined,
+    undefined, 'writesRemote', undefined, { surfaces: ['cli'] });
+    const lease = { registry: runtime, source: 'ephemeral' as const,
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const store = createCliApprovalsArtifactStore({ credentials, serverId: 'server-external', serverHttpBaseUrl: serverApiUrl });
+    const replay = createDaemonExternalActionContributedApprovalReplay({ credentials,
+      acquireRuntimeRegistryLease: async () => lease, targetActionApprovals: store,
+      isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentness({
+        accountId: 'account-1', machineId: 'machine-local', serverId: 'server-external',
+        // Installed Machine/Home observation is an OS boundary; the real origin,
+        // target and Account admission logic below remains in the currentness owner.
+        resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine-local',
+          serverIdentityId: mode === 'wrong-home' ? 'srv_wrong_fx45'
+            : mode === 'stale-source' ? 'srv_retired_fx45' : 'srv_fx45' }),
+        resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl }),
+        isAccountCurrent: async () => (await axios.get<{ id: string }>(`${serverApiUrl}/v1/account/profile`)).data.id === 'account-1',
+        listAccountApiTokens: async () => { throw new Error('Ordinary CLI source has no PAT'); },
+      }) });
+    const daemon = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      targetActionApprovalReplay: replay });
+    const handlers = new Map<string, (input: unknown, context?: import('@/api/rpc/types').RpcHandlerContext) => Promise<unknown>>();
+    registerApprovalRpcHandlers({ actionExecutor: daemon,
+      rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } } });
+    sockets.on('connection', socket => {
+      expect(socket.handshake.auth.token).toBe(token);
+      socket.on(SOCKET_RPC_EVENTS.CALL, async (packet, acknowledge) => {
+        calls.push(packet.method);
+        packets.push(packet.params);
+        const method = packet.method.replace('machine-local:', '');
+        const handler = handlers.get(method);
+        if (!handler) return acknowledge({ ok: false, error: 'method_not_found' });
+        const result = await runWithServerHttpBaseUrl(serverApiUrl,
+          () => handler(packet.params, { callerAuthority: 'present_user' }));
+        acknowledge({ ok: true, result });
+      });
+    });
+    try { await runWithServerHttpBaseUrl(serverApiUrl, async () => {
+      const invoke = createDaemonExternalActionContributedInvoker({ acquireRuntimeRegistryLease: async () => lease,
+        requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+          create: request => store.targetActionApprovalsCreate({ request }),
+          read: artifactId => store.targetActionApprovalsGet({ artifactId }),
+        }) });
+      const { principalId: _principal, credentialId: _credential, ...ordinaryOrigin } = createApiActionApprovalOrigin();
+      const created = await invoke({ action: { pluginId: 'acme.external', localId: 'inspect' }, input: {},
+        approvalExecutionOrigin: { ...ordinaryOrigin, serverIdentityId: 'srv_fx45',
+          surface: 'cli', authority: 'present_user' }, context: { surface: 'cli', authority: 'present_user',
+          actionCaller: { kind: 'host' } } });
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const artifactId = [...rows.keys()][0]!;
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
+      const standalone = createCliActionExecutorFromCredentials({ credentials, serverId: 'deciding-device', serverApiUrl,
+        actionsSettingsProvider: createActionSettingsProvider() });
+      for (const surface of ['mcp', 'agent'] as const) {
+        expect(await standalone.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+          surface, authority: 'account_automation', actionCaller: { kind: 'session', sessionId: 'requesting-agent' },
+        })).toMatchObject({ ok: false });
+      }
+      expect(calls).toEqual([]);
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
+      const output = captureConsoleJsonOutput();
+      try {
+        await runWithServerHttpBaseUrl(serverApiUrl, () => handleActionsCommand(
+          ['invoke', 'approval.request.decide', '--input-json', JSON.stringify({ artifactId, decision: 'approve' }), '--json'],
+          { readCredentialsFn: async () => credentials, getServerProfileFn: async () => { throw new Error('No ambient profile'); },
+            createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
+              serverId: 'deciding-device', serverApiUrl,
+              actionsSettingsProvider: createActionSettingsProvider(),
+            }) },
+        ));
+        const result = output.json();
+        expect(result, JSON.stringify(result)).toMatchObject(mode !== 'current'
+          ? { ok: false, error: { code: 'approval_stale' } }
+          : { ok: true, data: { status: 'executed' } });
+      } finally { output.restore(); process.exitCode = 0; }
+      const settled = await store.targetActionApprovalsGet({ artifactId });
+      expect(settled).toMatchObject({ status: mode === 'wrong-home' ? 'open' : mode === 'stale-source' ? 'failed' : 'executed' });
+      expect(effects).toBe(mode === 'current' ? 1 : 0);
+      expect(calls).toEqual(mode === 'wrong-home' ? [] : [`machine-local:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`]);
+      expect(packets).toEqual(mode === 'wrong-home' ? [] : [{ artifactId, decision: 'approve',
+        serverIdentityId: 'srv_fx45', originServerId: 'server-external' }]);
+      if (mode === 'current') expect(JSON.parse(await readFile(effectPath, 'utf8'))).toEqual({ applied: true });
+    });
+    } finally {
+      await runtime.dispose();
+      await new Promise<void>(resolve => sockets.close(() => resolve()));
+      await app.close();
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it.each(['pat', 'session'] as const)('retains signed %s source custody through nested production services', async sourceKind => {
     const source = createSharedBotContributedContext(sourceKind);
     let approval: unknown;
@@ -522,6 +683,125 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     } finally { await owners.dispose(); }
   });
 
+  it.each([
+    { liveOnly: false, outcome: 'executed' },
+    { liveOnly: true, outcome: 'executed' },
+    { liveOnly: true, outcome: 'failed' },
+    { liveOnly: true, outcome: 'uncertain' },
+    { liveOnly: true, outcome: 'receipt_unknown' },
+  ] as const)('settles a shared contributed approval with the credential admitted through its real Plugin service (liveOnly=$liveOnly, outcome=$outcome)', async ({ liveOnly, outcome }) => {
+    const source = createSharedBotContributedContext('session');
+    const service = { pluginId: 'acme.external', localId: 'credentials' };
+    const purpose = { consumer: { pluginId: 'acme.external', localId: 'inspect' }, purpose: 'release' };
+    const account = { service, accountId: 'private-connected-profile' };
+    let materializations = 0;
+    const credentialOwner = createConnectedAccountPurposeBindingOwner({
+      credentialOwnerAccountId: 'alice',
+      store: {
+        read: async () => ({ v: 1, bindings: [{ purpose, target: { kind: 'account', account } }] }),
+        update: async () => { throw new Error('Replay cannot change the saved credential'); },
+        subscribe: () => ({ dispose() {} }),
+      },
+      selectTarget: async () => { throw new Error('No credential prompt during replay'); },
+      resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: 'Release GitHub' } : null,
+      materializeAccount: async () => {
+        materializations += 1;
+        return { kind: 'environment', env: { RELEASE_TOKEN: 'private-release-token' } };
+      },
+      projectTargetAccounts: async () => { throw new Error('No account listing'); },
+      assertTargetAccountMaterializable: async () => { throw new Error('No listed account selection'); },
+    });
+    const owners = createProductionPluginInvocationServiceOwners({ connectedAccounts: credentialOwner });
+    const controller = new AbortController();
+    const secret = 'private-live-release-input';
+    let effects = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', async context => {
+      const material = await context.services.connectedAccounts.materialize('release', { kind: 'environment', keys: ['RELEASE_TOKEN'] });
+      expect(material).toEqual({ kind: 'environment', env: { RELEASE_TOKEN: 'private-release-token' } });
+      effects += 1;
+      if (outcome === 'failed') throw new PluginError({ code: 'release_refused', message: secret });
+      if (outcome === 'uncertain') controller.abort();
+    }, undefined, undefined, undefined, owners, 'writesRemote', undefined, { surfaces: ['agent'], hostAccess: [{
+      id: 'release', capability: 'connectedAccounts', reason: 'Publish the approved release',
+      scope: { serviceRefs: ['credentials'], operations: ['use'], materializationKinds: ['environment'] },
+    }], ...(liveOnly ? {
+      inputSchema: { type: 'object', properties: { title: { type: 'string' }, token: { type: 'string' } },
+        required: ['title', 'token'], additionalProperties: false },
+      inputHints: { fields: [{ path: 'token', title: 'Release credential', widget: 'secret' }] },
+    } : {}) });
+    const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'ephemeral',
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    let stored: TargetActionApprovalRequestV1 | null = null;
+    const invoker = createDaemonExternalActionContributedInvoker({ acquireRuntimeRegistryLease: async () => lease,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'credential-write' }; },
+        read: async () => stored,
+        update: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(request);
+          if (outcome === 'receipt_unknown') throw new Error('Receipt acknowledgement lost');
+          return { ok: true };
+        },
+      }),
+    });
+    const attribution = { requestRef: 'bob-original-request', requester: { serverId: 'server-external', accountId: 'bob' },
+      persona: { serverId: 'server-external', sessionId: 'original-manager-session' }, origin: null };
+    try {
+      const pending = createExternalActionExecutor(invoker).execute('action.invoke', {
+        action: { pluginId: 'acme.external', localId: 'inspect' }, input: { title: 'Approved release', ...(liveOnly ? { token: secret } : {}) },
+      }, { ...source.context, signal: controller.signal, actionRequestAttributionV1: attribution });
+      if (liveOnly) await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount('credential-write')).toBe(1));
+      else expect(await pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'credential-write' } });
+      expect(materializations).toBe(0);
+      const replay = createDaemonExternalActionContributedApprovalReplay({
+        readInstallationIdentity: source.readInstallationIdentity,
+        credentials: { token: 'alice-token', encryption: null } as never,
+        isApprovalExecutionOriginCurrent: source.isApprovalExecutionOriginCurrent,
+        acquireRuntimeRegistryLease: async () => lease,
+        targetActionApprovals: {
+          targetActionApprovalsGet: async () => stored,
+          targetActionApprovalsUpdate: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
+        },
+      });
+      const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+        requesterApprovalDecision: { sessionId: 'bot-session',
+          actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true } };
+      const result = await replay({ artifactId: 'credential-write', decision: 'approve', context });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: liveOnly ? 'approved' : 'executed' } });
+      if (liveOnly) expect(await pending).toMatchObject(outcome === 'executed' ? { ok: true }
+        : { ok: false, errorCode: outcome === 'failed' ? 'release_refused'
+          : outcome === 'receipt_unknown' ? 'approval_execution_outcome_unknown' : 'plugin_action_outcome_unknown' });
+      expect(effects).toBe(1);
+      expect(materializations).toBe(1);
+      const operationCredentialUses = [{ v: 1, kind: 'connected_account', label: 'Release GitHub',
+        owner: { kind: 'account', accountId: 'alice' }, service,
+        why: { kind: 'purpose_binding', purpose, target: 'account' }, currentness: { kind: 'current_at_materialization' } }];
+      const executed = outcome === 'executed' || outcome === 'receipt_unknown';
+      expect(stored).toMatchObject({ status: executed ? 'executed' : 'failed', decision: { decidingAccountId: 'bob' },
+        executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: attribution },
+        execution: { ok: executed, operationCredentialUses,
+          ...(executed ? {} : { errorCode: outcome === 'failed' ? 'release_refused' : 'approval_execution_outcome_unknown' }) } });
+      const reader = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsGet: async () => stored });
+      const receipt = await reader.execute('approval.request.get', { artifactId: 'credential-write' }, {
+        surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' },
+      });
+      expect(receipt).toMatchObject({ ok: true, result: { request: { status: executed ? 'executed' : 'failed',
+        execution: { ok: executed, operationCredentialUses } } } });
+      if (!liveOnly) expect(result).toMatchObject({ result: { execution: { operationCredentialUses } } });
+      const repeated = await replay({ artifactId: 'credential-write', decision: 'approve', context });
+      expect(repeated).toMatchObject(liveOnly ? { ok: false, errorCode: 'approval_stale' }
+        : { result: { execution: { operationCredentialUses } } });
+      expect(materializations).toBe(1);
+      expect(effects).toBe(1);
+      for (const privateValue of [secret, 'private-release-token', 'private-connected-profile']) {
+        expect(JSON.stringify(stored)).not.toContain(privateValue);
+        expect(JSON.stringify(result)).not.toContain(privateValue);
+        expect(JSON.stringify(receipt)).not.toContain(privateValue);
+      }
+    } finally {
+      await owners.dispose();
+    }
+  });
+
   it('rechecks the live requester after confirming confidential contributed operands', async () => {
     const source = createSharedBotContributedContext();
     const controller = new AbortController();
@@ -540,6 +820,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'bob-confidential' }; },
         read: async () => stored,
+        update: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
       }),
     }));
     const pending = executor.execute('action.invoke', { action: { pluginId: 'acme.external', localId: 'inspect' },
@@ -723,6 +1004,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))); return { artifactId: 'secret-workflow' }; },
         read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+        update: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
       }),
     });
     const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
@@ -958,6 +1240,10 @@ describe('createDaemonExternalActionContributedInvoker', () => {
           return { artifactId };
         },
         read: async () => stored ?? null,
+        update: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+          return { ok: true };
+        },
         subscribeChanges: (_artifactId, onChange) => {
           invalidate = onChange;
           return { dispose: () => { invalidate = undefined; } };
@@ -1028,6 +1314,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       } : {}) })).resolves.toMatchObject({ ok: true, result: { status: 'approved' } });
       await expect(pending).resolves.toMatchObject({ ok: true });
       expect(received).toEqual({ releaseTag: secret, public: ' endpoint ' });
+      expect(stored).toMatchObject({ status: 'executed', execution: { ok: true } });
+      expect(JSON.stringify(stored)).not.toContain(secret);
       expect(acquire).toHaveBeenCalledTimes(1);
       // No second invocation can reconstruct this input from approval history.
       await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });

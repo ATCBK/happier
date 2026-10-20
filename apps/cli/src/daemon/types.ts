@@ -80,6 +80,8 @@ export interface TrackedSession {
   activeTurnId?: string;
   /** Requester reason for this occurrence's planned signal; diagnostics only, never persisted. */
   plannedRestartReason?: string;
+  /** Request-owned planned-restart hold; read by the runner only to retire a lost cancellation. Never persisted. */
+  plannedRestartAdmission?: import('./plannedRunnerRestart/sessionRunnerRestartAdmission').SessionRunnerRestartAdmissionAttempt;
   /**
    * A turn that was active when a prior daemon incarnation stopped observing
    * this runner. It is exit-settlement evidence only and must never be used as
@@ -179,8 +181,8 @@ export interface TrackedSession {
   linuxLaunchUnit?: string;
   /** Same-address Guard receipt; only exact exit custody may publish observed stopped. */
   guardStopReceipt?: import('./guard/sessionStopReceipt').GuardSessionStopReceipt;
-  /** In-memory-only runner PID and generation captured by canonical session-report correlation. */
-  runnerProcessIdentity?: Readonly<Required<ProcessIdentityWitness>>;
+  /** In-memory-only runner generation and observed command captured by canonical session-report correlation. */
+  runnerProcessIdentity?: Readonly<Required<ProcessIdentityWitness> & { processCommand?: string }>;
   /** One-shot in-memory bridge from exact webhook capture to the existing accepted-marker owner. */
   persistWindowsTerminalAcceptedAgentMarker?: (
     identity: ExactWindowsProcessCancellationIdentity,
@@ -194,6 +196,8 @@ export interface TrackedSession {
    * tracks the wrapper PID (parent). This field stores the runner PID when known.
    */
   sessionRunnerPid?: number;
+  /** Observed private restart-admission refusal, valid only for this receiving runner PID. */
+  runnerRestartAdmissionUnsupportedPid?: number;
   /**
    * Set when a daemon-owned spawn times out before the runner has reported a
    * canonical session id. Late webhooks from this process must be ignored so a

@@ -11,6 +11,9 @@ import { useSessionDisplayNameSource, useSessionDisplayNameProjections } from '.
 import { readableSessionDisplayTitle, useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionWorkContextParts } from '@/utils/sessions/sessionUtils';
+import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 afterEach(() => {
     standardCleanup();
@@ -104,6 +107,30 @@ describe('useSessionMetadata', () => {
 });
 
 describe('useSessionDisplayNameSource', () => {
+    it('preserves declared Agent identity from the real layout-1 row producer through the display source', async () => {
+        const previousState = storage.getState();
+        try {
+            for (const agentId of ['opencode', 'acme.reviewer']) {
+                const opened = createSessionFixture({ id: 'agent-context', serverId: 'home-b', metadataLayoutVersion: 1,
+                    metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId } }, 1),
+                    ownerMetadataView: { name: 'Release review', host: 'review-box', path: '/release', flavor: 'codex' } });
+                const row = buildSessionListRenderableFromSession(opened);
+                expect(getSessionWorkContextParts(row, 'home-b').agentId).toBe(agentId);
+                // A same-id hydrated record on another Home must not supply this row's Agent.
+                storage.setState({ sessions: { [opened.id]: createSessionFixture({ id: opened.id, serverId: 'home-a',
+                    metadata: { path: '/wrong', host: 'wrong', flavor: 'claude' } }) },
+                    sessionListRowsByServerId: { 'home-b': { [opened.id]: row } } });
+                const hook = await renderHook(() => useSessionDisplayNameSource(opened.id, 'home-b'));
+                const source = hook.getCurrent()!;
+                expect(readSessionPresentationAgentId(source)).toBe(agentId);
+                expect(getSessionWorkContextParts(source, 'home-b')).toMatchObject({ agentId, locationLabel: 'review-box' });
+                expect(getSessionName(source, 'home-b')).toBe(getSessionName(row, 'home-b'));
+                await act(async () => { storage.setState({ sessions: {} }); });
+                expect(hook.getCurrent()?.metadata).toBe(source.metadata);
+                await hook.unmount();
+            }
+        } finally { storage.setState(previousState); }
+    });
     it('uses the sidebar display row when a same-Home live shell has not opened metadata', async () => {
         const previousState = storage.getState();
         try {

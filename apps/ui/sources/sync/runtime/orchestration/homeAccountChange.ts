@@ -16,10 +16,12 @@ import {
  */
 export type HomeAccountChangeEvent = Readonly<{
     serverId: string;
-    /** Marks the existing secondary transport's connected wake, rather than a content change. */
-    source?: 'connected';
+    /** Transport connection, or an early socket wake before detailed catch-up has answered. */
+    source?: 'connected' | 'catch-up-pending';
     /** Exact only for a consumed focused-Home change page; absent wakes remain conservative. */
     entityIds?: readonly string[];
+    /** Revision hints from the consumed change page; never inferred from a socket wake. */
+    entityRevisions?: Readonly<Record<string, number>>;
     /** Present when the publisher knows the changed domains; omitted wakes remain conservative. */
     changeKinds?: readonly ChangeEntry['kind'][];
     /**
@@ -38,7 +40,8 @@ export type HomeAccountChangeEvent = Readonly<{
 }>;
 
 type HomeAccountChangeDetails = Readonly<{
-    source?: 'connected';
+    entityRevisions?: Readonly<Record<string, number>>;
+    source?: 'connected' | 'catch-up-pending';
     changeKinds?: readonly ChangeEntry['kind'][];
     sessionListQueryAffects?: boolean | 'structural';
     profileCatalogAffects?: boolean;
@@ -61,7 +64,7 @@ export function isHomeAdministrationAccountChange(event: HomeAccountChangeEvent)
 
 type HomeAccountChangeObserver = (event: HomeAccountChangeEvent) => void;
 
-const homeAccountChangeObservers = new Set<HomeAccountChangeObserver>();
+const homeAccountChangeObservers = new Map<HomeAccountChangeObserver, boolean>();
 
 type HomeCredentialChangeObserver = (event: HomeCredentialMutationEvent) => void;
 const homeCredentialChangeObservers = new Set<HomeCredentialChangeObserver>();
@@ -100,8 +103,11 @@ export type { HomeCredentialMutationEvent };
 
 export function subscribeHomeAccountChange(
     observer: HomeAccountChangeObserver,
+    // Most projections consume exact planned entities. Catalogs may opt into
+    // early revalidation without making every observer refetch on every wake.
+    options?: Readonly<{ includeCatchUpPending?: boolean }>,
 ): () => void {
-    homeAccountChangeObservers.add(observer);
+    homeAccountChangeObservers.set(observer, options?.includeCatchUpPending === true);
     return () => {
         homeAccountChangeObservers.delete(observer);
     };
@@ -117,6 +123,7 @@ export function publishHomeAccountChange(
         serverId,
         ...(details?.source ? { source: details.source } : {}),
         ...(entityIds ? { entityIds: Object.freeze([...new Set(entityIds)]) } : {}),
+        ...(details?.entityRevisions ? { entityRevisions: Object.freeze({ ...details.entityRevisions }) } : {}),
         ...(details?.changeKinds ? { changeKinds: Object.freeze([...new Set(details.changeKinds)]) } : {}),
         ...(details?.sessionListQueryAffects !== undefined
             ? { sessionListQueryAffects: details.sessionListQueryAffects }
@@ -125,7 +132,8 @@ export function publishHomeAccountChange(
         ...(details?.usageQueryAffects !== undefined ? { usageQueryAffects: details.usageQueryAffects } : {}),
         ...(details?.deletedArtifactIds ? { deletedArtifactIds: Object.freeze([...new Set(details.deletedArtifactIds)]) } : {}),
     });
-    for (const observer of [...homeAccountChangeObservers]) {
+    for (const [observer, includeCatchUpPending] of [...homeAccountChangeObservers]) {
+        if (event.source === 'catch-up-pending' && !includeCatchUpPending) continue;
         try {
             observer(event);
         } catch {

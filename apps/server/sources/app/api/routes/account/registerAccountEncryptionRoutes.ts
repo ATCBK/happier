@@ -1,4 +1,5 @@
 import { InactiveAccountError } from "@/app/auth/accountStatus";
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 import { z } from "zod/mini";
 import { inTx } from "@/storage/inTx";
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
@@ -67,7 +68,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                     updatedAt: user.encryptionModeUpdatedAt.getTime(),
                 });
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },
@@ -115,7 +116,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                 }
                 return reply.send(currentness);
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },
@@ -177,7 +178,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                     updatedAt: result.updatedAt,
                 });
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },

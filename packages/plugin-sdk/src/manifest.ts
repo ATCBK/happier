@@ -3,6 +3,8 @@ import type { PluginDeclarativeToneV2 as DtoPluginDeclarativeToneV2, PluginDecla
 import type { PluginDeclarativeNodeV2, PluginLocalizedStringV2 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 import type { PluginDeclarativeDataNodeV1 as DtoPluginDeclarativeDataNodeV1 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 import { compilePluginJsonSchema as canonicalCompilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import type { PluginAvailabilityDescriptor } from './availability.js';
+export type { PluginAvailabilityDescriptor } from './availability.js';
 import { createPluginContributionIdentity as canonicalCreatePluginContributionIdentity, PluginContributionIdentityV1JsonSchema as canonicalPluginContributionIdentityV1JsonSchema, PluginContributionIdentityV1Schema as canonicalPluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ingestPluginManifestV2, validatePublicPluginManifestPolicy } from '@happier-dev/protocol/plugins/manifest/ingest';
 import { isValidPluginJsonSchemaValue as canonicalIsValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
@@ -444,7 +446,6 @@ export const PluginIdSchema: ProtocolComposableSchema<string> = canonicalPluginI
 // affect assignability, so no author or host call site changes meaning.
 export type { PluginLocalizedStringV2 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 
-export type PluginAvailabilityDescriptor = unknown;
 export type PluginContributionReference = DtoPluginContributionReference;
 export type PluginHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 

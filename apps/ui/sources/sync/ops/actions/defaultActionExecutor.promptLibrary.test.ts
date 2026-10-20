@@ -33,6 +33,7 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsagePromptCompositionSchema } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
@@ -49,6 +50,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -192,9 +194,10 @@ function serveSession(session: Session, beforeWrite?: (input: unknown) => void, 
     homes.answer(serverId, `PATCH /v2/sessions/${session.id}`, { select: (input) => {
         writes.push(input);
         beforeWrite?.(input);
-        if (row.active) return { status: 409, body: { code: 'session_active' } };
+        const team = SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input);
+        if (row.active && (!team.success || team.data.sessionExpectation)) return { status: 409, body: { code: 'session_active' } };
         const owner = SessionMetadataOwnerPatchV1Schema.safeParse(input);
-        const current = owner.success
+        const current = team.success ? team : owner.success
             ? owner
             : SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(input);
         if (current.success) {
@@ -948,8 +951,48 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         expect(rpc.session).not.toHaveBeenCalled();
     });
 
+    it.each(['brokered', 'direct'] as const)('commits an inactive %s Team model with its binding and explicit visibility consent', async deliveryMode => {
+        const remote = serveSession(seedSession(false));
+        const teamCredentialModel = { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',
+            expectedResourceRevision: 7, deliveryMode, agentTargetKey: 'agent:happier.agent.claude/claude', modelId: 'team-model' } as const;
+        const result = await createDefaultActionExecutor().execute('session.model.set', {
+            sessionId: 'session_1', teamCredentialModel, teamVisibilityGrantConsent: { teamId: 'team-1' },
+        }, { serverId, surface: 'ui' });
+        expect(result).toMatchObject({ ok: true, result: { status: 'intent_updated', sessionId: 'session_1',
+            selection: { v: 2, updatedAt: expect.any(Number), ref: { source: 'team_resource', deliveryMode, modelId: 'team-model' } } } });
+        const persisted = remote.readMetadata();
+        expect(persisted.modelSelectionIntentV2).toMatchObject({ v: 2, ref: { source: 'team_resource',
+            teamId: 'team-1', resourceId: 'resource-1', deliveryMode, modelId: 'team-model' } });
+        expect(persisted).not.toHaveProperty('modelSelectionIntentV1');
+        expect(remote.writes.map(input => SessionTeamCredentialBindingMetadataPatchV1Schema.parse(input))).toEqual([
+            expect.objectContaining({ operation: 'session.model.set', sessionExpectation: { kind: 'inactive_model_intent' },
+                teamVisibilityGrantConsent: { teamId: 'team-1' }, teamCredentialBindings: [expect.objectContaining({ deliveryMode, slot: { kind: 'provider_model' } })] }),
+        ]);
+        expect(rpc.session).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Team model for a different Agent without mutating the Session', async () => {
+        const remote = serveSession(seedSession(true));
+        const result = await createDefaultActionExecutor().execute('session.model.set', { sessionId: 'session_1',
+            teamCredentialModel: { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',
+                expectedResourceRevision: 7, deliveryMode: 'brokered', agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'team-model' },
+        }, { serverId, surface: 'ui' });
+        expect(result).toMatchObject({ ok: false, errorCode: 'model_selection_agent_target_unknown' });
+        expect(remote.writes).toEqual([]);
+        expect(rpc.session).not.toHaveBeenCalled();
+    });
+
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
+        const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+            : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
+        homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
+            const url = new URL(request.url);
+            const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'account-a',
+                method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
+            if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
+            return { status: response.status, body: await response.json() };
+        } });
         const { resolveServerProfileScopeIdForIdentifier, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
         const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };
@@ -1134,7 +1177,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const session = seedSession(false, { modelSelectionIntentV1: { v: 1, updatedAt: 10, selection: selection('pending-model', 'pc_pending') } });
         const remote = serveSession(session, () => remote.activate({ ...remote.readMetadata(), providerBindingV1: binding }));
         rpc.session.mockResolvedValueOnce({ ok: true, status: 'applied', activeSelection: selection('provider-next', 'pc_active') });
-        expect(await executeModel(modelInput('provider-next'))).toMatchObject({ ok: true, result: { status: 'applied', activeSelection: selection('provider-next', 'pc_active') } });
+        const result = await executeModel(modelInput('provider-next'));
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'applied', activeSelection: selection('provider-next', 'pc_active') } });
         expect(remote.writes).toHaveLength(1);
         expect(rpc.session).toHaveBeenLastCalledWith({ sessionId: 'session_1', serverId, method: 'session.model.transition', payload: { v: 1, selection: selection('provider-next', 'pc_active') } });
     });

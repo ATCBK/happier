@@ -225,7 +225,7 @@ describe('Claude provider task lifecycle', () => {
     })).toEqual({ type: 'started', admission: 'launch', sessionId: ' s1 ', taskId: 't1' });
     expect(readClaudeProviderTaskActivity({
       type: 'system', subtype: 'task_progress', session_id: 's1', task_id: 't1',
-    })).toEqual({ type: 'progress', sessionId: 's1', taskId: 't1' });
+    })).toEqual({ type: 'progress', sessionId: 's1', taskId: 't1', source: 'system-task-progress' });
     for (const status of ['completed', 'failed', 'stopped']) {
       expect(readClaudeProviderTaskActivity({
         type: 'system', subtype: 'task_notification', session_id: 's1', task_id: 't1', status,
@@ -429,7 +429,7 @@ describe('Claude provider task lifecycle', () => {
     })).toEqual({ type: 'started', admission: 'launch', sessionId: 's1', taskId: 'workflow-1' });
     expect(readClaudeProviderTaskActivity({
       type: 'system', subtype: 'task_progress', session_id: 's1', task_id: 'agent-1', task_type: 'local_agent',
-    })).toEqual({ type: 'progress', sessionId: 's1', taskId: 'agent-1' });
+    })).toEqual({ type: 'progress', sessionId: 's1', taskId: 'agent-1', source: 'system-task-progress' });
   });
 
   it('rejects transcript, tool-result, Stop, and broadened status aliases', () => {
@@ -779,4 +779,198 @@ describe('createClaudeProviderActivityLedger', () => {
     },
   );
 
+
+  describe('Agents awaiting their own background children (Claude Code 2.1.302 rows)', () => {
+    type Ledger = ReturnType<typeof createClaudeProviderActivityLedger>;
+    const sdkRowApplier = (ledger: Ledger, ownerScope?: object) => (row: Record<string, unknown>) => {
+      const activity = readClaudeProviderTaskActivity({ type: 'system', session_id: 's1', ...row });
+      if (activity) ledger.apply(activity, ownerScope);
+    };
+    const startAgent = (apply: (row: Record<string, unknown>) => void, taskId: string, parent?: string) => apply({
+      subtype: 'task_started', task_id: taskId, task_type: 'local_agent', is_backgrounded: true,
+      ...(parent ? { owned_by_subagent: true, parent_task_id: parent } : {}),
+    });
+    const startShell = (apply: (row: Record<string, unknown>) => void, taskId: string, parent: string) => apply({
+      subtype: 'task_started', task_id: taskId, task_type: 'local_bash', is_backgrounded: true,
+      owned_by_subagent: true, parent_task_id: parent,
+    });
+    const stop = (apply: (row: Record<string, unknown>) => void, taskId: string) => {
+      apply({ subtype: 'task_updated', task_id: taskId, patch: { status: 'completed' } });
+      apply({ subtype: 'task_notification', task_id: taskId, status: 'completed' });
+    };
+    const isActive = (ledger: Ledger, taskId: string) => ledger.hasProviderTask({ sessionId: 's1', taskId });
+
+    it('keeps an Agent that stopped with live children resumable only by its own typed progress', () => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      ledger.registerOwner(query);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 2 });
+
+      stop(apply, 'agent-1');
+      expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+      const subagentStop = readClaudeProviderTaskActivity({ hook_event_name: 'SubagentStop', session_id: 's1', agent_id: 'agent-1' });
+      expect(subagentStop).not.toBeNull();
+      if (subagentStop) ledger.apply(subagentStop, query);
+      expect(isActive(ledger, 'agent-1')).toBe(false);
+
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      // Not counted, but the query must keep observing so the Agent's wake is read.
+      expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+      expect(ledger.hasUnsettledProviderTasks(query)).toBe(true);
+      ledger.completeQueryObservation(query);
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+
+      stop(apply, 'agent-1');
+      expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+      expect(ledger.hasUnsettledProviderTasks(query)).toBe(false);
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(isActive(ledger, 'agent-1')).toBe(false);
+    });
+
+    it.each([
+      ['failed', { subtype: 'task_notification', task_id: 'agent-1', status: 'failed' }],
+      ['killed', { subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'killed' } }],
+    ])('does not let a %s Agent with live children wake or hold observation', (_status, terminalRow) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const apply = sdkRowApplier(ledger);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      apply(terminalRow);
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      expect(ledger.hasUnsettledProviderTasks()).toBe(false);
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(isActive(ledger, 'agent-1')).toBe(false);
+    });
+
+    it.each([
+      ['failed', { type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'failed' }],
+      ['killed', { type: 'system', subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'killed' } }],
+      ['TaskStop', {
+        hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
+        tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'stopped' },
+      }],
+      ['completed TaskStop', {
+        hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
+        tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'completed' },
+      }],
+      ['StopFailure', { hook_event_name: 'StopFailure', agent_id: 'agent-1' }],
+    ])('settles an awaiting Agent after %s evidence', (_label, terminalRow) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      ledger.registerOwner(query);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      stop(apply, 'agent-1');
+      const terminal = readClaudeProviderTaskActivity({ session_id: 's1', ...terminalRow });
+      if (!terminal) throw new Error('expected terminal evidence');
+      ledger.apply(terminal, query);
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      expect(ledger.hasUnsettledProviderTasks(query)).toBe(false);
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(isActive(ledger, 'agent-1')).toBe(false);
+    });
+
+    it.each(['typed', 'TaskOutput'])('preserves an Agent wake after %s completion and completed TaskOutput aliases', (firstCompletion) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      ledger.registerOwner(query);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      const output = readClaudeProviderTaskActivity({
+        hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'TaskOutput',
+        tool_input: { task_id: 'agent-1' },
+        tool_response: { retrieval_status: 'success', task: { task_id: 'agent-1', status: 'completed' } },
+      });
+      if (!output) throw new Error('expected completed TaskOutput evidence');
+      if (firstCompletion === 'TaskOutput') ledger.apply(output, query);
+      else stop(apply, 'agent-1');
+      ledger.apply(output, query);
+      stop(apply, 'agent-1');
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(isActive(ledger, 'agent-1')).toBe(true);
+    });
+
+    it('requires the awaiting Agent\'s query owner to settle or reactivate it', () => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      const otherQuery = {};
+      ledger.registerOwner(query);
+      ledger.registerOwner(otherQuery);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      stop(apply, 'agent-1');
+      ledger.apply({ type: 'terminal', terminalStatus: 'stopped', sessionId: 's1', taskId: 'agent-1' }, otherQuery);
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      const progress = readClaudeProviderTaskActivity({
+        type: 'system', subtype: 'task_progress', session_id: 's1', task_id: 'agent-1',
+      });
+      if (!progress) throw new Error('expected typed progress');
+      ledger.apply(progress, otherQuery);
+      expect(isActive(ledger, 'agent-1')).toBe(false);
+      ledger.apply(progress, query);
+      expect(isActive(ledger, 'agent-1')).toBe(true);
+    });
+
+    it('keeps an Agent resumable while a nested Agent it owns still waits on or resumes its own work', () => {
+      const nested = () => {
+        const ledger = createClaudeProviderActivityLedger();
+        const apply = sdkRowApplier(ledger);
+        startAgent(apply, 'agent-a');
+        startAgent(apply, 'agent-b', 'agent-a');
+        startShell(apply, 'bash-b', 'agent-b');
+        return { ledger, apply };
+      };
+
+      const waiting = nested();
+      stop(waiting.apply, 'agent-b');
+      stop(waiting.apply, 'agent-a');
+      waiting.apply({ subtype: 'task_notification', task_id: 'bash-b', status: 'completed' });
+      waiting.apply({ subtype: 'task_progress', task_id: 'agent-b' });
+      stop(waiting.apply, 'agent-b');
+      waiting.apply({ subtype: 'task_progress', task_id: 'agent-a' });
+      expect(isActive(waiting.ledger, 'agent-a')).toBe(true);
+
+      const resumed = nested();
+      stop(resumed.apply, 'agent-b');
+      resumed.apply({ subtype: 'task_notification', task_id: 'bash-b', status: 'completed' });
+      resumed.apply({ subtype: 'task_progress', task_id: 'agent-b' });
+      stop(resumed.apply, 'agent-a');
+      stop(resumed.apply, 'agent-b');
+      resumed.apply({ subtype: 'task_progress', task_id: 'agent-a' });
+      expect(isActive(resumed.ledger, 'agent-a')).toBe(true);
+    });
+
+    it('keeps the parent link when the typed child launch follows an earlier hook launch', () => {
+      const ledger = createClaudeProviderActivityLedger();
+      const apply = sdkRowApplier(ledger);
+      startAgent(apply, 'agent-a');
+      ledger.apply({ type: 'started', admission: 'launch', sessionId: 's1', taskId: 'agent-b' });
+      startAgent(apply, 'agent-b', 'agent-a');
+      apply({ subtype: 'task_notification', task_id: 'agent-a', status: 'completed' });
+      apply({ subtype: 'task_notification', task_id: 'agent-b', status: 'completed' });
+      apply({ subtype: 'task_progress', task_id: 'agent-a' });
+      expect(isActive(ledger, 'agent-a')).toBe(true);
+    });
+
+    it('releases an awaiting Agent when its provider stops', () => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      ledger.registerOwner(query);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      stop(apply, 'agent-1');
+      ledger.noteProviderStopped(query);
+      expect(ledger.hasUnsettledProviderTasks(query)).toBe(false);
+      expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    });
+  });
 });

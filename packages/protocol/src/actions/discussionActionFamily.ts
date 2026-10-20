@@ -9,6 +9,7 @@ import {
 } from '../discussions/api.js';
 import { DiscussionIdSchema } from '../discussions/content.js';
 import { DiscussionReplyTargetV1Schema } from '../discussions/replyTargets.js';
+import { DiscussionInviteRequestV1Schema } from '../discussions/participants.js';
 
 import {
   isDiscussionActionIdV1,
@@ -60,6 +61,9 @@ const DiscussionReplyHttpWireInputV1Schema = lazyZodSchema(() => z.safeExtend(Di
 const DiscussionRenameHttpWireInputV1Schema = lazyZodSchema(() => z.safeExtend(DiscussionRenameRequestV1Schema, {
   discussionId: DiscussionIdSchema,
 }));
+const DiscussionInviteHttpWireInputV1Schema = lazyZodSchema(() => z.union(
+  DiscussionInviteRequestV1Schema.def.options.map(schema => z.safeExtend(schema, { discussionId: DiscussionIdSchema })),
+));
 
 /** The closed post-sealing input, including metadata-bound route operands. */
 export function discussionActionHttpWireInputSchemaV1(
@@ -70,6 +74,7 @@ export function discussionActionHttpWireInputSchemaV1(
     case 'discussion.post': return DiscussionPostHttpWireInputV1Schema;
     case 'discussion.reply': return DiscussionReplyHttpWireInputV1Schema;
     case 'discussion.rename': return DiscussionRenameHttpWireInputV1Schema;
+    case 'discussion.invite': return DiscussionInviteHttpWireInputV1Schema;
     default: return discussionActionInputSchemaV1(actionId);
   }
 }
@@ -107,7 +112,7 @@ export function bindDiscussionActionHttpRequestV1(
   }
   return bindHomeDomainHttpRequestV1({
     transport: spec.serverTransport,
-    inputSchema: spec.inputSchema,
+    inputSchema: actionId === 'discussion.invite' ? DiscussionInviteHttpWireInputV1Schema : spec.inputSchema,
     input,
   });
 }

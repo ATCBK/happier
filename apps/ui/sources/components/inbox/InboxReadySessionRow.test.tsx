@@ -35,6 +35,9 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
+const hydrateSessionListRows = vi.hoisted(() => vi.fn(async (_addresses: readonly { serverId: string; sessionId: string }[]) => undefined));
+vi.mock('@/sync/sync', () => ({ sync: { hydrateSessionListRows } }));
+
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
@@ -75,6 +78,12 @@ async function renderRow(overrides?: Partial<{
 describe('InboxReadySessionRow', () => {
     beforeEach(() => {
         platformState.os = 'ios';
+        hydrateSessionListRows.mockClear();
+    });
+
+    it('demands the content of the Session it names, so an undecided one is not titled "Encrypted session"', async () => {
+        await renderRow();
+        expect(hydrateSessionListRows).toHaveBeenCalledWith([{ serverId: 'server-a', sessionId: 'session-1' }]);
     });
 
     it('exposes a native swipe action that marks only that session as read', async () => {

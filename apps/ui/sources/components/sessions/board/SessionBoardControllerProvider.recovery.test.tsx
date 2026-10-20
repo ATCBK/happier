@@ -34,14 +34,13 @@ vi.mock('socket.io-client', async (importOriginal) =>
 
 const harness = vi.hoisted(() => ({
     layoutLocked: false,
-    removalMode: 'none' as 'none' | 'populated' | 'empty',
+    removalMode: 'none' as 'none' | 'populated',
     homeId: '',
     secondHomeId: '',
     push: vi.fn(),
     replace: vi.fn(),
     alert: vi.fn(),
     show: vi.fn(),
-    confirm: vi.fn(),
 }));
 
 function nodeHasTestId(element: unknown, testID: string): boolean {
@@ -62,7 +61,6 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: {
         alert: harness.alert,
         show: harness.show,
-        confirm: harness.confirm,
     } }).module;
 });
 // The editor wrapper selects its platform module through a bundler-only require.
@@ -200,8 +198,6 @@ describe('mounted Board recovery navigation', () => {
             queueMicrotask(() => config.onRequestClose?.());
             return 'modal-id';
         });
-        harness.confirm.mockReset();
-        harness.confirm.mockResolvedValue(false);
         connection = await restoreServerAccountForTest({ serverUrl: 'https://board-recovery.test', accountId: 'alice', request });
         harness.homeId = connection.home.id;
         harness.secondHomeId = (await upsertServerProfile({ serverUrl: 'https://board-recovery-second.test', name: 'Second Home' })).id;
@@ -348,79 +344,6 @@ describe('mounted Board recovery navigation', () => {
         }> | undefined;
         expect(modalConfig?.focusReturnRef?.current).toBeTruthy();
         modalConfig?.focusReturnRef?.current?.focus?.();
-        expect(researchFocus).toHaveBeenCalledOnce();
-    });
-
-    it('gives item removal the exact source-view focus target', async () => {
-        harness.removalMode = 'populated';
-        const researchFocus = vi.fn();
-        await renderScreen(
-            <AuthorizedBoard>
-                <ControllerProbe />
-                <SessionBoardPane
-                    sessionId="session-1"
-                    serverId={harness.homeId}
-                    host="details"
-                    resolvePrimaryHost={() => 'details'}
-                    density="full"
-                    layout="grid"
-                />
-            </AuthorizedBoard>,
-            {
-                createNodeMock: (element) => nodeHasTestId(element, 'session-board-pane-surface-views-view-research')
-                    ? { focus: researchFocus }
-                    : {},
-            },
-        );
-
-        await flushHookEffects({ cycles: 30 });
-        await act(async () => {
-            await observedController?.run({ kind: 'view.select', viewId: 'research' });
-        });
-        await act(async () => {
-            await observedController?.run({ kind: 'item.remove', itemId: 'item-1' });
-        });
-
-        const confirmOptions = harness.confirm.mock.calls[0]?.[2] as Readonly<{
-            focusReturnRef?: Readonly<{ current: Readonly<{ focus?: () => void }> | null }>;
-        }> | undefined;
-        expect(confirmOptions?.focusReturnRef?.current).toBeTruthy();
-        confirmOptions?.focusReturnRef?.current?.focus?.();
-        expect(researchFocus).toHaveBeenCalledOnce();
-    });
-
-    it('gives the destructive confirmation the exact source-tab focus target', async () => {
-        harness.removalMode = 'empty';
-        const researchFocus = vi.fn();
-        await renderScreen(
-            <AuthorizedBoard>
-                <ControllerProbe />
-                <SessionBoardPane
-                    sessionId="session-1"
-                    serverId={harness.homeId}
-                    host="details"
-                    resolvePrimaryHost={() => 'details'}
-                    density="full"
-                    layout="grid"
-                />
-            </AuthorizedBoard>,
-            {
-                createNodeMock: (element) => nodeHasTestId(element, 'session-board-pane-surface-views-view-research')
-                    ? { focus: researchFocus }
-                    : {},
-            },
-        );
-
-        await flushHookEffects({ cycles: 30 });
-        await act(async () => {
-            await observedController?.run({ kind: 'view.remove', viewId: 'research' });
-        });
-
-        const confirmOptions = harness.confirm.mock.calls[0]?.[2] as Readonly<{
-            focusReturnRef?: Readonly<{ current: Readonly<{ focus?: () => void }> | null }>;
-        }> | undefined;
-        expect(confirmOptions?.focusReturnRef?.current).toBeTruthy();
-        confirmOptions?.focusReturnRef?.current?.focus?.();
         expect(researchFocus).toHaveBeenCalledOnce();
     });
 });

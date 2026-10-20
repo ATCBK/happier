@@ -3,7 +3,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { storage, useAllMachines } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storage';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { createUiClientActionReverseHandler } from '@/sync/ops/actions/clientActionReverseDispatch';
 import { getMountedWorkflowDraftAddresses, subscribeMountedWorkflowDraftOwners } from '@/sync/ops/actions/workflowAuthoringAction';
 import { workflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
@@ -53,11 +54,11 @@ function MachineClientActionBinding({ serverId, generation, accountId, machineId
     return null;
 }
 
-/** Account-visible Machines share the existing reconnect-safe reverse-RPC channel. */
+/** Currently reachable Machines share the existing reconnect-safe reverse-RPC channel. */
 export function ClientActionReverseRuntime(): React.ReactElement | null {
     const { serverId, generation } = useActiveServerSnapshot();
     const accountId = storage(state => state.profile?.id ?? null);
-    const machines = useAllMachines();
+    const { selectableMachineIds } = useMachinePresenceMembership(serverId);
     const { pluginUiProjection } = useAppShellPluginUiProjection();
     const contributedMachineIds = new Set(Object.values(pluginUiProjection?.actionsById ?? {}).flatMap(action => {
         const origin = readPluginUiContributionOrigin(action);
@@ -92,8 +93,8 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
         ...(currentUiSnapshot ? [currentUiContextReadClientRpcMethod(), ...currentUiSnapshot.commands.map(command =>
             currentUiContextCommandClientRpcMethod(command.id))] : []),
     ])];
-    return <>{machines.flatMap(machine => [...methods,
-        ...(contributedMachineIds.has(machine.id) ? [RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE] : []),
-    ].map(method => <MachineClientActionBinding key={`${machine.id}:${method}`}
-        serverId={serverId} generation={generation} accountId={accountId} machineId={machine.id} method={method} />))}</>;
+    return <>{selectableMachineIds.flatMap(machineId => [...methods,
+        ...(contributedMachineIds.has(machineId) ? [RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE] : []),
+    ].map(method => <MachineClientActionBinding key={`${machineId}:${method}`}
+        serverId={serverId} generation={generation} accountId={accountId} machineId={machineId} method={method} />))}</>;
 }

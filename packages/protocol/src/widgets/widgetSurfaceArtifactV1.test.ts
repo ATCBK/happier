@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWidgetSurfaceArtifactIdV1, createWidgetSurfaceArtifactPortV1, createWidgetAreaActionPortV1, createUsageWidgetPresets, USAGE_WIDGET_PRESET_IDS, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1 } from './index.js';
+import { buildWidgetSurfaceArtifactIdV1, createWidgetSurfaceArtifactPortV1, createWidgetAreaActionPortV1, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1 } from './index.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { enrichWorkspaceRefV1, projectWorkspaceRefV1 } from '../workspaces/workspaceRefResolutionV1.js';
 import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
@@ -41,24 +41,37 @@ describe('personal widget areas at the Account Artifact owner', () => {
     it('reads and personalizes every host-produced Usage preset without a mounted page', async () => {
         const b = boundary();
         const core: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'one', owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
-        const presets = createUsageWidgetPresets(Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>);
-        const views = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface: core, presets, isCurrent: () => true });
+        const views = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface: core, isCurrent: () => true });
         const listed = await views.list();
         expect(listed.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null))
             .toEqual(['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources']);
         expect(b.rows.size).toBe(0);
         for (const view of listed) {
-            const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: view.surface, presets, isCurrent: () => true });
+            const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: view.surface, isCurrent: () => true });
             const state = await owner.readState();
             expect(state).toMatchObject({ kind: 'missing', preset: { isEdited: false }, layout: { name: view.name } });
             expect(flattenWidgetLayoutWidgetsV1(state.layout.items).length).toBeGreaterThan(0);
         }
         expect(b.rows.size).toBe(0);
-        const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, presets, isCurrent: () => true });
+        const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });
         const initial = await owner.readState();
         const first = flattenWidgetLayoutWidgetsV1(initial.layout.items)[0]!.instance.id;
         await owner.apply({ kind: 'rename', instanceId: first, displayName: 'Mine' });
-        const replay = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, presets, isCurrent: () => true });
+        const personal = await views.list();
+        expect(personal).toHaveLength(8);
+        expect(personal.filter(row => row.artifactId === listed[0]!.artifactId)).toEqual([
+            expect.objectContaining({ isPreset: true, isDefault: true, isEdited: true,
+                revision: b.rows.get(listed[0]!.artifactId)!.revision }),
+        ]);
+        // A distinct view may have the same display name; its layout identity stays independent.
+        const copy = await views.create({ layoutId: 'my-overview', name: 'Overview', fromSurface: listed[0]!.surface });
+        const withCopy = await views.list();
+        expect(withCopy).toHaveLength(9);
+        expect(new Set(withCopy.map(row => row.artifactId)).size).toBe(9);
+        expect(new Set(withCopy.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null)).size).toBe(9);
+        expect(copy).toMatchObject({ isPreset: false, isDefault: false, isEdited: false });
+        expect(withCopy.filter(row => row.name === 'Overview')).toHaveLength(2);
+        const replay = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });
         expect(await replay.readState()).toMatchObject({ kind: 'present', preset: { isEdited: true } });
         const reset = await replay.resetPreset();
         expect(reset.layout.items).toEqual(initial.layout.items);

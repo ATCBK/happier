@@ -7,7 +7,44 @@ import { readRegisteredDiscussionRepository, subscribeRegisteredDiscussionReposi
 import type {
     DiscussionRepository,
     DiscussionRepositorySnapshot,
+    DiscussionRepositoryListSnapshot,
+    DiscussionRepositoryThreadSnapshot,
 } from './discussionRepository';
+
+type DiscussionDocSnapshot = Readonly<{
+    query: DiscussionRepositoryListSnapshot;
+    threads: Readonly<Record<string, Readonly<{
+        summary: DiscussionRepositoryThreadSnapshot['summary'];
+        messages: DiscussionRepositoryThreadSnapshot['messages'];
+        revoked: boolean;
+    }> | undefined>>;
+}>;
+
+/** A Doc consumes only its admitted query and the thread facts that its passage projection reads. */
+export function useDiscussionDocSnapshot(repository: DiscussionRepository | null, artifactId: string): DiscussionDocSnapshot | null {
+    const source = React.useMemo(() => {
+        let previous: DiscussionDocSnapshot | null = null;
+        const read = () => {
+            if (!repository) return null;
+            const query = repository.getDocListSnapshot(artifactId);
+            const threads = repository.getSnapshot().threads;
+            const current = previous;
+            if (current?.query === query && query.items.every(summary => {
+                const before = current.threads[summary.id];
+                const next = threads[summary.id];
+                return before?.summary === next?.summary && before?.messages === next?.messages
+                    && (before?.revoked ?? false) === (next?.status === 'revoked');
+            })) return previous;
+            previous = { query, threads: Object.fromEntries(query.items.map(summary => {
+                const thread = threads[summary.id];
+                return [summary.id, thread ? { summary: thread.summary, messages: thread.messages, revoked: thread.status === 'revoked' } : undefined] as const;
+            })) };
+            return previous;
+        };
+        return { read, subscribe: repository?.subscribe ?? (() => () => {}) };
+    }, [artifactId, repository]);
+    return React.useSyncExternalStore(source.subscribe, source.read, source.read);
+}
 
 /** The single React projection seam for the shared Home Discussion repository. */
 export function useDiscussionRepositorySnapshot(

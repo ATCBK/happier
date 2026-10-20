@@ -1702,7 +1702,6 @@
     "sources/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions.test.ts",
     "sources/sync/domains/session/subagents/autoRecipient/resolveSessionSubagentAutoRecipient.test.ts",
     "sources/sync/domains/session/subagents/deriveSessionSubagentActivityPreview.test.ts",
-    "sources/sync/domains/session/subagents/deriveSessionSubagentHasPendingPermission.test.ts",
     "sources/sync/domains/session/subagents/deriveSessionSubagentPendingAttentionKinds.test.ts",
     "sources/sync/domains/session/subagents/deriveSessionSubagents.test.ts",
     "sources/sync/domains/session/subagents/executionRuns/deriveExecutionRunSubagents.test.ts",

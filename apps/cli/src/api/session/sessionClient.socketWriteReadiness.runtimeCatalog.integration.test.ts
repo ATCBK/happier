@@ -17,6 +17,7 @@ import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSess
 import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, type ApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createInitialHostRuntimeActivityMutation } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import { createNativeAgentSessionWorkStateService } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionWorkState';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import type { Session } from '@/api/types';
 import { ApiSessionClient, type ApiSessionClientOptions } from './sessionClient';
 import { createSessionScopedSocketConnection } from './sockets';
@@ -32,6 +33,19 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
 import { PushNotificationClient } from '@/api/pushNotifications';
+import { createCodexAgentRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/engine';
+import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
+import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
+import type { AgentSessionGoalControlContext, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import { createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
+import { runSessionLoopLifecycle } from '@/agent/runtime/session/loop/lifecycle';
+import { createLifecycleParams } from '@/agent/runtime/session/loop/lifecycle.testkit';
+import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/runnerTerminationHandlers';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -48,6 +62,11 @@ vi.mock('expo-server-sdk', () => ({ Expo: class {
   chunkPushNotifications(messages: unknown[]) { return [messages]; }
   sendPushNotificationsAsync = expoSend;
 } }));
+// Keep the native startup file lock real, isolated from live agents at the OS boundary.
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: () => ({ ...actual.userInfo(), homedir: process.env.TMPDIR || actual.userInfo().homedir }) };
+});
 
 const ownerCredentials = { token: 'tok', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(4) } };
 const serverUrl = 'https://socket-readiness.example.test';
@@ -160,6 +179,140 @@ describe('ApiSessionClient socket write readiness', () => {
     await Promise.all(clients.splice(0).map(client => client.close()));
     vi.unstubAllGlobals();
     clearActiveAccountSettingsSnapshot();
+  });
+
+  it.each(['foreground', 'sidechain', 'ordinary', 'explicit-local-custody'] as const)(
+    'retains native foreground transcript custody until Home acknowledges the final sequence (%s)', async scope => {
+    const session = createPlainSessionFixture({ id: 's-native-final-anchor' });
+    serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });
+    const transcript = createSessionTranscriptHomeStub();
+    const appendGate = createDeferred();
+    const attempted = createDeferred();
+    let firstAppend = true;
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        SessionTranscriptObservationInputSchema.parse(payload);
+        if (firstAppend) {
+          firstAppend = false;
+          throw new Error('Home append receipt temporarily unavailable');
+        }
+        attempted.resolve();
+        await appendGate.promise;
+      }
+      return activity.answer(event, payload) ?? transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(session, [socket]);
+    client.getTurnAssistantTextSnapshotStore().beginTurn({ turnToken: 'native-turn', startSeqExclusive: null, startedAtMs: 1 });
+    let settled = false;
+    const commit = client.enqueueAgentMessageCommitted('codex', { type: 'message', message: 'Exact native answer',
+      ...(scope === 'sidechain' ? { sidechainId: 'native-child' } : {}) }, {
+      localId: 'native-final', ...(scope === 'ordinary' ? {} : { meta: { runtimeTurnId: 'native-turn' } }),
+      provenance: { kind: 'non_dependent', source: 'background' },
+      ...(scope === 'explicit-local-custody' ? { admission: { signal: new AbortController().signal, requireDelivery: false } } : {}),
+    }).then(result => { settled = true; return result; });
+    try {
+      await vi.waitFor(() => expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toContain(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1));
+      await attempted.promise;
+      expect(settled).toBe(scope !== 'foreground');
+      appendGate.resolve();
+      const result = await commit;
+      if (scope === 'foreground') {
+        expect(result).toMatchObject({ persisted: true, delivered: true, committedSequence: expect.any(Number) });
+        expect(client.getTurnAssistantTextSnapshotStore().getCurrentTurnSnapshot()).toMatchObject({
+          normalizedText: 'Exact native answer', seq: result.committedSequence, source: 'committed',
+        });
+      } else expect(result).toMatchObject({ persisted: true, delivered: false });
+    } finally {
+      appendGate.resolve();
+      await commit;
+    }
+  });
+
+  it.each(['offline', 'connected', 'disconnect-during-drain'] as const)(
+    'retires an offline native transcript ACK before runner cleanup drains the Session (%s)', async closeState => {
+    const session = createPlainSessionFixture({ id: 's-native-offline-close' });
+    serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });
+    const transcript = createSessionTranscriptHomeStub();
+    const appendGate = createDeferred();
+    const attempted = createDeferred();
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === 'session-turn-mutation') {
+        return createSessionTurnMutationAppliedSocketAck(SessionTurnMutationV1Schema.parse(payload));
+      }
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        attempted.resolve();
+        await appendGate.promise;
+      }
+      return activity.answer(event, payload) ?? transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(session, [socket]);
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let disposed = false;
+    const provider: AgentSessionRuntime = {
+      async send() { throw new Error('Provider-owned turn has no host prompt'); },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      dispose() { disposed = true; },
+    };
+    const runtime = createNativeAgentSessionOperations(provider, session.id, undefined, undefined, undefined, undefined, undefined, {
+      context: {} as AgentSessionRuntimeContext, cwd: '/tmp/native-offline-close', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false }, cancellation: { declared: false },
+      configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => mode.permissionMode, { batcher: combinePermissionModeQueuedPrompts });
+    let finished = false;
+    const run = runSessionLoopLifecycle({ ...base, session: client, runtime, hookRuntime: runtime,
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue }, deps: { ...base.deps,
+        registerRunnerTerminationHandlersFn: options => registerRunnerTerminationHandlers({ ...options,
+          processLifecycleOwnership: 'caller', sessionExitReport: null, exit() {} }),
+      } }).then(() => { finished = true; });
+    void run.catch(() => undefined);
+    let sequence = 0;
+    const emit = (event: Readonly<Record<string, unknown>>) => listener?.(AgentSessionRuntimeEventV1Schema.parse({
+      ...event, sessionId: session.id, emittedAtMs: ++sequence, sequence,
+    }));
+    try {
+      await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
+      emit({ kind: 'turn-start', turnId: 'offline-native-turn', startedBy: 'provider' });
+      emit({ kind: 'transcript-message-committed', turnId: 'offline-native-turn', role: 'assistant',
+        messageId: 'offline-final', text: 'Retained while offline' });
+      await vi.waitFor(() => expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toContain(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1));
+      await attempted.promise;
+      emit({ kind: 'turn-complete', turnId: 'offline-native-turn' });
+      if (closeState === 'offline') {
+        socket.connected = false;
+        socket.trigger('disconnect', 'transport close');
+      }
+      emit({ kind: 'runtime-ended', cause: 'providerEnded', retryable: false });
+      await vi.waitFor(() => expect(disposed).toBe(true));
+      if (closeState !== 'offline') {
+        expect(finished).toBe(false);
+        if (closeState === 'connected') appendGate.resolve();
+        else {
+          socket.connected = false;
+          socket.trigger('disconnect', 'transport close');
+        }
+      }
+      await vi.waitFor(() => expect(finished).toBe(true));
+      await run;
+      if (closeState === 'connected') {
+        const turns = socket.emitWithAck.mock.calls.filter(([event]) => event === 'session-turn-mutation')
+          .map(([, payload]) => SessionTurnMutationV1Schema.parse(payload));
+        expect(turns).toContainEqual(expect.objectContaining({ action: 'complete', turnId: 'offline-native-turn' }));
+        expect(turns).not.toContainEqual(expect.objectContaining({ action: 'fail', turnId: 'offline-native-turn' }));
+      }
+    } finally {
+      appendGate.resolve();
+      emit({ kind: 'turn-complete', turnId: 'offline-native-turn' });
+      emit({ kind: 'runtime-ended', cause: 'providerEnded', retryable: false });
+      await client.close();
+      await run.catch(() => undefined);
+    }
   });
 
   it.each(['unavailable', 'accepted', 'accepted_no_channels', 'failure_unavailable', 'failure_accepted', 'person_wrote_unavailable', 'person_wrote_owner', 'person_wrote_collaborator', 'unaccepted', 'unaccepted_rule_only', 'other_original', 'retired_account', 'missing_settings', 'wrong_account', 'other_home', 'retired_publisher'] as const)(
@@ -344,6 +497,103 @@ describe('ApiSessionClient socket write readiness', () => {
     await otherGoals.publish({ sourceSequence: 2, observedAtMs: 3, items: [] });
     await vi.waitFor(() => expect(originals).toHaveLength(4));
     expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())?.items).toMatchObject([{ kind: 'task' }]);
+  });
+
+  it.skipIf(process.platform === 'win32')('retains paused Codex Goal B through native reopen, then publishes only C and genuine Clear', async () => {
+    const session = createPlainSessionFixture({ id: 's-codex-goal-source-reopen' });
+    const row = createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null });
+    serveSession(row);
+    const socket = createSocket();
+    const client = createClient(session, [socket]);
+    const workState = (occurrenceId: string) => createNativeAgentSessionWorkStateService({
+      session: client, pluginId: 'happier.agent.codex', contributionId: 'codex', agentId: 'codex', occurrenceId,
+      isCurrent: () => true, declarations: [{ id: 'goals', itemKinds: ['goal'] }],
+    });
+    const originals = () => socket.emitWithAck.mock.calls.flatMap(([event, payload]) =>
+      event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 ? [SessionTranscriptObservationInputSchema.parse(payload)] : []);
+    let initialClearSent = false;
+    await withCodexNativeAttachFixture(async ({ openConfiguredSession, exec, directory, requests, emitNotification }) => {
+      const initial = await openConfiguredSession();
+      await initial.dispose();
+      const initialControls = createCodexNativeSessionControls();
+      const base = { signal: new AbortController().signal, services: { exec }, session: {
+        id: session.id, cwd: directory, activity: 'inactive' as const, providerSessionId: 'fresh-thread', connectedAccounts: [],
+      } };
+      await expect(initialControls.goals.set({ objective: 'Retained B', status: 'paused' }, {
+        ...base, goalSource: workState('inactive-before-reopen').publisher('goals'),
+      } as AgentSessionGoalControlContext)).resolves.toMatchObject({ status: 'applied' });
+      await client.flush();
+      expect(originals()).toHaveLength(1);
+      const retained = readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot());
+      expect(retained?.items).toMatchObject([{ title: 'Retained B', status: 'paused' }]);
+      const runtime = await createCodexAgentRuntime({ plugin: { id: 'happier.agent.codex', version: '1.0.0' },
+        agent: { id: 'codex' }, signal: base.signal });
+      if (!runtime.sessions) throw new Error('Expected the native Session factory');
+      const reopenedState = workState('reopened-native');
+      const nativeContext = { signal: base.signal, workState: reopenedState, services: { exec, sessions: {}, logger: {
+        debug() {}, info() {}, warn() {}, error() {},
+      } }, agent: { id: 'codex' }, session: { id: session.id, services: {} }, ui: { title: { set: async () => undefined } },
+      } as unknown as AgentSessionRuntimeContext;
+      const opened = await runtime.sessions.open({ kind: 'resume', providerSessionId: 'fresh-thread', sessionId: session.id,
+        cwd: directory, launchEnvironment: { values: { CODEX_HOME: directory } },
+        configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
+          permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} },
+      }, nativeContext);
+      const operations = createNativeAgentSessionOperations(opened, session.id, undefined, 'fresh-thread',
+        undefined, undefined, undefined, { context: nativeContext, cwd: directory, connectedAccounts: [],
+          capabilities: { open: ['resume'], delivery: ['newTurn'], cancel: false,
+            goals: { source: 'goals', active: { get: true, clear: true,
+              set: { fields: ['objective', 'status', 'tokenBudget'], writableStatuses: ['active', 'paused', 'complete'] } } } },
+          goals: runtime.sessions.goals, cancellation: { declared: false }, configuration: { declared: false },
+          manualCompaction: { declared: false } });
+      try {
+        expect(requests.some(request => request.method === 'thread/goal/get')).toBe(true);
+        expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())).toEqual(retained);
+        expect(originals()).toHaveLength(1);
+        // A person can Get immediately after Resume, before a transcript
+        // subscriber or prompt demands the native identity event stream.
+        const controls = operations as typeof operations & { refreshGoal(): Promise<unknown> };
+        await expect(controls.refreshGoal()).resolves.toMatchObject({ status: 'applied' });
+        expect(operations.readSessionIdentity()).toEqual({ sessionId: 'fresh-thread' });
+        const runtimeEvents: unknown[] = [];
+        const unsubscribe = operations.subscribeRuntimeEvents(event => { runtimeEvents.push(event); });
+        expect(runtimeEvents).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'fresh-thread' }));
+        unsubscribe();
+        const goalContext = { ...base, session: { ...base.session, activity: 'active' as const },
+          goalSource: reopenedState.publisher('goals') } as AgentSessionGoalControlContext;
+        if (!runtime.sessions.goals) throw new Error('Expected native Goal controls');
+        await expect(runtime.sessions.goals.get(goalContext)).resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(initialClearSent).toBe(true);
+        expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())).toEqual(retained);
+        expect(originals()).toHaveLength(1);
+        await expect(runtime.sessions.goals.set({ objective: 'Changed C', status: 'paused' }, goalContext))
+          .resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(originals()).toHaveLength(2);
+        emitNotification('thread/goal/cleared', { threadId: 'fresh-thread' });
+        await vi.waitFor(() => expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())?.items).toEqual([]));
+        await client.flush();
+        expect(originals()).toHaveLength(3);
+        await expect(runtime.sessions.goals.clear(goalContext)).resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(originals()).toHaveLength(3);
+        for (const original of originals()) {
+          const content = SessionStoredMessageContentSchema.parse(original.content);
+          if (content.t !== 'plain') throw new Error('Expected keyless plain original');
+          expect(TranscriptRawRecordV1Schema.parse(content.v)).toMatchObject({ role: 'agent',
+            content: { type: 'event', data: { type: 'goal-changed' } } });
+        }
+        expect(JSON.stringify(originals())).not.toContain('Retained B');
+        expect(JSON.stringify(originals())).not.toContain('Changed C');
+      } finally { await operations.resetOrDisposeRuntime('runtime_recovery'); }
+    }, { beforeThreadResumeResponse: ({ socket: nativeSocket, params }) => {
+      initialClearSent = true;
+      // CONT5: initial source absence precedes native Goal hydration. The
+      // resumed thread's explicit Goal read still returns retained paused B.
+      nativeSocket.send(JSON.stringify({ method: 'thread/goal/cleared', params: { threadId: params.threadId } }));
+    } });
   });
 
   it.each([

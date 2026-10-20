@@ -8,6 +8,14 @@ import type {
     PluginContributedActionOpenOutcome,
 } from './pluginContributedActionController';
 
+function presentPluginActionFailure(kind: 'failed' | 'stale' | 'unavailable' | 'thrown'): void {
+    const message = kind === 'failed' ? t('pluginRuntime.actionFailed')
+        : kind === 'stale' ? t('pluginRuntime.actionStale')
+            : kind === 'unavailable' ? t('pluginRuntime.actionUnavailable')
+                : t('pluginRuntime.actionOpenFailed');
+    Modal.alert(t('common.error'), message);
+}
+
 async function presentPluginContributedActionOpen(
     open: () => Promise<PluginContributedActionOpenOutcome>,
     signal: AbortSignal | undefined,
@@ -21,7 +29,7 @@ async function presentPluginContributedActionOpen(
         // known effect as stale, because consumers can otherwise retry it.
         if (opened.kind === 'direct') {
             if (showUnavailableFeedback && !opened.outcome.ok && !signal?.aborted) {
-                Modal.alert(t('common.error'), t('pluginRuntime.unavailableGeneric'));
+                presentPluginActionFailure('failed');
             }
             return opened;
         }
@@ -35,13 +43,13 @@ async function presentPluginContributedActionOpen(
             opened.kind === 'stale'
             || opened.kind === 'unavailable'
         )) {
-            Modal.alert(t('common.error'), t('pluginRuntime.unavailableGeneric'));
+            presentPluginActionFailure(opened.kind);
         }
         return opened;
     } catch {
         if (signal?.aborted) return { kind: 'stale', reason: 'host_retired' };
         if (showUnavailableFeedback) {
-            Modal.alert(t('common.error'), t('pluginRuntime.unavailableGeneric'));
+            presentPluginActionFailure('thrown');
         }
         return { kind: 'unavailable', reason: 'host_unavailable' };
     }
@@ -50,7 +58,7 @@ async function presentPluginContributedActionOpen(
 /**
  * Presents an already-admitted Action through the controller-owned form and
  * dispatch path. It intentionally owns no Action catalog, retry policy, or
- * transport behavior; failures retain the incumbent generic host feedback.
+ * transport behavior; typed failures share the host's single feedback presenter.
  */
 export async function openPluginContributedAction(params: Readonly<{
     controller: PluginContributedActionController;
@@ -102,11 +110,11 @@ export async function openPluginContributedActionReference(params: Readonly<{
         const outcome = await params.controller.invokeReference(params.action, params.input);
         if (params.signal?.aborted) return;
         if (outcome.kind === 'settled' && !outcome.outcome.ok) {
-            Modal.alert(t('common.error'), t('pluginRuntime.unavailableGeneric'));
+            presentPluginActionFailure('failed');
         }
     } catch {
         if (!params.signal?.aborted) {
-            Modal.alert(t('common.error'), t('pluginRuntime.unavailableGeneric'));
+            presentPluginActionFailure('thrown');
         }
     }
 }

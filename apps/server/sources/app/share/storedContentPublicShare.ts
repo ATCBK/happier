@@ -10,7 +10,8 @@ import { readLocalServicesFeatureEnv } from "@/app/features/catalog/readFeatureE
 import { artifactVisibleWhere } from "@/app/artifacts/artifactClassification";
 import { openArtifactStoredContentPair } from "@/app/artifacts/artifactStoredContent";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { tryParseEncryptedDataKeyV0 } from "@/app/api/routes/share/encryptedDataKeyValidation";
 import { resolvePublicShareUseLimit } from "@/app/api/routes/share/publicShareMessageAccessGrant";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT, } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -51,6 +52,7 @@ export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWri
         return { type: 'forbidden' as const };
     }
     const result = await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [userId]);
         const authority = await assertSessionCapabilityInTx({ tx, accountId: userId, sessionId, capability: "managePublicLink", authentication });
         if (!authority.ok)
             return { type: "forbidden" as const };
@@ -65,8 +67,8 @@ export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWri
         });
         const shareCursor = await markAccountChanged(tx, { accountId: userId, kind: 'share', entityId: sessionId });
         const sessionCursor = await markAccountChanged(tx, { accountId: userId, kind: 'session', entityId: sessionId });
-        const cursor = Math.max(shareCursor, sessionCursor);
         afterTx(tx, () => {
+            const cursor = Math.max(shareCursor.resolveCursor(), sessionCursor.resolveCursor());
             const updatePayload = buildPublicShareDeletedUpdate(sessionId, cursor, randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId: userId,
@@ -106,6 +108,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
         return { type: 'forbidden' as const };
     }
     const result = await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [userId]);
         const authority = await assertSessionCapabilityInTx({ tx, accountId: userId, sessionId, capability: "managePublicLink", authentication });
         if (!authority.ok)
             return { type: "forbidden" as const };
@@ -198,8 +201,8 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
         }
         const shareCursor = await markAccountChanged(tx, { accountId: userId, kind: 'share', entityId: sessionId });
         const sessionCursor = await markAccountChanged(tx, { accountId: userId, kind: 'session', entityId: sessionId });
-        const cursor = Math.max(shareCursor, sessionCursor);
         afterTx(tx, () => {
+            const cursor = Math.max(shareCursor.resolveCursor(), sessionCursor.resolveCursor());
             const updatePayload = isUpdate
                 ? buildPublicShareUpdatedUpdate({ ...publicShare, sessionId }, cursor, randomKeyNaked(12))
                 : buildPublicShareCreatedUpdate({ ...publicShare, sessionId, token: token! }, cursor, randomKeyNaked(12));
@@ -329,6 +332,7 @@ export async function writeArtifactPublicShare(input: Omit<SessionPublicShareWri
     artifactId: string;
 }) {
     return inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.userId], { includeSingleAccount: true });
         const artifact = await tx.artifact.findFirst({ where: { id: input.artifactId, accountId: input.userId, ...artifactVisibleWhere }, include: { account: { select: { encryptionMode: true } } } });
         if (!artifact)
             return { type: "forbidden" as const };

@@ -3,14 +3,6 @@ import type { ParsedPluginManifestV2 } from '@happier-dev/protocol';
 
 import type { CanonicalPluginManifest } from './types';
 
-/**
- * Pre-v1 manifests have no compatibility rewrite stage. Hook and family inputs
- * are parsed exactly by the one protocol manifest schema.
- */
-export function normalizeManifestHookRegistrations(input: unknown): unknown {
-  return input;
-}
-
 export function normalizeParsedPluginManifestV2(manifest: ParsedPluginManifestV2): CanonicalPluginManifest {
   return Object.freeze({
     ...manifest,

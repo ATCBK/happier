@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
 import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
@@ -71,13 +72,6 @@ export function describeMcpToolAgents(
     blocked: names((agent) => agent.off === 'blocked'),
     hidden: names((agent) => agent.off === 'hidden'),
   };
-}
-
-function formatTokens(tokens: number): string {
-  return new Intl.NumberFormat(undefined, {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(tokens);
 }
 
 /**
@@ -263,7 +257,7 @@ export const McpServerToolsSection = React.memo(function McpServerToolsSection(
               <Text variant="meta" style={styles.note}>
                 {t('capabilities.mcp.tools.cost', {
                   count: tools.length,
-                  tokens: formatTokens(list.tokens),
+                  tokens: formatCapabilityCount(list.tokens),
                 })}
                 {notes && notes.onDemand.length > 0
                   ? ` ${t('capabilities.mcp.tools.onDemand', { agents: formatAgentNameList(notes.onDemand), count: tools.length })}`

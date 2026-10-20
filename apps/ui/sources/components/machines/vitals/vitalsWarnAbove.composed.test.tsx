@@ -37,12 +37,14 @@ vi.mock('@/text', async () => {
 
 const { CpuTile } = await import('./CpuTile');
 const { NetworkTile } = await import('./NetworkTile');
+const { VitalsSheet } = await import('./VitalsSheet');
 const { MachineMoreFrom, buildMachineMoreFromFacts } =
   await import('./MachineMoreFrom');
 const { DiskTile } = await import('./DiskTile');
 const { MemoryTile } = await import('./MemoryTile');
 const { VitalsHistoryChart } = await import('./VitalsHistoryChart');
 const { VitalsMeterRow } = await import('./VitalsMeterRow');
+const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
 const { ScrubLens } =
   await import('@/components/settings/usage/UsageScrubLens');
 const { buildMachineVitalsTimeline } =
@@ -142,6 +144,62 @@ describe('a Metric widget’s “Warn above” on the Overview tiles (plan 60 rw
 });
 
 describe('retained vitals readings', () => {
+  it('stops live chart motion when its retained Overview is hidden', async () => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });
+    let setActive: React.Dispatch<React.SetStateAction<boolean>> = () => { throw new Error('Presentation not mounted'); };
+    function PresentedOverview() {
+      const [active, update] = React.useState(true);
+      setActive = update;
+      return <PluginSurfaceFocusEligibilityProvider active={active}>
+        <CpuTile sample={sample(at)} host={null} timeline={timeline} axis={['then', 'now']} freshness="live" live />
+      </PluginSurfaceFocusEligibilityProvider>;
+    }
+    const screen = await renderScreen(<PresentedOverview />);
+    act(() => screen.findByTestId('machine-vitals-cpu-chart')!.props.onLayout({ nativeEvent: { layout: { width: 400 } } }));
+    const chart = screen.findByType(StackedSeriesChart);
+    expect(chart.props.liveMotion.active).toBe(true);
+    act(() => setActive(false));
+    expect(screen.findByType(StackedSeriesChart)).toBe(chart);
+    expect(chart.props.liveMotion.active).toBe(false);
+    act(() => setActive(true));
+    expect(chart.props.liveMotion.active).toBe(true);
+  });
+  it('retains the measured chart through a hidden zero-width layout and measures a real resize on reveal', async () => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });
+    const screen = await renderScreen(<CpuTile sample={sample(at)} host={null} timeline={timeline}
+      axis={['then', 'now']} freshness="live" live />);
+    const layout = (width: number) => act(() => screen.findByTestId('machine-vitals-cpu-chart')!.props.onLayout({
+      nativeEvent: { layout: { width, height: 64, x: 0, y: 0 } },
+    }));
+    layout(400);
+    const chart = screen.findByType(StackedSeriesChart);
+    expect(chart.props.width).toBe(400);
+    layout(0);
+    expect(screen.findByType(StackedSeriesChart)).toBe(chart);
+    expect(chart.props.width).toBe(400);
+    layout(280);
+    expect(screen.findByType(StackedSeriesChart)).toBe(chart);
+    expect(chart.props.width).toBe(280);
+  });
+  it('keeps a retained narrow sheet in its measured composition while hidden', async () => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });
+    const screen = await renderScreen(<VitalsSheet testID="retained-sheet">{[
+      <CpuTile key="cpu" sample={sample(at)} host={null} timeline={timeline} axis={['then', 'now']} freshness="live" live />,
+      <NetworkTile key="network" sample={sample(at)} timeline={timeline} axis={['then', 'now']} freshness="live" live />,
+    ]}</VitalsSheet>);
+    const layout = (width: number) => act(() => screen.findByTestId('retained-sheet')!.props.onLayout({
+      nativeEvent: { layout: { width, height: 200, x: 0, y: 0 } },
+    }));
+    layout(400);
+    const network = screen.findByType(NetworkTile);
+    layout(0);
+    expect(screen.findByType(NetworkTile) === network).toBe(true);
+    layout(400);
+    expect(screen.findByType(NetworkTile) === network).toBe(true);
+  });
   it('shows the history mean and maximum as separate lens facts on CPU and both memory scales', async () => {
     const timeline = buildMachineVitalsTimeline({
       range: '24h',

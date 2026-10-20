@@ -4,12 +4,13 @@ import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/sk
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { t } from '@/text';
 
-import { SkillSourceSection } from './SkillSourceSection';
 import { skillSource } from '../skillsCollectionModel';
+import { SkillSourceSection } from './SkillSourceSection';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -27,6 +28,7 @@ vi.mock('react-native-unistyles', async () => {
 
 afterEach(() => {
   standardCleanup();
+  storage.setState({ machines: {} });
 });
 
 function read(
@@ -89,6 +91,13 @@ describe('SkillSourceSection', () => {
     expect(screen.getTextContent()).toContain('Acme Skills');
   });
 
+  it('a built-in skill says it follows Happier once, in its source row', async () => {
+    const screen = await renderScreen(
+      <SkillSourceSection {...common} read={read({ kind: 'first_party' })} updatePolicy="manual" />,
+    );
+    expect(screen.getTextContent().match(/follows its version|updates with Happier/g) ?? []).toHaveLength(1);
+  });
+
   it('a written skill says "Written by you" and offers no update controls', async () => {
     const screen = await renderScreen(
       <SkillSourceSection
@@ -134,5 +143,39 @@ describe('SkillSourceSection', () => {
     expect(screen.getTextContent()).toContain('Up to date');
     expect(screen.findAllByTestId('src:checkNow').length).toBeGreaterThan(0);
     expect(screen.findAllByTestId('src:auto').length).toBeGreaterThan(0);
+  });
+  const withReference = (provenance: SkillReadResultV1['provenance']): SkillReadResultV1 => ({
+    ...read(provenance),
+    skillMd: '---\nname: code-review\n---\nFollow [the checklist](../../shared/checklist.md).',
+  });
+
+  it('notes the files an imported skill points at that its copy lacks', async () => {
+    const screen = await renderScreen(
+      <SkillSourceSection {...common} read={withReference({ kind: 'upload', importedAt: 1 })} updatePolicy="manual" />,
+    );
+    expect(screen.findHostByTestId('src:outsideReferences')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('../../shared/checklist.md');
+  });
+
+  it('says nothing for a skill written here, whose references are the author’s own', async () => {
+    const screen = await renderScreen(
+      <SkillSourceSection {...common} read={withReference({ kind: 'written' })} updatePolicy="manual" />,
+    );
+    expect(screen.findHostByTestId('src:outsideReferences')).toBeNull();
+  });
+  it('writes the folder a found skill came from relative to that machine\'s home', async () => {
+    const machine = createMachineFixture({ id: 'mac-1' });
+    storage.setState({
+      machines: { 'mac-1': { ...machine, metadata: { ...machine.metadata!, homeDir: '/home/leeroy' } } },
+    });
+    const screen = await renderScreen(
+      <SkillSourceSection
+        {...common}
+        read={read({ kind: 'machine', machineId: 'mac-1', path: '/home/leeroy/.claude/skills/code-review', importedAt: 1 } as SkillReadResultV1['provenance'])}
+        updatePolicy="manual"
+      />,
+    );
+    expect(screen.getTextContent()).toContain('~/.claude/skills/code-review');
+    expect(screen.getTextContent()).not.toContain('/home/leeroy');
   });
 });

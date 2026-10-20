@@ -847,7 +847,10 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
     expect(resolveClaudeScreenInFlightSteerVeto(cursorUnavailable)).toBe('unrecognized_confirmation_dialog');
   });
 
-  it('distinguishes a focused chooser artifact from the separate cursor-proven bordered composer', () => {
+  it.each([
+    { composer: '❯ ', cursorX: 2, draft: '' },
+    { composer: '│ ❯ my unfinished draft │', cursorX: 23, draft: 'my unfinished draft' },
+  ])('distinguishes a focused chooser artifact from the separate cursor-proven bordered composer: $composer', ({ composer, cursorX, draft }) => {
     const screen = [
       'Allow external CLAUDE.md file imports?',
       '',
@@ -857,18 +860,20 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
       'Enter to confirm · Esc to cancel',
       '',
       '──────────────────────────────',
-      '❯ ',
+      composer,
       '──────────────────────────────',
     ].join('\n');
 
-    const composerOwned = parseClaudeScreenState(screen, { cursor: { x: 2, y: 8 } });
-    expect(composerOwned.composerContent).toBe('');
-    expect(composerOwned.composerCursorRelation).toBe('at_content_start');
+    const composerOwned = parseClaudeScreenState(screen, { cursor: { x: cursorX, y: 8 } });
+    expect(composerOwned.composerContent).toBe(draft);
+    expect(composerOwned.composerCursorRelation).toBe(draft ? 'inside_or_after_content' : 'at_content_start');
     expect(composerOwned.unrecognizedConfirmationDialogVisible).toBe(false);
     expect(composerOwned.unrecognizedConfirmationDialog).toBeNull();
-    expect(isClaudeScreenReadyForInput(composerOwned)).toBe(true);
-    expect(isSafeWindowForSlashControl(composerOwned)).toBe(true);
-    expect(resolveClaudeScreenInFlightSteerVeto(composerOwned)).toBeNull();
+    expect(composerOwned.userDraftPresent).toBe(Boolean(draft));
+    expect(isClaudeScreenReadyForInput(composerOwned)).toBe(!draft);
+    expect(isSafeWindowForSlashControl(composerOwned)).toBe(!draft);
+    expect(isSafeWindowForModeCycle(composerOwned)).toBe(!draft);
+    expect(resolveClaudeScreenInFlightSteerVeto(composerOwned)).toBe(draft ? 'user_draft' : null);
 
     for (const state of [
       parseClaudeScreenState(screen, { cursor: { x: 2, y: 2 } }),

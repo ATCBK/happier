@@ -3,8 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
-import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
+import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -13,20 +12,9 @@ import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAu
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { t } from '@/text';
 
+import { previewRef, SkillPreviewRows } from './SkillPreviewRows';
+import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
-
-/** The preview's identity facts: where it was found, pinned. */
-export function previewRef(item: SkillInstallPreviewV1): string | undefined {
-  const provenance = item.provenance;
-  if (provenance.kind === 'link' && provenance.ref.kind === 'gitTree')
-    return provenance.ref.commit.slice(0, 7);
-  if (
-    provenance.kind === 'registry' &&
-    provenance.registry.ref.kind === 'gitTree'
-  )
-    return provenance.registry.ref.commit.slice(0, 7);
-  return undefined;
-}
 
 /**
  * From a link (lab sa L): paste a repository or folder, look (`skills.install` dry run, nothing written), tick the
@@ -36,10 +24,13 @@ export function SkillLinkInput(
   props: Readonly<{
     execute: MountedAuthoringActionExecute;
     onAdded: (skillId: string) => void;
+    /** Closes the dialog (the footer's Done when everything found is already held). */
+    onDone: () => void;
     testID: string;
   }>,
 ) {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const [url, setUrl] = React.useState('');
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
@@ -77,7 +68,7 @@ export function SkillLinkInput(
       return;
     }
     setState({ kind: 'found', items: preview.items });
-    setTicked(new Set(preview.items.map((item) => item.path)));
+    setTicked(tickAllSkillPreviews(preview.items));
   }, [props.execute, url]);
 
   const add = React.useCallback(async () => {
@@ -99,11 +90,12 @@ export function SkillLinkInput(
   }, [props, state, ticked, url]);
 
   const found = state.kind === 'found' ? state.items : null;
+  const allHeld = found ? readAllHeldFooter(found) : null;
   return (
     <View style={styles.fill}>
       <ScrollView
         style={styles.fill}
-        contentContainerStyle={styles.body}
+        contentContainerStyle={[styles.body, edge]}
         keyboardShouldPersistTaps="handled"
       >
         <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
@@ -148,33 +140,23 @@ export function SkillLinkInput(
             }
             surface="none"
           >
-            {found.map((item) => (
-              <CapabilityRow
-                key={item.path}
-                testID={`${props.testID}.item.${item.name}`}
-                title={item.name}
-                description={item.description}
-                facts={{
-                  presentation: 'row',
-                  source: {
-                    kind: 'git',
-                    label: item.path || '/',
-                    ...(previewRef(item) ? { ref: previewRef(item)! } : {}),
-                  },
-                  trust: item.trust,
-                  cost: { tokensWhenUsed: item.cost.bodyTokens },
-                }}
-                checked={ticked.has(item.path)}
-                onPress={() =>
-                  setTicked((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(item.path)) next.delete(item.path);
-                    else next.add(item.path);
-                    return next;
-                  })
-                }
-              />
-            ))}
+            <SkillPreviewRows
+              testID={props.testID}
+              items={found}
+              ticked={ticked}
+              onToggle={(path) => setTicked((previous) => toggleSkillPreview(found, previous, path))}
+              onOpen={props.onAdded}
+              facts={(item) => ({
+                presentation: 'row',
+                source: {
+                  kind: 'git',
+                  label: item.path || '/',
+                  ...(previewRef(item) ? { ref: previewRef(item)! } : {}),
+                },
+                trust: item.trust,
+                cost: { tokensWhenUsed: item.cost.bodyTokens },
+              })}
+            />
           </ItemGroup>
         ) : null}
       </ScrollView>
@@ -189,16 +171,32 @@ export function SkillLinkInput(
             ) : null
           }
         >
-          <RoundButton
-            size="normal"
-            title={t('capabilities.skillAdd.link.addSelected', {
-              count: ticked.size,
-            })}
-            loading={adding}
-            disabled={ticked.size === 0}
-            onPress={() => void add()}
-            testID={`${props.testID}.add`}
-          />
+          {allHeld?.kind === 'open' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.open')}
+              onPress={() => props.onAdded(allHeld.skillId)}
+              testID={`${props.testID}.add`}
+            />
+          ) : allHeld?.kind === 'done' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.add.done')}
+              onPress={props.onDone}
+              testID={`${props.testID}.done`}
+            />
+          ) : (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.link.addSelected', {
+                count: ticked.size,
+              })}
+              loading={adding}
+              disabled={ticked.size === 0}
+              onPress={() => void add()}
+              testID={`${props.testID}.add`}
+            />
+          )}
         </CapabilityAddFooter>
       ) : null}
     </View>
@@ -208,7 +206,6 @@ export function SkillLinkInput(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   body: {
-    paddingHorizontal: theme.space.s24,
     paddingTop: theme.space.s16,
     paddingBottom: theme.space.s24,
     gap: theme.space.s16,

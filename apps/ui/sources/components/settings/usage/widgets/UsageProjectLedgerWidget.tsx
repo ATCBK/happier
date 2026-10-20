@@ -56,7 +56,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   const { theme: appTheme } = useUnistyles();
   const presentation = useWidgetPresentation();
   const rowMetrics = usePageRowMetrics('list');
-  const { summary, format, cell, projectLabel, sessionLabel, openSession } = useUsageWork(
+  const { summary, format, cell, projectLabel, projectPlace, sessionLabel, openSession } = useUsageWork(
     props.slice,
     props.query,
     props.serverId,
@@ -100,6 +100,8 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   const density = compact ? 'compact' : 'comfortable';
   const metricLabel = props.query.metric === 'cost' ? t('usage.cost') : t('usage.tokens');
   const sessionsLine = (count: number) => t('usage.board.work.valueCaption', { count });
+  // A shared Project name keeps its place on the row's second line; the one-string form serves labels that have no second line.
+  const projectWhere = (projectKey: string | null) => [projectLabel(projectKey), projectPlace(projectKey)].filter(Boolean).join(' · ');
   const caption = {
     fontSize: rowMetrics.subtitle.fontSize,
     lineHeight: rowMetrics.subtitle.lineHeight,
@@ -132,7 +134,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   const branchCells = (row: UsageWorkBranchRow, withProject: boolean) => [
     usageWorkBranchName(row.branch.branch.ref),
     cell(row.amount, row.moneyBasis),
-    withProject ? row.projectKeys.map(projectLabel).join(', ') : '',
+    withProject ? row.projectKeys.map(projectWhere).join(', ') : '',
     sessionsLine(row.sessions.length),
     row.perSession === null || row.sessions.length < 2
       ? ''
@@ -284,9 +286,9 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
         rows={projects.map((row) => [
           projectLabel(row.projectKey),
           cell(row.amount, row.moneyBasis),
-          anyLinked
+          [anyLinked
             ? t('usage.board.work.ledgerRowLine', { sessions: row.sessionIds.length, prs: row.outcomes.length })
-            : sessionsLine(row.sessionIds.length),
+            : sessionsLine(row.sessionIds.length), projectPlace(row.projectKey)].filter(Boolean).join(' · '),
           ...(anyLinked
             ? [row.unallocated === null || row.unallocated > 0
               ? t('usage.board.work.notLinkedPart', { amount: format(row.unallocated, row.unallocatedBasis) })
@@ -301,7 +303,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
             <UsageWorkDisclosure
               expanded={disclosures.isOpen(id)}
               onToggle={() => disclosures.toggle(id)}
-              label={projectLabel(row.projectKey)}
+              label={projectWhere(row.projectKey)}
               testID={testID}
               detail={() => projectDetail(row, testID)}
             >

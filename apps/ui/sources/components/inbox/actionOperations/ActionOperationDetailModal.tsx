@@ -26,6 +26,8 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionAudienceContext } from '@/hooks/teams/useSessionAudienceContext';
 import { useSessionListHomeObservations } from '@/sync/store/hooks';
+import { useManagedMachineName } from '@/components/approvals/approvalReferenceReading';
+import { TechnicalDetailsDisclosure } from '@/components/ui/lists/TechnicalDetailsDisclosure';
 
 import {
     describeActionOperationStatusLabel,
@@ -128,6 +130,9 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
     const audienceContext = useSessionAudienceContext(sessionAddresses);
     const homeObservations = useSessionListHomeObservations();
     const projectCommandMachineName = projectCommandRef && machine ? getMachineDisplayName(machine) ?? null : null;
+    // A managed power operation runs on its controller but concerns the managed guest, which the Machine row names.
+    const managedMachineName = useManagedMachineName(exactServerId,
+        operation?.snapshot.domainRef?.kind === 'managedMachine' ? operation.snapshot.domainRef.id : null);
     const [resumePending, setResumePending] = React.useState(false);
     const [resumeFeedback, setResumeFeedback] = React.useState<string | null>(null);
     const resumeControllerRef = React.useRef<AbortController | null>(null);
@@ -172,6 +177,7 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         snapshot,
         session,
         machine,
+        managedMachineName,
         serverProfile: operation.serverId ? getServerProfileById(operation.serverId) : null,
         audienceScope: operation.serverId ? audienceContext.scopes.get(operation.serverId) : null,
         homeObservation: operation.serverId ? homeObservations[operation.serverId] ?? null : null,
@@ -223,7 +229,7 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
     return (
         <View style={styles.body}>
             <View accessibilityLiveRegion="polite" style={styles.hero}>
-                {!terminal && observation === 'available' ? (
+                {!terminal && observation === 'available' && status.label.kind === 'host' && status.label.value !== 'outcome_uncertain' ? (
                     <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 ) : (
                     <Icon
@@ -234,7 +240,8 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                 )}
                 <View style={styles.heroCopy}>
                     <Text style={[styles.status, status.tone === 'danger' ? styles.danger : undefined]}>
-                        {describeActionOperationStatusLabel({ kind: 'host', value: snapshot.state })}
+                        {describeActionOperationStatusLabel(status.label.kind === 'host' && status.label.value === 'outcome_uncertain'
+                            ? status.label : { kind: 'host', value: snapshot.state })}
                     </Text>
                     {showStatusDetail ? <Text style={styles.progress}>{statusLabel}</Text> : null}
                     {snapshot.progress?.kind === 'determinate' ? (
@@ -371,23 +378,27 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                             mode="info"
                             title={row.label}
                             subtitle={row.value}
+                            subtitleLines={0}
                         />
                     ))}
                 </ItemGroup>
             ) : null}
 
-            {detail.errorSummary.length > 0 ? (
+            {detail.failure ? (
                 <ItemGroup title={t('common.error')}>
-                    {detail.errorSummary.map((row) => (
-                        <Item
-                            key={row.label}
-                            testID={`action-operation-error.${row.label}`}
-                            mode="info"
-                            title={row.label}
-                            subtitle={row.value}
-                            destructive={true}
+                    <Item
+                        testID="action-operation-failure"
+                        mode="info"
+                        title={detail.failure.reason}
+                        titleLines={0}
+                    />
+                    {detail.failure.technicalLines.length > 0 ? (
+                        <TechnicalDetailsDisclosure
+                            testID="action-operation-technical-details"
+                            title={t('approvals.technicalDetails')}
+                            lines={detail.failure.technicalLines}
                         />
-                    ))}
+                    ) : null}
                 </ItemGroup>
             ) : null}
 

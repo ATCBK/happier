@@ -257,11 +257,13 @@ describe('bounded Agent External Sessions invocation', () => {
 
     it('explains cursor admission failure without disclosing the native cursor', async () => {
         const wrapped = createWrapper({ contribution: contributionWith(method => method === 'pageTranscript'
-            ? { ok: true, value: { items: [], nextCursor: 'private-native-state'.repeat(200) } }
+            ? { ok: true, value: { items: [], nextCursor: 'private-native-state' + 'x'.repeat(
+                EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes,
+            ) } }
             : successFor(method)) });
         await expect(wrapped.pageTranscript(requestFor('pageTranscript'))).resolves.toEqual({
             ok: false, code: 'agent_error', retryable: false,
-            message: 'external_sessions_native_cursor_too_large',
+            message: 'external_sessions_transcript_page_byte_budget',
         });
     });
 
@@ -1714,9 +1716,10 @@ describe('bounded Agent External Sessions invocation', () => {
         ['pageTranscript', 'tailCursor'],
         ['readAfterTranscript', 'nextCursor'],
     ] as const)(
-        'accepts an exact native %s %s and rejects first-over',
+        'admits semantic %s %s cursors within the whole qualified response budget',
         async (method, field) => {
-            const exact = exactOpaqueCodeUnits(EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits);
+            const cursor = 'native-semantic-facts'.repeat(30_000);
+            const maxSerializedBytes = EXTERNAL_SESSIONS_INVOCATION_POLICY[method].maxSerializedBytes * 2;
             const call = async (cursor: string) => {
                 const wrapped = createWrapper({
                     contribution: contributionWith(() => ({
@@ -1732,26 +1735,38 @@ describe('bounded Agent External Sessions invocation', () => {
                                 },
                     })),
                 });
-                return await invoke(wrapped, method);
+                return method === 'pageTranscript'
+                    ? await wrapped.pageTranscript({ ...requestFor(method), maxSerializedBytes })
+                    : await wrapped.readAfterTranscript({ ...requestFor(method), maxSerializedBytes });
             };
 
-            await expect(call(exact)).resolves.toMatchObject({
+            const first = await call(cursor);
+            expect(first).toMatchObject({
                 ok: true,
                 value: { [field]: expect.stringMatching(/^happier_external_cursor_v1:/) },
             });
-            await expect(call(`${exact}x`)).resolves.toEqual({
-                ok: false,
-                code: 'agent_error',
-                retryable: false,
-                message: 'external_sessions_native_cursor_too_large',
-            });
+            const bytes = Buffer.byteLength(JSON.stringify(first), 'utf8');
+            // Exercise the actual resource boundary, including qualification
+            // overhead, rather than a second arbitrary native-cursor ceiling.
+            const bounded = createWrapper({ contribution: contributionWith(() => ({ ok: true,
+                value: method === 'pageTranscript' ? { items: [], nextCursor: null, [field]: cursor }
+                    : { outcome: 'advanced', hasMore: false,
+                        items: [{ id: 'item-1', createdAtMs: 1, raw: canonicalTranscriptRaw }], nextCursor: cursor, boundary: 'item-1' },
+            })) });
+            const withBytes = (maxSerializedBytes: number) => method === 'pageTranscript'
+                ? bounded.pageTranscript({ ...requestFor(method), maxSerializedBytes })
+                : bounded.readAfterTranscript({ ...requestFor(method), maxSerializedBytes });
+            await expect(withBytes(bytes)).resolves.toEqual(first);
+            await expect(withBytes(bytes - 1)).resolves.toMatchObject({ ok: false, code: 'agent_error',
+                message: 'external_sessions_transcript_page_byte_budget' });
         },
     );
 
     it.each(['pageTranscript', 'readAfterTranscript'] as const)(
-        'passes an exact native %s cursor through opaquely and rejects first-over before leaf admission',
+        'uses the %s response resource budget for coarse opaque input admission',
         async (method) => {
-            const exact = exactOpaqueCodeUnits(EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits);
+            const maxSerializedBytes = EXTERNAL_SESSIONS_INVOCATION_POLICY[method].maxSerializedBytes * 2;
+            const exact = exactOpaqueCodeUnits(maxSerializedBytes);
             const observed = vi.fn();
             const wrapped = createWrapper({
                 contribution: contributionWith((calledMethod, request) => {
@@ -1760,8 +1775,8 @@ describe('bounded Agent External Sessions invocation', () => {
                 }),
             });
             const call = async (cursor: string) => method === 'pageTranscript'
-                    ? await wrapped.pageTranscript({ ...requestFor('pageTranscript'), cursor })
-                    : await wrapped.readAfterTranscript({ ...requestFor('readAfterTranscript'), cursor });
+                    ? await wrapped.pageTranscript({ ...requestFor('pageTranscript'), cursor, maxSerializedBytes })
+                    : await wrapped.readAfterTranscript({ ...requestFor('readAfterTranscript'), cursor, maxSerializedBytes });
 
             await expect(call(exact)).resolves.toMatchObject({ ok: true });
             expect(observed).toHaveBeenCalledWith(method, expect.objectContaining({ cursor: exact }));

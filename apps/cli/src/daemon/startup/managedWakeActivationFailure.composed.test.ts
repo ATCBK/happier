@@ -53,6 +53,74 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(async () => { resetActiveAccountSettingsSnapshotForTests(); if (database) await database.close(); });
 
+it('does not create an unused-power operation from the real Home census before guest enrollment', async () => {
+    const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const homeId = await getOrCreateServerIdentityId();
+    const signing = nacl.sign.keyPair();
+    const controller = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id,
+        installationId: randomUUID(), installationPublicKey: signing.publicKey, metadata: 'fixture', active: true } });
+    const managed = await db.managedMachine.create({ data: { homeId, custodianAccountId: owner.id,
+        controllerMachineId: controller.id, controllerInstallationId: controller.installationId!,
+        admittedActionRequestId: randomUUID(), admittedInput: {}, allocation: 'bound', creationState: 'active',
+        launch: { provider: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+        resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+        desired: 'start', retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: true } });
+    const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+    const serverUrl = 'https://retention-home.example';
+    const app = createAuthenticatedTestApp({ authentication: 'real' });
+    registerManagedMachineRoutes(app);
+    await app.ready();
+    const restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+    const operations = createHostActionOperationRuntime({ machineId: controller.id, resolveAccountId: async () => owner.id });
+    const adapter = createDaemonManagedMachineActionAdapter({ credentials: { token, encryption: null }, machineId: controller.id,
+        serverId: configuration.activeServerId, serverBaseUrl: serverUrl, installationIdentity: null,
+        acquireRuntimeRegistryLease: async () => { throw new Error('No native runtime installed'); },
+        observeActionExecution: request => operations.observeExecution(request),
+        executeManagedPolicyAction: (machine, context, runApproved) => executeManagedMachinePolicyAction({ machine, context,
+            runApproved, serverId: configuration.activeServerId, createExecutor: overrides => createActionExecutor(overrides) }),
+    });
+    const censusInput = { homeId, controller: { machineId: controller.id, installationId: controller.installationId! },
+        custodianAccountId: owner.id, privateKey: signing.secretKey, token, serverUrl };
+    let censusRead: (() => void) | undefined;
+    let censusError: unknown;
+    const runtime = createDaemonManagedMachinePolicyRuntime({
+        readCensus: async signal => {
+            try {
+                const census = await readManagedMachinePolicyCensus({ ...censusInput, signal });
+                expect(census.machines).toMatchObject([{ id: managed.id, allocation: 'bound' }]);
+                return census;
+            } catch (error) { censusError = error; throw error; }
+            finally { censusRead?.(); }
+        },
+        executePolicy: adapter.executePolicy,
+    });
+    const notify = async () => {
+        const read = new Promise<void>(resolve => { censusRead = resolve; });
+        runtime.notifyChanged();
+        await read;
+        expect(censusError).toBeUndefined();
+        await new Promise<void>(resolve => setImmediate(resolve));
+    };
+    try {
+        expect((await readManagedMachinePolicyCensus(censusInput)).machines[0]!.enrolledMachineId).toBeUndefined();
+        await notify();
+        expect(await operations.handlers.listV2({})).toEqual({ items: [], nextCursor: null });
+        const guest = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: 'fixture',
+            installationId: randomUUID() } });
+        await db.managedMachine.update({ where: { id: managed.id }, data: { enrolledMachineId: guest.id } });
+        await notify();
+        // A missing native installation is now a legitimate observable attempt.
+        // This assertion also fails if the census/adapter binding is disconnected.
+        await vi.waitFor(async () => expect(await operations.handlers.listV2({})).toMatchObject({ items: [
+            { state: 'failed', error: { errorCode: 'admission_unavailable' } },
+        ] }));
+    } finally {
+        await runtime.stop();
+        restore();
+        await app.close();
+    }
+});
+
 it('keeps the real fire-time Ask and original input waiting when a competing runtime failure arrives before compute starts', async () => {
     const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
     const custodian = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -171,7 +239,7 @@ it('keeps the real fire-time Ask and original input waiting when a competing run
         const report = await runWithServerHttpBaseUrl(serverUrl, () => activatePendingInactiveSession({
             credentials: { token: ownerToken, encryption: null }, machineId: guest.id, sessionId: session.id,
             requestId: input.localId, pendingVersion: before.pendingVersion,
-            spawnSession: async () => { throw new Error('Missing resume metadata must not spawn'); },
+            spawnSessionForInternalResume: async () => { throw new Error('Missing resume metadata must not spawn'); },
         }));
         expect(report).toEqual({ status: 'not-needed', reason: 'authorization-stale' });
         const failureRecords = serverLog.mock.calls.map(([entry]) => entry).filter(entry => entry && typeof entry === 'object'

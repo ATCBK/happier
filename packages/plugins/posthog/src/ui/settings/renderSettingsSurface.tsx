@@ -495,6 +495,7 @@ export const renderSurface = createTriageSourceSettingsSurface({
   pluginId: POSTHOG_PLUGIN_ID,
   listInstancesLocalActionId: POSTHOG_ACTION_IDS.listInstances,
   connectedAccountServiceLocalId: POSTHOG_CONNECTED_ACCOUNT_PURPOSE,
+  connectedAccountPurpose: POSTHOG_CONNECTED_ACCOUNT_PURPOSE,
   sourceDisplayName: POSTHOG_SOURCE_DISPLAY_NAME,
   DraftEditor: PosthogDraftEditor,
 });

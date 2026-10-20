@@ -9,6 +9,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         machineRpcWithServerScopeMock(...args),
 }));
 
+await Promise.all([
+    import('./machineRpc'),
+    import('../actions/runtimeActionExecutor'),
+    import('@/sync/ops/actions/defaultRuntimeActionExecutor'),
+]);
+
 const snapshot = {
     v: 1 as const,
     machineId: 'machine_1',

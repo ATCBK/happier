@@ -22,7 +22,8 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
-import { resetDesktopActivityOverlayPosition } from '@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { requestCodexPetRefresh } from '@/components/settings/pets/petSettingsCommandEvents';
 import {
     SEARCH_DESTINATION_ID,
@@ -273,6 +274,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const activateCompactAppDestination = useActivateAppDestination();
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const writeSetting = useSettingActionWriter();
     const keyboardPlatform = useMemo(resolveKeyboardPlatform, []);
     const labelHandlers = useMemo<KeyboardShortcutHandlers>(
         () => ({
@@ -341,13 +343,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             },
             resetPosition: desktop
                 ? () => {
-                    applyLocalSettings({
-                        desktopOverlayPlacementMode: 'anchored',
-                        desktopOverlayAnchor: 'top_center',
-                        desktopOverlayOffsetX: 0,
-                        desktopOverlayOffsetY: 0,
-                    });
-                    fireAndForget(resetDesktopActivityOverlayPosition(), {
+                    fireAndForget(writeSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored'), {
                         tag: 'CommandPaletteProvider.resetDesktopActivityOverlayPosition',
                     });
                 }
@@ -357,7 +353,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 requestCodexPetRefresh();
             },
         };
-    }, [applyLocalSettings, applySettings, router]);
+    }, [applyLocalSettings, applySettings, router, writeSetting]);
 
     const openNewSession = useCallback(() => {
         const { draftId, draftOrigin } = resolveNewSessionOrdinaryEntryRoute();

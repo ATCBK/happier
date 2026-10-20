@@ -4,7 +4,7 @@ import type {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import type { ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { readArtifactAudience, type ArtifactAudience } from '@/sync/domains/artifacts/artifactAudience';
 import { MemoryDocReadResultV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import * as React from 'react';
 
@@ -37,6 +37,7 @@ export type MemoryDocumentView = Readonly<{
   access: ArtifactCallerAccessV1 | null;
   /** Current admitted granted/public audience; null cannot establish privacy. */
   shared: boolean | null;
+  audience: ArtifactAudience | null;
   title: string;
   revision: MemoryDocumentRevision;
   /** The facts of this page: the index's key facts, or the open topic's facts. */
@@ -108,6 +109,8 @@ export function useMemoryDocument(
     topic?: string;
     /** A closed or switched-off surface reads nothing. */
     enabled?: boolean;
+    /** An unresolved context attachment is unknown, not a successful empty read. */
+    attachmentStatus?: 'loading' | 'ready' | 'unavailable';
   }>,
 ): MemoryDocumentSource {
   const { ref, serverId, topic } = params;
@@ -178,22 +181,32 @@ export function useMemoryDocument(
       try {
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         account = await captureLazyActionAccountContext(homeId, controller.signal);
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        const result = await createDefaultActionExecutor().execute('memory.read', {
+        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const readAccount = { ...account };
+        const readArtifactContent = account.readArtifactContent;
+        // Observe the admitted Action's existing read, rather than fetching the body again for audience metadata.
+        const observed: { artifact: Awaited<ReturnType<LazyActionAccountContext['readArtifactContent']>> } = { artifact: null };
+        readAccount.readArtifactContent = async (...args: Parameters<LazyActionAccountContext['readArtifactContent']>) => {
+          const artifact = await readArtifactContent(...args);
+          if (args[0] === artifactId) observed.artifact = artifact;
+          return artifact;
+        };
+        const result = await executeDefaultActionInCapturedAccount(readAccount, 'memory.read', {
           ref: { kind: 'doc', artifactId, serverId: homeId },
           ...(topic === undefined ? {} : { topic }),
         }, { surface: 'ui', authority: 'present_user', serverId: homeId,
           expectedAccountId: account.accountId, signal: controller.signal });
         if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
         const read = MemoryDocReadResultV1Schema.parse(result.result);
-        const artifact = await account.readArtifactContent(artifactId, { signal: controller.signal });
+        const artifact = observed.artifact;
         if (!artifact) throw Object.assign(new Error('memory_doc_not_found'), { code: 'memory_doc_not_found' });
         const access = artifact.access ?? null;
         // Finite observations must not prepare/publish the Artifact and invalidate their own read.
         const accessGrants = createArtifactAccessApi(account.credentials, { request: account.request });
-        const shared = await readArtifactSharedAudienceV1({ current: artifact, signal: controller.signal,
+        const audience = await readArtifactAudience({ current: artifact, signal: controller.signal,
           readGrants: () => accessGrants.list({ artifactId }, controller.signal),
         }).catch(() => null);
+        const shared = audience?.shared ?? null;
         if (!currentness.isCurrent()) return null;
         if (controller.signal.aborted) return await successorRead();
         const view: MemoryDocumentView =
@@ -203,6 +216,7 @@ export function useMemoryDocument(
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
                 shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.topic.facts,
@@ -214,6 +228,7 @@ export function useMemoryDocument(
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
                 shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.body.index,
@@ -309,7 +324,7 @@ export function useMemoryDocument(
   return React.useMemo((): MemoryDocumentSource => {
     if (!enabled || !ref || !serverId)
       return {
-        status: 'none',
+        status: !ref && params.attachmentStatus && params.attachmentStatus !== 'ready' ? params.attachmentStatus : 'none',
         view: null,
         stale: false,
         target: null,
@@ -342,5 +357,5 @@ export function useMemoryDocument(
           : null,
       refresh,
     };
-  }, [activeLifetime, enabled, homeId, identity, key, loaded, ref, refresh, serverId, topic]);
+  }, [activeLifetime, enabled, homeId, identity, key, loaded, params.attachmentStatus, ref, refresh, serverId, topic]);
 }

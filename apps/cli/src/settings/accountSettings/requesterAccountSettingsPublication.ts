@@ -1,7 +1,7 @@
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { acquireRequesterAccountEncryptionCurrentness, waitForObservation,
-  type RequesterAccountSettingsObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
+  sameRequesterAccountEncryptionCurrentness, type RequesterAccountSettingsObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { applyAccountSettingsV2Update, bootstrapAccountSettingsContext } from './bootstrapAccountSettingsContext';
@@ -58,18 +58,23 @@ export function createRequesterAccountSettingsPublication(input: Readonly<{
     if (signal?.aborted || retirement.signal.aborted) return false;
     const readerSignal = signal ? AbortSignal.any([signal, retirement.signal]) : retirement.signal;
     try {
+      if (!ready && !pending) observe({ kind: 'hint', version: highestVersion }, true);
       let observed: typeof pending;
       let outcome: Awaited<NonNullable<typeof pending>> | undefined;
       do {
         observed = pending;
         outcome = observed ? await waitForObservation(observed, readerSignal) : undefined;
       } while (observed !== pending);
-      if (outcome && typeof outcome === 'object') throw outcome.error;
+      if (outcome && typeof outcome === 'object') {
+        if (pending === observed) pending = null;
+        throw outcome.error;
+      }
       // This fence owns Settings publication, not fresh Session/Machine
       // admission. Warm readers consume the already observed Account fact;
       // effects retain their distinct requester authority guard.
-      return !readerSignal.aborted && ready && context.readSnapshot() !== null
-        && input.observation.isCurrent(input.currentness);
+      const current = input.observation.isCurrent(input.currentness)
+        || sameRequesterAccountEncryptionCurrentness(await input.observation.read(readerSignal), input.currentness);
+      return !readerSignal.aborted && ready && context.readSnapshot() !== null && current;
     } catch (error) { if (readerSignal.aborted) return false; throw error; }
   };
   return Object.freeze({

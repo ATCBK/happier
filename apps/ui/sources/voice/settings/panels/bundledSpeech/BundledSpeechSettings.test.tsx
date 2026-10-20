@@ -484,6 +484,34 @@ describe('BundledSpeechSettings', () => {
     nativeAlert.mockRestore();
   });
 
+  it('admits speech voice catalog loading and Retry through Settings Actions', async () => {
+    const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
+    const entry = createDefaultVoiceProviderRegistry().get(GOOGLE_CLOUD_TTS_ID)!;
+    const spec = createBundledLocalTtsProviderSpec(entry)!;
+    const base = voiceWithRootProviderConfig(GOOGLE_CLOUD_TTS_ID, { voiceName: 'en-US-Test-A', languageCode: '', format: 'mp3', speakingRate: 1, pitch: 0 });
+    const local = readLocalConversationVoiceSettings(base);
+    const voice = writeLocalConversationVoiceSettings({ ...base, providerId: 'local_conversation' }, {
+      ...local, tts: { ...local.tts, provider: GOOGLE_CLOUD_TTS_ID },
+    });
+    account.replaceSettings(settingsParse({ ...account.settings, voice, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    const rendered = await renderScreen(React.createElement(spec.Settings, {
+      cfgTts: VoiceLocalTtsSchema.parse({ provider: GOOGLE_CLOUD_TTS_ID }), setTts: vi.fn(),
+      voice, setVoice: vi.fn(), networkTimeoutMs: 15_000, popoverBoundaryRef: null,
+    }));
+    await flushHookEffects();
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    const voiceMenu = () => rendered.tree.root.findAllByType(DropdownMenu)
+      .find(row => row.props.items.some((item: { id: string }) => item.id === '__retry__'))!;
+    await vi.waitFor(() => expect(voiceMenu()).toBeDefined());
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: true } } } }));
+    await act(async () => voiceMenu().props.onSelect('__retry__'));
+    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    expect(rendered.tree.root.findAllByType(DropdownMenu).flatMap(row => row.props.items))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'en-US-Test-A', title: 'English Test' })]));
+  });
+
   it('renders package-owned STT fields and writes the provider envelope', async () => {
     const { createBundledLocalSttProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalSttProviderSpec(createDefaultVoiceProviderRegistry().get(GOOGLE_GEMINI_STT_ID)!);

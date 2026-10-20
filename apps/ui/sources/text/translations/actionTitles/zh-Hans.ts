@@ -578,7 +578,7 @@ export const zhHans = {
     connectedServices_accounts_revoke: "撤销已连接账户",
     connectedServices_accounts_default_set: "设置默认已连接账户",
     connectedServices_accounts_purposeDefault_set: "选择代理默认登录方式",
-    connectedServices_purposes_default_set: "选择资源默认连接账户",
+    connectedServices_purposes_default_set: "选择默认连接账户",
     connectedServices_pools_create: "创建已连接服务池",
     connectedServices_pools_patch: "编辑已连接服务池",
     connectedServices_pools_delete: "删除已连接服务池",

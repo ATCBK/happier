@@ -9,6 +9,7 @@ import {
     peekServerReachabilityState,
     reportServerUnreachable,
     subscribeServerReachabilityState,
+    acquireServerReachabilitySupervisor,
 } from './serverReachabilitySupervisorPool';
 
 describe('serverReachabilitySupervisorPool (abort semantics)', () => {
@@ -57,6 +58,57 @@ describe('serverReachabilitySupervisorPool (abort semantics)', () => {
         reportServerUnreachable('https://example.test', new DOMException('Cancelled', 'AbortError'), null);
 
         expect(peekServerReachabilityState('https://example.test', null)?.phase).toBe('online');
+    });
+
+    it('retires an abandoned lease startup and ignores its late refusal after recovery', async () => {
+        let answer!: (response: Response) => void;
+        setRuntimeFetch(() => new Promise<Response>(resolve => { answer = resolve; }));
+        const cancellation = new AbortController();
+        const first = acquireServerReachabilitySupervisor({
+            serverUrl: 'https://example.test', token: 'account-token', signal: cancellation.signal,
+        }).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(0);
+        cancellation.abort();
+        await expect(first).resolves.toMatchObject({ name: 'AbortError' });
+        expect(peekServerReachabilityState('https://example.test', 'account-token')).toBeNull();
+
+        setRuntimeFetch(async () => new Response(null, { status: 200 }));
+        const recovered = await acquireServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: 'account-token' });
+        answer(new Response(null, { status: 401 }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(peekServerReachabilityState('https://example.test', 'account-token')?.phase).toBe('online');
+        await recovered.release();
+    });
+
+    it('releases startup when the existing wait budget expires without a caller signal', async () => {
+        setRuntimeFetch(() => new Promise<Response>(() => {}));
+        const first = waitForServerReachable({
+            serverUrl: 'https://example.test', token: 'account-token', timeoutMs: 30_000,
+        }).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(first).resolves.toMatchObject({ name: 'ServerReachabilityWaitTimeoutError' });
+        expect(peekServerReachabilityState('https://example.test', 'account-token')).toBeNull();
+        setRuntimeFetch(async () => new Response(null, { status: 200 }));
+        await waitForServerReachable({ serverUrl: 'https://example.test', token: 'account-token', timeoutMs: 30_000 });
+        expect(peekServerReachabilityState('https://example.test', 'account-token')?.phase).toBe('online');
+    });
+
+    it('releases a canceled lease startup without retiring another live lease observer', async () => {
+        let answer!: (response: Response) => void;
+        setRuntimeFetch(() => new Promise<Response>(resolve => { answer = resolve; }));
+        const cancellation = new AbortController();
+        const first = acquireServerReachabilitySupervisor({
+            serverUrl: 'https://example.test', token: 'account-token', signal: cancellation.signal,
+        }).catch((error: unknown) => error);
+        const second = acquireServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: 'account-token' });
+        await vi.advanceTimersByTimeAsync(0);
+        cancellation.abort();
+        await expect(first).resolves.toMatchObject({ name: 'AbortError' });
+        expect(peekServerReachabilityState('https://example.test', 'account-token')).not.toBeNull();
+        answer(new Response(null, { status: 200 }));
+        const lease = await second;
+        expect(peekServerReachabilityState('https://example.test', 'account-token')?.phase).toBe('online');
+        await lease.release();
     });
 
     it('cancels one waiter while a slow shared probe continues for another waiter', async () => {

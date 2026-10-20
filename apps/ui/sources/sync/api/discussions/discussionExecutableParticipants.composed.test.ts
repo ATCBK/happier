@@ -1,14 +1,18 @@
+import * as React from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installAgentInputCommonModuleMocks } from '@/components/sessions/agentInput/agentInputTestHelpers';
+import type { DiscussionComposerValue } from '@/components/discussions/DiscussionComposer';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { DiscussionInviteRequestV1Schema, DiscussionParticipantPolicySetRequestV1Schema, DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionMessageV1Schema, DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionModelParticipantLaunchV1Schema, projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { bindDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
@@ -16,16 +20,34 @@ import { ProfileRecordV1Schema, ProfileRowsListResponseV1Schema, PROFILE_ROWS_RO
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { SessionSpawnNewResultV1Schema, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { DiscussionCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { encodeBase64 } from '@/encryption/base64';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+
+installAgentInputCommonModuleMocks({ modal: async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module });
 
 // The person accepts the real Action policy's UI confirmation at the presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// Genuine third-party renderer boundary, shared with the repository lifecycle
+// and Workflow-row suites. This data-owner composition never renders Markdown.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: (text: string) => [{ text, reveal: false }],
+}));
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 let spawnServerId = '';
 let spawnResultOverride: SessionSpawnNewResultV1 | null = null;
+let spawnResponseGate: Promise<void> | null = null;
+let onSpawnRequest: (() => void) | null = null;
 const spawnRequests: SocketRpcRequestPayload[] = [];
 const spawnParseIssues: unknown[] = [];
+let stopAnswer: ((request: SocketRpcRequestPayload) => unknown) | null = null;
+const stopRequests: SocketRpcRequestPayload[] = [];
 // Daemon acknowledgements are a network boundary; admission uses its actual
 // strict RPC binding, also exercised by the CLI registered-handler suite.
 installDisconnectedServerSocketBoundary(socket => {
@@ -40,6 +62,10 @@ installDisconnectedServerSocketBoundary(socket => {
         if (request.method === `machine-a:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
             return { ok: true, result: createExistingSessionDirectoryPreflightResult(request.params) };
         }
+        if (stopAnswer && (request.method === `machine-a:${RPC_METHODS.STOP_SESSION}` || request.method.endsWith(':killSession'))) {
+            stopRequests.push(request);
+            return { ok: true, result: await stopAnswer(request) };
+        }
         if (request.method !== `machine-a:${RPC_METHODS.SESSION_SPAWN_NEW}`) throw new Error(`Unexpected daemon request: ${request.method}`);
         spawnRequests.push(request);
         const inputSchema = getActionSpec('session.spawn_new').surfaceBindings?.rpc?.inputSchema;
@@ -49,6 +75,8 @@ installDisconnectedServerSocketBoundary(socket => {
             spawnParseIssues.push(...parsed.error.issues);
             return { ok: true, result: { ok: false, errorCode: 'invalid_action_transport_input', error: 'invalid_action_transport_input' } };
         }
+        onSpawnRequest?.();
+        await spawnResponseGate;
         return { ok: true, result: spawnResultOverride ?? SessionSpawnNewResultV1Schema.parse({ type: 'success', disposition: 'created', sessionId: 'owned-model-session',
             executionTarget: { serverId: spawnServerId, machineId: 'machine-a' },
             organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } }) };
@@ -61,7 +89,9 @@ const { buildExecutableModelParticipantSelectionFromAuthoringDraft, buildExecuta
 const { buildNewSessionAuthoringDraftFromTempData } = await import('@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters');
 const initial = getStorage().getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
-beforeEach(async () => { await homes.reset(); spawnRequests.length = 0; spawnParseIssues.length = 0; spawnResultOverride = null; });
+beforeEach(async () => { await homes.reset(); spawnRequests.length = 0; spawnParseIssues.length = 0; spawnResultOverride = null;
+    spawnResponseGate = null; onSpawnRequest = null;
+    stopAnswer = null; stopRequests.length = 0; });
 afterEach(async () => {
     await connection?.dispose();
     connection = undefined;
@@ -71,6 +101,10 @@ afterEach(async () => {
     resetScopedMachineTransportCacheForTests();
     getStorage().setState(initial, true);
     standardCleanup();
+    const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+    const { clearDiscussionRepositoryRegistryForTests } = await import('@/sync/ops/discussions/discussionRepositoryRegistry');
+    resetSessionDraftRepositoryForTests();
+    clearDiscussionRepositoryRegistryForTests();
 });
 
 function answerDiscussionRead(serverId: string) {
@@ -90,6 +124,125 @@ function answerDiscussionRead(serverId: string) {
         messages: [message], hasMoreOlder: false, messageSeq: 1,
     } });
 }
+
+it('retains resolved initial Session invitations and the original E2EE key after a lost create response', async () => {
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64url') };
+    const serverId = await homes.addHome({ name: 'Encrypted review', serverUrl: 'https://encrypted-review.test', accountId: 'alice',
+        currentAccount: true, accountEncryptionMode: 'e2ee', credentials });
+    const contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+    const transport = answerDiscussionThreadForTests(homes, serverId, { accountId: 'alice', mode: 'e2ee', loseCreate: true, loseFirstRejoin: false });
+    let selected = 'chosen-at-submit';
+    homes.answer(serverId, '/v1/discussions/source/participants', { select: () => ({ body: {
+        discussionId: 'source', ownerAccountId: 'alice', access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'session', sessionId: selected }, answerPolicy: 'when_addressed', createdAt: 1 }],
+    } }) });
+    homes.answer(serverId, '/v1/discussions/committed-thread/data-key/recipients', { select: () => ({ body: {
+        discussionId: 'committed-thread', ownerAccountId: 'alice', access: 'owner', encryptionMode: 'e2ee',
+        dataEncryptionKey: transport.stored()?.discussion.dataEncryptionKey,
+        callerDataEncryptionKey: transport.stored()?.discussion.dataEncryptionKey,
+        recipients: [{ recipientAccountId: 'bob', contentKey: { status: 'unavailable', reason: 'plain_account' },
+            contentPublicKeyFingerprint: null, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }],
+    } }) });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    expect(await repository.create({ creationLocalId: 'create-selected', messageLocalId: 'first-selected', title: 'Review',
+        content: { v: 1, parts: [{ t: 'text', text: 'Question' }] },
+        participants: [{ kind: 'account', accountId: 'bob' }, { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } }],
+        draftSubmission: { scope, address: { kind: 'newDiscussion' }, currentness: { address: { kind: 'newDiscussion' }, mutationIds: {} } },
+    })).toMatchObject({ kind: 'checking' });
+    await vi.waitFor(() => expect(repository.getSnapshot().mutations['create-selected']?.status).toBe('outcome_unknown'));
+    selected = 'joined-later';
+    const retried = await repository.retry('create-selected');
+    const creates = homes.requestsFor('/v1/discussions').filter(request => request.input && typeof request.input === 'object'
+        && 'firstMessage' in request.input).map(request => DiscussionCreateRequestV1Schema.parse(request.input));
+    expect(creates).toHaveLength(2);
+    expect(creates[1].participants).toEqual(creates[0].participants);
+    expect(creates[1].dataEncryptionKey).toBe(creates[0].dataEncryptionKey);
+    expect(creates[1].creationLocalId).toBe('create-selected');
+    expect(creates[1].firstMessage.localId).toBe('first-selected');
+    expect(homes.requestsFor('/v1/discussions/source/participants')).toHaveLength(1);
+    expect(retried).toMatchObject({ kind: 'succeeded' });
+});
+
+it('does not resurrect a retired create intent when Session resolution finishes late', async () => {
+    const serverId = await homes.addHome({ name: 'Review', serverUrl: 'https://review.test', accountId: 'alice', currentAccount: true });
+    answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    homes.answer(serverId, '/v1/discussions/source/participants', { select: async () => {
+        entered.resolve();
+        await release.promise;
+        return { body: { discussionId: 'source', ownerAccountId: 'alice', access: 'owner', grants: [],
+            participants: [{ participant: { kind: 'session', sessionId: 'chosen' }, answerPolicy: 'when_addressed', createdAt: 1 }] } };
+    } });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    const creating = repository.create({ creationLocalId: 'retired-create', messageLocalId: 'retired-first', title: 'Review',
+        content: { v: 1, parts: [{ t: 'text', text: 'Question' }] },
+        participants: [{ kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } }],
+        draftSubmission: { scope, address: { kind: 'newDiscussion' }, currentness: { address: { kind: 'newDiscussion' }, mutationIds: {} } },
+    });
+    await entered.promise;
+    repository.clear();
+    const retired = repository.getSnapshot();
+    release.resolve();
+    expect(await creating).toMatchObject({ kind: 'failed', errorCode: 'discussion_read_denied' });
+    expect(repository.getSnapshot()).toBe(retired);
+    expect(await repository.retry('retired-create')).toEqual({ kind: 'failed', errorCode: 'discussion_retry_not_found' });
+});
+
+it.each(['create', 'reconciliation'] as const)('retains unrelated Home state and create custody after a %s readiness refusal', async phase => {
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64url') };
+    const serverId = await homes.addHome({ name: 'Encrypted review', serverUrl: 'https://encrypted-review.test', accountId: 'alice',
+        currentAccount: true, accountEncryptionMode: 'e2ee', credentials });
+    const contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+    answerDiscussionThreadForTests(homes, serverId, { accountId: 'alice', mode: 'e2ee', loseCreate: false, loseFirstRejoin: false });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    const draftSubmission = { scope, address: { kind: 'newDiscussion' as const },
+        currentness: { address: { kind: 'newDiscussion' as const }, mutationIds: {} } };
+    const input = { creationLocalId: 'unrelated-create', messageLocalId: 'unrelated-first', title: 'Keep this review',
+        content: { v: 1 as const, parts: [{ t: 'text' as const, text: 'Unrelated retained question' }] }, draftSubmission };
+    expect(await repository.create(input)).toMatchObject({ kind: 'succeeded' });
+    await repository.refreshDiscussion('committed-thread');
+    const unrelated = repository.getSnapshot().threads['committed-thread'];
+    expect(unrelated?.messages).toHaveLength(1);
+    // Real atomic server admission returns this refusal for an unprepared
+    // foreign runtime. Only the native HTTP boundary is substituted here.
+    if (phase === 'create') {
+        homes.answer(serverId, 'POST /v1/discussions', { status: 409, body: { error: 'discussion_content_unavailable' } });
+    } else {
+        let dispatched = false;
+        homes.answer(serverId, 'GET /v1/discussions', { select: () => dispatched
+            ? { status: 409, body: { error: 'discussion_content_unavailable' } }
+            : { body: { discussions: [], nextCursor: null } } });
+        homes.answer(serverId, 'POST /v1/discussions', { select: () => {
+            dispatched = true;
+            return { dispatchThenFail: true };
+        } });
+    }
+    const outcome = await repository.create({ ...input, creationLocalId: 'declined-create', messageLocalId: 'declined-first',
+        participants: [{ kind: 'session', sessionId: 'foreign-runtime' }] });
+    if (phase === 'create') expect(outcome).toEqual({ kind: 'failed', errorCode: 'discussion_content_unavailable' });
+    else {
+        expect(outcome).toEqual({ kind: 'checking' });
+        await vi.waitFor(() => expect(repository.getSnapshot().mutations['declined-create']?.status).not.toBe('checking'));
+    }
+    expect(repository.getSnapshot().threads['committed-thread']).toBe(unrelated);
+    expect(repository.getSnapshot().lists.active.items.map(row => row.id)).toContain('committed-thread');
+    expect(repository.getSnapshot().mutations['declined-create']).toMatchObject({ status: phase === 'create' ? 'failed' : 'outcome_unknown',
+        errorCode: phase === 'create' ? 'discussion_content_unavailable' : 'outcome_unknown', draftSubmission });
+    expect(await repository.retry('declined-create')).toEqual({ kind: 'failed', errorCode: 'discussion_content_unavailable' });
+    expect(repository.getSnapshot().threads['committed-thread']).toBe(unrelated);
+});
 
 it('keeps model Home admission at the canonical Action before any reservation HTTP request', async () => {
     const serverId = await homes.addHome({ name: 'Review', serverUrl: 'https://review.test', accountId: 'alice', currentAccount: true });
@@ -192,6 +345,349 @@ it('reconciles an unknown model reservation with the retained explicit slot befo
     expect(requests).toHaveLength(2);
     expect(requests.map(request => DiscussionInviteRequestV1Schema.parse(request.input)))
         .toEqual(Array.from({ length: 2 }, () => ({ participant: { kind: 'model', participantSlotId: 'retained-slot', launch } })));
+});
+
+it.each(['success', 'repeated', 'failed', 'pending', 'unknown', 'approval', 'removed', 'bound', 'edited', 'birth_edited', 'unmounted', 'disabled', 'unavailable', 'retired', 'context', 'superseded'] as const)(
+    'offers a reserved model slot in the actual composer and starts it only on Send before posting a real Session mention (%s)', async scenario => {
+    await loadSyncSingletonForTests();
+    const serverUrl = 'https://model-mention.test';
+    const serverId = await homes.addHome({ name: 'Model mention', serverUrl, accountId: 'alice', currentAccount: true });
+    const token = homes.findByServerUrl(serverUrl)?.token;
+    if (!token) throw new Error('Missing fixture Account token');
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    spawnServerId = serverId;
+    const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
+    const machine = createMachineFixture({ id: 'machine-a', activeAt: machineRow.activeAt });
+    getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+    homes.answer(serverId, '/v1/machines', { body: { machines: [machineRow] } });
+    homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
+    homes.answer(serverId, '/v1/machines/machine-a/access', { body: MachineAccessGrantsListResponseV1Schema.parse({
+        machineId: machineRow.id, custodian: machineRow.access!.custodian, access: machineRow.access,
+        canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }) });
+    const scope = { serverId, accountId: 'alice' };
+    const thread = answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
+    const client = createDiscussionClient({ scope, availability: 'available' });
+    const created = await client.create({ creationLocalId: 'mention-discussion', messageLocalId: 'mention-first',
+        title: 'Model review', content: { v: 1, parts: [{ t: 'text', text: 'Review' }] } });
+    if (created.kind !== 'succeeded') throw new Error(JSON.stringify(created));
+    const discussionId = created.value.discussion.id;
+    const path = `/v1/discussions/${discussionId}`;
+    const launch = DiscussionModelParticipantLaunchV1Schema.parse({ executionTarget: { serverId, machineId: 'machine-a' },
+        directory: { kind: 'path', path: '/workspace' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+        configuration: { mode: { value: null, updatedAtMs: 1 }, model: { value: 'gpt-6-luna', updatedAtMs: 1 },
+            permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} } });
+    const model = { participant: { kind: 'model' as const, participantSlotId: 'saved-mention-slot' }, launch,
+        sessionId: null, answerPolicy: 'reads_only' as const, createdAt: 1 };
+    const roster = DiscussionParticipantsListResponseV1Schema.parse({ discussionId, ownerAccountId: 'alice', access: 'owner', grants: [], participants: [model] });
+    let currentPolicy: (typeof roster.participants)[number]['answerPolicy'] = model.answerPolicy;
+    let loseInvite = false;
+    homes.answer(serverId, `${path}/participants`, { body: roster });
+    homes.answer(serverId, `POST ${path}/participants/invite`, { select: input => {
+        expect(DiscussionInviteRequestV1Schema.parse(input)).toEqual({ participant: { ...model.participant, launch }, answerPolicy: currentPolicy });
+        if (loseInvite) { loseInvite = false; return { dispatchThenFail: true }; }
+        return { body: { discussionId, ownerAccountId: 'alice', access: 'owner', grants: [], changed: false,
+            modelParticipant: { ...model, answerPolicy: currentPolicy } } };
+    } });
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client });
+    await repository.refreshDiscussion(discussionId);
+    const { DiscussionComposer } = await import('@/components/discussions/DiscussionComposer');
+    const { AgentInput } = await import('@/components/sessions/agentInput');
+    const { useDiscussionDraft } = await import('@/components/discussions/useDiscussionDraft');
+    const { useDiscussionParticipantManagement } = await import('@/components/discussions/useDiscussionParticipantManagement');
+    const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+    const { renderScreen, act } = await import('@/dev/testkit');
+    let posted: Promise<unknown> | undefined;
+    let disabled = false;
+    let available = true;
+    let currentDiscussionId = discussionId;
+    function Harness() {
+        const bindings = useServerCredentialAccountScopeBindings([serverId]);
+        const accountLifetime = bindings.get(serverId);
+        const draft = useDiscussionDraft({ scope, address: { kind: 'discussion', discussionId: scenario === 'superseded' ? discussionId : currentDiscussionId } });
+        const management = useDiscussionParticipantManagement({ accountLifetime: accountLifetime ?? null, discussionId: currentDiscussionId, repository,
+            enabled: true, summary: repository.getSnapshot().threads[currentDiscussionId]?.summary ?? null });
+        if (!accountLifetime) return null;
+        return React.createElement(DiscussionComposer, { scope, accountLifetime, address: { serverId }, discussionId: currentDiscussionId,
+            availability: available ? 'available' : 'unavailable', value: { text: draft.text, mentions: draft.mentions }, onChange: draft.setComposer,
+            disabled,
+            prepareParticipantMentions: async (document: DiscussionComposerValue, isCurrent: () => boolean) => {
+                const { prepareDiscussionParticipantMentions } = await vi.importActual<typeof import('@/components/discussions/prepareDiscussionParticipantMentions')>(
+                    '@/components/discussions/prepareDiscussionParticipantMentions');
+                const result = await prepareDiscussionParticipantMentions({ document, discussionId: currentDiscussionId, repository,
+                    inviteExecutable: management.inviteExecutable, isCurrent });
+                return result.kind === 'ready' ? result.content : null;
+            },
+            onSend: content => { posted = repository.post({ discussionId, localId: 'model-question', content }); },
+        });
+    }
+    const throughDetails = ['success', 'repeated', 'failed', 'pending', 'unknown', 'approval', 'removed', 'bound'].includes(scenario);
+    const { DiscussionDetailsView } = throughDetails
+        ? await import('@/components/discussions/DiscussionDetailsView') : { DiscussionDetailsView: null };
+    const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+    if (throughDetails) {
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const { tryWriteServerEnabledBitInPlace } = await import('@happier-dev/protocol/features/serverEnabledBit');
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const features = createRootLayoutFeaturesResponse();
+        expect(tryWriteServerEnabledBitInPlace(features, 'sessions.conversations', true)).toBe(true);
+        homes.answer(serverId, '/v1/features', { body: features });
+        homes.answer(serverId, '/v1/features/authenticated', { body: features });
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    }
+    const element = () => DiscussionDetailsView ? React.createElement(DiscussionDetailsView, {
+        target: { kind: 'discussion', address: { serverId }, discussionId }, active: true, standaloneSurface: true,
+    }) : React.createElement(Harness);
+    const screen = await renderScreen(element(), throughDetails ? { wrapper: AppPaneProvider } : {});
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let unmounted = false;
+    try {
+        const input = () => screen.root.findByType(AgentInput);
+        await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
+        const suggestions = await input().props.autocompleteSuggestions('@', new AbortController().signal);
+        const selected = suggestions.find((item: { structuredInput?: { ref?: string } }) => item.structuredInput?.ref?.includes('saved-mention-slot'));
+        expect(selected, JSON.stringify(suggestions)).toBeDefined();
+        expect(selected.label).toContain('gpt-6-luna');
+        homes.answer(serverId, `${path}/participants`, { body: DiscussionParticipantsListResponseV1Schema.parse({ ...roster,
+            participants: [...Array.from({ length: 24 }, (_, index) => ({ participant: { kind: 'session', sessionId: `unrelated-session-${index}` },
+                answerPolicy: 'when_addressed', createdAt: 1 })), model],
+        }) });
+        const narrowed = await input().props.autocompleteSuggestions('@gpt-6-luna', new AbortController().signal);
+        expect(narrowed).toMatchObject([{ structuredInput: { ref: selected.structuredInput.ref } }]);
+        expect(await input().props.autocompleteSuggestions('@file:gpt-6-luna', new AbortController().signal)).toEqual([]);
+        expect(await input().props.autocompleteSuggestions('/gpt-6-luna', new AbortController().signal)).toEqual([]);
+        expect(spawnRequests).toEqual([]);
+        expect(homes.requestsFor(`${path}/participants/invite`)).toEqual([]);
+        await act(async () => {
+            const text = scenario === 'repeated' ? `${selected.text} ${selected.text}` : selected.text;
+            input().props.onChangeText(text);
+            input().props.onStructuredInputMentionsChange([
+                { ...selected.structuredInput, tokenText: selected.text, start: 0, end: selected.text.length },
+                ...(scenario === 'repeated' ? [{ ...selected.structuredInput, tokenText: selected.text,
+                    start: selected.text.length + 1, end: text.length }] : []),
+            ]);
+        });
+        expect(spawnRequests).toEqual([]);
+        expect(input().props.disabled, JSON.stringify(homes.requests.map(request => request.path))).toBe(false);
+        if (['edited', 'disabled', 'unavailable', 'retired', 'context', 'superseded'].includes(scenario)) {
+            homes.answer(serverId, `${path}/participants`, { select: async () => {
+                entered.resolve(); await release.promise; return { body: roster };
+            } });
+        } else if (scenario === 'removed' || scenario === 'bound') {
+            homes.answer(serverId, `${path}/participants`, { body: { ...roster,
+                participants: scenario === 'removed' ? [] : [{ ...model, sessionId: 'already-bound-session' }],
+            } });
+        } else if (scenario === 'failed') {
+            spawnResultOverride = SessionSpawnNewResultV1Schema.parse({ type: 'error', code: 'spawn_failed', retryable: true });
+        } else if (scenario === 'pending') {
+            spawnResultOverride = SessionSpawnNewResultV1Schema.parse({ type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' });
+        } else if (scenario === 'unknown') {
+            loseInvite = true;
+        } else if (scenario === 'approval') {
+            await homes.requireUiApproval(serverId, 'discussion.invite');
+        } else if (scenario === 'birth_edited' || scenario === 'unmounted') {
+            spawnResponseGate = release.promise;
+            onSpawnRequest = () => entered.resolve();
+        }
+        let sending: Promise<unknown> | undefined;
+        await act(async () => { sending = input().props.onSend(); });
+        if (['edited', 'birth_edited', 'unmounted', 'disabled', 'unavailable', 'retired', 'context', 'superseded'].includes(scenario)) {
+            await entered.promise;
+            await act(async () => {
+                if (scenario === 'edited' || scenario === 'birth_edited') input().props.onChangeText(`${selected.text} newer question`);
+                if (scenario === 'disabled') disabled = true;
+                if (scenario === 'unavailable') available = false;
+                if (scenario === 'retired') await homes.switchAccount(serverId, 'bob', { currentAccount: true });
+                if (scenario === 'context' || scenario === 'superseded') {
+                    currentDiscussionId = 'other-discussion';
+                    homes.answer(serverId, '/v1/discussions/other-discussion/participants', { body: { ...roster,
+                        discussionId: currentDiscussionId, participants: [] } });
+                }
+            });
+            if (scenario === 'unmounted') { await screen.unmount(); unmounted = true; }
+            else await screen.update(element());
+            if (scenario === 'context' || scenario === 'superseded') {
+                if (scenario === 'context') await act(async () => {
+                        input().props.onChangeText(selected.text);
+                        input().props.onStructuredInputMentionsChange([{ ...selected.structuredInput, tokenText: selected.text, start: 0, end: selected.text.length }]);
+                    });
+                const before = homes.requestsFor('/v1/discussions/other-discussion/participants').length;
+                await act(async () => { await input().props.onSend(); });
+                expect(homes.requestsFor('/v1/discussions/other-discussion/participants').length).toBeGreaterThan(before);
+                if (scenario === 'superseded') {
+                    currentDiscussionId = discussionId;
+                    await screen.update(element());
+                }
+            }
+            release.resolve();
+        }
+        await act(async () => { await sending; });
+        if (!['success', 'repeated', 'bound'].includes(scenario)) {
+            expect(thread.messages).toHaveLength(1);
+            if (scenario !== 'retired' && !unmounted) expect(input().props.value).toBe(scenario === 'edited' || scenario === 'birth_edited' ? `${selected.text} newer question` : selected.text);
+            if (throughDetails) {
+                const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+                const { t } = await import('@/text');
+                const notice = screen.root.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'session-discussion-notice');
+                expect(notice?.props.title).toBe(t(scenario === 'approval' ? 'approvals.status.open'
+                    : scenario === 'pending' || scenario === 'unknown' ? 'session.collaboration.discussion.manage.checking'
+                        : scenario === 'removed' ? 'session.collaboration.discussion.invalidMention' : 'session.collaboration.discussion.sendFailed'));
+            }
+            if (scenario === 'failed' || scenario === 'pending' || scenario === 'unknown') {
+                expect(spawnRequests).toHaveLength(scenario === 'unknown' ? 0 : 1);
+                spawnResultOverride = null;
+                currentPolicy = 'when_addressed';
+                homes.answer(serverId, `${path}/participants`, { body: { ...roster, participants: [{ ...model, answerPolicy: currentPolicy }] } });
+                await act(async () => { await input().props.onSend(); });
+                await posted;
+                await vi.waitFor(() => expect(thread.messages).toHaveLength(2));
+                expect(spawnRequests).toHaveLength(scenario === 'unknown' ? 1 : 2);
+                if (spawnRequests.length === 2) expect(SessionSpawnNewInputV2Schema.parse(spawnRequests[1].params).creationKey)
+                    .toBe(SessionSpawnNewInputV2Schema.parse(spawnRequests[0].params).creationKey);
+                expect(homes.requestsFor(`${path}/participants/invite`).map(request => DiscussionInviteRequestV1Schema.parse(request.input)))
+                    .toEqual(['reads_only', 'when_addressed'].map(answerPolicy => ({ participant: { ...model.participant, launch }, answerPolicy })));
+                expect(thread.messages).toHaveLength(2);
+            } else expect(spawnRequests).toHaveLength(scenario === 'birth_edited' || scenario === 'unmounted' ? 1 : 0);
+            return;
+        }
+        await posted;
+        await vi.waitFor(() => expect(thread.messages).toHaveLength(2));
+        expect(spawnRequests).toHaveLength(scenario === 'bound' ? 0 : 1);
+        expect(spawnParseIssues).toEqual([]);
+        for (const request of spawnRequests) expect(SessionSpawnNewInputV2Schema.parse(request.params)).toMatchObject({
+            discussionParticipant: { discussionId, participantSlotId: model.participant.participantSlotId }, initialTriggers: [],
+        });
+        for (const request of spawnRequests) expect(SessionSpawnNewInputV2Schema.parse(request.params).initialInput).toBeUndefined();
+        expect(thread.messages.at(-1)?.content).toEqual({ t: 'plain', v: { v: 1, parts: [
+            { t: 'mention', participant: { kind: 'session', sessionId: scenario === 'bound' ? 'already-bound-session' : 'owned-model-session' } },
+            ...(scenario === 'repeated' ? [{ t: 'text', text: ' ' }, { t: 'mention', participant: { kind: 'session', sessionId: 'owned-model-session' } }] : []),
+        ] } });
+        expect(thread.messages).toHaveLength(2);
+    } finally { release.resolve(); if (!unmounted) await screen.unmount(); }
+});
+
+it.each(['stopped', 'already_stopped', 'active', 'unknown', 'not_found', 'unreadable', 'requested', 'ambiguous', 'detached', 'archive_conflict', 'archive_unavailable', 'account_retired'] as const)(
+    'uses ordinary Stop confirmation for participant removal (%s)', async confirmation => {
+    await loadSyncSingletonForTests();
+    const serverUrl = 'https://model-removal.test';
+    const serverId = await homes.addHome({ name: 'Model removal', serverUrl, accountId: 'alice', currentAccount: true });
+    const token = homes.findByServerUrl(serverUrl)?.token;
+    if (!token) throw new Error('Missing fixture Account token');
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
+    homes.answer(serverId, '/v1/machines', { body: { machines: [machineRow] } });
+    homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
+    homes.answer(serverId, '/v1/machines/machine-a/access', { body: MachineAccessGrantsListResponseV1Schema.parse({
+        machineId: machineRow.id, custodian: machineRow.access!.custodian, access: machineRow.access,
+        canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }) });
+    const sessionId = 'owned-model-session';
+    const session = createSessionFixture({ id: sessionId, serverId, active: true,
+        metadata: { path: '/workspace', host: 'model-machine', machineId: 'machine-a' } });
+    const machine = createMachineFixture({ id: 'machine-a', activeAt: machineRow.activeAt });
+    getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine },
+        machineListByServerId: { [serverId]: [machine] } });
+    const effects: string[] = [];
+    let stopped = false;
+    let archivedAt: number | null = null;
+    let freshInactiveReads = 0;
+    const sessionAnswer = { select: () => {
+        if (stopped) freshInactiveReads++;
+        if (stopped && confirmation === 'not_found') return { status: 404, body: { error: 'Session not found' } };
+        if (stopped && confirmation === 'unreadable') return { status: 403, body: { error: 'Forbidden' } };
+        const body = createPlainSessionByIdResponseFixture({ ...session, active: !stopped || confirmation === 'active' });
+        return { body: { session: { ...body.session, archivedAt,
+            ...(stopped && confirmation === 'unknown' ? { active: undefined } : {}) } } };
+    } };
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, sessionAnswer);
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, sessionAnswer);
+    stopAnswer = async request => {
+        if (request.method === `${sessionId}:killSession`) {
+            effects.push('runner-stop');
+            return { status: 'not_found' };
+        }
+        expect(request.method).toBe(`machine-a:${RPC_METHODS.STOP_SESSION}`);
+        expect(request.params).toEqual({ sessionId });
+        stopped = true;
+        effects.push('stop');
+        if (confirmation === 'account_retired') {
+            await homes.switchAccount(serverId, 'bob', { currentAccount: true });
+            return { status: 'stopped' };
+        }
+        if (confirmation === 'ambiguous') throw Object.assign(new Error('Stop acknowledgement lost'), { rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        if (confirmation === 'requested') return { status: 'requested' };
+        return { status: confirmation === 'stopped' || confirmation.startsWith('archive_') ? 'stopped' : 'not_found' };
+    };
+    const removal = { discussionId: 'discussion-a', participant: confirmation === 'detached'
+        ? { kind: 'session' as const, sessionId } : { kind: 'model' as const, participantSlotId: 'retained-slot' } };
+    const { path, method } = bindDiscussionActionHttpRequestV1('discussion.participant.remove', removal);
+    answerDiscussionRead(serverId);
+    homes.answer(serverId, `${method} ${path}`, { select: input => {
+        expect(input).toEqual({ participant: removal.participant });
+        effects.push('remove');
+        return { body: { discussionId: 'discussion-a', ownerAccountId: 'alice', access: 'owner', grants: [], changed: true,
+            ...(confirmation === 'detached' ? {} : { ownedSession: { discussionId: 'discussion-a', participantSlotId: 'retained-slot', sessionId } }) } };
+    } });
+    homes.answer(serverId, `POST /v2/sessions/${sessionId}/archive`, { select: () => {
+        effects.push('archive');
+        if (confirmation === 'archive_conflict') return { status: 409, body: { error: 'session_active' } };
+        if (confirmation === 'archive_unavailable') return { status: 503, body: { error: 'service_unavailable' } };
+        archivedAt = 123;
+        return { body: { archivedAt } };
+    } });
+    const client = createDiscussionClient({ scope: { serverId, accountId: 'alice' }, availability: 'available' });
+    const repository = createDiscussionRepository({ scope: { serverId, accountId: 'alice' }, address: { serverId }, client });
+    const outcome = await repository.removeParticipant(removal);
+    if (confirmation === 'account_retired') {
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed' });
+        expect(effects).toEqual(['remove', 'stop']);
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    if (confirmation === 'detached') {
+        expect(outcome).toMatchObject({ kind: 'succeeded' });
+        expect(effects).toEqual(['remove']);
+        expect(stopRequests).toEqual([]);
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    expect(stopRequests[0], JSON.stringify({ outcome, effects })).toMatchObject({ method: `machine-a:${RPC_METHODS.STOP_SESSION}` });
+    if (confirmation === 'archive_conflict' || confirmation === 'archive_unavailable') {
+        const code = confirmation === 'archive_conflict' ? 'session_active' : 'unknown_error';
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed', errorCode: code });
+        expect(effects).toEqual(['remove', 'stop', 'archive']);
+        expect(archivedAt).toBeNull();
+        const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+        expect(await executeSessionLifecycleAction('session.archive', sessionId, { serverId }))
+            .toMatchObject({ success: false, code, message: expect.any(String) });
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    if (confirmation !== 'stopped' && confirmation !== 'already_stopped') {
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed' });
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        expect(getStorage().getState().sessions[sessionId]?.archivedAt).not.toBe(123);
+        return;
+    }
+    expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'succeeded', value: { changed: true } });
+    expect(effects).toEqual(['remove', 'stop', 'archive']);
+    if (confirmation === 'already_stopped') expect(freshInactiveReads).toBeGreaterThan(0);
+    expect(stopRequests).toHaveLength(1);
+    expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`).map(request => request.serverId)).toEqual([serverId]);
+    expect(getStorage().getState().sessions[sessionId]?.archivedAt).toBe(123);
+    expect(archivedAt).toBe(123);
+    if (confirmation === 'already_stopped') {
+        expect(await repository.removeParticipant(removal)).toMatchObject({ kind: 'succeeded' });
+        expect(effects).toEqual(['remove', 'stop', 'archive', 'remove', 'stop', 'archive']);
+        expect(homes.requestsFor(path).map(request => request.input)).toEqual([
+            { participant: removal.participant }, { participant: removal.participant },
+        ]);
+    }
 });
 
 it.each([{ enriched: false, failure: false, pending: false }, { enriched: true, failure: false, pending: false },

@@ -278,10 +278,11 @@ async function defaultResolveGeneration(): Promise<number> {
 
 function isExpectedPluginOccurrenceCurrent(
     registry: ResolvedExecutablePluginRuntimeRegistry,
-    pluginId: string,
-    expectedOccurrenceId: string,
+    pluginId: string | undefined,
+    expectedOccurrenceId: string | undefined,
 ): boolean {
     try {
+        if (pluginId === undefined) return false;
         const currentOccurrenceId = registry.readPluginOccurrenceId?.(pluginId)
             ?? registry.contributes.occurrenceIdsByPluginId?.[pluginId]
             ?? null;
@@ -2661,10 +2662,36 @@ export function registerDaemonContributionRegistryProjectionHandler(
                     code: 'plugin_action_unavailable',
                 });
             }
+            const mountedCaller = await traceStage('contributed.mounted_caller', () => deriveMountedPluginInvocationCaller({
+                request: {
+                    machineId: request.data.machineId,
+                    invocationSurface,
+                    ...(request.data.invocation ? { invocation: request.data.invocation } : {}),
+                },
+                registry: lease.registry,
+                resolveCurrentPluginMaterializationRef:
+                    lease.resolveCurrentPluginMaterializationRef,
+                resolveExecutionOriginContext: opts?.resolvePluginProjectionExecutionOriginContext
+                    ? () => traceStage('contributed.mounted_origin', () => opts.resolvePluginProjectionExecutionOriginContext!())
+                    : undefined,
+            }));
+            if (mountedCaller.status === 'unavailable') {
+                return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({
+                    ok: false,
+                    code: 'plugin_mounted_caller_unavailable',
+                });
+            }
             let defaultSessionId = request.data.sessionId;
             if (request.data.resolveClientMessageContext) {
                 if (resolvedAction?.definition.execution?.target !== 'client'
-                    || !resolvedAction.definition.contributionSurfaces?.includes('ui')) {
+                    || !resolvedAction.definition.contributionSurfaces?.includes('ui')
+                    || !resolvedAction.definition.placementBindings?.includes('message.menu')
+                    || resolvedAction.definition.surfaces[invocationSurface] !== true
+                    || (invocation?.kind === 'clientPluginAction' && (
+                        mountedCaller.status !== 'available'
+                        || buildQualifiedPluginContributionKey({ pluginId: invocation.clientActionBinding.pluginId,
+                            localId: invocation.clientActionBinding.contributionLocalId }) !== request.data.qualifiedActionId
+                    ))) {
                     return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: false, code: 'plugin_action_unavailable' });
                 }
                 if (!isExpectedPluginOccurrenceCurrent(lease.registry, resolvedAction.pluginId, request.data.expectedContributorOccurrenceId)) {
@@ -2700,29 +2727,11 @@ export function registerDaemonContributionRegistryProjectionHandler(
             if (request.data.resolveClientMessageContext) {
                 if (!messageAction || !resolvedAction
                     || !isExpectedPluginOccurrenceCurrent(lease.registry, resolvedAction.pluginId, request.data.expectedContributorOccurrenceId)
+                    || (mountedCaller.status === 'available' && !await mountedCaller.isMountedCallerCurrent())
                     || context?.signal?.aborted) {
                     return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: false, code: 'plugin_message_action_unavailable' });
                 }
                 return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: true, result: messageAction });
-            }
-            const mountedCaller = await traceStage('contributed.mounted_caller', () => deriveMountedPluginInvocationCaller({
-                request: {
-                    machineId: request.data.machineId,
-                    invocationSurface,
-                    ...(request.data.invocation ? { invocation: request.data.invocation } : {}),
-                },
-                registry: lease.registry,
-                resolveCurrentPluginMaterializationRef:
-                    lease.resolveCurrentPluginMaterializationRef,
-                resolveExecutionOriginContext: opts?.resolvePluginProjectionExecutionOriginContext
-                    ? () => traceStage('contributed.mounted_origin', () => opts.resolvePluginProjectionExecutionOriginContext!())
-                    : undefined,
-            }));
-            if (mountedCaller.status === 'unavailable') {
-                return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({
-                    ok: false,
-                    code: 'plugin_mounted_caller_unavailable',
-                });
             }
             const selectedActionInputCarrier = request.data.selectedActionInputCarrier;
             if (selectedActionInputCarrier !== undefined) {

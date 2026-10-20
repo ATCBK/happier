@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountUsernameUpdateErrorV1Schema } from '../account/profile.js';
 import { z } from 'zod/mini';
 import { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
+import { FriendsMutationErrorSchema } from '../social/friends.js';
 
 import {
   HOME_GOVERNANCE_ACTION_IDS_V1,
@@ -48,6 +49,7 @@ import {
  */
 export const HOME_DOMAIN_ACTION_IDS_V1 = [
   ...ACTION_ID_FAMILIES_V1.account_profile,
+  ...ACTION_ID_FAMILIES_V1.friends,
   ...HOME_GOVERNANCE_ACTION_IDS_V1,
   ...HOME_IDENTITY_ACTION_IDS_V1,
   ...TEAM_HOME_ACTION_IDS_V1,
@@ -62,6 +64,7 @@ export const HOME_DOMAIN_ACTION_IDS_V1 = [
 
 export type HomeDomainActionIdV1 =
   | typeof ACTION_ID_FAMILIES_V1.account_profile[number]
+  | typeof ACTION_ID_FAMILIES_V1.friends[number]
   | HomeGovernanceActionIdV1
   | HomeIdentityActionIdV1
   | typeof TEAM_HOME_ACTION_IDS_V1[number]
@@ -81,6 +84,7 @@ export function isHomeDomainActionIdV1(value: string): value is HomeDomainAction
 
 const HOME_DOMAIN_ERROR_SCHEMAS_V1 = [
   AccountUsernameUpdateErrorV1Schema,
+  FriendsMutationErrorSchema,
   HomeGovernanceErrorV1Schema,
   HomeSettingsInvalidErrorV1Schema,
   TeamErrorV1Schema,

@@ -302,15 +302,57 @@ export type DocCollaborationActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
                     outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
+                    workflow?: {
+                        runId: string;
+                        invocationRecordId: string;
+                        invocationAttempt: string;
+                    } | undefined;
                 } | undefined;
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -337,6 +379,17 @@ export type DocCollaborationActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | undefined;
             docEditProposalDispositionV1?: {
                 state: 'open';
@@ -487,15 +540,57 @@ export type DocCollaborationActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
                     outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
+                    workflow?: {
+                        runId: string;
+                        invocationRecordId: string;
+                        invocationAttempt: string;
+                    } | undefined;
                 } | undefined;
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -522,6 +617,17 @@ export type DocCollaborationActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | undefined;
             docEditProposalDispositionV1?: {
                 state: 'open';

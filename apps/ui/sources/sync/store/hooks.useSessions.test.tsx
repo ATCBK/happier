@@ -28,6 +28,7 @@ import { buildSessionFolderAssignmentKey } from '@/sync/domains/session/folders/
 import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
@@ -520,6 +521,11 @@ describe('useSessionListIndexByServerId', () => {
 });
 
 describe('mobile cockpit surface local-setting selectors', () => {
+    beforeEach(() => {
+        storage.setState(state => ({ settings: settingsParse({ ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) }));
+    });
+
     it('does not read a legacy bare session selection without a resolved Account realm', async () => {
         const previousState = storage.getState();
         try {

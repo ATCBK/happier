@@ -3601,6 +3601,61 @@ describe('workspace sync target bootstrap authority', () => {
     }
   });
 
+  it('does not rebuild bootstrap custody for an endpoint the relationship sync already owns', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-authority-sync-owned-'));
+    const alphaRoot = join(fixture, 'alpha');
+    const betaRoot = join(fixture, 'beta');
+    await Promise.all([mkdir(alphaRoot, { recursive: true }), mkdir(betaRoot, { recursive: true })]);
+    const harness = createAuthorityHarness({ getProjectSnapshot: () => snapshot(alphaRoot, betaRoot) });
+    try {
+      const syncOwnership = await harness.rootOwnershipManager.tryAcquire({
+        ownerId: relationshipId, canonicalRoot: await realpath(betaRoot), operation: 'sync',
+      });
+      expect('kind' in syncOwnership).toBe(false);
+      if ('kind' in syncOwnership) return;
+      await expect(harness.authority.reconcileRetainedBootstraps()).resolves.toBeUndefined();
+      const foreign = await harness.rootOwnershipManager.tryAcquire({
+        ownerId: 'foreign', canonicalRoot: await realpath(betaRoot), operation: 'bootstrap',
+      });
+      expect(foreign).toMatchObject({ kind: 'overlap', existing: { ownerId: relationshipId, operation: 'sync' } });
+      await syncOwnership.release();
+    } finally {
+      await harness.authority.releaseAllRetainedBootstraps();
+      await harness.cleanup();
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('does not rebuild bootstrap custody for a source endpoint held by its shared hub participation', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-authority-hub-owned-'));
+    const alphaRoot = join(fixture, 'alpha');
+    const betaRoot = join(fixture, 'beta');
+    await Promise.all([mkdir(alphaRoot, { recursive: true }), mkdir(betaRoot, { recursive: true })]);
+    // Both endpoints live on this Machine (a same-Machine link): the controller holds the source root as
+    // the hub workspace (ownerId = the hub workspace ref), not under the relationship id.
+    const harness = createAuthorityHarness({
+      localMachineId: 'machine-a',
+      getProjectSnapshot: () => snapshot(alphaRoot, betaRoot, { betaMachineId: 'machine-a' }),
+    });
+    try {
+      const hubOwnership = await harness.rootOwnershipManager.tryAcquire({
+        ownerId: 'workspace-alpha', canonicalRoot: await realpath(alphaRoot), operation: 'sync',
+      });
+      expect('kind' in hubOwnership).toBe(false);
+      if ('kind' in hubOwnership) return;
+      await expect(harness.authority.reconcileRetainedBootstraps()).resolves.toBeUndefined();
+      const foreign = await harness.rootOwnershipManager.tryAcquire({
+        ownerId: 'foreign', canonicalRoot: await realpath(alphaRoot), operation: 'bootstrap',
+      });
+      expect(foreign).toMatchObject({ kind: 'overlap', existing: { ownerId: 'workspace-alpha', operation: 'sync' } });
+      await hubOwnership.release();
+    } finally {
+      await harness.authority.releaseAllRetainedBootstraps();
+      await harness.cleanup();
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('reconciles disabled relationships and releases every retained handle on shutdown', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-authority-reconcile-'));
     const alphaRoot = join(fixture, 'alpha');

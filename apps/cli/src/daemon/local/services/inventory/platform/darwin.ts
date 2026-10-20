@@ -12,6 +12,7 @@ export type DarwinExecFileBoundary = (
 export type DarwinLocalServiceScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
+    readProcessFacts?: () => Promise<ReadonlyMap<number, LocalServiceProcessFact>>;
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
 }>;
 
@@ -104,6 +105,7 @@ async function readDarwinTcpListenOutput(
 
 export async function readDarwinLocalServiceListeners(input: Readonly<{
     execFile: DarwinExecFileBoundary;
+    includeProcessFacts?: boolean;
 }>): Promise<DarwinLocalServiceScanResult> {
     const listenOutput = await readDarwinTcpListenOutput(input.execFile);
     const parsed = { listeners: measureDarwinConnections(listenOutput.output,
@@ -130,7 +132,7 @@ export async function readDarwinLocalServiceListeners(input: Readonly<{
     const listenerPids = [...new Set(parsed.listeners
         .map((listener) => listener.pid)
         .filter((pid): pid is number => typeof pid === 'number' && Number.isInteger(pid) && pid > 0))];
-    const processes = listenerPids.length > 0
+    const readProcessFacts = async (): Promise<ReadonlyMap<number, LocalServiceProcessFact>> => listenerPids.length > 0
         ? await projectLocalServiceProcessFacts({
             seedPids: listenerPids,
             onReadFailure: () => diagnostics.push({
@@ -142,7 +144,8 @@ export async function readDarwinLocalServiceListeners(input: Readonly<{
         : new Map<number, LocalServiceProcessFact>();
     return {
         listeners: parsed.listeners,
-        processes,
+        processes: input.includeProcessFacts === false ? new Map<number, LocalServiceProcessFact>() : await readProcessFacts(),
+        ...(input.includeProcessFacts === false ? { readProcessFacts } : {}),
         diagnostics,
     };
 }

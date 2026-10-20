@@ -13,12 +13,22 @@ import {
   resolveVitestPassthroughArgs,
   resolveVitestPositionalFilters,
   resolveVitestShardCountForFileCount,
+  resolveVitestShardConcurrency,
   resolveVitestShardTimeoutMs,
 } from './runVitestShards.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(scriptsDir);
 const runnerPath = join(scriptsDir, 'runVitestShards.mjs');
+
+test('partition admission accounts for each transform server and its full canonical fork pool', () => {
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 12, 4), 2);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 48, 4), 8);
+  assert.equal(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '8' }, [], 4, 2), 1);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 1, 1), 1);
+  assert.equal(resolveVitestShardConcurrency({}, [], 48, 4), 1);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 12, 1), 6);
+});
 
 test('the containing job owns the default deadline while explicit diagnostic watchdogs remain available', () => {
   assert.equal(resolveVitestShardTimeoutMs({}), undefined);
@@ -35,6 +45,10 @@ for (const scenario of [
   { name: 'canonical legacy cap', env: { VITEST_UI_MAX_FORKS: '9' }, args: [], workers: 6 },
   { name: 'invalid supplied budget through canonical config', env: { HAPPIER_VITEST_MAX_WORKERS: 'invalid' }, args: [], workers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))) },
   { name: 'selected-file worker budget', partition: false, env: { HAPPIER_VITEST_MAX_WORKERS: '2', VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 2 },
+  { name: 'parallel partitions include transform-server CPU', env: {}, args: ['--concurrency=8'], shards: 8, fileCount: 16,
+    workers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))) },
+  { name: 'parallel native minimum worker arguments', env: { HAPPIER_VITEST_MAX_WORKERS: '2' },
+    args: ['--concurrency=8', '--minWorkers=2'], shards: 8, fileCount: 16, workers: 2, minWorkers: 2 },
 ]) {
   test(`${scenario.partition === false ? 'ordinary UI' : 'Gate'} honors ${scenario.name}`, async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'happier-ui-vitest-budget-'));
@@ -45,7 +59,10 @@ for (const scenario of [
       await writeFile(reporterPath, `import { writeFileSync } from 'node:fs'; export default class { onInit(ctx) { writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ maxWorkers: ctx.config.poolOptions?.forks?.maxForks ?? ctx.config.maxWorkers, minWorkers: ctx.config.poolOptions?.forks?.minForks ?? ctx.config.minWorkers })); } }\n`);
       await writeFile(configPath, `import { resolveVitestWorkers } from ${JSON.stringify(join(packageRoot, '../../scripts/testing/vitestWorkers.ts'))}; export default { root: ${JSON.stringify(tempRoot)}, test: { include: ['*.test.js'], pool: 'forks', ...resolveVitestWorkers({ legacyUiOverride: true }), reporters: [${JSON.stringify(reporterPath)}] } };\n`);
       await writeFile(join(tempRoot, 'pool.test.js'), "import { test, expect } from 'vitest'; test('real pool admission', () => expect(true).toBe(true));\n");
-      const env = { ...process.env, CI: 'true', HAPPIER_UI_VITEST_PART: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_PARTS: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_SHARDS: '1', VITEST_MAX_FORKS: '13', VITEST_MAX_THREADS: '13', VITEST_MIN_FORKS: '1', VITEST_MIN_THREADS: '1' };
+      for (let index = 1; index < (scenario.fileCount ?? 1); index += 1) {
+        await writeFile(join(tempRoot, `pool-${index}.test.js`), "import { test, expect } from 'vitest'; test('real pool admission', () => expect(true).toBe(true));\n");
+      }
+      const env = { ...process.env, CI: 'true', HAPPIER_UI_VITEST_PART: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_PARTS: scenario.partition === false ? '' : '1', HAPPIER_UI_VITEST_SHARDS: String(scenario.shards ?? 1), VITEST_MAX_FORKS: '13', VITEST_MAX_THREADS: '13', VITEST_MIN_FORKS: '1', VITEST_MIN_THREADS: '1' };
       delete env.HAPPIER_VITEST_MAX_WORKERS;
       delete env.VITEST_UI_MAX_FORKS;
       Object.assign(env, scenario.env);

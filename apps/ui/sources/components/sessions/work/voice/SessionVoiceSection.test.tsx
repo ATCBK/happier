@@ -109,7 +109,7 @@ describe('Work voice source display', () => {
       if (!choice) throw new Error('Session voice choice missing');
       // Actual catalog client crosses the daemon RPC transport, then the shared owner retains its row.
       const previousPicker = await renderHook(() => useRealtimeVoiceCatalog({
-        client: choice.client, credentialUsable: true, targetKey: choice.targetKey,
+        providerId: choice.providerId, catalogAvailable: choice.catalogAvailable, credentialUsable: true, targetKey: choice.targetKey,
       }));
       await act(async () => previousPicker.getCurrent().requestCatalog());
       await vi.waitFor(() => expect(previousPicker.getCurrent().catalog.phase).toBe('ready'));

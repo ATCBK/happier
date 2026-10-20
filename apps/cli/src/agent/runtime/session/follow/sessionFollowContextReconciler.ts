@@ -3,6 +3,9 @@ import { deriveSessionFollowWakeEventLocalIdV1, normalizeSessionFollowWakeObserv
 import { isAuthoritativeHumanSessionFollowMessageV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowUpdateEnvelopeV1';
 import { isFollowPolicyEqualV1, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { classifyWorkerUpdateEventV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { buildAgentEventLocalId } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { renderSessionInputContextPromptV1, renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { SessionFollowUpdateEnvelopeV1, WorkerUpdateV1 } from '@happier-dev/protocol';
@@ -19,6 +22,8 @@ export type SessionFollowQueuedDelivery = Readonly<{
   delivery: SessionFollowInputV1;
   localInputId: string;
   userMessageSeq: number | null;
+  /** Public-safe route reasons projected from the validated Pending admission receipt. */
+  followMatches?: readonly WorkerUpdateFollowMatchV1[];
 }>;
 
 import { applySessionFollowContextBudgetV1 } from './sessionFollowContextBudget';
@@ -78,7 +83,8 @@ export type SessionFollowPreparedContext = Readonly<{
   updates: readonly SessionFollowUpdateEnvelopeV1[];
   workerUpdates?: readonly WorkerUpdateV1[];
   /** Per-worker cards share the incumbent frontier identity owner, independently of batch membership. */
-  workerUpdateEvents?: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[];
+  workerUpdateEvents?: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+    followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[];
   /** Present only for a wake; this is the deterministic durable event identity committed before delivery. */
   wakeEventLocalId?: string;
   acknowledgeAccepted: (input: Readonly<{
@@ -88,7 +94,7 @@ export type SessionFollowPreparedContext = Readonly<{
   }> | Readonly<{
     kind: 'context_only_wake';
     eventLocalId: string;
-  }>) => void;
+  }>, pendingSettlement?: Promise<void>) => void;
 }>;
 
 /**
@@ -183,7 +189,21 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     observation.relation === 'manager' && observation.observed.turn !== null
     && update !== undefined
     && update.wake !== 'published' && !(update.workerKind === 'session' && update.ownerState === 'needs_input');
-  return async ({ signal, maxFollowContextUtf8Bytes: invocationAllowance, deliveryIntent = 'natural', executionRunId, followDeliveries = [] }) => {
+  type Options = Readonly<{ signal: AbortSignal; maxFollowContextUtf8Bytes?: number | null;
+    deliveryIntent?: 'natural' | 'wake'; executionRunId?: string; followDeliveries?: readonly SessionFollowQueuedDelivery[] }>;
+  const pendingRunAcknowledgements = new Set<() => Promise<void>>();
+  const isUnsettledOriginalAcknowledgement = (error: string) => error === 'retryable'
+    || error === 'stale_publisher_generation' || error === 'provider_acceptance_unverified';
+  const readAcceptedOriginalPublisherGeneration = async (localInputId: string, delivery: SessionFollowInputV1) => {
+    // Input custody survives a publisher replacement. Rejoin that exact input
+    // under the current socket; its immutable represented prefix stays intact.
+    const current = await input.session.observePendingSessionFollow({ inputLocalIds: [localInputId] });
+    if (!current.ok || !current.observations.some(observation => 'kind' in observation
+      && observation.localInputId === localInputId && observation.destinationSessionId === input.session.sessionId
+      && sameStrictJsonValue(observation.delivery, delivery))) return null;
+    return current.publisherGeneration;
+  };
+  const reconcileSessions = async ({ signal, maxFollowContextUtf8Bytes: invocationAllowance, deliveryIntent = 'natural', executionRunId, followDeliveries = [] }: Options): Promise<SessionFollowReconciledContext | null> => {
     if (signal.aborted) return null;
     // Reuse the host's next preparation boundary; no rearm/timer or second
     // native effect is needed to finish an already accepted input's ACK.
@@ -309,7 +329,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const isAwaitingAcknowledgement = (observation: SessionFollowPendingObservationV1, update: WorkerUpdateV1 | undefined): boolean => {
       for (const pending of pendingAcknowledgements) {
         const represented = pending.workerObservation ?? pending.observation;
-        if (pending.publisherGeneration === publisherGeneration
+        if ((pending.publisherGeneration === publisherGeneration || 'kind' in represented)
           && represented.sourceSessionId === observation.sourceSessionId
           && represented.destinationSessionId === observation.destinationSessionId
           && (pending.workerObservation
@@ -336,6 +356,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
         && observed.observations!.some(original => 'kind' in original
           && followDeliveries.some(queued => queued.localInputId === original.localInputId
             && sameStrictJsonValue(queued.delivery, original.delivery))
+          && 'sourceSessionId' in original.delivery.original
           && original.delivery.original.sourceSessionId === observation.sourceSessionId
           && 'sourceRequests' in original.delivery.original && original.delivery.original.sourceRequests.requests.some(request =>
             request.turnId === observation.observed.turn?.id))));
@@ -470,9 +491,11 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const workerPrepared = stillAdmitted.flatMap((entry) => {
       const { observation, update, workerUpdate, recheckWorkerUpdateAdmission } = entry;
       if ('kind' in observation) return [];
-      // Required originals keep their existing Pending order. A later optional
-      // manager outcome must not spend their budget or ACK past their prefix.
-      if (followDeliveries.some(({ delivery }) => delivery.original.sourceSessionId === observation.sourceSessionId)) return [];
+      // Required transcript originals keep their existing Pending order. A
+      // later optional manager outcome cannot spend or ACK past their prefix.
+      // Foreground questions retain their separate exact-Turn witness rule.
+      if (followDeliveries.some(({ delivery }) => 'sourceMessage' in delivery.original
+        && delivery.original.sourceSessionId === observation.sourceSessionId)) return [];
       if (!workerUpdate || deliveryIntent === 'wake' && !entry.mayWake) return [];
       const fitted = fitWorkerUpdateWithinHostContextAllowance(workerUpdate, Math.max(0, remainingBytes - 2));
       if (!fitted) return [];
@@ -581,7 +604,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const wakeCandidates = prepared.flatMap(({ observation, update }) => 'kind' in observation ? [] : [{
           sourceSessionId: observation.sourceSessionId,
           policy: observation.policy,
-          ...(observation.relation ? { relation: observation.relation, attachedAt: observation.attachedAt } : {}),
+          relation: observation.relation,
+          attachedAt: observation.attachedAt,
           expected: observation.delivered,
           consumed: update.observed,
         }]);
@@ -602,8 +626,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
       ...(prepared.some(entry => entry.workerUpdate) ? {
         workerUpdates: prepared.flatMap(entry => entry.workerUpdate ? [entry.workerUpdate] : []),
       } : {}),
-      ...(deliveryIntent === 'wake' && workerPrepared.length ? {
-        workerUpdateEvents: workerPrepared.map(({ observation, update, workerUpdate }) => ({
+      ...((deliveryIntent === 'wake' && workerPrepared.length) || prefixPrepared.some(entry => entry.workerUpdate && 'kind' in entry.observation) ? {
+        workerUpdateEvents: [...(deliveryIntent === 'wake' ? workerPrepared : []).map(({ observation, update, workerUpdate }) => ({
           localId: deriveSessionFollowWakeEventLocalIdV1({
             destinationSessionId, publisherGeneration,
             observations: [{ sourceSessionId: observation.sourceSessionId, relation: 'manager',
@@ -611,7 +635,17 @@ export function createSessionFollowContextReconciler(input: Readonly<{
               attachedAt: observation.attachedAt, expected: observation.delivered, consumed: update.observed }],
           }),
           update: workerUpdate,
-        })),
+          followMatches: [{ kind: 'relation' as const, relation: observation.relation }],
+        })), ...prefixPrepared.flatMap(({ observation, workerUpdate }) => {
+          if (!('kind' in observation) || !workerUpdate) return [];
+          const queued = representedDeliveries.find(delivery => delivery.localInputId === observation.localInputId);
+          if (!queued) return [];
+          return [{ localId: buildAgentEventLocalId('worker-update', ['follow', deriveSessionFollowInputLocalIdV1({
+              destinationSessionId, original: queued.delivery.original,
+            })]),
+            update: workerUpdate, followInputLocalId: queued.localInputId,
+            ...(queued.followMatches?.length ? { followMatches: queued.followMatches } : {}) }];
+        })],
       } : {}),
       ...(wakeEventLocalId ? { wakeEventLocalId } : {}),
       recheckAdmission: async (dispatchSignal) => {
@@ -635,7 +669,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
           && !isAwaitingAcknowledgement(observation, workerUpdate)));
         return !signal.aborted && !dispatchSignal.aborted && allowed.every(Boolean);
       },
-      acknowledgeAccepted: (acceptance) => {
+      acknowledgeAccepted: (acceptance, pendingSettlement) => {
         if (
           acceptance.kind === 'context_only_wake'
           && acceptance.eventLocalId !== wakeEventLocalId
@@ -661,15 +695,21 @@ export function createSessionFollowContextReconciler(input: Readonly<{
             inFlight = true;
             const startedAtMs = Date.now();
             const acknowledgementFacts = { destinationSessionId, sourceSessionId: observation.sourceSessionId,
-              localInputId, expected: observation.delivered, consumed };
-            logger.debug('[Session Follow] Acceptance ACK started', acknowledgementFacts);
+              localInputId, userMessageSeq, expected: observation.delivered, consumed };
             try {
+              if (pendingSettlement) await pendingSettlement;
+              const currentPublisherGeneration = 'kind' in observation
+                ? await readAcceptedOriginalPublisherGeneration(observation.localInputId, observation.delivery)
+                : publisherGeneration;
+              if (!currentPublisherGeneration) return;
+              logger.debug('[Session Follow] Acceptance ACK started', { ...acknowledgementFacts,
+                expectedPublisherGeneration: currentPublisherGeneration });
               const result = await (observer.kind === 'account_voice'
                 ? input.session.acknowledgeAccountVoiceFollow({
                     executionRunId: executionRunId!,
                     expectedExecutionRunOccurrenceId: observed.executionRunOccurrenceId!,
                     sourceSessionId: observation.sourceSessionId,
-                    expectedPublisherGeneration: publisherGeneration,
+                    expectedPublisherGeneration: currentPublisherGeneration,
                     expected: observation.voiceExpected ?? null,
                     observed: observation.observed,
                     consumed,
@@ -679,13 +719,14 @@ export function createSessionFollowContextReconciler(input: Readonly<{
                 : input.session.acknowledgeSessionFollow('kind' in observation ? {
                     sourceSessionId: observation.sourceSessionId,
                     localInputId: observation.localInputId,
-                    expectedPublisherGeneration: publisherGeneration,
+                    expectedPublisherGeneration: currentPublisherGeneration,
                     expected: observation.delivered, observed: observation.observed, consumed,
                     acceptance: { kind: 'admitted_input', localInputId, userMessageSeq },
                   } : {
                     sourceSessionId: observation.sourceSessionId,
                     policy: observation.policy,
-                    ...(observation.relation ? { relation: observation.relation, attachedAt: observation.attachedAt } : {}),
+                    relation: observation.relation,
+                    attachedAt: observation.attachedAt,
                     expectedPublisherGeneration: publisherGeneration,
                     expected: observation.delivered,
                     observed: observation.observed,
@@ -695,12 +736,18 @@ export function createSessionFollowContextReconciler(input: Readonly<{
                       : { kind: 'admitted_input', localInputId, userMessageSeq },
                   }));
               logger.debug('[Session Follow] Acceptance ACK completed', { ...acknowledgementFacts,
+                expectedPublisherGeneration: currentPublisherGeneration,
                 elapsedMs: Date.now() - startedAtMs, ok: result.ok,
                 ...(!result.ok ? { rejection: 'rejection' in result ? result.rejection : result.error } : {}) });
-              if (result.ok || !('error' in result) || result.error !== 'retryable') pendingAcknowledgements.delete(request);
+              const rejection = result.ok ? null : result.error;
+              if (result.ok || !(rejection === 'retryable'
+                || 'kind' in observation && rejection !== null && isUnsettledOriginalAcknowledgement(rejection))) {
+                pendingAcknowledgements.delete(request);
+              }
             } catch {
-              pendingAcknowledgements.delete(request);
-              // Provider acceptance already happened. Lost ACKs intentionally redeliver safely.
+              if (!('kind' in observation)) pendingAcknowledgements.delete(request);
+              // Originals retain exact accepted-input custody for the next
+              // boundary. No-original wakes keep their at-least-once path.
               logger.debug('[Session Follow] Acceptance ACK failed', { ...acknowledgementFacts, elapsedMs: Date.now() - startedAtMs });
             } finally { inFlight = false; }
           } };
@@ -709,6 +756,69 @@ export function createSessionFollowContextReconciler(input: Readonly<{
           pendingAcknowledgements.add(request);
           void request.retry();
         }
+      },
+    };
+  };
+  return async options => {
+    await Promise.all([...pendingRunAcknowledgements].map(retry => retry()));
+    const queued = (options.followDeliveries ?? []).filter(entry => 'source' in entry.delivery.original);
+    const sessions = await reconcileSessions({ ...options,
+      followDeliveries: (options.followDeliveries ?? []).filter(entry => 'sourceSessionId' in entry.delivery.original) });
+    if (!queued.length || input.observer?.kind === 'account_voice' || options.signal.aborted) return sessions;
+    const observe = async (signal: AbortSignal) => {
+      try { return await input.session.observePendingSessionFollow({ signal,
+        inputLocalIds: queued.map(entry => entry.localInputId) }); }
+      catch (error) {
+        const preparationError = classifyHomeReadPreparationError(error);
+        if (preparationError instanceof PromptStackPreparationError) throw preparationError;
+        return null;
+      }
+    };
+    const observed = await observe(options.signal);
+    if (!observed?.ok || options.signal.aborted) return sessions;
+    const admitted = queued.filter(entry => observed.observations.some(observation =>
+      'kind' in observation && observation.kind === 'admitted_run_input'
+      && observation.destinationSessionId === input.session.sessionId && observation.localInputId === entry.localInputId
+      && sameStrictJsonValue(observation.delivery, entry.delivery)));
+    if (!admitted.length) return sessions;
+    return {
+      updates: sessions?.updates ?? [],
+      ...(sessions?.workerUpdates ? { workerUpdates: sessions.workerUpdates } : {}),
+      ...(sessions?.workerUpdateEvents ? { workerUpdateEvents: sessions.workerUpdateEvents } : {}),
+      ...(sessions?.wakeEventLocalId ? { wakeEventLocalId: sessions.wakeEventLocalId } : {}),
+      representedFollowLocalInputIds: [...(sessions?.representedFollowLocalInputIds ?? []), ...admitted.map(entry => entry.localInputId)],
+      recheckAdmission: async signal => {
+        if (signal.aborted || options.signal.aborted || sessions && !await sessions.recheckAdmission(signal)) return false;
+        const current = await observe(signal);
+        return !signal.aborted && !options.signal.aborted && current?.ok === true && current.publisherGeneration === observed.publisherGeneration
+          && admitted.every(entry => current.observations.some(observation => 'kind' in observation
+            && observation.kind === 'admitted_run_input' && observation.destinationSessionId === input.session.sessionId
+            && observation.localInputId === entry.localInputId && sameStrictJsonValue(observation.delivery, entry.delivery)));
+      },
+      acknowledgeAccepted: (acceptance, pendingSettlement) => {
+        sessions?.acknowledgeAccepted(acceptance, pendingSettlement);
+        if (acceptance.kind !== 'admitted_input' || options.signal.aborted) return;
+        const entry = admitted.find(entry => entry.localInputId === acceptance.localInputId
+          && entry.userMessageSeq === acceptance.userMessageSeq);
+        if (!entry || !('source' in entry.delivery.original)) return;
+        const original = entry.delivery.original;
+        let inFlight = false;
+        const retry = async () => {
+          if (inFlight || !pendingRunAcknowledgements.has(retry)) return;
+          inFlight = true;
+          try {
+            if (pendingSettlement) await pendingSettlement;
+            const publisherGeneration = await readAcceptedOriginalPublisherGeneration(entry.localInputId, entry.delivery);
+            if (!publisherGeneration) return;
+            const result = await input.session.acknowledgeSessionFollow({ localInputId: entry.localInputId,
+              expectedPublisherGeneration: publisherGeneration, original, acceptance });
+            if (result.ok || !isUnsettledOriginalAcknowledgement(result.error)) pendingRunAcknowledgements.delete(retry);
+          } catch {
+            logger.debug('[Session Follow] Run acceptance ACK failed');
+          } finally { inFlight = false; }
+        };
+        pendingRunAcknowledgements.add(retry);
+        void retry();
       },
     };
   };

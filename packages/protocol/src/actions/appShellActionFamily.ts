@@ -6,6 +6,10 @@ import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { ComposerRefV1Schema } from '../plugins/ui/composerRef.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
+import { DiscussionMessageRefV1Schema } from '../discussions/references.js';
+import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '../discussions/replyTargets.js';
+import { DocEditProposalDispositionV1Schema } from '../discussions/docEditProposalDispositionV1.js';
+import { SessionQuestionContextV1Schema } from '../sessions/permissions/questionV1.js';
 
 export const APP_SHELL_ACTION_IDS = ['session.work.get', 'inbox.get', 'inbox.mark_all_read', 'session.draft.open', 'session.draft.delete', 'session.draft.directory.set', 'session.draft.append'] as const;
 export type AppShellActionId = typeof APP_SHELL_ACTION_IDS[number];
@@ -46,6 +50,29 @@ const InboxReadGroupSchema = z.strictObject({ key: z.string(), root: z.discrimin
   z.strictObject({ kind: z.literal('automation'), automationId: z.string(), serverId: z.string(), runId: z.string() }),
   z.strictObject({ kind: z.literal('other') }),
 ]), items: z.array(InboxReadItemSchema) });
+// The mounted Inbox owns classification and navigation. This closed read projection
+// carries its admitted rows without copying source content or becoming another builder.
+const InboxCanonicalItemSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string(), producer: z.enum(['live', 'notice']),
+  type: z.enum(['decision', 'approval', 'blocked', 'update', 'mention']),
+  view: z.enum(['needs_you', 'updates', 'mentions']),
+  title: z.string(), context: z.nullable(z.string()), createdAt: z.number(), read: z.boolean(), pageRoute: z.string(),
+  source: z.strictObject({ kind: z.string(), id: z.string(), serverId: z.string(), displayName: z.optional(z.nullable(z.string())) }),
+  focus: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('session'), serverId: z.string(), id: z.string(), jumpSeq: z.optional(z.number()) }),
+    z.strictObject({ kind: z.literal('approval'), serverId: z.string(), id: z.string() }),
+    z.strictObject({ kind: z.literal('notice'), serverId: z.string(), id: z.string() }),
+    z.strictObject({ kind: z.literal('workflow_run'), serverId: z.string(), id: z.string(), invocationId: z.optional(z.string()) }),
+    z.strictObject({ kind: z.literal('automation_run'), serverId: z.string(), id: z.string(), automationId: z.string() }),
+    z.strictObject({ kind: z.literal('discussion'), serverId: z.string(), id: z.string(), messageId: z.string() }),
+  ]),
+  question: z.optional(z.safeExtend(SessionQuestionContextV1Schema, { requestId: z.string(),
+    currentHandler: z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('person') }),
+      z.strictObject({ kind: z.literal('session'), address: InboxTargetSchema })]) })),
+  discussion: z.optional(z.strictObject({ accountId: z.string(), messageRef: DiscussionMessageRefV1Schema,
+    seq: z.number().check(z.int(), z.nonnegative()), anchor: z.nullable(DiscussionAnchorV1Schema),
+    replyTarget: z.optional(DiscussionReplyTargetV1Schema), proposalDisposition: z.optional(DocEditProposalDispositionV1Schema) })),
+}));
 export const AppShellActionInputSchemas = {
   'session.work.get': z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
   'inbox.get': z.strictObject({}),
@@ -66,6 +93,8 @@ export const AppShellActionOutputSchemas = {
   })]),
   'inbox.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.strictObject({
     status: z.literal('ready'), groups: z.array(InboxReadGroupSchema),
+    items: z.array(InboxCanonicalItemSchema),
+    coverage: z.strictObject({ discussions: z.enum(['complete', 'partial', 'unavailable']) }),
     approvalIds: z.array(z.string()), usageNoticeIds: z.array(z.string()), accountNoticeIds: z.optional(z.array(z.string())), friendRequestIds: z.array(z.string()),
     automationRunIds: z.array(z.string()),
     readySessions: z.array(InboxTargetSchema),
@@ -115,7 +144,7 @@ export const APP_SHELL_ACTION_SPECS = [
     id: 'session.work.get', approval: {result: 'required'}, title: 'Read Session Work',
     description: 'Read the answering client’s mounted canonical Work projection for one exact Session. Unavailable without its mounted owner; never loads a second projection.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
-    placements: [], bindings: { mcpToolName: 'session_work_get' },
+    placements: [], bindings: { mcpToolName: 'session_work_get', voiceClientToolName: 'session_work_get' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'work', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },

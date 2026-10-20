@@ -14,6 +14,8 @@ import { projectTargetActionApprovalInvocationV1 } from '@happier-dev/protocol/a
 import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { ActionOperationCredentialUseV1Schema, type ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
@@ -221,6 +223,10 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       return persistenceFailure ?? buildTargetActionApprovalDecisionResult(rejected);
     }
 
+    if (existing.approvalInputCustody === 'live_only'
+      && getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId) === 0) {
+      return targetActionReplayFailure('approval_stale');
+    }
     if ((existing.status === 'executed' || existing.status === 'failed')
       && existing.decision?.kind === 'approve') {
       return buildTargetActionApprovalDecisionResult(existing);
@@ -235,11 +241,6 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     if (resolveApprovalRequestApproveAdmission(existing).status !== 'available') {
       return targetActionReplayFailure('approval_context_unavailable');
     }
-    if (existing.approvalInputCustody === 'live_only'
-      && getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId) === 0) {
-      return targetActionReplayFailure('approval_stale');
-    }
-
     let approved = existing;
     if (existing.status === 'open') {
       const approvedAtMs = nextTimestamp(existing);
@@ -366,6 +367,15 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     }
     approved = executionClaim;
 
+    const operationCredentialUses: ActionOperationCredentialUseV1[] = [];
+    let observingCredentialUse = true;
+    const recordOperationCredentialUse = (use: ActionOperationCredentialUseV1) => {
+      if (!observingCredentialUse) return;
+      const parsed = ActionOperationCredentialUseV1Schema.safeParse(use);
+      if (!parsed.success || operationCredentialUses.some(existing => sameStrictJsonValue(existing, parsed.data))) return;
+      operationCredentialUses.push(parsed.data);
+      context?.recordOperationCredentialUse?.(parsed.data);
+    };
     let executionResult: ActionExecuteResult | undefined;
     let externalActionContext: PluginExternalActionContext | undefined;
     if (executionResult === undefined && origin.externalActionExecutionAuthorization !== undefined) {
@@ -433,6 +443,7 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
             // Replay fingerprints the admitting authority, not the decider's
             // authority or the dispatcher's absent-context automation default.
             approvalContext: { authority: origin.authority, runtimeAccountId: origin.accountId,
+              recordOperationCredentialUse,
               serverId: origin.serverId,
               ...(replayPlacement.defaultSessionId === undefined ? {} : { defaultSessionId: replayPlacement.defaultSessionId }),
               actionRequestAttributionV1: origin.actionRequestAttributionV1,
@@ -485,6 +496,7 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
         executionResult = targetActionReplayFailure('plugin_action_execution_failed');
       }
     }
+    observingCredentialUse = false;
 
     const executedAtMs = nextTimestamp(approved);
     const terminal: TargetActionApprovalRequestV1 = executionResult.ok
@@ -505,13 +517,16 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
             error: executionResult.error,
           },
         };
+    if (operationCredentialUses.length && terminal.execution) {
+      terminal.execution = { ...terminal.execution, effectAttempted: true, operationCredentialUses };
+    }
     const persistenceFailure = await persist(terminal);
     // Once the durable claim is admitted, a lost terminal write leaves later
     // callers unable to distinguish an in-flight effect from an unknown one.
     if (persistenceFailure) return targetActionReplayFailure('approval_execution_outcome_unknown');
     return executionResult.ok
       ? buildTargetActionApprovalDecisionResult(terminal)
-      : executionResult;
+      : operationCredentialUses.length ? { ...executionResult, operationCredentialUses } : executionResult;
   };
 
   return async ({ artifactId: rawArtifactId, decision, signal, callerGrant, context }) => {

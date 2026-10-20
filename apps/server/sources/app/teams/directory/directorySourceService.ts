@@ -18,7 +18,7 @@ import {
     retryableDirectoryErrorWhere,
     WORKOS_DIRECTORY_SYNC_TARGET_MS,
 } from "./directorySourceProjection";
-import { revokeExternalSourceFactsInTx } from "../memberships/externalFacts";
+import { acquireExternalSourceAccountAdmissionInTx, revokeExternalSourceFactsInTx } from "../memberships/externalFacts";
 import { isDirectorySourceAllowedInTx, isDirectorySourceKindAllowedInTx } from "./directorySourcePolicy";
 import type { ExpectedDirectorySourceCurrentness } from "./directorySourcePolicy";
 import { publishTeamChangedInTx } from "../teamChanges";
@@ -81,6 +81,7 @@ export async function removeDirectorySourceInTx(
     tx: Tx,
     input: Readonly<{ teamId: string; sourceId: string }>,
 ): Promise<Readonly<{ membershipsRemoved: number; contributionsRemoved: number }>> {
+    await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: input.sourceId } });
     const revoked = await revokeExternalSourceFactsInTx(tx, {
         teamId: input.teamId,
         owner: { kind: "directory_source", directorySourceId: input.sourceId },

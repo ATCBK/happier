@@ -115,13 +115,13 @@ export type MessagingActionResultById = {
         status: 'rejected';
         code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
     } | {
-        status: 'held';
-        localId: string;
-        code: 'session_input_target_unavailable' | 'autonomous_check_in';
-    } | {
         status: 'outcomeUnknown';
         localId: string;
         code: string;
+    } | {
+        status: 'held';
+        localId: string;
+        code: 'session_input_target_unavailable' | 'autonomous_check_in';
     } | {
         status: 'replied';
         localId: string;
@@ -199,13 +199,13 @@ export type MessagingActionResultById = {
                     status: 'rejected';
                     code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
                 } | {
-                    status: 'held';
-                    localId: string;
-                    code: 'session_input_target_unavailable' | 'autonomous_check_in';
-                } | {
                     status: 'outcomeUnknown';
                     localId: string;
                     code: string;
+                } | {
+                    status: 'held';
+                    localId: string;
+                    code: 'session_input_target_unavailable' | 'autonomous_check_in';
                 } | {
                     status: 'replied';
                     localId: string;
@@ -287,6 +287,13 @@ export type MessagingActionResultById = {
                 messageId: string;
                 throughSeq: number;
                 participantSessionId: string;
+            } | undefined;
+            workflow?: {
+                purpose: 'invocation';
+                runId: string;
+                invocationRecordId: string;
+                workDepth?: number | undefined;
+                stepOrdinal?: string | undefined;
             } | undefined;
             actionRequestAttributionV1?: {
                 requestRef: string;

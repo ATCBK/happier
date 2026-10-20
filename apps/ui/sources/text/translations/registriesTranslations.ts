@@ -247,6 +247,9 @@ export type SkillAddTranslation = Readonly<{
   addToLibrary: string;
   pinnedTo: (params: Readonly<{ ref: string }>) => string;
   via: (params: Readonly<{ source: string }>) => string;
+  outsideReferences: (params: Count) => string;
+  outsideReferencesMore: (params: Count) => string;
+  alsoAdds: (params: Readonly<{ name: string }>) => string;
   detail: Readonly<{
     whereTitle: string;
     whereBody: string;
@@ -295,6 +298,7 @@ export type SkillAddTranslation = Readonly<{
     reading: string;
     invalidName: (params: Readonly<{ file: string }>) => string;
     unreadable: (params: Readonly<{ file: string }>) => string;
+    found: (params: Count) => string;
     noSkill: string;
     failed: string;
   }>;
@@ -324,6 +328,10 @@ const enSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Add to library',
   pinnedTo: ({ ref }) => `Pinned to ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Refers to one file that won’t be included.' : `Refers to ${count} files that won’t be included.`,
+  outsideReferencesMore: ({ count }) => `and ${count} more`,
+  alsoAdds: ({ name }) => `Also adds ${name}, which it refers to`,
   detail: {
     whereTitle: 'Where it’s on',
     whereBody: 'Every machine and agent, unless you narrow it now.',
@@ -382,6 +390,10 @@ const enSkillAdd: SkillAddTranslation = {
     reading: 'Reading…',
     invalidName: ({ file }) =>
       `“${file}” has a name that can’t be saved on every machine. Rename it and try again.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'One skill in this upload'
+        : `${count} skills in this upload`,
     unreadable: ({ file }) => `Couldn’t read “${file}”.`,
     noSkill: 'No SKILL.md in what you chose.',
     failed: 'Couldn’t read this upload. Try again.',
@@ -598,6 +610,10 @@ const caSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Afegeix a la biblioteca',
   pinnedTo: ({ ref }) => `Fixada a ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Fa referència a un fitxer que no s’inclourà.' : `Fa referència a ${count} fitxers que no s’inclouran.`,
+  outsideReferencesMore: ({ count }) => `i ${count} més`,
+  alsoAdds: ({ name }) => `També afegeix ${name}, a què fa referència`,
   detail: {
     whereTitle: 'On està activada',
     whereBody:
@@ -658,6 +674,10 @@ const caSkillAdd: SkillAddTranslation = {
     reading: 'Llegint…',
     invalidName: ({ file }) =>
       `«${file}» té un nom que no es pot desar a totes les màquines. Canvia-li el nom i torna-ho a provar.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilitat en aquesta càrrega'
+        : `${count} habilitats en aquesta càrrega`,
     unreadable: ({ file }) => `No s’ha pogut llegir «${file}».`,
     noSkill: 'No hi ha cap SKILL.md en el que has triat.',
     failed: 'No s’ha pogut llegir aquesta pujada. Torna-ho a provar.',
@@ -817,6 +837,10 @@ const deSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Zur Bibliothek hinzufügen',
   pinnedTo: ({ ref }) => `Angeheftet an ${ref}`,
   via: ({ source }) => `über ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Verweist auf eine Datei, die nicht enthalten ist.' : `Verweist auf ${count} Dateien, die nicht enthalten sind.`,
+  outsideReferencesMore: ({ count }) => `und ${count} weitere`,
+  alsoAdds: ({ name }) => `Fügt außerdem ${name} hinzu, auf das es verweist`,
   detail: {
     whereTitle: 'Wo er an ist',
     whereBody:
@@ -878,6 +902,10 @@ const deSkillAdd: SkillAddTranslation = {
     reading: 'Wird gelesen…',
     invalidName: ({ file }) =>
       `„${file}“ hat einen Namen, der nicht auf jeder Maschine gespeichert werden kann. Benenne sie um und versuche es erneut.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Ein Skill in diesem Upload'
+        : `${count} Skills in diesem Upload`,
     unreadable: ({ file }) => `„${file}“ konnte nicht gelesen werden.`,
     noSkill: 'Keine SKILL.md in deiner Auswahl.',
     failed: 'Dieser Upload konnte nicht gelesen werden. Versuche es erneut.',
@@ -1030,6 +1058,10 @@ const esSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Añadir a la biblioteca',
   pinnedTo: ({ ref }) => `Fijada a ${ref}`,
   via: ({ source }) => `vía ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Hace referencia a un archivo que no se incluirá.' : `Hace referencia a ${count} archivos que no se incluirán.`,
+  outsideReferencesMore: ({ count }) => `y ${count} más`,
+  alsoAdds: ({ name }) => `También añade ${name}, a la que hace referencia`,
   detail: {
     whereTitle: 'Dónde está activada',
     whereBody:
@@ -1090,6 +1122,10 @@ const esSkillAdd: SkillAddTranslation = {
     reading: 'Leyendo…',
     invalidName: ({ file }) =>
       `«${file}» tiene un nombre que no se puede guardar en todas las máquinas. Cámbiale el nombre y vuelve a intentarlo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilidad en esta subida'
+        : `${count} habilidades en esta subida`,
     unreadable: ({ file }) => `No se pudo leer «${file}».`,
     noSkill: 'No hay ningún SKILL.md en lo que elegiste.',
     failed: 'No se pudo leer esta subida. Vuelve a intentarlo.',
@@ -1247,6 +1283,10 @@ const frSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Ajouter à la bibliothèque',
   pinnedTo: ({ ref }) => `Épinglé sur ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Renvoie à un fichier qui ne sera pas inclus.' : `Renvoie à ${count} fichiers qui ne seront pas inclus.`,
+  outsideReferencesMore: ({ count }) => `et ${count} de plus`,
+  alsoAdds: ({ name }) => `Ajoute aussi ${name}, auquel il fait référence`,
   detail: {
     whereTitle: 'Où il est activé',
     whereBody:
@@ -1307,6 +1347,10 @@ const frSkillAdd: SkillAddTranslation = {
     reading: 'Lecture…',
     invalidName: ({ file }) =>
       `« ${file} » a un nom qui ne peut pas être enregistré sur toutes les machines. Renommez-le et réessayez.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Un skill dans cet envoi'
+        : `${count} skills dans cet envoi`,
     unreadable: ({ file }) => `Impossible de lire « ${file} ».`,
     noSkill: 'Aucun SKILL.md dans votre sélection.',
     failed: 'Impossible de lire cet import. Réessayez.',
@@ -1457,6 +1501,10 @@ const itSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Aggiungi alla libreria',
   pinnedTo: ({ ref }) => `Bloccata su ${ref}`,
   via: ({ source }) => `tramite ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Rimanda a un file che non sarà incluso.' : `Rimanda a ${count} file che non saranno inclusi.`,
+  outsideReferencesMore: ({ count }) => `e altri ${count}`,
+  alsoAdds: ({ name }) => `Aggiunge anche ${name}, a cui rimanda`,
   detail: {
     whereTitle: 'Dove è attiva',
     whereBody:
@@ -1517,6 +1565,10 @@ const itSkillAdd: SkillAddTranslation = {
     reading: 'Lettura…',
     invalidName: ({ file }) =>
       `«${file}» ha un nome che non può essere salvato su ogni macchina. Rinominalo e riprova.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una skill in questo caricamento'
+        : `${count} skill in questo caricamento`,
     unreadable: ({ file }) => `Impossibile leggere «${file}».`,
     noSkill: 'Nessun file SKILL.md in ciò che hai scelto.',
     failed: 'Impossibile leggere questo caricamento. Riprova.',
@@ -1670,6 +1722,10 @@ const jaSkillAdd: SkillAddTranslation = {
   addToLibrary: 'ライブラリに追加',
   pinnedTo: ({ ref }) => `${ref} に固定`,
   via: ({ source }) => `${source} 経由`,
+  outsideReferences: ({ count }) =>
+    `含まれない ${count} 件のファイルを参照しています。`,
+  outsideReferencesMore: ({ count }) => `ほか ${count} 件`,
+  alsoAdds: ({ name }) => `参照先の ${name} も追加します`,
   detail: {
     whereTitle: 'オンになっている場所',
     whereBody:
@@ -1727,6 +1783,8 @@ const jaSkillAdd: SkillAddTranslation = {
     reading: '読み込み中…',
     invalidName: ({ file }) =>
       `「${file}」はすべてのマシンで保存できない名前です。名前を変えてからもう一度お試しください。`,
+    found: ({ count }) =>
+      `このアップロードにスキルが ${count} 件あります`,
     unreadable: ({ file }) => `「${file}」を読み込めませんでした。`,
     noSkill: '選択した内容に SKILL.md がありません。',
     failed: 'このアップロードを読み込めませんでした。もう一度お試しください。',
@@ -1906,6 +1964,10 @@ const plSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Dodaj do biblioteki',
   pinnedTo: ({ ref }) => `Przypięta do ${ref}`,
   via: ({ source }) => `przez ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Odwołuje się do jednego pliku, który nie zostanie dołączony.' : `Odwołuje się do ${count} plików, które nie zostaną dołączone.`,
+  outsideReferencesMore: ({ count }) => `i ${count} więcej`,
+  alsoAdds: ({ name }) => `Dodaje też ${name}, do którego się odwołuje`,
   detail: {
     whereTitle: 'Gdzie jest włączona',
     whereBody:
@@ -1971,6 +2033,10 @@ const plSkillAdd: SkillAddTranslation = {
     reading: 'Odczytywanie…',
     invalidName: ({ file }) =>
       `„${file}” ma nazwę, której nie da się zapisać na każdej maszynie. Zmień ją i spróbuj ponownie.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Jedna umiejętność w tym przesłanym pliku'
+        : `${count} umiejętności w tym przesłanym pliku`,
     unreadable: ({ file }) => `Nie udało się odczytać „${file}”.`,
     noSkill: 'W tym, co wybrano, nie ma pliku SKILL.md.',
     failed: 'Nie udało się odczytać tego przesłania. Spróbuj ponownie.',
@@ -2123,6 +2189,10 @@ const ptSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Adicionar à biblioteca',
   pinnedTo: ({ ref }) => `Fixada em ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Faz referência a um arquivo que não será incluído.' : `Faz referência a ${count} arquivos que não serão incluídos.`,
+  outsideReferencesMore: ({ count }) => `e mais ${count}`,
+  alsoAdds: ({ name }) => `Também adiciona ${name}, a que faz referência`,
   detail: {
     whereTitle: 'Onde está ativada',
     whereBody:
@@ -2183,6 +2253,10 @@ const ptSkillAdd: SkillAddTranslation = {
     reading: 'Lendo…',
     invalidName: ({ file }) =>
       `“${file}” tem um nome que não pode ser salvo em todas as máquinas. Renomeie e tente de novo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Uma habilidade neste envio'
+        : `${count} habilidades neste envio`,
     unreadable: ({ file }) => `Não foi possível ler “${file}”.`,
     noSkill: 'Nenhum SKILL.md no que você escolheu.',
     failed: 'Não foi possível ler este envio. Tente de novo.',
@@ -2364,6 +2438,10 @@ const ruSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Добавить в библиотеку',
   pinnedTo: ({ ref }) => `Закреплён на ${ref}`,
   via: ({ source }) => `через ${source}`,
+  outsideReferences: ({ count }) =>
+    `Не включены файлы, на которые есть ссылки: ${count}.`,
+  outsideReferencesMore: ({ count }) => `и ещё ${count}`,
+  alsoAdds: ({ name }) => `Также добавит ${name}, на который он ссылается`,
   detail: {
     whereTitle: 'Где включён',
     whereBody:
@@ -2438,6 +2516,15 @@ const ruSkillAdd: SkillAddTranslation = {
     reading: 'Читаем…',
     invalidName: ({ file }) =>
       `У «${file}» имя, которое нельзя сохранить на всех машинах. Переименуйте и повторите попытку.`,
+    found: ({ count }) =>
+      pickForm(russianForm(count), {
+        one:
+          count === 1
+            ? 'Один скилл в этой загрузке'
+            : `${count} скилл в этой загрузке`,
+        few: `${count} скилла в этой загрузке`,
+        many: `${count} скиллов в этой загрузке`,
+      }),
     unreadable: ({ file }) => `Не удалось прочитать «${file}».`,
     noSkill: 'В выбранном нет файла SKILL.md.',
     failed: 'Не удалось прочитать загрузку. Повторите попытку.',
@@ -2588,6 +2675,10 @@ const zhHansSkillAdd: SkillAddTranslation = {
   addToLibrary: '添加到资料库',
   pinnedTo: ({ ref }) => `固定到 ${ref}`,
   via: ({ source }) => `经由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `引用了 ${count} 个不会被包含的文件。`,
+  outsideReferencesMore: ({ count }) => `另外 ${count} 个`,
+  alsoAdds: ({ name }) => `同时添加它引用的 ${name}`,
   detail: {
     whereTitle: '在哪里开启',
     whereBody: '所有机器和智能体，除非你现在就限定范围。',
@@ -2640,6 +2731,8 @@ const zhHansSkillAdd: SkillAddTranslation = {
     reading: '正在读取…',
     invalidName: ({ file }) =>
       `“${file}”的名称无法在所有机器上保存。请重命名后重试。`,
+    found: ({ count }) =>
+      `此上传中有 ${count} 个技能`,
     unreadable: ({ file }) => `无法读取“${file}”。`,
     noSkill: '你选择的内容中没有 SKILL.md。',
     failed: '无法读取此上传内容。请重试。',
@@ -2790,6 +2883,10 @@ const zhHantSkillAdd: SkillAddTranslation = {
   addToLibrary: '新增到資料庫',
   pinnedTo: ({ ref }) => `固定在 ${ref}`,
   via: ({ source }) => `經由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `參照了 ${count} 個不會被包含的檔案。`,
+  outsideReferencesMore: ({ count }) => `另有 ${count} 個`,
+  alsoAdds: ({ name }) => `同時新增它引用的 ${name}`,
   detail: {
     whereTitle: '在哪裡開啟',
     whereBody: '所有機器和代理，除非你現在就限定範圍。',
@@ -2842,6 +2939,8 @@ const zhHantSkillAdd: SkillAddTranslation = {
     reading: '正在讀取…',
     invalidName: ({ file }) =>
       `「${file}」的名稱無法在所有機器上儲存。請重新命名後重試。`,
+    found: ({ count }) =>
+      `此上傳中有 ${count} 個技能`,
     unreadable: ({ file }) => `無法讀取「${file}」。`,
     noSkill: '你選擇的內容中沒有 SKILL.md。',
     failed: '無法讀取此上傳內容。請重試。',

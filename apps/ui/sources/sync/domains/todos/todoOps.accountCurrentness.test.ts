@@ -8,13 +8,13 @@ installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { profileDefaults } = await import('@/sync/domains/profiles/profile');
-const { addTodo } = await import('./todoOps');
+const { fetchTodos } = await import('./todoOps');
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 afterEach(async () => { await connection?.dispose(); });
 
-describe('Todo writes through Account currentness', () => {
-    it('refuses Todo writes and rolls back when an old Home lacks Account currentness', async () => {
+describe('Todo reads through Account currentness', () => {
+    it('refuses Todo reads and preserves prior state when an old Home lacks Account currentness', async () => {
         let currentnessUnavailable = false;
         const todoRequests: Array<{ path: string; method: string }> = [];
         connection = await restoreServerAccountForTest({
@@ -52,7 +52,7 @@ describe('Todo writes through Account currentness', () => {
         storage.getState().applyTodos(priorState);
         currentnessUnavailable = true;
 
-        await expect(addTodo(connection.credentials, 'Do not send')).rejects.toMatchObject({
+        await expect(fetchTodos(connection.credentials)).rejects.toMatchObject({
             code: 'todo_stored_content_unavailable',
             key: 'todo.index',
             reason: 'account_currentness_unavailable',

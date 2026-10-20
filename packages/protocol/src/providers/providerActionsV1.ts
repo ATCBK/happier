@@ -13,7 +13,7 @@ import {
 } from '../rpc/providers.js';
 import { ProviderDefaultModelSelectionMutationV1Schema } from './selection/v1.js';
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema } from './ids.js';
-import { type ProviderActionIdV1 } from './providerActionIdsV1.js';
+import type { ProviderActionIdV1 } from './providerActionIdsV1.js';
 export { PROVIDER_ACTION_IDS_V1, isProviderActionIdV1, type ProviderActionIdV1 } from './providerActionIdsV1.js';
 
 type ConnectionAction = z.output<typeof DaemonProviderConnectionMutationRequestV1Schema>['action'];

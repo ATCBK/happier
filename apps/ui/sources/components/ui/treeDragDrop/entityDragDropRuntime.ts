@@ -13,7 +13,7 @@ import type {
 } from './entityDragDropTypes';
 import type { WindowBounds, WindowPointer } from './treeDragDropTypes';
 
-const IDLE: EntityDragDropSnapshot = Object.freeze({ phase: 'idle', item: null, sourceId: null, targetId: null, admission: null, outcome: null });
+const IDLE: EntityDragDropSnapshot = Object.freeze({ phase: 'idle', item: null, sourceId: null, targetId: null, destinationKey: null, admission: null, outcome: null });
 
 /** Mounted realm owner; no persistence and no global target materialization. */
 export function createEntityDragDropRuntime(options: Readonly<{
@@ -62,6 +62,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
         // Only semantic feedback changes wake rows/targets. Geometry/pointer frames have a separate channel.
         if (snapshot.phase === next.phase && snapshot.sourceId === next.sourceId
             && snapshot.targetId === next.targetId && snapshot.item === next.item
+            && snapshot.destinationKey === next.destinationKey
             && JSON.stringify(snapshot.admission) === JSON.stringify(next.admission)
             && snapshot.outcome === next.outcome) return false;
         snapshot = next;
@@ -157,8 +158,13 @@ export function createEntityDragDropRuntime(options: Readonly<{
         active.selected = target;
         const admission = target ? resolve(active, target) : null;
         if (carry !== active) return;
+        const destinationKey = target && admission?.status === 'allowed'
+            ? target.getDestinationKey ? target.getDestinationKey({ item: active.item,
+                pointer: active.input === 'pointer' ? pointer : null, destination: active.destination,
+                input: active.input }, admission) : target.id
+            : null;
         if (!publish({ phase: 'carrying', item: active.item, sourceId: active.source.id,
-            targetId: target?.id ?? null, admission, outcome: null }) && notifyDestinations) {
+            targetId: target?.id ?? null, destinationKey, admission, outcome: null }) && notifyDestinations) {
             // A chooser has no selected target yet; current destination admission can still change.
             notify();
         }
@@ -234,6 +240,9 @@ export function createEntityDragDropRuntime(options: Readonly<{
         if (active.input === 'pointer' && target.measureBounds && !measuredTargets.includes(target)) { cancel(); return null; }
         // Resolvers may observe retirement while reading current domain state.
         if (!sourceCurrent(active) || !readItem(active.source) || !targetCurrent(target)) { cancel(); return null; }
+        // An uncued empty place is cancellation. Losing an already-admitted release cue above
+        // remains an explicit target-missing refusal, including release-time geometry loss.
+        if (admission.status === 'refused' && admission.reason.code === 'no-target') { cancel('no-target'); return null; }
         if (admission.status === 'refused') {
             const outcome: EntityDropOutcomeV1 = { status: 'refused', reason: admission.reason };
             carry = null;
@@ -272,7 +281,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
         const active: Carry = { source, item, input, selected: null, destination: null, dispatched: false };
         carry = active;
         captureSourceFeedback(source);
-        publish({ phase: 'carrying', item, sourceId, targetId: null, admission: null, outcome: null });
+        publish({ phase: 'carrying', item, sourceId, targetId: null, destinationKey: null, admission: null, outcome: null });
         // A transient object reference fences delayed native callbacks; no durable gesture identity.
         return {
             move: next => { if (carry === active) move(next); },

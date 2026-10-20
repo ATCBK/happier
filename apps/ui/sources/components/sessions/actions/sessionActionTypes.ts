@@ -3,6 +3,7 @@ import type { SessionReadStateAction } from '@/sync/domains/session/readState/se
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import type { SessionArchiveActionResultV1 } from '@happier-dev/protocol/sessions/control/contract';
 
 export type SessionActionSurface =
     | 'rowMenu'
@@ -99,6 +100,8 @@ export type SessionActionOperationResult = Readonly<{
     code?: string;
     details?: unknown;
     recovery?: SessionStopRecovery;
+    reports?: SessionArchiveActionResultV1['reports'];
+    reportsError?: SessionArchiveActionResultV1['reportsError'];
 }>;
 
 export type SessionDeletePresentUserConfirmation = Readonly<{
@@ -106,6 +109,7 @@ export type SessionDeletePresentUserConfirmation = Readonly<{
 }>;
 
 export type SessionActionExecutionInput = Readonly<{
+    alsoArchiveReports?: boolean;
     title?: string;
     readState?: 'read' | 'unread';
     tags?: readonly string[];
@@ -127,7 +131,7 @@ export type SessionActionExecutionOperations = Readonly<{
         archiveErrorMessage: string;
     }) => Promise<void>;
     stopSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
-    archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
+    archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null; alsoArchiveReports?: boolean }>) => Promise<SessionActionOperationResult>;
     unarchiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     setSessionAnswersWorkerQuestions?: (sessionId: string, enabled: boolean, opts?: Readonly<{ serverId?: string | null }>) => Promise<Readonly<{ ok: boolean; error?: string }>>;
     renameSession?: (sessionId: string, title: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;

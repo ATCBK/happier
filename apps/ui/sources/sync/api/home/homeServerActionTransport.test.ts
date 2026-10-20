@@ -35,6 +35,7 @@ import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScop
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { requestHomeDomain } from './homeServerActionTransport';
+const { readSavedSecretResourceRecipientReadiness } = await import('@/sync/ops/settings/savedSecretResourceOperations');
 
 function tokenForSub(sub: string): string {
     const payload = globalThis.btoa(JSON.stringify({ sub }))
@@ -155,7 +156,6 @@ describe('requestHomeDomain', () => {
         runtimeFetchMock.mockResolvedValueOnce(jsonResponse(nextPage, 200));
 
         // Exercise the actual operation and its HTTP binding, not an internal transport double.
-        const { readSavedSecretResourceRecipientReadiness } = await import('@/sync/ops/settings/savedSecretResourceOperations');
         const result = await readSavedSecretResourceRecipientReadiness({
             scope: createServerAccountScope(homeA, 'account')!,
             resourceId,

@@ -88,12 +88,15 @@ export function resolveVitestShardTimeoutMs(env) {
   return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? undefined;
 }
 
-export function resolveVitestShardConcurrency(env, argv) {
+export function resolveVitestShardConcurrency(env, argv, parallelism = os.availableParallelism(),
+  maxWorkers = resolveVitestWorkers({ env, legacyUiOverride: true }).maxWorkers) {
   const flagOverride = parsePositiveInt(resolveConcurrencyFlagValue(argv));
-  if (flagOverride) return flagOverride;
-
   const envOverride = parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_CONCURRENCY);
-  return envOverride ?? 1;
+  // Every partition has a Vite transform server as well as its canonical fork pool.
+  // Eight partitions previously multiplied the four-fork policy into 40 Node
+  // processes on a 12-CPU worker, oversubscribing cold module loading.
+  // Keep that pool sharing one transform cache instead of multiplying cold servers.
+  return Math.min(flagOverride ?? envOverride ?? 1, Math.max(1, Math.floor(parallelism / (maxWorkers + 1))));
 }
 
 export function resolveVitestConfigPath(argv) {
@@ -411,7 +414,8 @@ async function main(argv) {
     process.exit(1);
   }
 
-  const shardConcurrency = resolveVitestShardConcurrency(process.env, argv);
+  const workers = resolveVitestWorkers({ legacyUiOverride: true });
+  const shardConcurrency = resolveVitestShardConcurrency(process.env, argv, os.availableParallelism(), workers.maxWorkers);
   const shardTimeoutMs = resolveVitestShardTimeoutMs(process.env);
   const sizeMb = resolveMaxOldSpaceSizeMb(process.env);
   const nodeOptions = upsertMaxOldSpaceSize(process.env.NODE_OPTIONS, sizeMb);
@@ -420,7 +424,7 @@ async function main(argv) {
   const { options } = parseCLI(['vitest', 'run', ...passthroughArgs]);
   const vitestEnv = {
     ...process.env,
-    ...resolveVitestPoolEnv(resolveVitestWorkers({ legacyUiOverride: true })),
+    ...resolveVitestPoolEnv(workers),
     NODE_OPTIONS: nodeOptions,
   };
   // Native CLI arguments, including percentages, retain Vitest's own resolution.
@@ -456,6 +460,10 @@ async function main(argv) {
     startShard: shardRange.start,
     endShard: shardRange.end,
   });
+
+  const activePartitions = Math.max(1, Math.min(shardConcurrency, plan.length));
+  // eslint-disable-next-line no-console
+  console.log(`[vitest] partitions=${activePartitions}; maxWorkers=${options.maxWorkers ?? workers.maxWorkers}; cpus=${os.availableParallelism()}`);
 
   const startShard = (entry) => {
     // eslint-disable-next-line no-console

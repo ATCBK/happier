@@ -253,6 +253,19 @@ export const ExecutionRunGetResponseSchema = lazyZodSchema(() => z.looseObject({
 }));
 export type ExecutionRunGetResponse = z.infer<typeof ExecutionRunGetResponseSchema>;
 
+/** Retained source identity only; unlike get, this read never returns Run content. */
+export const ExecutionRunFollowFrontierRequestSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
+}));
+export const ExecutionRunFollowFrontierResponseSchema = lazyZodSchema(() => z.strictObject({
+  runId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
+  status: ExecutionRunStatusSchema,
+  terminalEventId: z.nullable(z.string().check(z.minLength(1))),
+}));
+export type ExecutionRunFollowFrontierResponse = z.infer<typeof ExecutionRunFollowFrontierResponseSchema>;
+
 /**
  * One public observation disposition for `execution.run.wait` and optional
  * `execution.run.start({ waitForCompletion: true })` composition. It says

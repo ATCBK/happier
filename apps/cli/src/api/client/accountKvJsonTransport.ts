@@ -2,7 +2,7 @@ import axios from 'axios';
 import { z } from 'zod/mini';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
-import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { createAccountKvCipher, openAccountKvJsonRow } from '@happier-dev/protocol/crypto/accountKvCipher';
 import type { ScmReviewedMarksJsonTransport } from '@happier-dev/protocol/scm';
 import type { AccountJsonKvCollectionPort } from '@happier-dev/protocol/todos/todoActionOperationsV1';
 import type { StoredCredentials } from '@/persistence';
@@ -83,28 +83,37 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
       signal: params.signal, shouldContinue: params.shouldContinue });
   };
   type Context = Awaited<ReturnType<typeof context>>;
-  const encode = (value: unknown, admitted: Context): string => {
-    if (admitted.mode === 'plain') return encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: value })));
-    const material = admitted.encryption;
-    return encodeBase64(encrypt(material.type === 'legacy' ? material.secret : material.machineKey, material.type, value));
+  const cipher = (admitted: Context) => createAccountKvCipher({ mode: admitted.mode, material: admitted.material,
+    dataKeyCipher: key => ({
+      seal: async value => encodeBase64(encrypt(key, 'dataKey', value)),
+      open: async encoded => {
+        try { return decryptResult(key, 'dataKey', decodeBase64(encoded)); }
+        catch { return { status: 'authentication_failed' }; }
+      },
+    }),
+  });
+  const mutateEncoded = async (mutations: readonly { key: string; value: string; version: number }[]) => {
+    const body = { mutations };
+    const response = await axios.post(`${base}/v1/kv`, body,
+      { headers: headers({ method: 'POST', path: '/v1/kv', body }), validateStatus: () => true, ...(params.signal ? { signal: params.signal } : {}) });
+    check();
+    if (response.status !== 200 && response.status !== 409) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation failed');
+    return mutationResponse.parse(response.data);
   };
-  const decode = (encoded: string, admitted: Context): unknown => {
-    let envelope: z.infer<typeof StoredJsonContentEnvelopeSchema> | null = null;
-    try { const parsed = StoredJsonContentEnvelopeSchema.safeParse(JSON.parse(new TextDecoder().decode(decodeBase64(encoded))));
-      if (parsed.success) envelope = parsed.data; } catch { /* Released ciphertext-only E2EE is not JSON. */ }
-    if ((envelope?.t === 'plain' ? 'plain' : 'e2ee') !== admitted.mode) {
-      throw new AccountKvJsonTransportError('account_stored_json_mode_mismatch', 'Stored Account content does not match its authoritative mode');
-    }
-    if (envelope?.t === 'plain') return envelope.v;
-    if (admitted.mode !== 'e2ee') throw new AccountKvJsonTransportError('account_stored_json_mode_mismatch', 'Encrypted Account content requires E2EE mode');
-    const material = admitted.encryption;
-    let ciphertext: Uint8Array;
-    try { ciphertext = decodeBase64(envelope?.t === 'encrypted' ? envelope.c : encoded); }
-    catch { throw new AccountKvJsonTransportError('account_kv_content_unreadable', 'The encrypted Account KV record could not be opened'); }
-    const result = decryptResult(material.type === 'legacy' ? material.secret : material.machineKey, material.type, ciphertext);
-    if (result.status !== 'authenticated') throw new AccountKvJsonTransportError('account_kv_content_unreadable', 'The encrypted Account KV record could not be opened');
-    return result.value;
-  };
+  const openRow = (row: { key: string; value: string | null; version: number }, admitted: Context) => openAccountKvJsonRow({
+    row, cipher: cipher(admitted), requireCurrent: check,
+    compareAndSet: async (value, version) => {
+      const result = await mutateEncoded([{ key: row.key, value, version }]);
+      if (result.success) {
+        const stored = result.results.find(item => item.key === row.key);
+        if (!stored) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV re-seal omitted its result');
+        return { success: true, version: stored.version };
+      }
+      const conflict = result.errors.find(item => item.key === row.key);
+      if (!conflict) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV re-seal omitted its conflict');
+      return { success: false, value: conflict.value, version: conflict.version };
+    },
+  });
   return {
     read: async key => {
       check(); const admitted = await context(); const path = `/v1/kv/${encodeURIComponent(key)}`;
@@ -114,7 +123,7 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
       if (response.status !== 200) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV read failed');
       const item = storedItem.parse(response.data);
       if (item.key !== key) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV read returned another key');
-      return { value: decode(item.value, admitted), version: item.version };
+      return await openRow(item, admitted);
     },
     list: async prefix => {
       check(); const admitted = await context();
@@ -132,7 +141,9 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
         const page = z.strictObject({ items: z.array(storedItem) }).parse(response.data).items;
         for (const row of page) {
           if (!row.key.startsWith(prefix) || seen.has(row.key)) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV list returned invalid membership');
-          seen.add(row.key); rows.push({ ...row, value: decode(row.value, admitted) });
+          seen.add(row.key);
+          const opened = await openRow(row, admitted);
+          if (!opened.tombstone) rows.push({ key: row.key, ...opened });
         }
         if (page.length < 1000) return rows;
         afterKey = page[page.length - 1]!.key;
@@ -140,17 +151,13 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
     },
     mutate: async mutations => {
       check(); const admitted = await context();
-      const body = { mutations: mutations.map(row => ({ key: row.key, value: encode(row.value, admitted), version: row.version })) };
-      const response = await axios.post(`${base}/v1/kv`, body,
-        { headers: headers({ method: 'POST', path: '/v1/kv', body }), validateStatus: () => true, ...(params.signal ? { signal: params.signal } : {}) });
-      check();
-      if (response.status !== 200 && response.status !== 409) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation failed');
-      const result = mutationResponse.parse(response.data);
+      const codec = cipher(admitted);
+      const result = await mutateEncoded(await Promise.all(mutations.map(async row => ({ key: row.key, value: await codec.seal(row.value), version: row.version }))));
       if (result.success) {
         return result;
       }
       if (result.errors.length === 0) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its conflict');
-      return { success: false, errors: result.errors.map(row => ({ key: row.key, value: row.value === null ? null : decode(row.value, admitted), version: row.version })) };
+      return { success: false, errors: await Promise.all(result.errors.map(async row => ({ key: row.key, ...await openRow(row, admitted) }))) };
     },
   };
 }

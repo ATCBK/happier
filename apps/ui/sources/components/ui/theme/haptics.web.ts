@@ -13,3 +13,11 @@ export async function hapticsSelection(): Promise<void> {
 export async function hapticsSuccess(): Promise<void> {
     // No implementation
 }
+
+export async function hapticsDragStart(): Promise<void> {
+    // No implementation
+}
+
+export async function hapticsMedium(): Promise<void> {
+    // No implementation
+}

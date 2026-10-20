@@ -289,6 +289,9 @@ export type AgentExternalSessionTerminalObservation = Readonly<{
 
 export type AgentExternalSessionsResolveSourceRequest = AgentExternalSessionsInvocation & Readonly<{
     source: AgentExternalSessionSource;
+    /** Source admission alone needs no accounting inventory. Omission retains
+     * accounting discovery; older contributions may safely ignore false. */
+    includeAccountingSource?: boolean;
 }>;
 export type AgentExternalSessionsResolveSourceResult = Readonly<{
     source: AgentExternalSessionSource;
@@ -305,6 +308,8 @@ export type AgentExternalSessionsResolveSourceResult = Readonly<{
 export type AgentExternalSessionAccountingSource = Readonly<{
     /** Exact source ids emitted by this source's accounting codecs, discovered without reading records. */
     accountingSources?: readonly string[];
+    /** Files already enumerated without opening records; omit when no inventory was observed. */
+    discoveredFileCount?: number;
     rootPath?: string;
     rootField?: string;
     resourceKey: string;

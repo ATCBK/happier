@@ -148,9 +148,12 @@ export function HappierUiEnvironmentProvider(props: HappierUiEnvironmentProvider
   const { presentationActive = true } = props as HappierUiEnvironmentProviderInternalProps;
   const { theme, localization, accessibility, platform, insets } = environment;
 
+  // The public theme is a JSON snapshot. Context transport copies must not
+  // invalidate every theme consumer when only another surface fact changed.
+  const themeSnapshotJson = JSON.stringify(theme);
   const themeValue = useMemo(
     () => resolveHappierUiPresentationTheme(theme, accessibility.contrast),
-    [theme, accessibility.contrast],
+    [themeSnapshotJson, accessibility.contrast],
   );
 
   const localizationValue = useMemo(

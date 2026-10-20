@@ -23,6 +23,7 @@ import { WorkerUpdateV1Schema, SessionUpdatePostInputV1Schema, refineWorkerDeliv
 import { UsagePromptCompositionSchema } from '../../usage/coach/usagePromptComposition.js';
 import { UsageMcpBindingUsageSchema } from '../../usage/coach/usageMcpBindingUsage.js';
 import { isSessionFollowWakeEventLocalId } from '../follow/sessionFollowTransportV1.js';
+import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 
 const UsageDataSchema = lazyZodSchema(() => z.looseObject({
     input_tokens: z.number(),
@@ -624,6 +625,14 @@ export const TerminalComposerDraftBlockedReasonV1Schema = lazyZodSchema(() => z.
 export type TerminalComposerDraftBlockedReasonV1 =
   z.infer<typeof TerminalComposerDraftBlockedReasonV1Schema>;
 
+/** Presentation evidence supplied only by admitted Follow routes. */
+export const WorkerUpdateFollowMatchV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('relation'), relation: z.enum(['follower', 'manager']) }),
+  // Rule identity is private admission custody, never part of a shared Session transcript.
+  z.strictObject({ kind: z.literal('rule') }),
+]));
+export type WorkerUpdateFollowMatchV1 = z.infer<typeof WorkerUpdateFollowMatchV1Schema>;
+
 const AgentEventSchema = lazyZodSchema(() => z.pipe(z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('mcp-binding-usage'), usage: UsageMcpBindingUsageSchema }),
   z.strictObject({ type: z.literal('prompt-composition'), composition: UsagePromptCompositionSchema }),
@@ -769,6 +778,10 @@ const AgentEventSchema = lazyZodSchema(() => z.pipe(z.discriminatedUnion('type',
     completedTurnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   }),
   z.strictObject({ type: z.literal('worker-update'), update: WorkerUpdateV1Schema,
+    /** Admitted Follow routes for this card; ordinary run cards have none. */
+    followMatches: z.optional(z.array(WorkerUpdateFollowMatchV1Schema).check(z.minLength(1))),
+    /** Existing accepted Follow original identity; presentation joins only this input's delivery. */
+    followInputLocalId: z.optional(PendingLocalIdSchema),
     followWakeEventLocalId: z.optional(z.string().check(z.refine(isSessionFollowWakeEventLocalId, {
       message: 'Expected a canonical Session Follow wake event id',
     }))),

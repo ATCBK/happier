@@ -117,9 +117,10 @@ vi.mock('@/components/workspaces/scm/review/ChangedFilesReview', () => ({
     ChangedFilesReview: () => React.createElement('ChangedFilesReview'),
 }));
 
+const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
 describe('SessionScmReviewDetailsView (loading)', () => {
     it('stops polling while hidden and refreshes through the current Home when shown', async () => {
-        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
         const { scmStatusSync } = await import('@/scm/scmStatusSync');
         pollingSpy.mockClear();
         const screen = await renderScreen(<SessionScmReviewDetailsView sessionId="s1" serverId="home-a" scopeId="session:s1" active={false} />);
@@ -133,7 +134,6 @@ describe('SessionScmReviewDetailsView (loading)', () => {
         expect(scmStatusSync.invalidateFromAutoRefreshAndAwait).toHaveBeenCalledWith('s1', 'home-b');
     });
     it('shows a loading indicator while the SCM snapshot is not ready', async () => {
-        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />)).tree;

@@ -3,7 +3,8 @@ import * as React from 'react';
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { warmMachineResourceSummaries } from '@/sync/domains/machines/resources/warmMachineResourceSummaries';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
@@ -45,7 +46,7 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
     selected?: boolean;
 }>) {
     const rail = useMachinesRailSignal();
-    const [seen, setSeen] = useLocalSettingMutable('machinesRailSeenV1');
+    const seen = useLocalSetting('machinesRailSeenV1');
     const title = t('settings.machines');
     const label = rail.detail ? `${title} · ${rail.detail}` : title;
     const fleetRef = React.useRef(rail.fleet);
@@ -61,13 +62,13 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
         // establishes no recovery fact about the previously observed scope.
         if (previous === rail.fleet || !areServerAccountScopesEqual(previous.accountScope, rail.fleet.accountScope)) return;
         const next = forgetRecoveredMachinesRailReasons(rail.fleet, seenRef.current);
-        if (next !== seenRef.current) setSeen(next);
-    }, [rail.fleet, setSeen]);
+        if (next !== seenRef.current) getStorage().getState().applyLocalSettings({ machinesRailSeenV1: next }, { source: 'ui' });
+    }, [rail.fleet]);
     const previousGuardSeenAtRef = React.useRef(seen.guardSeenAt);
     const recordSeen = React.useCallback(() => {
         previousGuardSeenAtRef.current = seenRef.current.guardSeenAt;
-        setSeen(buildMachinesRailSeen(fleetRef.current, Date.now()));
-    }, [setSeen]);
+        getStorage().getState().applyLocalSettings({ machinesRailSeenV1: buildMachinesRailSeen(fleetRef.current, Date.now()) }, { source: 'ui' });
+    }, []);
     const renderMachines = React.useCallback((content: SidebarFooterPopoverContentProps) => (
         <SidebarMachinesPopoverContent {...content} guardSeenAt={previousGuardSeenAtRef.current} />
     ), []);

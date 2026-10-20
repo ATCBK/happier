@@ -1,14 +1,27 @@
 import React from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import { installPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 import { installNavigationShellCommonModuleMocks } from './navigationShellTestHelpers';
+import { SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const initialStorage = storage.getState();
+type SettingsHarnessModule = typeof import('@/components/settings/secrets/secretSettingsTestHarness');
+let createSecretSettingsTestHarness: SettingsHarnessModule['createSecretSettingsTestHarness'];
+let account: Awaited<ReturnType<SettingsHarnessModule['createSecretSettingsTestHarness']>>;
+
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 
 const hoistedState = vi.hoisted(() => ({
     mockPlatformOS: 'web' as 'web' | 'ios',
@@ -81,83 +94,31 @@ installNavigationShellCommonModuleMocks({
             },
         }).module;
     },
-    storage: installPartialStorageModuleMock({
-        useLocalSetting: (key: string) => {
-            return React.useSyncExternalStore(
-                (listener) => mockLocalSettingsStore.subscribe(listener),
-                () => {
-                    if (key === 'sidebarCollapsed') return mockLocalSettingsStore.sidebarCollapsed;
-                    if (key === 'sidebarWidthPx') return mockLocalSettingsStore.sidebarWidthPx;
-                    if (key === 'sidebarWidthBasisPx') return mockLocalSettingsStore.sidebarWidthBasisPx;
-                    return false;
-                },
-                () => {
-                    if (key === 'sidebarCollapsed') return mockLocalSettingsStore.sidebarCollapsed;
-                    if (key === 'sidebarWidthPx') return mockLocalSettingsStore.sidebarWidthPx;
-                    if (key === 'sidebarWidthBasisPx') return mockLocalSettingsStore.sidebarWidthBasisPx;
-                    return false;
-                },
-            );
-        },
-        useLocalSettingMutable: (key: string) => {
-            const val = (React as any).useSyncExternalStore(
-                (listener: any) => mockLocalSettingsStore.subscribe(listener),
-                () => {
-                    if (key === 'sidebarCollapsed') return mockLocalSettingsStore.sidebarCollapsed;
-                    if (key === 'sidebarWidthPx') return mockLocalSettingsStore.sidebarWidthPx;
-                    if (key === 'sidebarWidthBasisPx') return mockLocalSettingsStore.sidebarWidthBasisPx;
-                    return false;
-                },
-                () => {
-                    if (key === 'sidebarCollapsed') return mockLocalSettingsStore.sidebarCollapsed;
-                    if (key === 'sidebarWidthPx') return mockLocalSettingsStore.sidebarWidthPx;
-                    if (key === 'sidebarWidthBasisPx') return mockLocalSettingsStore.sidebarWidthBasisPx;
-                    return false;
-                },
-            );
-            return [
-                val,
-                (next: unknown) => {
-                    if (key === 'sidebarCollapsed' && typeof next === 'boolean') mockLocalSettingsStore.setSidebarCollapsed(next);
-                    if (key === 'sidebarWidthPx' && typeof next === 'number') mockLocalSettingsStore.setSidebarWidthPx(next);
-                    if (key === 'sidebarWidthBasisPx' && typeof next === 'number') mockLocalSettingsStore.setSidebarWidthBasisPx(next);
-                },
-            ] as const;
-        },
-    }),
+    storage: importOriginal => importOriginal(),
 });
 
 const mockLocalSettingsStore = (() => {
-  let sidebarCollapsed = false;
-  let sidebarWidthPx = 320;
-  let sidebarWidthBasisPx = 1200;
-  const listeners = new Set<() => void>();
-
   return {
     get sidebarCollapsed() {
-      return sidebarCollapsed;
+      return storage.getState().localSettings.sidebarCollapsed;
     },
     get sidebarWidthPx() {
-      return sidebarWidthPx;
+      return storage.getState().localSettings.sidebarWidthPx;
     },
     get sidebarWidthBasisPx() {
-      return sidebarWidthBasisPx;
+      return storage.getState().localSettings.sidebarWidthBasisPx;
     },
     setSidebarCollapsed(next: boolean) {
-      sidebarCollapsed = next;
-      for (const l of listeners) l();
+      storage.getState().applyLocalSettings({ sidebarCollapsed: next }, { source: 'ui' });
     },
     setSidebarWidthPx(next: number) {
-      sidebarWidthPx = next;
-      for (const l of listeners) l();
+      storage.getState().applyLocalSettings({ sidebarWidthPx: next }, { source: 'ui' });
     },
     setSidebarWidthBasisPx(next: number) {
-      sidebarWidthBasisPx = next;
-      for (const l of listeners) l();
+      storage.getState().applyLocalSettings({ sidebarWidthBasisPx: next }, { source: 'ui' });
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      return storage.subscribe(listener);
     },
   };
 })();
@@ -215,17 +176,6 @@ vi.mock('./appRail/AppShellColumn', () => ({
   AppShellColumn: (props: any) => React.createElement('AppShellColumn', props, null),
 }));
 
-vi.mock('./appRail/AppShellTitleStrip', () => ({
-  AppShellTitleStrip: (props: any) =>
-    React.createElement(
-      'AppShellTitleStrip',
-      props,
-      props.columnToggleAvailable
-        ? React.createElement('Pressable', { testID: 'app-shell-column-toggle', onPress: props.onToggleColumn })
-        : null,
-    ),
-}));
-
 vi.mock('./SidebarIcons', () => ({
   SidebarExpandIcon: (props: any) => React.createElement('SidebarExpandIcon', props, null),
   SidebarCollapseIcon: (props: any) => React.createElement('SidebarCollapseIcon', props, null),
@@ -243,12 +193,72 @@ function widthOf(node: { props: { style?: unknown } }): number | undefined {
 
 function getResizableSidebarPane(tree: renderer.ReactTestRenderer) {
   return tree.find((node) => {
-    return typeof node.props?.onCommitWidthPx === 'function' && node.props?.minWidthPx === 250;
+    return typeof node.props?.onCommitWidthPx === 'function' && node.props?.minWidthPx === SIDEBAR_DOCK_MIN_WIDTH_PX;
   });
 }
 
+function installResizePointerBoundary() {
+  const listeners = new Map<string, Set<(event: { clientX: number }) => void>>();
+  vi.stubGlobal('window', {
+    addEventListener: (type: string, listener: (event: { clientX: number }) => void) => {
+      const group = listeners.get(type) ?? new Set();
+      group.add(listener);
+      listeners.set(type, group);
+    },
+    removeEventListener: (type: string, listener: (event: { clientX: number }) => void) => listeners.get(type)?.delete(listener),
+  });
+  return (type: 'pointermove' | 'pointerup', clientX: number) => {
+    for (const listener of [...listeners.get(type) ?? []]) listener({ clientX });
+  };
+}
+
 describe('SidebarNavigator (collapsed sidebar)', () => {
-  beforeEach(() => {
+  it('runs the sidebar keyboard command through the same admitted toggle', async () => {
+    const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    let command: ReturnType<typeof useKeyboardCommand> | undefined;
+    function CommandProbe() { command = useKeyboardCommand(); return null; }
+    const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><SidebarNavigator /><CommandProbe /></KeyboardShortcutProvider>);
+    await act(async () => { expect(command?.('shell.column.toggle')).toBe(true); });
+    await vi.waitFor(() => expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true));
+    expect(screen.findByTestId('navigation-sidebar')).toBeNull();
+    await act(async () => { expect(command?.('shell.column.toggle')).toBe(true); });
+    await vi.waitFor(() => expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false));
+    expect(screen.findByTestId('navigation-sidebar')).not.toBeNull();
+  });
+
+  it('keeps literal pixel preferences across window changes and clamps only the rendered width', async () => {
+    mockLocalSettingsStore.setSidebarWidthPx(650);
+    hoistedState.mockWindowDimensions = { width: 1200, height: 900 };
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    expect(widthOf(getSidebar(screen.tree))).toBe(600);
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(650);
+    await act(async () => {
+      hoistedState.mockWindowDimensions = { width: 2560, height: 900 };
+      for (const listener of hoistedState.dimensionListeners) listener();
+    });
+    expect(widthOf(getSidebar(screen.tree))).toBe(650);
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(650);
+  });
+
+  it('does not hide while the pointer is between the minimum and its collapse threshold', async () => {
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    const pane = getResizableSidebarPane(screen.tree);
+    await act(async () => {
+      pane.props.onDragWidthPx(SIDEBAR_DOCK_MIN_WIDTH_PX, {
+        attemptedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX - 1,
+        clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
+        exceededMinPx: true,
+        exceededMaxPx: false,
+      });
+    });
+    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
+    expect(getSidebar(screen.tree)).toBeDefined();
+  });
+  afterEach(async () => { standardCleanup(); await account?.dispose(); storage.setState(initialStorage, true); });
+  beforeEach(async () => {
     vi.unstubAllGlobals();
     act(() => {
       mockLocalSettingsStore.setSidebarCollapsed(false);
@@ -256,6 +266,10 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
       mockLocalSettingsStore.setSidebarWidthBasisPx(1200);
       mockAppPaneStore.reset();
     });
+    ({ createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness'));
+    account = await createSecretSettingsTestHarness({ settings: settingsParse({
+      actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+    }) });
     hoistedState.mockPlatformOS = 'web';
     hoistedState.mockWindowDimensions = { width: 1000, height: 800 };
     hoistedState.mockPathname = '/';
@@ -327,9 +341,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
-    await act(async () => {
-      tree = renderer.create(<SidebarNavigator />);
-    });
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
 
     const wheelBoundary = tree.root.find((node) => {
       return (node.type as any) === 'View' && typeof (node.props as any)?.onWheel === 'function';
@@ -348,9 +360,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
-    await act(async () => {
-      tree = renderer.create(<SidebarNavigator />);
-    });
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
 
     expect(tree.root.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
     expect(tree.root.findAllByType('AppRail' as any)).toHaveLength(1);
@@ -401,52 +411,50 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const resizablePane = getResizableSidebarPane(tree);
 
     await act(async () => {
-      resizablePane.props.onDragWidthPx(250, {
-        attemptedSizePx: 250,
-        clampedSizePx: 250,
+      resizablePane.props.onDragWidthPx(SIDEBAR_DOCK_MIN_WIDTH_PX, {
+        attemptedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
+        clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         exceededMinPx: false,
         exceededMaxPx: false,
       });
-      resizablePane.props.onCommitWidthPx(250, {
-        attemptedSizePx: 250,
-        clampedSizePx: 250,
+      resizablePane.props.onCommitWidthPx(SIDEBAR_DOCK_MIN_WIDTH_PX, {
+        attemptedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
+        clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         exceededMinPx: false,
         exceededMaxPx: false,
       });
     });
 
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
-    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(250);
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(SIDEBAR_DOCK_MIN_WIDTH_PX);
 
     const sidebar = getSidebar(tree);
-    expect(widthOf(sidebar)).toBe(250);
+    expect(widthOf(sidebar)).toBe(SIDEBAR_DOCK_MIN_WIDTH_PX);
   });
 
-  it('collapses into compact view when resized narrower again from the minimum width', async () => {
+  it('collapses only on release past half the minimum, preserving the stored width for restore', async () => {
     act(() => {
-      mockLocalSettingsStore.setSidebarWidthPx(250);
-      mockLocalSettingsStore.setSidebarWidthBasisPx(1000);
+      mockLocalSettingsStore.setSidebarWidthPx(320);
     });
 
+    const pointer = installResizePointerBoundary();
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    const resizablePane = getResizableSidebarPane(tree);
-
-    await act(async () => {
-      resizablePane.props.onDragWidthPx(250, {
-        attemptedSizePx: 200,
-        clampedSizePx: 250,
-        exceededMinPx: true,
-        exceededMaxPx: false,
-      });
-    });
+    const handle = getResizableSidebarPane(tree).findByProps({ accessibilityRole: 'adjustable' });
+    await act(async () => { handle.props.onPressIn({ clientX: 320 }); });
+    await act(async () => { pointer('pointermove', Math.floor(SIDEBAR_DOCK_MIN_WIDTH_PX / 2) - 1); });
+    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
+    await act(async () => { pointer('pointerup', 0); });
 
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
     expect(tree.root.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
     expect(tree.root.findAllByType('AppRail' as any)).toHaveLength(1);
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(320);
+    await tree.pressByTestIdAsync('app-shell-column-toggle');
+    expect(widthOf(getSidebar(tree))).toBe(320);
   });
 
   it("stands the open destination's column beside the page, and none beside a full-page destination", async () => {
@@ -472,20 +480,62 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const tree = (await renderScreen(<SidebarNavigator />)).tree;
 
     await act(async () => {
-      await pressTestInstanceAsync(tree.root.findByProps({ testID: 'app-shell-column-toggle' }));
+      await tree.pressByTestIdAsync('app-shell-column-toggle');
     });
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
     expect(tree.root.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
     expect(tree.root.findAllByType('AppRail' as any)).toHaveLength(1);
 
     await act(async () => {
-      await pressTestInstanceAsync(tree.root.findByProps({ testID: 'app-shell-column-toggle' }));
+      await tree.pressByTestIdAsync('app-shell-column-toggle');
     });
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
     expect(getSidebar(tree)).toBeDefined();
   });
 
-  it('clears scoped focus mode when the current route no longer matches the focused pane scope', async () => {
+  it('admits the real title-strip toggle through shell.column.set under Off, Ask and Allowed', async () => {
+    await act(async () => account.replaceSettings(settingsParse({ ...account.persistedSettings,
+      actionsSettingsV1: { v: 1, actions: { 'shell.column.set': { disabledSurfaces: ['ui'] } } },
+    })));
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    await screen.pressByTestIdAsync('app-shell-column-toggle');
+    expect(storage.getState().localSettings.sidebarCollapsed).toBe(false);
+    expect(account.artifacts.list()).toHaveLength(0);
+    await act(async () => account.replaceSettings(settingsParse({ ...account.persistedSettings,
+      actionsSettingsV1: { v: 1, actions: { 'shell.column.set': { approvalRequiredSurfaces: ['ui'] } } },
+    })));
+    await screen.pressByTestIdAsync('app-shell-column-toggle');
+    await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+    expect(storage.getState().localSettings.sidebarCollapsed).toBe(false);
+    await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve');
+    await vi.waitFor(() => expect(storage.getState().localSettings.sidebarCollapsed).toBe(true));
+    await act(async () => account.replaceSettings(settingsParse({ ...account.persistedSettings,
+      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'shell.column.set': ['ui'] } },
+    })));
+    await screen.pressByTestIdAsync('app-shell-column-toggle');
+    await vi.waitFor(() => expect(storage.getState().localSettings.sidebarCollapsed).toBe(false));
+    expect(account.artifacts.list()).toHaveLength(1);
+    expect(screen.findAllByType('AppRail')).toHaveLength(1);
+  });
+
+  it('retires the real title-strip toggle when its Account scope is replaced', async () => {
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    const press = screen.tree.find(node => typeof node.props.onToggleColumn === 'function').props.onToggleColumn;
+    await act(async () => {
+      await account.dispose();
+      account = await createSecretSettingsTestHarness({
+        token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature`,
+        settings: settingsParse({ actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'shell.column.set': ['ui'] } } }),
+      });
+    });
+    await act(async () => { await press(); });
+    expect(storage.getState().localSettings.sidebarCollapsed).toBe(false);
+    expect(account.artifacts.list()).toHaveLength(0);
+  });
+
+  it('does not mutate a pane scope when the current route changes', async () => {
     hoistedState.mockPathname = '/settings';
     act(() => {
       mockAppPaneStore.setFocusModeScopeId('session:s1');
@@ -495,65 +545,33 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    expect(mockAppPaneStore.dispatch).toHaveBeenCalledWith({
-      type: 'exitFocusMode',
-      scopeId: 'session:s1',
-    });
+    expect(mockAppPaneStore.dispatch).not.toHaveBeenCalled();
     const sidebar = getSidebar(tree);
     expect(widthOf(sidebar)).toBeGreaterThan(0);
   });
 
-  it('can collapse again on the first resize attempt after expanding from compact view', async () => {
+  it('disarms a drag when it returns above half the minimum and commits the minimum', async () => {
     act(() => {
-      mockLocalSettingsStore.setSidebarWidthPx(250);
-      mockLocalSettingsStore.setSidebarWidthBasisPx(1000);
+      mockLocalSettingsStore.setSidebarWidthPx(320);
     });
 
+    const pointer = installResizePointerBoundary();
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    let resizablePane = getResizableSidebarPane(tree);
-    let onDragWidthPx = resizablePane.props.onDragWidthPx;
-
-    await act(async () => {
-      onDragWidthPx(250, {
-        attemptedSizePx: 200,
-        clampedSizePx: 250,
-        exceededMinPx: true,
-        exceededMaxPx: false,
-      });
-    });
-
-    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
-
-    await act(async () => {
-      onDragWidthPx(null, null);
-    });
-
-    const expandButton = tree.findByProps({ testID: 'app-shell-column-toggle' });
-    await act(async () => {
-      await pressTestInstanceAsync(expandButton);
-    });
-
+    const handle = getResizableSidebarPane(tree).findByProps({ accessibilityRole: 'adjustable' });
+    await act(async () => { handle.props.onPressIn({ clientX: 320 }); });
+    await act(async () => { pointer('pointermove', 0); });
+    await act(async () => { pointer('pointermove', SIDEBAR_DOCK_MIN_WIDTH_PX - 1); });
+    await act(async () => { pointer('pointerup', SIDEBAR_DOCK_MIN_WIDTH_PX - 1); });
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
-
-    resizablePane = getResizableSidebarPane(tree);
-    onDragWidthPx = resizablePane.props.onDragWidthPx;
-    await act(async () => {
-      onDragWidthPx(250, {
-        attemptedSizePx: 200,
-        clampedSizePx: 250,
-        exceededMinPx: true,
-        exceededMaxPx: false,
-      });
-    });
-
-    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(SIDEBAR_DOCK_MIN_WIDTH_PX);
+    expect(widthOf(getSidebar(tree))).toBe(SIDEBAR_DOCK_MIN_WIDTH_PX);
   });
 
-  it('hides the column in scoped focus mode without remounting, and the toggle exits focus mode', async () => {
+  it('keeps the sidebar and navigator independent of hiding the main pane', async () => {
     hoistedState.mockPathname = '/session/s1';
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
@@ -573,16 +591,16 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     // No remount: toggling focus should not reset session/details state.
     expect(tree.root.findByType(Stack) === navigator).toBe(true);
 
-    expect(tree.root.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
+    expect(widthOf(getSidebar(tree))).toBeGreaterThan(0);
     expect(tree.root.findAllByType('AppRail' as any)).toHaveLength(1);
 
-    const expandButton = tree.findByProps({ testID: 'app-shell-column-toggle' });
+    const expandButton = tree.findByTestId('app-shell-column-toggle');
     await act(async () => {
       await pressTestInstanceAsync(expandButton);
     });
 
-    expect(mockAppPaneStore.dispatch).toHaveBeenCalledWith({ type: 'exitFocusMode' });
-    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
+    expect(mockAppPaneStore.dispatch).not.toHaveBeenCalled();
+    expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
   });
 
   it('keeps the route navigator mounted with hidden chrome on terminal-connect desktop web routes', async () => {
@@ -592,9 +610,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
-    await act(async () => {
-      tree = renderer.create(<SidebarNavigator />);
-    });
+    tree = (await renderScreen(<SidebarNavigator />)).tree;
 
     const { Stack } = await import('expo-router');
     const navigator = tree.root.findByType(Stack);

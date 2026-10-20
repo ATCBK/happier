@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
+import { describeApprovalActionFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { DocReadResultV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { SessionTargetPreviewV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import {
   formatQualifiedPluginActionId,
@@ -13,10 +24,208 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { createVoiceToolHandlers, resolveVoiceToolEffectClass } = await import('./handlers');
 const { resolveVoiceActionExecution } = await import('./voiceActionExecution');
+const { createArtifactActionsClient } = await import('@/components/artifacts/artifactActionsClient');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 
 describe('Voice Action reference catalog', () => {
   beforeEach(async () => { await home.reset(); });
   afterEach(async () => { await home.reset(); });
+  it('pauses an exact Workflow through generic Voice execution and the canonical Account storage owner', async () => {
+    const serverId = await home.addHome({ name: 'Workflow Voice Home', serverUrl: 'https://workflow-voice.test', accountId: 'alice', currentAccount: true });
+    const features = createRootLayoutFeaturesResponse();
+    expect(tryWriteServerEnabledBitInPlace(features, 'workflows', true)).toBe(true);
+    home.answer(serverId, '/v1/features', { body: features });
+    const input = { runId: 'run-voice', expectedRevision: 3 };
+    let revision = input.expectedRevision;
+    home.answer(serverId, 'POST /v3/automations/runs/workflow-storage', { select: operation => {
+      expect(operation).toEqual({ operation: 'pause', ...input });
+      revision += 1;
+      return { body: WorkflowActionOutputSchemasV1['workflow.run.pause'].parse({
+        run: createWorkflowRunSummaryFixture({ id: input.runId, ownerAccountId: 'alice', revision, state: 'paused' }),
+        intent: 'paused',
+      }) };
+    } });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    const result = JSON.parse(await handlers.action_execute!({ actionId: 'workflow.run.pause', input }, { serverId, effectId: 'pause-exact-run' }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { run: { id: input.runId, revision: 4, state: 'paused' }, intent: 'paused' } });
+    expect(WorkflowActionOutputSchemasV1['workflow.run.pause'].parse(result.result)).toEqual(result.result);
+    expect(revision).toBe(4);
+    for (const parameters of [
+      { actionId: 'workflow.run.invocations.complete_review', input: {
+        runId: input.runId, invocation: { recordId: 'invocation-1' }, expectedContentRevision: '0', mode: 'use_result',
+      } },
+      { actionId: 'approval.request.decide', input: { artifactId: 'approval-1', decision: 'approve' } },
+    ] as const) {
+      expect(getActionSpec(parameters.actionId)
+        .inputSchema.safeParse(parameters.input).success).toBe(true);
+      expect(resolveVoiceActionExecution(parameters)).toBeNull();
+    }
+  });
+  it('projects the safe target-preview and existing notice Artifact read/write Actions into Voice', () => {
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    for (const [actionId, effect] of [
+      ['session.targets.resolve', 'read_only'], ['artifact.get', 'read_only'], ['artifact.update', 'mutation'],
+    ] as const) {
+      const tool = actionId.replaceAll('.', '_');
+      expect(handlers[tool], actionId).toBeTypeOf('function');
+      expect(resolveVoiceToolEffectClass(tool)).toBe(effect);
+    }
+  });
+  it('inspects targets through the real Voice front door and publishes the canonical preview DTO', async () => {
+    const serverId = await home.addHome({ name: 'Target Voice Home', serverUrl: 'https://target-preview-voice.test', accountId: 'alice', currentAccount: true });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => 'current-session' });
+    const input = { actionId: 'session.message.send', target: { selector: 'self' } };
+    const outcome = JSON.parse(await handlers.action_execute!({ actionId: 'session.targets.resolve', input }, { serverId }));
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
+    expect(SessionTargetPreviewV1Schema.parse(outcome.result)).toEqual({ coverage: 'complete',
+      addresses: [{ serverId, sessionId: 'current-session' }], error: null });
+  });
+  it('reads and dismisses an owned notice through Voice and the existing approved Artifact CAS writer', async () => {
+    const serverId = await home.addHome({ name: 'Notice Voice Home', serverUrl: 'https://notice-voice.test', accountId: 'alice', currentAccount: true });
+    const artifacts = createArtifactActionsClient({ serverId, accountId: 'alice' });
+    const created = await artifacts.createArtifact({ header: { kind: 'markdown', title: 'Notice fixture' }, body: 'Fixture' });
+    if (!('ok' in created) || !created.ok) throw new Error(`Expected fixture: ${JSON.stringify(created)}`);
+    const stored = home.artifacts(serverId).read(created.value.artifactId);
+    if (!stored) throw new Error('Expected stored fixture');
+    const content = AccountNoticeArtifactBodyV1Schema.parse({ v: 1, source: { kind: 'plugin', pluginId: 'acme.review', itemId: 'review-42' },
+      type: 'update', resolved: false, body: 'Review updated' });
+    const header = AccountNoticeArtifactHeaderV1Schema.parse({ ...content, kind: 'account_notice.v1', status: 'open', title: 'Review updated' });
+    const body = JSON.stringify(content);
+    // A notice written by its producer arrives across the existing Home persistence boundary.
+    home.artifacts(serverId).replaceStoredRow({ ...stored, kind: undefined,
+      header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body }) });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    const read = JSON.parse(await handlers.action_execute!({ actionId: 'artifact.get', input: { artifactId: stored.id } }, { serverId }));
+    expect(read, JSON.stringify(read)).toMatchObject({ ok: true });
+    const current = ArtifactActionOutputSchemasV1['artifact.get'].parse(read.result).artifact;
+    expect(current).toMatchObject({ ownerAccountId: 'alice', header: { status: 'open' } });
+    if (!current) throw new Error('Expected owned notice');
+    const input = { artifactId: stored.id, expectedRevision: current.revision,
+      header: { ...current.header, status: 'dismissed' }, body: current.body };
+    let announceCreated: () => void = () => { throw new Error('Missing creation observer'); };
+    const askCreated = new Promise<void>(resolve => { announceCreated = resolve; });
+    home.artifacts(serverId).afterNextCreate(async () => { announceCreated(); });
+    const pending = handlers.action_execute!({ actionId: 'artifact.update', input }, { serverId, effectId: 'dismiss-notice' });
+    await askCreated;
+    const ask = home.artifacts(serverId).list().find(row => {
+      const parsed = ApprovalRequestSchema.safeParse(JSON.parse(home.artifacts(serverId).readPlainBody(row.id) ?? 'null'));
+      return parsed.success && parsed.data.actionId === 'artifact.update';
+    });
+    if (!ask) throw new Error('Expected notice update Ask');
+    expect(ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(ask.id) ?? 'null')))
+      .toMatchObject({ status: 'open', actionId: 'artifact.update', requestedSurface: 'voice', approval: { flow: 'blocking' } });
+    expect(home.artifacts(serverId).read(stored.id)?.headerVersion).toBe(current.revision.headerVersion);
+    const result = await createDefaultActionExecutor().execute('approval.request.decide', {
+      artifactId: ask.id, decision: 'approve',
+    }, { surface: 'ui', serverId, authority: 'present_user', actionCaller: { kind: 'host' } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(JSON.parse(await pending)).toMatchObject({ ok: true, result: { artifactId: stored.id } });
+    const dismissed = JSON.parse(await handlers.action_execute!({ actionId: 'artifact.get', input: { artifactId: stored.id } }, { serverId }));
+    expect(ArtifactActionOutputSchemasV1['artifact.get'].parse(dismissed.result).artifact)
+      .toMatchObject({ header: { status: 'dismissed', source: content.source }, body });
+  });
+  it('reads an admitted Doc and publishes exact reviewed Voice comments and proposals through the existing approval and C3 owners', async () => {
+    const serverUrl = 'https://doc-voice.test';
+    const serverId = await home.addHome({ name: 'Doc Voice Home', serverUrl, accountId: 'alice', currentAccount: true });
+    const artifacts = createArtifactActionsClient({ serverId, accountId: 'alice' });
+    const source = 'Private first passage.\n\nPrivate second passage.';
+    const created = await artifacts.createArtifact({ header: { kind: 'markdown', title: 'Voice notes' }, body: source });
+    if (!('ok' in created) || !created.ok) throw new Error(`Expected source Doc: ${JSON.stringify(created)}`);
+    const ref = { kind: 'doc' as const, artifactId: created.value.artifactId, serverId };
+    const network = answerDiscussionThreadForTests(home, serverId, { loseCreate: false, loseFirstRejoin: false });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    expect(handlers.doc_read).toBeTypeOf('function');
+    expect(resolveVoiceToolEffectClass('doc_read')).toBe('read_only');
+    const read = JSON.parse(await handlers.action_execute!({ actionId: 'doc.read', input: { ref } }, { serverId }));
+    expect(read, JSON.stringify(read)).toMatchObject({ ok: true });
+    const admitted = DocReadResultV1Schema.parse(read.result);
+    expect(admitted).toMatchObject({ ref, artifact: { body: source, revision: created.value.revision }, openCommentCount: 0 });
+    const target = captureDocPassageV1({ ref, revision: admitted.artifact.revision, source,
+      range: { start: source.lastIndexOf('Private'), end: source.length } });
+    await home.requireActionApproval(serverId, ['doc.comment.reply', 'doc.edit.propose'], 'voice');
+    const requests = [
+      { actionId: 'doc.comment.reply', input: { target, localId: 'voice-comment', content: { v: 1,
+        parts: [{ t: 'text', text: 'Please clarify the second passage.' }] } } },
+      { actionId: 'doc.edit.propose', input: { target, discussionRef: { serverId, discussionId: 'committed-thread' },
+        localId: 'voice-proposal', baseRevision: target.revision, before: target.quote,
+        after: 'A clearer second passage.', reason: 'Make the exact passage explicit.' } },
+    ] as const;
+    const executor = createDefaultActionExecutor();
+    for (const { actionId, input } of requests) {
+      expect(resolveVoiceActionExecution({ actionId, input })?.input).toEqual(input);
+      expect(resolveVoiceToolEffectClass(actionId.replaceAll('.', '_'))).toBe('mutation');
+      const before = network.messages.length;
+      const pending = JSON.parse(await handlers.action_execute!({ actionId, input }, { serverId, effectId: input.localId }));
+      expect(pending, JSON.stringify(pending)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(JSON.stringify(pending)).not.toContain(target.quote);
+      expect(network.messages).toHaveLength(before);
+      const request = ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(pending.result.artifactId) ?? 'null'));
+      expect(request).toMatchObject({ actionId, actionArgs: input, status: 'open', requestedSurface: 'voice',
+        preview: { actionId, actionArgs: input }, executionOriginV1: { surface: 'voice', authority: 'account_automation' } });
+      const presentation = describeApprovalActionFields(request);
+      expect(presentation.unrepresentable).toBeNull();
+      expect(presentation.rows).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'target', value: JSON.stringify(target) })]));
+      if (actionId === 'doc.edit.propose') for (const field of ['before', 'after', 'reason'] as const) {
+        expect(presentation.rows).toEqual(expect.arrayContaining([expect.objectContaining({ path: field, value: input[field] })]));
+      }
+      const decided = await executor.execute('approval.request.decide', { artifactId: pending.result.artifactId, decision: 'approve' }, {
+        surface: 'ui', serverId, authority: 'present_user', actionCaller: { kind: 'host' },
+      });
+      expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      expect(network.messages).toHaveLength(before + 1);
+    }
+    expect(network.messages[0]?.content).toEqual({ t: 'plain', v: { kind: 'doc_passage_comment', passage: target, content: requests[0].input.content } });
+    expect(network.messages[1]?.content).toEqual({ t: 'plain', v: { kind: 'doc_edit_proposal', proposal: {
+      target, baseRevision: target.revision, before: target.quote, after: requests[1].input.after, reason: requests[1].input.reason,
+    } } });
+    const canceledInput = { ...requests[0].input, localId: 'voice-canceled-comment' };
+    const pending = JSON.parse(await handlers.action_execute!({ actionId: 'doc.comment.reply', input: canceledInput }, {
+      serverId, effectId: canceledInput.localId,
+    }));
+    expect(pending, JSON.stringify(pending)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(await executor.execute('approval.request.decide', { artifactId: pending.result.artifactId, decision: 'cancel' }, {
+      surface: 'ui', serverId, authority: 'present_user', actionCaller: { kind: 'host' },
+    })).toMatchObject({ ok: true, result: { status: 'canceled' } });
+    expect(network.messages).toHaveLength(2);
+    expect(home.artifacts(serverId).readPlainBody(ref.artifactId)).toContain(source);
+  });
+  it('keeps refused, canceled and person-only Doc Voice calls free of source previews or effects', async () => {
+    const serverId = await home.addHome({ name: 'Refused Doc Home', serverUrl: 'https://doc-voice-refusal.test', accountId: 'alice', currentAccount: true });
+    const ref = { kind: 'doc' as const, artifactId: 'unavailable-doc', serverId };
+    const target = { ref, revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 13 }, quote: 'Private quote' };
+    const input = { target, localId: 'must-not-post', content: { v: 1, parts: [{ t: 'text', text: 'Private comment' }] } };
+    home.answer(serverId, `/v1/artifacts/${ref.artifactId}`, { status: 403, body: { error: 'artifact_access_forbidden' } });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    expect(handlers.doc_read).toBeTypeOf('function');
+    const refused = await handlers.action_execute!({ actionId: 'doc.read', input: { ref } }, { serverId });
+    expect(JSON.parse(refused), refused).toMatchObject({ ok: false });
+    expect(refused).not.toContain(target.quote);
+    const before = home.requests.length;
+    const canceled = new AbortController();
+    canceled.abort();
+    expect(JSON.parse(await handlers.doc_read!({ ref }, { serverId, signal: canceled.signal })))
+      .toMatchObject({ ok: false, errorCode: 'tool_cancelled' });
+    expect(home.requests).toHaveLength(before);
+    const foreign = JSON.parse(await handlers.action_execute!({ actionId: 'doc.read', input: { ref: { ...ref, serverId: 'foreign-home' } } }, { serverId }));
+    expect(foreign).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    for (const parameters of [
+      { actionId: 'doc.comment.reply', input: { ...input, bypassApprovals: true, authority: 'present_user' } },
+      { actionId: 'doc.edit.propose', input: { target, localId: 'invalid-basis', discussionRef: { serverId, discussionId: 'thread' },
+        baseRevision: { headerVersion: 1, bodyVersion: 2 }, before: target.quote, after: 'Replacement', reason: 'Reason' } },
+      { actionId: 'doc.edit.accept', input: { proposalRef: { kind: 'discussion', discussion: { serverId, discussionId: 'thread' }, messageId: 'proposal' },
+        expectedRevision: target.revision } },
+      { actionId: 'doc.edit.decline', input: { proposalRef: { kind: 'discussion', discussion: { serverId, discussionId: 'thread' }, messageId: 'proposal' } } },
+    ]) {
+      const result = await handlers.action_execute!(parameters, { serverId, effectId: 'must-not-create-preview' });
+      expect(JSON.parse(result), result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      expect(result).not.toContain(target.quote);
+    }
+    expect(handlers.doc_edit_accept).toBeUndefined();
+    expect(handlers.doc_edit_decline).toBeUndefined();
+    expect(home.requestsFor(`/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
+    expect(home.requestsFor('/v1/discussions')).toEqual([]);
+    expect(home.artifacts(serverId).list()).toEqual([]);
+  });
   it.each([
     ['follow.get', { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: 'exact-source' } }],
     ['follow.set', { receiver: { kind: 'session', sessionId: { selector: 'self' } }, source: { kind: 'session', sessionId: 'exact-source' }, policy: { preset: 'important' } }],

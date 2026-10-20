@@ -14,11 +14,13 @@ export function pushMessageToQueueWithSpecialCommands<Mode, Message>(opts: {
   message: Message;
   text: string;
   mode: Mode;
+  isolate?: boolean;
 }): void {
   const special = parseSpecialCommand(opts.text);
   if (special.type === 'clear') {
     opts.queue.pushIsolateAndClear(opts.message, opts.mode);
     return;
   }
-  opts.queue.push(opts.message, opts.mode);
+  if (opts.isolate) opts.queue.pushIsolate(opts.message, opts.mode);
+  else opts.queue.push(opts.message, opts.mode);
 }

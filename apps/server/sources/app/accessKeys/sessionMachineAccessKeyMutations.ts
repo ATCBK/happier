@@ -2,6 +2,12 @@ import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGua
 import { resolveMachineAdmissionInTx } from "@/app/machines/machineAccess";
 import { isPrismaErrorCode } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
+
+async function acquireBindingMutationAccountsInTx(tx: Tx, binding: SessionMachineAccessKeyBinding): Promise<void> {
+    const machine = await tx.machine.findUnique({ where: { id: binding.machineId }, select: { accountId: true } });
+    await acquireAccountChangePublicationLocksInTx(tx, [binding.accountId, ...(machine ? [machine.accountId] : [])], { includeSingleAccount: true });
+}
 
 /**
  * Canonical `AccessKey(accountId, machineId, sessionId)` writer.
@@ -12,7 +18,7 @@ import type { Tx } from "@/storage/inTx";
  * compose it with their other writes. It never mints a Session/Machine binding
  * of its own — the tuple must already exist and the Machine must be available.
  *
- * Callers that are not composing a wider transaction pass the shared client.
+ * Standalone callers open `inTx`; the same transaction owns admission and the tuple write.
  */
 
 export type SessionMachineAccessKeyBinding = Readonly<{
@@ -115,6 +121,8 @@ export async function createSessionMachineAccessKeyInTx(
         sessionId: params.sessionId,
     };
 
+    await acquireBindingMutationAccountsInTx(tx, binding);
+
     if (await readSessionMachineBindingStateInTx(tx, binding) !== "available") {
         return { ok: false, reason: "binding-not-found" };
     }
@@ -158,6 +166,8 @@ export async function updateSessionMachineAccessKeyDataInTx(
         machineId: params.machineId,
         sessionId: params.sessionId,
     };
+
+    await acquireBindingMutationAccountsInTx(tx, binding);
 
     // The tuple already proves Session correspondence, so currentness here is
     // the Machine's availability.

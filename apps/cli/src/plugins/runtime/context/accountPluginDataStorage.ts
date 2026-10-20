@@ -307,6 +307,9 @@ function requestConfig(credentials: StoredCredentials, signal: AbortSignal): Rea
             Authorization: `Bearer ${credentials.token}`,
             'Content-Type': 'application/json',
         },
+        // POST bodies have already passed the owning serializer. Axios's
+        // default string transform would parse the same bytes again.
+        transformRequest: [],
         validateStatus: () => true,
         signal,
     };
@@ -627,8 +630,12 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         result: Promise<PluginError | null>;
     }>;
     const writerClaimsByScope = new Map<string, WriterClaim>();
-    // Admitted manifests are immutable. Hash once per projection, not once per Collection operation.
-    const declarationDigests = new WeakMap<CanonicalPluginManifest, string>();
+    // Admitted manifests are immutable. Prepare their digest and wire bytes
+    // once per projection; retry/currentness state remains with writerClaimsByScope.
+    const preparedDeclarations = new WeakMap<CanonicalPluginManifest, Readonly<{
+        digest: string;
+        encodedClaim: string | null;
+    }>>();
 
     const readKnownCollectionLimits = (): PluginDataCollectionsCapabilities | undefined => {
         try {
@@ -731,9 +738,12 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             parseError: (value: unknown, status: number) => PluginError | null;
             unavailableMessage: string;
             diagnosticClaimAttemptId?: string;
+            encodedBody?: string | null;
         }>): Promise<unknown> => {
             const signal = signalFor(input.operationSignal);
-            const encodedBody = serializeRequestBody(input.body);
+            const encodedBody = input.encodedBody === undefined
+                ? serializeRequestBody(input.body)
+                : input.encodedBody;
             if (encodedBody === null) {
                 throw dataError(
                     COLLECTION_INVALID_VALUE_CODE,
@@ -798,11 +808,16 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const scopeKey = currentAccountScopeKey();
             if (!manifest || scopeKey === null) return;
             const key = `${scopeKey}\u0000${lifecycle.pluginId}`;
-            let declarationDigest = declarationDigests.get(manifest);
-            if (!declarationDigest) {
-                declarationDigest = computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest)));
-                declarationDigests.set(manifest, declarationDigest);
+            let declaration = preparedDeclarations.get(manifest);
+            if (!declaration || declaration.encodedClaim === null) {
+                declaration = Object.freeze({
+                    digest: declaration?.digest
+                        ?? computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest))),
+                    encodedClaim: serializeRequestBody({ manifest }),
+                });
+                preparedDeclarations.set(manifest, declaration);
             }
+            const declarationDigest = declaration.digest;
             const availabilityChangeKey = readPluginAccountAvailabilityChangeKey(scopeKey, lifecycle.pluginId);
             let claim = writerClaimsByScope.get(key);
             if (!claim || claim.declarationDigest !== declarationDigest
@@ -823,6 +838,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                 const claimOnce = (prepare?: true) => post({
                     path: COLLECTION_WRITERS_CLAIM_HTTP_PATH,
                     body: { manifest, ...(prepare ? { prepare } : {}) },
+                    ...(prepare ? {} : { encodedBody: declaration.encodedClaim }),
                     credentials,
                     ...(operationSignal ? { operationSignal } : {}),
                     parseError: (value, status) => {

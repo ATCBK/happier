@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { getMachineContributionRegistryProjectionRevision, subscribeMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 
 import {
     getMachineCapabilitiesSnapshot,
@@ -13,28 +14,42 @@ import {
 export function useMachinesCapabilitySnapshots(
     serverId: string,
     machineIds: readonly string[],
+    accountId?: string | null,
 ): ReadonlyMap<string, MachineCapabilitiesSnapshot | null> {
     const key = [...new Set(machineIds)].join('\u0000');
     const lastRef = React.useRef<ReadonlyMap<string, MachineCapabilitiesSnapshot | null>>(new Map());
+    const scopeKey = JSON.stringify([serverId, accountId ?? null]);
+    const lastScopeRef = React.useRef(scopeKey);
+    const subscribeRevisions = React.useCallback((listener: () => void) => {
+        const disposers = (key ? key.split('\u0000') : []).map(machineId => subscribeMachineContributionRegistryProjectionInvalidation({ serverId, machineId }, listener));
+        return () => disposers.forEach(dispose => dispose());
+    }, [key, serverId]);
+    const readRevisions = React.useCallback(() => JSON.stringify((key ? key.split('\u0000') : []).map(machineId =>
+        getMachineContributionRegistryProjectionRevision({ serverId, machineId }))), [key, serverId]);
+    const revisions = React.useSyncExternalStore(subscribeRevisions, readRevisions, readRevisions);
     const subscribe = React.useCallback((listener: () => void) => {
         const ids = key ? key.split('\u0000') : [];
-        const unsubscribes = ids.map((id) => subscribeMachineCapabilitiesCacheState(id, serverId, null, listener));
+        const unsubscribes = ids.map((id) => subscribeMachineCapabilitiesCacheState(id, serverId,
+            getMachineContributionRegistryProjectionRevision({ serverId, machineId: id }) || null, listener, accountId));
         return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-    }, [key, serverId]);
+    }, [accountId, key, revisions, serverId]);
     const getSnapshot = React.useCallback(() => {
         const ids = key ? key.split('\u0000') : [];
         const previous = lastRef.current;
         let changed = previous.size !== ids.length;
         const next = new Map<string, MachineCapabilitiesSnapshot | null>();
         for (const id of ids) {
-            const snapshot = getMachineCapabilitiesSnapshot(id, serverId);
+            const snapshot = getMachineCapabilitiesSnapshot(id, serverId,
+                getMachineContributionRegistryProjectionRevision({ serverId, machineId: id }) || null, accountId)
+                ?? (lastScopeRef.current === scopeKey ? previous.get(id) ?? null : null);
             next.set(id, snapshot);
             if (previous.get(id) !== snapshot) changed = true;
         }
         if (!changed) return previous;
+        lastScopeRef.current = scopeKey;
         lastRef.current = next;
         return next;
-    }, [key, serverId]);
+    }, [accountId, key, revisions, scopeKey, serverId]);
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 

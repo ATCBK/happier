@@ -332,8 +332,8 @@ export type SessionControlActionInputById = {
         } | undefined;
     };
     readonly "session.archive": {
-        [x: string]: unknown;
         sessionId: string;
+        alsoArchiveReports?: boolean | undefined;
     };
     readonly "session.delete": {
         sessionId: string;
@@ -355,6 +355,41 @@ export type SessionControlActionInputById = {
         sessionId: SessionTargetV1<true>;
         live?: boolean | undefined;
         readiness?: boolean | undefined;
+        operation?: 'conversation' | 'credential' | undefined;
+        credentialPurpose?: {
+            consumer: {
+                pluginId: string;
+                localId: string;
+            };
+            purpose: string;
+        } | undefined;
+        credentialTeamSelection?: {
+            purpose: {
+                consumer: {
+                    pluginId: string;
+                    localId: string;
+                };
+                purpose: string;
+            };
+            teamId: string;
+            selection: {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            };
+        } | undefined;
     };
     readonly "session.work_state.get": {
         [x: string]: unknown;
@@ -460,17 +495,6 @@ export type SessionControlActionInputById = {
         } | {
             v: 2;
             bindingsByServiceId?: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -486,6 +510,17 @@ export type SessionControlActionInputById = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
             }> | undefined;
         };
         machineId: string;
@@ -677,7 +712,7 @@ export type SessionControlActionResultById = {
     readonly "session.turn.cancel": JsonValue;
     readonly "session.runtime.refresh": {
         ok: boolean;
-        status: 'restarted' | 'already_current' | 'dry_run_restartable' | 'not_found' | 'not_tracked' | 'not_daemon_started' | 'runner_not_active' | 'version_unknown' | 'runner_identity_changed' | 'busy' | 'missing_resume_snapshot' | 'missing_spawn_options' | 'unsupported_daemon' | 'ineligible' | 'stop_failed' | 'spawn_failed' | 'partial_failure';
+        status: 'restarted' | 'already_current' | 'dry_run_restartable' | 'not_found' | 'not_tracked' | 'not_daemon_started' | 'runner_not_active' | 'version_unknown' | 'runner_identity_changed' | 'busy' | 'missing_resume_snapshot' | 'missing_spawn_options' | 'unsupported_daemon' | 'restart_admission_unsupported' | 'ineligible' | 'stop_failed' | 'spawn_failed' | 'partial_failure';
         sessionId: string;
         previous?: {
             pid?: number | null | undefined;
@@ -691,7 +726,7 @@ export type SessionControlActionResultById = {
             entrypointVersion?: string | null | undefined;
             processCommandHash?: string | null | undefined;
         } | undefined;
-        reasonCode?: 'not_daemon_started' | 'missing_spawn_options' | 'not_remote_started' | 'not_active' | 'no_tracked_process' | 'missing_resume_identity' | 'missing_credentials' | 'unsupported_backend' | 'turn_in_progress' | 'approval_pending' | 'terminal_detached' | 'terminal_host_attached' | 'non_destructive_refresh_unsupported' | 'windows_hosted_runner' | 'restart_already_running' | 'current_entrypoint_unknown' | 'runner_entrypoint_unknown' | 'runner_generation_unattested' | 'unsupported_daemon_version' | null | undefined;
+        reasonCode?: 'not_daemon_started' | 'missing_spawn_options' | 'restart_admission_unsupported' | 'not_remote_started' | 'not_active' | 'no_tracked_process' | 'missing_resume_identity' | 'missing_credentials' | 'unsupported_backend' | 'turn_in_progress' | 'approval_pending' | 'terminal_detached' | 'terminal_host_attached' | 'non_destructive_refresh_unsupported' | 'windows_hosted_runner' | 'restart_already_running' | 'current_entrypoint_unknown' | 'runner_entrypoint_unknown' | 'runner_generation_unattested' | 'unsupported_daemon_version' | null | undefined;
         diagnostics?: Record<string, unknown> | undefined;
     };
     readonly "session.stop": JsonValue;
@@ -766,7 +801,31 @@ export type SessionControlActionResultById = {
     readonly "session.instructions.set": JsonValue;
     readonly "session.permission_mode.set": JsonValue;
     readonly "session.model.set": JsonValue;
-    readonly "session.archive": JsonValue;
+    readonly "session.archive": {
+        success: true;
+        sessionId: string;
+        archivedAt?: number | undefined;
+        reports?: ({
+            status: 'archived';
+            sessionId: string;
+            title?: string | undefined;
+        } | {
+            status: 'failed';
+            errorCode: string;
+            error: string;
+            sessionId: string;
+            title?: string | undefined;
+        } | {
+            status: 'approval_pending';
+            artifactId: string;
+            sessionId: string;
+            title?: string | undefined;
+        })[] | undefined;
+        reportsError?: {
+            errorCode: string;
+            error: string;
+        } | undefined;
+    };
     readonly "session.delete": {
         success: true;
     };
@@ -800,6 +859,7 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             archivedAt?: number | null | undefined;
             pendingCount?: number | undefined;
@@ -1176,6 +1236,7 @@ export type SessionControlActionResultById = {
                     kind: 'source_unavailable';
                 } | {
                     kind: 'broker_unavailable';
+                    reason?: 'application_unavailable' | 'model_unavailable' | undefined;
                 } | {
                     kind: 'update_required';
                 } | {
@@ -1267,6 +1328,7 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             pendingReviewRuns?: number | undefined;
         } | undefined;
@@ -1323,6 +1385,7 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            archived?: number | undefined;
                         } | undefined;
                         archivedAt?: number | null | undefined;
                         pendingCount?: number | undefined;
@@ -1699,6 +1762,7 @@ export type SessionControlActionResultById = {
                                 kind: 'source_unavailable';
                             } | {
                                 kind: 'broker_unavailable';
+                                reason?: 'application_unavailable' | 'model_unavailable' | undefined;
                             } | {
                                 kind: 'update_required';
                             } | {
@@ -1790,6 +1854,7 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            archived?: number | undefined;
                         } | undefined;
                         pendingReviewRuns?: number | undefined;
                     } | undefined;

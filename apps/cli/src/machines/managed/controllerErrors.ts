@@ -6,7 +6,7 @@ export class ManagedMachineControllerError extends Error {
         this.name = 'ManagedMachineControllerError';
     }
 }
-/** Definite provider refusal, distinct from policy, cancellation and uncertain IO. */
+/** Definite native refusal, including proof that the handler never started. */
 export class ManagedMachineNativeRefusal extends ManagedMachineControllerError {}
 /** A private pre-handler guard prevented native IO, not an unknown delivery. */
-export class ManagedMachineNativeEffectGuardRefusal extends ManagedMachineControllerError {}
+export class ManagedMachineNativeEffectGuardRefusal extends ManagedMachineNativeRefusal {}

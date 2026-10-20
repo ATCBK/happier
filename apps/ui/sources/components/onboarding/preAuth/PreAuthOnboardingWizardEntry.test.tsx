@@ -197,7 +197,7 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
     useLocalSetting: (key: string) => (localSettingsState as Record<string, unknown>)[key],
 }));
 

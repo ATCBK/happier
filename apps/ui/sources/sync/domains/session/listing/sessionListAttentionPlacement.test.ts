@@ -270,7 +270,7 @@ describe('unread attention placement', () => {
         ]);
     });
 
-    it('keeps a working session with unread activity in the working lane', () => {
+    it('places an unread session in attention ahead of background activity', () => {
         const source = createSource(['working-and-unread']);
         const resolveSessionRow = () => createRow({
             id: 'working-and-unread',
@@ -291,24 +291,22 @@ describe('unread attention placement', () => {
             options: { mode: 'global' },
             nowMs,
             resolveSessionRow,
-        })).toBeNull();
+        })).toMatchObject({
+            attentionItems: [
+                expect.objectContaining({ type: 'header', headerKind: 'attention' }),
+                expect.objectContaining({
+                    type: 'session',
+                    sessionId: 'working-and-unread',
+                    attentionPlacementReason: 'unread',
+                }),
+            ],
+        });
         expect(buildSessionListWorkingPlacement({
             source,
             options: { mode: 'global' },
             nowMs,
             resolveSessionRow,
-        })).toMatchObject({
-            promotedCount: 1,
-            workingItems: [
-                expect.objectContaining({ type: 'header', headerKind: 'working' }),
-                expect.objectContaining({
-                    type: 'session',
-                    sessionId: 'working-and-unread',
-                    groupKind: 'working',
-                    workingPlacementReason: 'working',
-                }),
-            ],
-        });
+        })).toBeNull();
     });
 
     it('keeps ready precedence for a row that is both ready and unread', () => {
@@ -333,6 +331,108 @@ describe('unread attention placement', () => {
         expect(result?.attentionItems[1]).toEqual(expect.objectContaining({
             sessionId: 'ready-and-unread',
             attentionPlacementReason: 'ready',
+        }));
+    });
+
+    it('places an unread completed turn in Ready ahead of background activity', () => {
+        // The foreground reply (often a question) is what waits on the person; background work
+        // only claims the row once that reply has been read.
+        const source = createSource(['ready-over-background']);
+        const row = createRow({
+            id: 'ready-over-background',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: nowMs - 10_000,
+            latestReadyEventAt: nowMs - 10_000,
+            seq: 9,
+            lastViewedSessionSeq: 4,
+            meaningfulActivityAt: nowMs - 10_500,
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: nowMs - 1_000,
+            runtimeActivityRevision: 1,
+        });
+
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row,
+        })?.attentionItems[1]).toEqual(expect.objectContaining({
+            sessionId: 'ready-over-background',
+            attentionPlacementReason: 'ready',
+        }));
+        expect(buildSessionListWorkingPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row,
+        })?.promotedCount ?? 0).toBe(0);
+
+        const read = { ...row, lastViewedSessionSeq: 9 };
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => read,
+        })).toBeNull();
+        expect(buildSessionListWorkingPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => read,
+        })?.promotedCount).toBe(1);
+    });
+
+    it('places a modern viewer attention reason ahead of background activity', () => {
+        const source = createSource(['modern-unread-background']);
+        const viewer = (needsAttention: boolean) => ({
+            readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: 100 },
+            relevance: { relevant: true, reasons: ['followed_by_me' as const] },
+            follow: { follows: true, notificationLevel: 'none' as const },
+            notification: { level: 'none' as const, source: 'preference' as const },
+            attention: needsAttention
+                ? { needsAttention: true, reasons: ['unread' as const], primary: 'unread' as const, presentation: 'full' as const }
+                : { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
+        });
+        const row = (needsAttention: boolean) => createRow({
+            id: 'modern-unread-background',
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: nowMs - 1_000,
+            runtimeActivityRevision: 1,
+            viewer: viewer(needsAttention),
+        });
+
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(true),
+        })?.attentionItems[1]).toEqual(expect.objectContaining({
+            sessionId: 'modern-unread-background',
+            attentionPlacementReason: 'unread',
+        }));
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(false),
+        })).toBeNull();
+        expect(buildSessionListWorkingPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(false),
+        })?.promotedCount).toBe(1);
+    });
+
+    it('keeps modern manual standing below background work and restores it when work settles', () => {
+        const source = createSource(['modern-standing-background']);
+        const row = (backgroundActive: boolean) => createRow({
+            id: 'modern-standing-background',
+            runtimeActivityState: backgroundActive ? 'active' : 'idle',
+            runtimeActivityActiveCount: backgroundActive ? 1 : 0,
+            runtimeActivityObservedAt: nowMs - 1_000,
+            runtimeActivityRevision: 1,
+            viewer: {
+                readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+                relevance: { relevant: true, reasons: ['followed_by_me'] },
+                follow: { follows: true, notificationLevel: 'none' },
+                notification: { level: 'none', source: 'preference' },
+                attention: { needsAttention: true, reasons: ['manual'], primary: 'manual', presentation: 'full' },
+            },
+        });
+
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(true),
+        })).toBeNull();
+        expect(buildSessionListWorkingPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(true),
+        })?.promotedCount).toBe(1);
+        expect(buildSessionListAttentionPlacement({
+            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(false),
+        })?.attentionItems[1]).toEqual(expect.objectContaining({
+            sessionId: 'modern-standing-background',
+            attentionPlacementReason: 'standing',
         }));
     });
 

@@ -68,12 +68,17 @@ function readMachineActivitySortValue(machine: Machine): number {
     return typeof machine.createdAt === 'number' && Number.isFinite(machine.createdAt) ? machine.createdAt : 0;
 }
 
-export function createAwaitedMachineArrivalBaseline(serverUrl: string, machines: readonly Machine[], serverId?: string): AwaitedMachineArrivalBaseline {
+export function createAwaitedMachineArrivalBaseline(
+    serverUrl: string,
+    machines: readonly Machine[],
+    serverId?: string,
+    presenceById?: Readonly<Record<string, MachinePresence>>,
+): AwaitedMachineArrivalBaseline {
     const knownIds = new Set<string>();
     const wasOnlineById = new Map<string, boolean>();
     for (const machine of machines) {
         knownIds.add(machine.id);
-        wasOnlineById.set(machine.id, isMachineOnline(machine));
+        wasOnlineById.set(machine.id, isMachineOnline(presenceById?.[machine.id] ?? machine));
     }
     return { serverUrl, ...(serverId ? { serverId } : {}), knownIds, wasOnlineById };
 }
@@ -137,7 +142,7 @@ export function useAwaitedMachineArrival(input: AwaitedMachineArrivalInput = {})
         // A new externally supplied baseline also starts a new wait while mounted.
         snapshotRef.current = { scope, baseline: provided };
     } else if (!snapshotRef.current || snapshotRef.current.scope !== scope) {
-        snapshotRef.current = machineListKnown ? { scope, baseline: createAwaitedMachineArrivalBaseline(serverUrl, machines, serverId ?? undefined) } : null;
+        snapshotRef.current = machineListKnown ? { scope, baseline: createAwaitedMachineArrivalBaseline(serverUrl, machines, serverId ?? undefined, presenceById) } : null;
     }
     const snapshot = enabled && snapshotRef.current?.scope === scope ? snapshotRef.current.baseline : null;
     const persistedBaseline = input.baseline ?? null;

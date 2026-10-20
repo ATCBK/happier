@@ -1,10 +1,26 @@
 import { directConnectionsStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
+import { combineClientEncryptionRequirements } from '@happier-dev/protocol/encryption/clientEncryptionRequirement';
 
 /** Account's searchable settings. Rows render their labels from these declarations. */
 export const ACCOUNT_SETTINGS = defineSettingsPage({
     pageId: 'account',
     sections: {
+        encryption: {
+            titleKey: 'terminal.encryption',
+            featureId: 'encryption.accountOptOut',
+            settings: {
+                requireE2ee: {
+                    storage: { scope: 'account', kind: 'owner', access: 'read_write',
+                        read: settings => combineClientEncryptionRequirements(settings.clientEncryptionRequirementV1,
+                            settings.clientEncryptionRequirementLocalV1) === 'require_e2ee',
+                        parse: value => typeof value === 'boolean' ? { success: true, value } : { success: false },
+                        // This client-owned intent also orders the scoped local minimum around the Account CAS.
+                        mutate: () => null,
+                    },
+                },
+            },
+        },
         signIn: {
             titleKey: 'settingsAccount.security',
             settings: {

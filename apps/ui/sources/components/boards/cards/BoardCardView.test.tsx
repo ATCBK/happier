@@ -2,11 +2,16 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storageStore';
+import { isSessionListRowVisible } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { buildBoardCards, type BoardCard } from '../model/boardCards';
 import { BoardCardView } from './BoardCardView';
 
+const hydrateSessionListRows = vi.hoisted(() => vi.fn(async (_addresses: readonly { serverId: string; sessionId: string }[]) => undefined));
+vi.mock('@/sync/sync', () => ({ sync: { hydrateSessionListRows } }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -147,6 +152,20 @@ describe('Board body facts', () => {
         expect(text.split('boards.kinds.session')).toHaveLength(2);
         expect(text.split('boards.card.unavailable')).toHaveLength(2);
         expect(text.split('boards.card.readFailed')).toHaveLength(2);
+    });
+    it('demands the content of a Session card nobody has decided yet for as long as the card is shown, so it is not left "Encrypted"', async () => {
+        storage.setState({ sessionListRowsByServerId: { 'home-a': { 's-undecided': createSessionListRenderableSessionFixture({
+            id: 's-undecided', encryptionMode: 'e2ee', encryptedContentAvailability: undefined }) } } });
+        const card: BoardCard = { key: 'undecided', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-undecided' } }, picked: true,
+            availability: 'ready', title: 'boards.kinds.session', status: { bucket: 'idle', tone: 'neutral', word: 'Idle' },
+            body: { kind: 'session', serverId: 'home-a', sessionId: 's-undecided' } };
+        hydrateSessionListRows.mockClear();
+        const screen = await renderScreen(<BoardCardView card={card} />);
+        expect(hydrateSessionListRows).toHaveBeenCalledWith([{ serverId: 'home-a', sessionId: 's-undecided' }]);
+        expect(isSessionListRowVisible('s-undecided', 'home-a')).toBe(true);
+        await screen.unmount();
+        expect(isSessionListRowVisible('s-undecided', 'home-a')).toBe(false);
+        storage.setState({ sessionListRowsByServerId: {} });
     });
     it('in a status group, keeps what a needs-you card waits for and drops a healthy word the group already says', async () => {
         const session = (word: string, tone: 'attention' | 'neutral', bucket: 'needs_you' | 'idle'): BoardCard => ({

@@ -18,6 +18,7 @@ import { computeActionInputApprovalDigestV1, isAutomationApprovalRequestSurface 
 import type { ActionId } from '../actions/actionIds.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
 import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
+import { ActionOperationCredentialUseV1Schema } from '../actions/actionExecutionResult.js';
 import { SessionMessageRefV1Schema } from '../sessions/messages/sessionMessageRefV1.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { SessionMessageAccountActorV1Schema } from '../sessions/messages/sessionMessageAccountActorV1.js';
@@ -144,7 +145,13 @@ export const ApprovalExecutionV2Schema = lazyZodSchema(() => z.strictObject({
   errorCode: z.optional(z.string().check(z.minLength(1))),
   error: z.optional(z.string().check(z.minLength(1))),
   details: z.optional(z.unknown()),
-}));
+  /** Host-stamped actual credential admissions, not plugin result data or replay authority. */
+  operationCredentialUses: z.optional(z.array(ActionOperationCredentialUseV1Schema)),
+}).check(z.superRefine((value, ctx) => {
+  if (value.effectAttempted === false && value.operationCredentialUses?.length) {
+    ctx.addIssue({ code: 'custom', path: ['operationCredentialUses'], message: 'Unattempted effects cannot claim credential use' });
+  }
+})));
 export type ApprovalExecutionV2 = z.infer<typeof ApprovalExecutionV2Schema>;
 
 /**

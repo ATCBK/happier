@@ -51,3 +51,30 @@ it('clears the surface-owned announcement when its real move settles without cha
         expect(announcement()).toBe('');
     } finally { receipt.resolve(); await move; await act(async () => { drag?.runtime.cancel('test-end'); }); }
 });
+
+
+it('forwards destination feedback keys for equivalent and different admitted positions', async () => {
+    const { useSessionSurfaceEntityDrag } = await import('./SessionSurfaceEntityDrag');
+    const drag = (await renderHook(() => useSessionSurfaceEntityDrag({
+        scope: SCOPE, isCurrent: () => true, title: 'Capacity',
+        getItem: () => ({ kind: 'home-section', scope: SCOPE, sectionId: 'capacity' }),
+        getNativeBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+        pointerDestination: (_bounds, pointer) => ({ index: pointer.y < 80 ? 1 : 2 }),
+        target: { acceptedKinds: ['home-section'],
+            resolve: context => ({ status: 'allowed', effect: { actionId: 'home.hub.layout.update',
+                input: context.destination ?? {}, preview: { verb: 'Move', target: 'Home' } } }),
+            getDestinationKey: (_context, admission) => JSON.stringify(admission.effect.input),
+            execute: async () => ({ status: 'applied' }),
+        },
+    }))).getCurrent();
+    try {
+        const carry = drag.runtime.begin(drag.sourceId);
+        carry?.move({ x: 50, y: 25 });
+        const key = drag.runtime.getSnapshot().destinationKey;
+        expect(key).toBe(JSON.stringify({ index: 1 }));
+        carry?.move({ x: 50, y: 60 });
+        expect(drag.runtime.getSnapshot().destinationKey).toBe(key);
+        carry?.move({ x: 50, y: 90 });
+        expect(drag.runtime.getSnapshot().destinationKey).toBe(JSON.stringify({ index: 2 }));
+    } finally { drag.runtime.cancel(); }
+});

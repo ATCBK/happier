@@ -45,7 +45,7 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
   };
   const verifyCurrent = async () => {
     assertCurrent();
-    if (context && !await context.isCurrent()) throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
+    if (context && !await context.isCurrent(input.signal)) throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
     assertCurrent();
   };
   const compatibilityHeaders = buildCurrentAccountStoredContentCompatibilityHttpHeaders();

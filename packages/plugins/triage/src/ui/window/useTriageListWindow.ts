@@ -37,6 +37,7 @@ import {
  * There is no timer and no poller here, and none anywhere beneath it.
  */
 export type TriageMountedListWindowV1 = Readonly<{
+  /** Includes completedAtMs from the freshness owner for the shell's read-age display. */
   snapshot: TriageListWindowSnapshotV1;
   readiness: PluginUiHostReadiness;
   /** Explicit user demand; the shell's **Refresh** control passes `manual`. */

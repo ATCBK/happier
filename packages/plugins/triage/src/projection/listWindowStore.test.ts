@@ -904,6 +904,7 @@ describe('the mounted PRs & Issues window store', () => {
 
     it('derives freshness from each lane completion rather than the final transport batch', async () => {
         const harness = createHarness({ configureSourceB: false });
+        const firstCompletedAtMs = harness.clock.nowMs;
         for (let index = 0; index < MAX_TRIAGE_LIST_SOURCE_BATCH_V1; index += 1) {
             const sourceInstanceId = `${String(index + 3).padStart(8, '0')}-1111-4111-8111-111111111111`;
             harness.control.sourceInstances.seed(toCorpusStoredValue(instanceRow(
@@ -925,7 +926,71 @@ describe('the mounted PRs & Issues window store', () => {
 
         expect(harness.state.agedEarlierBatches).toBe(true);
         expect(store.getSnapshot().freshness).toBe('stale');
+        expect(store.getSnapshot()).toHaveProperty('completedAtMs', firstCompletedAtMs);
         store.dispose();
+    });
+
+    it('publishes the oldest successful read time through pacing, failed refresh and recovery', async () => {
+        const harness = createHarness();
+        const store = createTriageListWindowStore({ readEntries: harness.readEntries, nowMs: () => harness.clock.nowMs });
+        try {
+            expect(store.getSnapshot()).not.toHaveProperty('completedAtMs');
+            const firstCompletedAtMs = harness.clock.nowMs;
+            await store.refresh('view');
+            expect(store.getSnapshot()).toHaveProperty('completedAtMs', firstCompletedAtMs);
+
+            harness.clock.nowMs += 1;
+            await store.refresh('view');
+            expect(store.getSnapshot()).toHaveProperty('completedAtMs', firstCompletedAtMs);
+
+            harness.state.sourceBFails = true;
+            harness.clock.nowMs += 1;
+            await store.refresh('manual');
+            expect(store.getSnapshot()).toMatchObject({ freshness: 'stale', completedAtMs: firstCompletedAtMs });
+            harness.state.enumerationRejected = true;
+            harness.clock.nowMs += 1;
+            await store.refresh('manual');
+            expect(store.getSnapshot()).toMatchObject({ freshness: 'stale', completedAtMs: firstCompletedAtMs });
+
+            harness.state.enumerationRejected = false;
+            harness.state.sourceBFails = false;
+            harness.clock.nowMs += TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS;
+            await store.refresh('manual');
+            expect(store.getSnapshot()).toMatchObject({ freshness: 'fresh', completedAtMs: harness.clock.nowMs });
+            harness.clock.nowMs += 1;
+            await store.refresh('manual');
+            expect(store.getSnapshot()).toHaveProperty('completedAtMs', harness.clock.nowMs);
+        } finally { store.dispose(); }
+    });
+
+    it('publishes a completed read even when the retained window content is unchanged', async () => {
+        const harness = createHarness({ configureSourceB: false,
+            scanA: async () => ({ kind: 'complete', observations: [], evidence: { kind: 'walkFinished' } }),
+        });
+        const store = createTriageListWindowStore({ readEntries: harness.readEntries, nowMs: () => harness.clock.nowMs });
+        try {
+            await store.refresh('view');
+            const retained = store.getSnapshot().window;
+            let lastPublished: number | undefined;
+            const unsubscribe = store.subscribe(() => { lastPublished = store.getSnapshot().completedAtMs; });
+            harness.clock.nowMs += 1;
+            await store.refresh('manual');
+            expect(store.getSnapshot().window).toBe(retained);
+            expect(lastPublished).toBe(harness.clock.nowMs);
+            unsubscribe();
+        } finally { store.dispose(); }
+    });
+
+    it('does not claim a completed list read for empty or never-readable configured lanes', async () => {
+        for (const empty of [true, false]) {
+            const harness = createHarness({ configureSourceA: !empty, configureSourceB: !empty, admitSourceB: false });
+            const store = createTriageListWindowStore({ readEntries: harness.readEntries, nowMs: () => harness.clock.nowMs });
+            try {
+                await store.refresh('view');
+                expect(store.getSnapshot().window).toBeDefined();
+                expect(store.getSnapshot()).not.toHaveProperty('completedAtMs');
+            } finally { store.dispose(); }
+        }
     });
 
     it('settles a repeated configured-source cursor instead of looping the mounted read', async () => {

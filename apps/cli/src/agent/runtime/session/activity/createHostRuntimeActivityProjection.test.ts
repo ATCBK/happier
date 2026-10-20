@@ -6,6 +6,44 @@ import {
 } from './createHostRuntimeActivityProjection';
 
 describe('createHostRuntimeActivityProjection', () => {
+  it('reads the native slot independently of execution runs and fences retired bindings', async () => {
+    const projection = createHostRuntimeActivityProjection({
+      sessionId: 'session-1', agentRuntimeApplicability: 'supported',
+      enqueueRegisteredSessionStateFieldMutation: async () => undefined,
+    });
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+    const runtime = projection.bindAgentRuntime({ applicability: 'supported' });
+    const runs = projection.bindExecutionRuns();
+    await runs.observeSnapshot({ state: 'active', activeCount: 3 });
+    await runtime.observeEvent({ kind: 'runtime-activity-snapshot', sessionId: 'session-1',
+      sequence: 1, emittedAtMs: 1, state: 'active', activeCount: 1 });
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+    await runtime.observeEvent({ kind: 'runtime-activity-snapshot', sessionId: 'session-1',
+      sequence: 2, emittedAtMs: 2, state: 'idle', activeCount: 0 });
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    await runtime.revoke();
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+    const rebound = projection.bindAgentRuntime({ applicability: 'supported' });
+    await runtime.observeEvent({ kind: 'runtime-activity-snapshot', sessionId: 'session-1',
+      sequence: 3, emittedAtMs: 3, state: 'active', activeCount: 1 });
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+    await rebound.observeEvent({ kind: 'runtime-activity-snapshot', sessionId: 'session-1',
+      sequence: 4, emittedAtMs: 4, state: 'active', activeCount: 1 });
+    projection.dispose();
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+  });
+
+  it('reads not-applicable native activity as idle even while execution runs are active', async () => {
+    const projection = createHostRuntimeActivityProjection({
+      sessionId: 'session-1', agentRuntimeApplicability: 'not_applicable',
+      enqueueRegisteredSessionStateFieldMutation: async () => undefined,
+    });
+    await projection.bindExecutionRuns().observeSnapshot({ state: 'active', activeCount: 1 });
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    projection.dispose();
+    expect(projection.readAgentRuntimeSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+  });
+
   it('keeps supported hosts unknown until the bound provider reports its first snapshot', async () => {
     const enqueue = vi.fn(async () => undefined);
     const projection = createHostRuntimeActivityProjection({

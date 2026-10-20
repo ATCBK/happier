@@ -56,6 +56,7 @@ const PAGE_GLYPHS: Readonly<Record<ProjectPageV1, IconName>> = {
   scripts: 'play',
   services: 'hard-drives',
   context: 'stack',
+  memory: 'book-bookmark',
 };
 
 /** A page's glyph: its tab and every reference back to that page draw the same mark. */
@@ -77,6 +78,8 @@ export function projectPageLabel(page: ProjectPageV1): string {
       return t('projects.pages.services');
     case 'context':
       return t('projects.pages.context');
+    case 'memory':
+      return t('projects.pages.memory');
   }
 }
 

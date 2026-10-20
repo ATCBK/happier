@@ -6,9 +6,25 @@ import { describe, expect, it } from 'vitest';
 import {
   createPluginFileSystemService,
   isCanonicalPathAuthorizedByPluginFileSystemScopes,
+  resolvePluginPathWithinRoots,
 } from './filesystem';
 
 describe('plugin invocation filesystem service', () => {
+  it.each([
+    ['COM¹', false], ['CONIN$', false], ['CONOUT$', false], ['CLOCK$', false], ['LPT².txt', false],
+    ['report?.txt', false], ['a<b.txt', false], ['report\u007f.txt', false],
+    ['COM1-not-device.txt', true], ['CONIN-report.txt', true], ['report.txt', true], ['a-b.txt', true],
+    ['cafe\u0301.txt', true],
+  ])('uses portable name admission without requiring NFC for workspace filename %s', (name, accepted) => {
+    const root = tmpdir();
+    const resolvePath = () => resolvePluginPathWithinRoots(
+      { pluginData: root, workspace: root, projects: new Map() },
+      { root: 'workspace', relativePath: name },
+    );
+    if (accepted) expect(resolvePath()).toBe(join(root, name));
+    else expect(resolvePath).toThrow(expect.objectContaining({ code: 'plugin_fs_path_denied' }));
+  });
+
   it('is the sole plugin filesystem service owner', async () => {
     const predecessorExists = await stat(
       new URL('../../context/fs.ts', import.meta.url),

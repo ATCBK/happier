@@ -65,6 +65,16 @@ describe('parseWindowsNetstatTcpListeners', () => {
 
 
 describe('Windows local services census projection', () => {
+    it('defers process census for listener-only demand without losing its later detailed observation', async () => {
+        const opened = vi.spyOn(fs, 'open');
+        const result = await readWindowsLocalServiceListeners({ execFile: async () => ({
+            stdout: 'TCP 127.0.0.1:5173 0.0.0.0:0 LISTENING 1234',
+        }), includeProcessFacts: false });
+        expect(result.listeners).toEqual([expect.objectContaining({ pid: 1234, port: 5173 })]);
+        expect(result.processes.size).toBe(0);
+        expect(opened).not.toHaveBeenCalled();
+        expect((await result.readProcessFacts?.())?.get(1234)).toMatchObject({ command: 'node vite' });
+    });
     it('enriches socket pids and their ancestors without a second process inventory', async () => {
         const execFile = async (command: string) => {
             if (command !== 'netstat.exe') throw new Error('Only socket discovery may spawn');

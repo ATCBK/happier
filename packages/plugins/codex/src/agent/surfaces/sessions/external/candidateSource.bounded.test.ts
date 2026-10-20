@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -531,7 +531,8 @@ describe('Codex rollout candidate paging bounds', () => {
     }
   });
 
-  it('returns a typed source-invalid result when the rollout set mutates between pages', async () => {
+  it.each(['newer file', 'older file', 'append', 'removed container', 'replaced container'] as const)(
+    'continues live rollout growth but fences container replacement/removal (%s)', async (change) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-candidate-generation-'));
     try {
       const codexHome = join(root, 'codex-home');
@@ -562,22 +563,54 @@ describe('Codex rollout candidate paging bounds', () => {
       }
 
       const addedSessionId = '33333333-3333-3333-3333-333333333333';
-      await writeFile(
-        join(dayDir, `rollout-2026-07-23T10-00-00-${addedSessionId}.jsonl`),
-        sessionMetaLine(addedSessionId, '2026-07-23T10:00:00.000Z'),
-        'utf8',
-      );
+      if (change === 'removed container' || change === 'replaced container') {
+        await rename(dayDir, `${dayDir}-old`);
+        if (change === 'replaced container') {
+          await mkdir(dayDir);
+          for (const [time, id] of [
+            ['08-00-00', '11111111-1111-1111-1111-111111111111'],
+            ['09-00-00', '22222222-2222-2222-2222-222222222222'],
+          ] as const) {
+            await writeFile(join(dayDir, `rollout-2026-07-23T${time}-${id}.jsonl`),
+              sessionMetaLine(id, `2026-07-23T${time.replaceAll('-', ':')}.000Z`), 'utf8');
+          }
+        }
+      } else if (change === 'append') {
+        await appendFile(join(dayDir, 'rollout-2026-07-23T08-00-00-11111111-1111-1111-1111-111111111111.jsonl'),
+          `${JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'live append' } })}\n`);
+      } else {
+        const time = change === 'newer file' ? '10-00-00' : '07-00-00';
+        await writeFile(join(dayDir, `rollout-2026-07-23T${time}-${addedSessionId}.jsonl`),
+          sessionMetaLine(addedSessionId, `2026-07-23T${time.replaceAll('-', ':')}.000Z`), 'utf8');
+        // Make the directory metadata change deterministic even on coarse filesystems.
+        await utimes(dayDir, new Date('2026-07-24'), new Date('2026-07-24'));
+      }
 
-      await expect(contribution.listCandidates({
+      const secondPage = await contribution.listCandidates({
         source,
         cursor: firstPage.value.nextCursor,
         maxItems: 1,
         searchMode: 'fast',
         ...invocation(),
-      })).resolves.toMatchObject({
-        ok: false,
-        code: 'source_invalid',
       });
+      if (change === 'removed container' || change === 'replaced container') {
+        expect(secondPage).toMatchObject({ ok: false, code: 'source_invalid' });
+        return;
+      }
+      if (!secondPage.ok) throw new Error(`Unexpected ${secondPage.code}: ${secondPage.message}`);
+      expect(secondPage.value.candidates.map(({ remoteSessionId }) => remoteSessionId))
+        .toEqual(['11111111-1111-1111-1111-111111111111']);
+      if (change === 'older file') {
+        if (!secondPage.value.nextCursor) throw new Error('Expected continuation to the newly discovered older rollout');
+        const thirdPage = await contribution.listCandidates({
+          source, cursor: secondPage.value.nextCursor, maxItems: 1, searchMode: 'fast', ...invocation(),
+        });
+        expect(thirdPage).toMatchObject({ ok: true, value: { nextCursor: null,
+          candidates: [{ remoteSessionId: addedSessionId }] } });
+      } else {
+        // Newer files above the traversal frontier are picked up on the next inventory.
+        expect(secondPage.value.nextCursor).toBeNull();
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

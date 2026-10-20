@@ -8,6 +8,27 @@ import { sha256 } from '@noble/hashes/sha2';
 import { encodeBase64 } from '../../crypto/base64.js';
 
 const publicFields = { v: z.literal(1), delivery: z.enum(['wake', 'next_turn']) };
+export const ExecutionRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ kind: z.literal('execution_run'), sessionId: asProtocolZod(SessionIdSchema),
+    runId: z.string().check(z.minLength(1)) }),
+  terminalEventId: z.string().check(z.minLength(1)),
+}));
+export const WorkflowRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ kind: z.literal('workflow_run'), runId: z.string().check(z.minLength(1)) }),
+  revision: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
+export const ExecutionRunFollowEventV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }));
+/** Workflow revisions retain live attention and committed progress as well as terminal outcomes. */
+export const WorkflowRunFollowEventV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped', 'update_posted']) }),
+  z.strictObject({ kind: z.literal('needs_you'), type: z.enum(['decision', 'approval', 'blocked']) }),
+]));
+export type WorkflowRunFollowEventV1 = z.infer<typeof WorkflowRunFollowEventV1Schema>;
+/** Shared source hint/notice shape. Neither transport can widen the original's source contract. */
+export const RunFollowOccurrenceV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ original: ExecutionRunFollowOriginalV1Schema, event: ExecutionRunFollowEventV1Schema }),
+  z.strictObject({ original: WorkflowRunFollowOriginalV1Schema, event: WorkflowRunFollowEventV1Schema }),
+]));
 /** Public notice-only intent. Private rule identity and match proof stay in server admission custody. */
 export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ...publicFields,
@@ -29,12 +50,28 @@ export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
     }
     if (ids.size) context.addIssue({ code: 'custom', path: ['requestEvents'], message: 'Every selected original request must be represented' });
   })),
+  z.strictObject({ ...publicFields,
+    original: ExecutionRunFollowOriginalV1Schema,
+    event: ExecutionRunFollowEventV1Schema,
+  }),
+  z.strictObject({ ...publicFields,
+    original: WorkflowRunFollowOriginalV1Schema,
+    event: WorkflowRunFollowEventV1Schema,
+  }),
 ]));
 export type SessionFollowInputV1 = z.infer<typeof SessionFollowInputV1Schema>;
+export type RunFollowOriginalV1 = Extract<SessionFollowInputV1['original'], { source: unknown }>;
+export function isRunFollowOriginalV1(original: SessionFollowInputV1['original']): original is RunFollowOriginalV1 {
+  return 'source' in original;
+}
 
 /** Indexed projection of an existing original identity, independent of routes, batches and publisher fences. */
 export function deriveSessionFollowOriginalOccurrenceKeyV1(original: SessionFollowInputV1['original']): string | null {
-  const identity = 'sourceMessage' in original
+  const identity = isRunFollowOriginalV1(original)
+    ? 'terminalEventId' in original
+      ? ['execution_run', original.source.sessionId, original.source.runId, original.terminalEventId]
+      : ['workflow_run', original.source.runId, original.revision]
+    : 'sourceMessage' in original
     ? ['message', original.sourceSessionId, original.sourceMessage.localId, original.sourceMessage.seq]
     : original.sourceRequests.requests.length === 1
       ? ['request', original.sourceSessionId, original.sourceRequests.requests[0]!.requestId,

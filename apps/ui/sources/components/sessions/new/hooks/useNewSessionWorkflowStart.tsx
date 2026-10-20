@@ -5,6 +5,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { createWorkflowRunActionChip } from '@/components/sessions/agentInput/sessionActions/createWorkflowRunActionChip';
 import { WorkflowStartPicker, type WorkflowStartSelection } from '@/components/workflows/run/WorkflowStartPicker';
 import { WorkflowRunComposer, type WorkflowRunComposerProps } from '@/components/workflows/run/WorkflowRunComposer';
+import { findWorkflowMainInput } from '@/components/workflows/presentation/workflowBuiltinInputPresentation';
 import { useWorkflowRunNowController } from '@/components/workflows/run/useWorkflowRunNowController';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -12,6 +13,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { NewSessionSimplePanelProps } from '../components/NewSessionSimplePanel';
@@ -60,7 +62,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
                 </Pressable> : null}
             </View> };
     }, [remove, select, selection]);
-    const main = selection?.definition.inputs.find((input) => input.valueType === 'string');
+    const main = selection ? findWorkflowMainInput(selection.definition.inputs) : undefined;
     const changeRawTextValues = React.useCallback((next: Readonly<Record<string, string>>) => {
         if (main && next[main.name] !== undefined) props.setSessionPrompt(next[main.name]);
         setRawTextValues(next);
@@ -83,7 +85,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
         });
         if (!admitted || !lifetime.isCurrent() || selectionRef.current !== selection) return;
         pendingRunId.current = null;
-        router.push({ pathname: '/workflows/runs/[runId]', params: { runId: admitted.run.id } } as never);
+        router.push(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
     }, [props.selectedMachineId, props.selectedPath, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
     const composer = selection === null ? null : <WorkflowRunComposer key={selection.id}
         surfaceGroup={params.surfaceGroup}

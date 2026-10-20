@@ -63,4 +63,12 @@ describe('workflow exact input and recovery precedence', () => {
       invocation: { ...invocation, recovery: { conversation: 'same_conversation', input: { kind: 'original' } } },
     })).toEqual({ kind: 'unavailable' });
   });
+
+  it('refuses an unmaterialized conversation input before either execution target can select a fresh conversation', () => {
+    for (const kind of ['session', 'detached_run'] as const) {
+      expect(resolveWorkflowConversationSelection({ runId: 'workflow-run', invocation,
+        execution: { conversation: { kind: 'input', name: 'selected-session' } }, executionTarget: { kind },
+      })).toEqual({ kind: 'unavailable' });
+    }
+  });
 });

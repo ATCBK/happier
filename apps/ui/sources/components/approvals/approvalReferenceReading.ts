@@ -106,6 +106,14 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const workspaceMachineId = workspaceRefId ? workspaceRefs.find((ref) => ref.id === workspaceRefId)?.machineId ?? '' : '';
     const workspaceMachineNames = useMachineDisplayNamesById(workspaceMachineId ? [workspaceMachineId] : []);
     const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRefs, workspaceMachineNames, approvalServerId ?? undefined) : null;
+    const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
+    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
+        managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
+        syncLink, workspace });
+}
+
+/** The managed row and its enrolled Machine behind a managed reference, read in the reference's own Home. */
+function useManagedReferenceSources(reference: ApprovalReference | undefined, approvalServerId: string | null) {
     const managedServerId = reference?.kind === 'managedMachine' && isSameApprovalHome(reference.homeId, approvalServerId)
         ? approvalServerId : null;
     const managed = useManagedMachineInventory(managedServerId ? [managedServerId] : [],
@@ -113,9 +121,22 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const managedMachine = managedServerId ? managed.machinesByServerId[managedServerId]?.find(row =>
         reference?.kind === 'managedMachine' && row.id === reference.id && row.homeId === reference.homeId) : undefined;
     const managedEnrolledMachine = useServerScopedMachine(managedServerId, managedMachine?.enrolledMachineId ?? '');
-    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
-        managedMachine, managedEnrolledMachine, managedMachineLoading: managed.loading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
-        syncLink, workspace });
+    return { managedMachine, managedEnrolledMachine, managedMachineLoading: managed.loading };
+}
+
+/** The managed guest's name: its enrolled Machine's current display name, else the launch name it was created with. */
+function readManagedMachineName(sources: Pick<ApprovalReferenceSources, 'managedMachine' | 'managedEnrolledMachine'>): string | undefined {
+    return getMachineDisplayName(sources.managedEnrolledMachine) ?? sources.managedMachine?.launch.name.trim();
+}
+
+/**
+ * The name of a managed guest by its managed id, for a surface about it that is not an approval (an Action
+ * operation runs on the controller but concerns the guest). Null until the guest is read.
+ */
+export function useManagedMachineName(serverId: string | null, managedId: string | null): string | null {
+    const homeId = serverId ? getServerProfileById(serverId)?.serverIdentityId : undefined;
+    const sources = useManagedReferenceSources(homeId && managedId ? { kind: 'managedMachine', id: managedId, homeId } : undefined, serverId);
+    return readManagedMachineName(sources) || null;
 }
 
 type ApprovalReferenceSources = {
@@ -142,7 +163,7 @@ type ApprovalReferenceSources = {
 function resolveApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null, sources: ApprovalReferenceSources): ApprovalReferenceReading {
     const { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations } = sources;
     if (reference?.kind === 'managedMachine') {
-        const title = getMachineDisplayName(sources.managedEnrolledMachine) ?? sources.managedMachine?.launch.name.trim();
+        const title = readManagedMachineName(sources);
         return { text: title || t('contextBar.machine'), named: true, subject: 'managedMachine',
             ...(sources.managedMachineLoading && !title ? { resolving: true } : {}) };
     }

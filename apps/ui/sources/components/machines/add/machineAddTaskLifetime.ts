@@ -1,6 +1,6 @@
 import { t } from '@/text';
 import { storage } from '@/sync/domains/state/storageStore';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { createAwaitedMachineArrivalBaseline } from '@/components/onboarding/detection/useAwaitedMachineArrival';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
@@ -15,8 +15,10 @@ export function hasRunningMachineAddTask(): boolean {
 
 export function beginMachineAddWatch(serverId: string, path: MachineAddPathId): void {
     const profile = getServerProfileById(serverId);
-    const machines = storage.getState().machineListByServerId[serverId];
-    const baseline = profile && Array.isArray(machines) ? createAwaitedMachineArrivalBaseline(profile.serverUrl, machines, serverId) : null;
+    const state = storage.getState();
+    const machines = state.machineListByServerId[serverId];
+    const presence = state.machinePresenceByServerId[resolveServerProfileScopeIdForIdentifier(serverId)];
+    const baseline = profile && Array.isArray(machines) ? createAwaitedMachineArrivalBaseline(profile.serverUrl, machines, serverId, presence) : null;
     updateMachineAddFlowDraft((draft) => draft.startedAtMs !== null ? draft : { ...draft, serverId, path, baseline, startedAtMs: Date.now() });
 }
 

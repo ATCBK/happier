@@ -87,6 +87,7 @@ export type WorkflowCoordinatorInvocation = Readonly<{
   resultProvenance?: WorkflowProgressEnvelopeV1['resultProvenance'];
   lifecycle: WorkflowInvocationLifecycleV1;
   result?: WorkflowJsonValue;
+  replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'];
   usage?: WorkflowUsageV1;
   reason?: string;
   reasonMessage?: string;
@@ -138,6 +139,7 @@ export type WorkflowCoordinatorStore = Readonly<{
     review?: WorkflowProgressEnvelopeV1['review'];
     resultProvenance?: WorkflowProgressEnvelopeV1['resultProvenance'];
     result?: WorkflowJsonValue;
+    replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'];
     usage?: WorkflowUsageV1;
     /** Private invocation-scoped request state; never a selected step result. */
     interaction?: WorkflowJsonValue;
@@ -170,7 +172,7 @@ export type WorkflowCoordinatorStore = Readonly<{
   readControl: (runId: string) => Promise<'running' | 'pause_requested' | 'cancel_requested'>;
 }>;
 
-export type WorkflowStepExecutionResult =
+export type WorkflowStepExecutionResult = (
   | Readonly<{
       kind: 'completed';
       result?: WorkflowJsonValue;
@@ -181,7 +183,8 @@ export type WorkflowStepExecutionResult =
   | Readonly<{ kind: 'failed'; code: string; message?: string; reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details']; runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1']; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'needs_attention'; code: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
-  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>;
+  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>
+) & Readonly<{ replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'] }>;
 
 export type WorkflowStepExecutor = (params: Readonly<{
   runId: string;
@@ -852,6 +855,8 @@ type WorkflowCoordinatorDependencies = Readonly<{
   allocateInvocationRecordId?: () => string;
   rootInvocationRecordId?: string;
   onReviewEntered?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
+  /** Publish accepted leaf output; replay repairs its external acknowledgement without executing again. */
+  onInvocationCompleted?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
 }>;
 
 export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies): Readonly<{
@@ -2076,6 +2081,7 @@ async function executeStepBlock(
       });
     }
     const result = existing.result ?? null;
+    await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: existing });
     return result;
   }
   if (existing) {
@@ -2473,7 +2479,8 @@ async function executeStepBlock(
             observation: { kind: 'failed', code: error.code } }) === 'waiting_for_review') {
             const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: error.code,
               ...(error.resultFailureReason ? { reasonMessage: error.resultFailureReason } : {}),
-              ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+              ...(execution.usage ? { usage: execution.usage } : {}),
+              ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
               nativeTerminalCommitted = true;
               releaseAdmission();
             });
@@ -2486,6 +2493,7 @@ async function executeStepBlock(
             reason: error.code,
             ...(error.resultFailureReason ? { reasonMessage: error.resultFailureReason } : {}),
             ...(execution.usage ? { usage: execution.usage } : {}),
+            ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
           });
           nativeTerminalCommitted = true;
         }
@@ -2495,21 +2503,24 @@ async function executeStepBlock(
         isGeneration: isReviewGeneration, inputCompleted: true, observation: { kind: 'completed' } }) === 'waiting_for_review') {
         const row = await enterReview({ key, lifecycle: 'waiting_for_review', result,
           review: { resultSource: { kind: 'execution_input' } },
-          ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+          ...(execution.usage ? { usage: execution.usage } : {}),
+          ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
           nativeTerminalCommitted = true;
           releaseAdmission();
         });
         await awaitReviewedInvocation(row, context);
         return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
       }
-      await context.deps.store.commitFact({
+      const completed = await context.deps.store.commitFact({
         key,
         lifecycle: 'completed',
         result,
         ...(isReviewGeneration ? { review: { resultSource: { kind: 'execution_input' as const } } } : {}),
         ...(execution.usage ? { usage: execution.usage } : {}),
+        ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
       });
       nativeTerminalCommitted = true;
+      await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: completed });
       return result;
     }
     const generationContinuationRefused = execution.kind === 'needs_attention' && !rejoining && !durableExecution
@@ -2521,7 +2532,8 @@ async function executeStepBlock(
         ...(execution.kind === 'failed' && execution.runtimeIssueV1 ? { runtimeIssueV1: execution.runtimeIssueV1 } : {}),
         ...(execution.kind === 'failed' && execution.reasonDetails ? { reasonDetails: execution.reasonDetails } : {}),
         ...(execution.kind === 'failed' && execution.message !== undefined ? { reasonMessage: execution.message } : {}),
-        ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+        ...(execution.usage ? { usage: execution.usage } : {}),
+        ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
         nativeTerminalCommitted = true;
         releaseAdmission();
       });
@@ -2577,6 +2589,7 @@ async function executeStepBlock(
       ...(execution.kind === 'failed' && execution.message !== undefined
         ? { reasonMessage: execution.message } : {}),
       ...(execution.usage ? { usage: execution.usage } : {}),
+      ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
     });
     nativeTerminalCommitted = execution.kind === 'failed' || execution.kind === 'cancelled';
     if (authorizationRevoked && execution.kind === 'cancelled') {

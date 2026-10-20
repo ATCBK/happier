@@ -317,7 +317,7 @@ export function resolveActivityInteractionCommand(params: Readonly<{
             runId: parsed.workflowRun.runId,
             serverId: target.serverId,
             serverUrl: target.serverUrl ?? parsed.serverUrl ?? null,
-            route: createWorkflowRunRoute(parsed.workflowRun.runId),
+            route: createWorkflowRunRoute(parsed.workflowRun.runId, target.serverId),
         };
     }
 

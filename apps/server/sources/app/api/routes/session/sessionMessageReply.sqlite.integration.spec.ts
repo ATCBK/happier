@@ -23,6 +23,7 @@ import { enqueuePendingMessageByAuthenticatedMachine, updatePendingMessage, send
 import type { SessionInputSettlementValidationV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { buildTrustedHostSessionInputAdmissionV1, withSessionInputRequestV1, withSessionInputAuthorityV1, settleSessionInputRequestV1,
+    withSessionInputRequest, withSessionInputAuthority, settleSessionInputRequestV2, deriveWorkflowSessionInputLocalIdV2,
     settleSessionMessageProvenanceV1, SESSION_MESSAGE_PROVENANCE_META_KEY,
     type SessionInputRequestV1, SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
@@ -51,6 +52,65 @@ describe('original Session input reply custody', () => {
         await getOrCreateServerIdentityId();
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(['pass', 'answer'] as const)('retains a Workflow V2 %s at the original input through retirement and final replay', async outcomeKind => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), installationId: randomUUID(), accountId: account.id,
+            metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] }, sessionMessageReply: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1 } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: account.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        const workflow = { purpose: 'invocation', runId: 'workflow-run', invocationRecordId: randomUUID() } as const;
+        const request = { v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow, permission: {}, replyIntent: { mode: 'wait' } } as const;
+        const localId = deriveWorkflowSessionInputLocalIdV2(workflow);
+        const content = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Review the proposal' },
+            meta: withSessionInputRequest({}, request) } };
+        const admission = { accountId: account.id, sourceMachineId: machine.id, targetMachineId: machine.id, sessionId: session.id,
+            localId, content, reply: { mode: 'wait' as const }, requestedAction: { v: 1 as const, kind: 'enqueue' as const } };
+        expect(await enqueuePendingMessageByAuthenticatedMachine(admission)).toEqual({ status: 'accepted', localId });
+        const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } });
+        const authority = settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: pending.inputAdmissionReceipt });
+        const input = await inTx(async tx => {
+            const committed = await createSessionMessageFromPending(tx, { sessionId: session.id, sessionEncryptionMode: 'plain', storagePolicy: 'optional',
+                localId, content: { ...content, v: { ...content.v, meta: withSessionInputAuthority({}, authority) } }, messageRole: 'user',
+                requestContentForEquality: content, inputAdmissionReceipt: SessionInputAdmissionReceiptV1Schema.parse(pending.inputAdmissionReceipt),
+                pendingRequestedAction: admission.requestedAction });
+            if (!committed.ok) throw new Error('Workflow input materialization failed');
+            await tx.sessionPendingMessage.delete({ where: { id: pending.id } });
+            return committed.message;
+        });
+        const turnId = randomUUID();
+        expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: { v: 1, sessionId: session.id,
+            turnId, mutationId: randomUUID(), action: 'begin', observedAt: Date.now(), transcriptAnchors: { userMessageSeqs: [input.seq] } } })).toMatchObject({ ok: true });
+        // Explicit fulfillment uses the Session publisher; the Machine only recovers disposition.
+        const socket = createAuthenticatedFakeSocket();
+        sessionUpdateHandler(account.id, socket as never, { connectionType: 'session-scoped', socket, userId: account.id, sessionId: session.id } as never,
+            { presence: createSessionPublisherPresence(), binding: { accountId: account.id, machineId: machine.id, sessionId: session.id } });
+        await getSocketHandler(socket, 'session-runtime-activity-snapshot')({ sessionId: session.id, mutationId: randomUUID(), snapshot: { state: 'idle', activeCount: 0 } }, () => {});
+        if (outcomeKind === 'pass') {
+            let response: unknown;
+            await getSocketHandler(socket, SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1)({ v: 1, sessionId: session.id,
+                requestSessionId: session.id, requestLocalId: localId, operation: { kind: 'fulfill', turnId, outcome: { kind: 'pass' } } },
+            (value: unknown) => { response = value; });
+            expect(response).toMatchObject({ ok: true, progress: { outcome: { kind: 'pass' } } });
+        }
+        const final = await db.sessionMessage.create({ data: { sessionId: session.id, seq: input.seq + 1, messageRole: 'agent',
+            content: { t: 'plain', v: { text: 'Exact final answer' } } } });
+        const terminal = { v: 1 as const, sessionId: session.id, turnId, mutationId: randomUUID(), action: 'complete' as const, observedAt: Date.now() + 1,
+            transcriptAnchors: { startSeqInclusive: input.seq, endSeqInclusive: final.seq, finalAssistantMessageSeq: final.seq } };
+        expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });
+        await withAuthenticatedTestApp(registerSessionMessageRoutes, async app => {
+            const url = `/v2/sessions/${session.id}/messages/by-local-id/${localId}/reply`;
+            const headers = { 'x-test-user-id': account.id };
+            const expected = outcomeKind === 'pass' ? { kind: 'pass' } : { kind: 'answer', result: { sessionId: session.id, messageId: final.id } };
+            expect((await app.inject({ method: 'GET', url, headers })).json()).toMatchObject({ status: 'available', progress: { mode: 'wait', acceptedTurnId: turnId, outcome: expected } });
+            expect((await app.inject({ method: 'POST', url, headers, payload: { kind: 'inline' } })).json()).toMatchObject({ ok: true, progress: { disposition: 'inline', outcome: expected } });
+            expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });
+            expect((await app.inject({ method: 'GET', url, headers })).json()).toMatchObject({ progress: { disposition: 'inline', outcome: expected } });
+        });
+    });
 
     it('preserves the human Ask root through a non-counting return and its next autonomous child', async () => {
         const keys = tweetnacl.box.keyPair();

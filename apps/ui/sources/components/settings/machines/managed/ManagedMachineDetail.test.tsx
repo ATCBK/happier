@@ -1501,7 +1501,7 @@ describe('managed Machine detail', () => {
         expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.policy.retention).toEqual(outcome === 'saved'
             ? { kind: 'unused', effect: 'stop', afterMs } : authored.retention);
     });
-    it.each(['enrolled-failure', 'enrolled-activation-failure', 'controller-restart', 'enrolled-observation-unavailable'] as const)('keeps one native Check now and same-resource recovery through Ask with %s operation history', async basis => {
+    it.each(['enrolled-failure', 'enrolled-activation-failure', 'enrolled-retention-failure', 'controller-restart', 'enrolled-observation-unavailable'] as const)('keeps one native Check now and same-resource recovery through Ask with %s operation history', async basis => {
         const homeId = `srv_bootstrap_${basis}`;
         const target = await upsertAndActivateServer({ serverUrl: `https://managed-bootstrap-${basis}.test`, scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, homeId);
@@ -1511,7 +1511,7 @@ describe('managed Machine detail', () => {
         storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({
             id: controller.machineId, installationId: controller.installationId, updatedAt: Date.now(),
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        }), ...(basis === 'enrolled-activation-failure' ? [createMachineFixture({ id: 'enrolled-guest', installationId: 'guest-installation',
+        }), ...(basis === 'enrolled-activation-failure' || basis === 'enrolled-retention-failure' ? [createMachineFixture({ id: 'enrolled-guest', installationId: 'guest-installation',
             active: false, activeAt: 1, updatedAt: Date.now(),
             daemonState: { status: 'running', startupSource: 'background-service', serviceManaged: true },
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
@@ -1529,13 +1529,16 @@ describe('managed Machine detail', () => {
             resource: { contributionRef: provider, schemaVersion: 1, value: { nativeId: 'same-paid-resource' } },
             desired: 'start', desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
         const failed: ActionOperationSnapshotV1 = { version: 1, operationId: 'boot-failure', revision: 2,
-            actionId: 'machines.managed.bootstrap.retry', state: 'failed', scope: { accountId: 'owner', machineId: controller.machineId },
+            actionId: basis === 'enrolled-retention-failure' ? 'machines.managed.power.set' : 'machines.managed.bootstrap.retry', state: 'failed', scope: { accountId: 'owner', machineId: controller.machineId },
             title: 'Create managed machine', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'unsupported',
-            error: basis === 'enrolled-activation-failure' ? { errorCode: 'action_failed',
+            ...(basis === 'enrolled-retention-failure' ? { progress: { kind: 'phase' as const,
+                phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' } } : {}),
+            error: basis === 'enrolled-retention-failure' ? { errorCode: 'managed_controller_request_failed', error: 'managed_controller_request_failed' }
+                : basis === 'enrolled-activation-failure' ? { errorCode: 'action_failed',
                 error: 'Background service install completed, but the expected background service did not become the active daemon for the selected Home within 30000ms. Run `happier service status` to inspect the active owner and system service state.' }
                 : { errorCode: 'native_boot_unconfirmed', error: 'Native boot configuration was not confirmed' },
             domainRef: { kind: 'managedMachine', id: machine.id, resource: machine.resource, controller } };
-        operationRpcBoundary.answer = { items: basis === 'enrolled-failure' || basis === 'enrolled-activation-failure' ? [failed] : [], nextCursor: null };
+        operationRpcBoundary.answer = { items: basis === 'enrolled-failure' || basis === 'enrolled-activation-failure' || basis === 'enrolled-retention-failure' ? [failed] : [], nextCursor: null };
         const retries: unknown[] = [];
         const inspections: unknown[] = [];
         setRuntimeFetch(async (input, init) => {
@@ -1568,7 +1571,7 @@ describe('managed Machine detail', () => {
         expect(screen.tree.findAllByType(ManagedCreationProgress), screen.getTextContent()).toHaveLength(1);
         expect(operationRpcBoundary.requests).toContainEqual({ serverId, accountId: 'owner', machineId: controller.machineId,
             method: ACTION_OPERATION_RPC_METHODS_V2.list });
-        if (basis === 'enrolled-activation-failure') {
+        if (basis === 'enrolled-activation-failure' || basis === 'enrolled-retention-failure') {
             expect(screen.findByTestId('managed-machine.installation-error')).not.toBeNull();
             const guest = storage.getState().machineListByServerId[serverId]!.find(candidate => candidate.id === 'enrolled-guest')!;
             await act(async () => storage.getState().applyMachines([{ ...guest, active: true, activeAt: Date.now(), updatedAt: Date.now() }], false,

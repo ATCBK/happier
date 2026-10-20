@@ -2,6 +2,7 @@ import type { StoredCredentials } from '@/persistence';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import type {
     SessionEncryptionContext,
     SessionStoredContentEncryptionMode,
@@ -92,6 +93,26 @@ export async function resolveSessionTransportContext(params: Readonly<{
             ? { authorizationHeaders: currentnessAuthorizationHeaders }
             : {}),
         ...(params.signal ? { signal: params.signal } : {}),
+    }).catch(error => {
+        if (params.signal?.aborted) throw error;
+        // The reader retains the transport cause. Translate it once at this
+        // shared adapter so CLI, signed Actions and direct Session operations
+        // expose the established control codes before generic normalization.
+        const { kind } = classifyServerEndpointError(error);
+        if (kind === 'auth_failed') {
+            throw Object.assign(new Error('Account encryption currentness authentication failed', { cause: error }), {
+                code: 'not_authenticated',
+            });
+        }
+        if (kind === 'network' || kind === 'timeout' || kind === 'server_error'
+            || kind === 'dependency_unavailable' || kind === 'rate_limited') {
+            throw Object.assign(new Error('Account encryption currentness Home is unavailable', { cause: error }), {
+                code: 'server_unreachable',
+            });
+        }
+        // Invalid successful responses and domain refusals retain their own
+        // evidence; they do not establish Home unreachability or missing keys.
+        throw error;
     }).then(currentness => { phase('account_currentness', resolutionStartedAt); return currentness; });
     const lookupStartedAt = performance.now();
     const sessionLookup = resolveSessionIdOrPrefix({

@@ -577,8 +577,24 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     async requestPluginChange(request, options) {
       if (request.kind === 'development' && request.observedRevision === undefined) {
         const registeredRootId = await realpath(request.sourceRootPath).catch(() => null);
-        if (registeredRootId && !baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
-          const observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+        if (registeredRootId && !options?.signal?.aborted && !baseChangeService.isQuiescing()
+          && !baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
+          let observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+          if (!observation) {
+            // Direct development installs enter the same custody owner as
+            // author submissions; its initial observation owns the review.
+            const registration = await developmentRoots!.control({
+              kind: 'registerExplicit', rootPath: registeredRootId,
+              ...(request.sdkRegistryOrigin ? { sdkRegistryOrigin: request.sdkRegistryOrigin } : {}),
+            });
+            if (baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
+              return await baseChangeService.requestPluginChange(request, options);
+            }
+            if (registration.kind === 'failed') {
+              return Object.freeze({ kind: 'failed' as const, code: registration.code, message: registration.message });
+            }
+            observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+          }
           if (observation) {
             return await baseChangeService.requestPluginChange({
               ...request,

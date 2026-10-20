@@ -5,8 +5,9 @@ import type { WorkItem, WorkProjection, WorkStatus } from './workProjection';
 /**
  * The Session and run producer for the neutral Work map (ORC §3.8 "Map", O11; lab `session-A2`,
  * `map-M1`): the lead at the root, each Session under the Session it reports to, and the workflows and
- * background runs the lead started under the lead. Every edge is one the Work projection already holds
- * (`manager`, or "this Session started it"); nothing is inferred from order, time or workspace.
+ * background runs the lead started under the lead. Every edge comes from the Work projection's manager
+ * ancestry (with archived intermediates folded out), or "this Session started it"; nothing is inferred
+ * from order, time or workspace.
  * The lead's node carries no state of its own, so it stays neutral whatever its reports need (S-6).
  */
 export type SessionWorkMapNodeDeclaration = HappierWorkMapNodeDeclaration & Readonly<{

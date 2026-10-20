@@ -6,6 +6,7 @@ import { resolveCliAcquisitionFailureMessage } from './cliAcquisitionPresentatio
  * Setup decisions and admission failures name their remedy in the user's language.
  */
 const SYSTEM_TASK_FAILURE_TRANSLATION_KEYS: Readonly<Record<string, TranslationKey>> = {
+    managed_controller_request_failed: 'managedMachines.detail.controllerRequestFailed',
     remote_cli_update_required: 'setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired',
     system_task_setup_in_progress: 'machine.thisComputer.setupAlreadyRunning',
     service_reconciliation_declined: 'machine.backgroundServicePrompt.replaceDeclined',

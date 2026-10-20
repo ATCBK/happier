@@ -10,11 +10,12 @@ import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/proje
 import type { BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
 
-export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'accountingSources'> & Readonly<{
-    rootKind: 'default' | 'configured' | 'materialized' | 'override';
+export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'accountingSources' | 'rootKind'> & Readonly<{
     /** Declared configured identity, independent of a runtime-resolved root. */
     configuredSourceKey?: string;
     error?: string;
+    /** Count only the paths the source already enumerated; no native-record read is admitted. */
+    discoveredFileCount?: number;
 }>;
 export type NativeUsageSourceBoundary = Readonly<{
     catalogEntry: AgentCatalogEntry | null;
@@ -55,6 +56,9 @@ export async function resolveNativeUsageSourceMetadata(input: Readonly<{
             root: resolved.value.accountingSource?.rootPath ?? resolved.value.transcriptMediaReadRoots?.[0] ?? null,
             supported: input.boundary.externalSessions.supportsAccounting,
             ...(resolved.value.accountingSource?.accountingSources ? { accountingSources: [...resolved.value.accountingSource.accountingSources] } : {}),
+            ...(resolved.value.accountingSource?.discoveredFileCount !== undefined ? {
+                discoveredFileCount: resolved.value.accountingSource.discoveredFileCount,
+            } : {}),
             rootKind: 'default',
         },
         metadata: resolved.value,

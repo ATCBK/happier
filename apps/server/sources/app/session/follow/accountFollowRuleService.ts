@@ -16,15 +16,12 @@ import type { SessionAccessAuthentication } from '@/app/session/access/sessionAc
 import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import { markSessionFollowsChangedInTx } from './changes';
-import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
+import type { AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { UserKvMutationConflictError } from '@/app/kv/kvMutate';
 
-export async function markAccountFollowRulesChangedInTx(tx: Tx, input: Readonly<{ accountId: string }>): Promise<number> {
-    await markSessionFollowsChangedInTx(tx, input);
-    const change = await tx.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: {
-        accountId: input.accountId, kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
-    } }, select: { cursor: true } });
-    return change.cursor;
+export async function markAccountFollowRulesChangedInTx(tx: Tx, input: Readonly<{ accountId: string }>): Promise<AccountChangePublication> {
+    return markSessionFollowsChangedInTx(tx, input);
 }
 
 export const accountFollowRuleRowDomain: ReservedAccountScopedKvRowDomain<SessionFollowRuleStoredRowV1> = {
@@ -202,7 +199,7 @@ export async function setAccountFollowRule(input: Scope & Readonly<{ ruleId: str
     const parsed = SetSessionFollowRuleRequestV1Schema.safeParse(input.mutation);
     if (!parsed.success) return { ok: false, error: 'invalid_parameters' };
     const mutation = parsed.data;
-    return inTx(async tx => {
+    return inTx(async (tx): Promise<RuleResult<{ rule: SessionFollowRuleV1 }>> => {
         const denied = await admitAccount(tx, input) ?? await admitReceiver(tx, input, mutation.receiver, true);
         if (denied) return { ok: false, error: denied };
         const current = await readAccountFollowRuleInTx(tx, input);
@@ -219,7 +216,7 @@ export async function setAccountFollowRule(input: Scope & Readonly<{ ruleId: str
         if (current.status !== 'present') {
             // Capture after entering the mutation's incumbent Account fence,
             // so waiting for that fence cannot turn old work into new history.
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
             if (fence.status === 'account_not_found') return { ok: false, error: 'account_inactive' };
             if (fence.status === 'account_inconsistent') return { ok: false, error: 'account_inconsistent' };
             inception = { createdAt: Date.now(), accountChangeCursor: fence.account.version };
@@ -233,11 +230,14 @@ export async function setAccountFollowRule(input: Scope & Readonly<{ ruleId: str
             markChanged: ({ tx: changeTx }) => markAccountFollowRulesChangedInTx(changeTx, input) });
         if (result.status === 'conflict') return { ok: false, error: 'version_conflict' };
         return result.status === 'updated' ? { ok: true, value: { rule: projectRule(input.ruleId, envelope) } } : failure(result);
+    }).catch((error: unknown) => {
+        if (error instanceof UserKvMutationConflictError) return { ok: false as const, error: 'version_conflict' as const };
+        throw error;
     });
 }
 /** Versioned deletion is Account-private and leaves a content-free tombstone. */
 export async function removeAccountFollowRule(input: Scope & Readonly<{ ruleId: string; receiver: FollowReceiverRefV1; expectedVersion: number }>): Promise<RuleResult<{ changed: boolean; version: number }>> {
-    return inTx(async tx => {
+    return inTx(async (tx): Promise<RuleResult<{ changed: boolean; version: number }>> => {
         const denied = await admitAccount(tx, input);
         if (denied) return { ok: false, error: denied };
         const row = await readAccountFollowRuleInTx(tx, input);
@@ -250,5 +250,8 @@ export async function removeAccountFollowRule(input: Scope & Readonly<{ ruleId: 
             markChanged: ({ tx: changeTx }) => markAccountFollowRulesChangedInTx(changeTx, input) });
         if (result.status === 'conflict') return { ok: false, error: 'version_conflict' };
         return result.status === 'updated' ? { ok: true, value: { changed: true, version: result.revision } } : failure(result);
+    }).catch((error: unknown) => {
+        if (error instanceof UserKvMutationConflictError) return { ok: false as const, error: 'version_conflict' as const };
+        throw error;
     });
 }

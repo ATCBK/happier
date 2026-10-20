@@ -107,6 +107,8 @@ import { getFavoriteModelRef } from '@/sync/domains/models/favoriteModelSelectio
 
 export { AgentContributedSettingsSection } from './AgentContributedSettingsSection';
 import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
+import { readMachineAdministrationTargetRouteParams } from '@/sync/domains/machines/administration/targetSelection';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 function resolveQualifiedAgentProjectionId(params: Readonly<{
     routeAgent: ExternalSessionsQualifiedAgent | null;
@@ -904,7 +906,9 @@ export const AgentSettingsScreen = React.memo(function AgentSettingsScreen() {
     const settings = useSettingsSelector((settings) => ({
         backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
     }));
-    const administrationTargetSelection = useAgentsAdministrationTargetSelection();
+    const administrationTargetSelection = useAgentsAdministrationTargetSelection(
+        params.machineId !== undefined || params.serverIdentityId !== undefined ? params : undefined,
+    );
     // "On your machines" lists the machines of the active server's Account.
     const activeServer = useActiveServerSnapshot();
     const rawAgentId = params.agentId;
@@ -921,20 +925,17 @@ export const AgentSettingsScreen = React.memo(function AgentSettingsScreen() {
     const hasQualifiedAgentRoute = routePluginId.length > 0;
 
     const recoveryInstallRequest = React.useMemo(() => {
-        const machineId = typeof params.machineId === 'string' ? params.machineId.trim() : '';
-        const serverIdentityId = typeof params.serverIdentityId === 'string'
-            ? params.serverIdentityId.trim()
-            : '';
+        const target = readMachineAdministrationTargetRouteParams(params);
         const installIntent =
             params.installIntent === 'update'
                 ? 'update'
                 : params.installIntent === 'install'
                     ? 'install'
                     : null;
-        if (!machineId || !serverIdentityId || !installIntent) {
+        if (!target || !installIntent) {
             return null;
         }
-        return { machineId, serverIdentityId, installIntent } as const;
+        return { ...target, installIntent } as const;
     }, [
         params.installIntent,
         params.machineId,
@@ -942,24 +943,13 @@ export const AgentSettingsScreen = React.memo(function AgentSettingsScreen() {
     ]);
     const recoveryInstallTarget = React.useMemo(() => {
         if (!recoveryInstallRequest) return null;
-        const candidate = administrationTargetSelection.candidates.find((entry) => (
-            entry.target.machineId === recoveryInstallRequest.machineId
-            && entry.target.serverIdentityId === recoveryInstallRequest.serverIdentityId
-        ));
-        return candidate
-            ? { target: candidate.target, installIntent: recoveryInstallRequest.installIntent }
+        const state = administrationTargetSelection.state;
+        if (state.kind !== 'online' && state.kind !== 'offline') return null;
+        return state.target.machineId === recoveryInstallRequest.machineId
+            && areServerProfileIdentifiersEquivalent(state.target.serverIdentityId, recoveryInstallRequest.serverIdentityId)
+            ? { target: state.target, installIntent: recoveryInstallRequest.installIntent }
             : null;
-    }, [administrationTargetSelection.candidates, recoveryInstallRequest]);
-    const recoveryInstallRequestKey = recoveryInstallTarget
-        ? `${recoveryInstallTarget.target.serverIdentityId}\u0000${recoveryInstallTarget.target.machineId}\u0000${recoveryInstallTarget.installIntent}`
-        : null;
-    const appliedRecoveryInstallRequestRef = React.useRef<string | null>(null);
-    React.useEffect(() => {
-        if (!recoveryInstallTarget || !recoveryInstallRequestKey) return;
-        if (appliedRecoveryInstallRequestRef.current === recoveryInstallRequestKey) return;
-        appliedRecoveryInstallRequestRef.current = recoveryInstallRequestKey;
-        administrationTargetSelection.selectTarget(recoveryInstallTarget.target);
-    }, [administrationTargetSelection, recoveryInstallRequestKey, recoveryInstallTarget]);
+    }, [administrationTargetSelection.state, recoveryInstallRequest]);
     const machineScope = useAgentsMachineScope(administrationTargetSelection);
     const executionTarget = machineScope.executionTarget;
     // An offline machine keeps its scope so its last known projection stays visible.

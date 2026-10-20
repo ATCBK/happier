@@ -245,7 +245,6 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
             <VirtualizedList
                 ref={props.listRef}
                 testID={testIDPrefix}
-                backendPreference="auto"
                 style={styles.scroll}
                 data={props.invocations}
                 keyExtractor={keyExtractor}

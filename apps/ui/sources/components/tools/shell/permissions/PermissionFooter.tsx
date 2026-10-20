@@ -1,5 +1,6 @@
 import { Typography } from '@/constants/Typography';
 import { McpAlwaysAllowDecision } from './McpAlwaysAllowDecision';
+import { PermissionAnswerUnconfirmedNotice } from './PermissionAnswerUnconfirmedNotice';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
@@ -27,7 +28,13 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
+    clearPermissionAnswerUnconfirmed,
+    isPermissionAnswerUnconfirmed,
+    markPermissionAnswerUnconfirmed,
+    permissionAnswerRequestKey,
+    readPermissionActionDisposition,
     recordPermissionActionFailure,
+    usePermissionAnswerUnconfirmed,
     type PermissionActionFailureKind,
     type PermissionActionFailureState,
 } from './permissionActionFailure';
@@ -112,6 +119,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         gap: theme.space.s6,
+    },
+    // The decisions stay visible but visibly withheld while an answer is unconfirmed.
+    buttonContainerWithheld: {
+        opacity: 0.45,
     },
     button: {
         justifyContent: 'center',
@@ -318,6 +329,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const [storedActionFailure, setStoredActionFailure] = useState<PermissionActionFailureDisplay | null>(null);
     const permissionActionInFlight = useRef<PermissionActionInFlight | null>(null);
     const isMounted = useRef(true);
+    const requestKey = permissionAnswerRequestKey(requestIdentity);
+    const answerUnconfirmedForRequest = usePermissionAnswerUnconfirmed(requestKey);
     const isCurrentRequestLoading = isSamePermissionRequest(loadingRequestIdentity, requestIdentity);
     const loadingButton = isCurrentRequestLoading ? storedLoadingButton : null;
     const loadingAllEdits = isCurrentRequestLoading && storedLoadingAllEdits;
@@ -340,6 +353,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
             isMounted.current = false;
         };
     }, []);
+
+    // The request settling is what ends the unconfirmed state; a new request id has its own key.
+    const requestPending = permission.status === 'pending';
+    React.useEffect(() => {
+        if (!requestPending) clearPermissionAnswerUnconfirmed(requestKey);
+    }, [requestPending, requestKey]);
     
     // A terminal outcome was decided by whoever was running at the time, so a
     // Session that later switched Agent must not re-label its history. A
@@ -469,6 +488,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         if (isSamePermissionRequest(permissionActionInFlight.current?.requestIdentity ?? null, requestIdentity)) {
             return;
         }
+        // An answer that may already be applied is never sent a second time blindly.
+        if (isPermissionAnswerUnconfirmed(requestKey)) return;
         const token = Symbol(action);
         permissionActionInFlight.current = {
             requestIdentity,
@@ -487,6 +508,9 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
             await operation();
             if (executionRun === undefined) markTranscriptPromptAnswered(source, permission.id);
         } catch (error) {
+            // The response may already be applied when its result was lost: withhold both decisions
+            // for this request, even if the footer that sent it is gone, instead of inviting a blind resend.
+            if (readPermissionActionDisposition(error) === 'outcomeUnknown') markPermissionAnswerUnconfirmed(requestKey);
             if (isMounted.current && permissionActionInFlight.current?.token === token) {
                 setStoredActionFailure((previousDisplay) => ({
                     requestIdentity,
@@ -688,6 +712,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const isApproved = permission.status === 'approved';
     const isDenied = permission.status === 'denied';
     const isPending = permission.status === 'pending';
+    const answerUnconfirmed = answerUnconfirmedForRequest && isPending;
     const isStopped = isDenied && permission.decision === 'abort';
     const isDeniedViaNo = isDenied && !isStopped;
 
@@ -826,7 +851,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const isCodexApprovedForSession = isCodexDecision && isApproved && permission.decision === 'approved_for_session';
     const isCodexApprovedExecPolicy = isCodexDecision && isApproved && permission.decision === 'approved_execpolicy_amendment';
     const isCodexAborted = isCodexDecision && isDenied && permission.decision === 'abort';
-    const actionFailureNode = actionFailure && isPending ? (
+    const actionFailureNode = answerUnconfirmed ? (
+        <PermissionAnswerUnconfirmedNotice
+            requestKey={requestKey}
+            requestId={permission.id}
+            actions={executionRun === undefined ? actions : null}
+            testIDPrefix="permission-footer"
+        />
+    ) : actionFailure && isPending ? (
         <View
             testID="permission-footer.action-error"
             accessibilityRole="alert"
@@ -851,14 +883,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     // Session-only grants, exec-policy amendments and stop have no equivalent
     // there, so only the neutral pair is offered.
     if (executionRun !== undefined) {
-        const actionsDisabled = !isPending || loadingButton !== null || executionRunAnswerPending;
+        const actionsDisabled = !isPending || answerUnconfirmed || loadingButton !== null || executionRunAnswerPending;
         const decisions = [
             { key: 'allow', onPress: handleApprove, label: t('common.yes'), pendingStyle: styles.buttonTextAllow, spinnerColor: styles.loadingIndicatorAllow.color },
             { key: 'deny', onPress: handleDeny, label: t('common.no'), pendingStyle: styles.buttonTextDeny, spinnerColor: styles.loadingIndicatorDeny.color },
         ] as const;
         return (
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
-                <View style={styles.buttonContainer}>
+                <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                     {decisions.map((decision) => (
                         <TouchableOpacity
                             key={decision.key}
@@ -900,10 +932,10 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     // Agent did not publish a recognized prompt protocol. A single explicit
     // denial keeps the request answerable without granting any authority.
     if (copy.protocol === 'unavailable') {
-        const actionsDisabled = !isPending || loadingButton !== null;
+        const actionsDisabled = !isPending || answerUnconfirmed || loadingButton !== null;
         return (
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
-                <View style={styles.buttonContainer}>
+                <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                     <TouchableOpacity
                         testID="permission-footer.deny"
                         ref={primaryAnswerRef}
@@ -953,10 +985,10 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
 
     // Render Codex-style decision buttons if the agent uses the Codex decision protocol.
     if (copy.protocol === 'codexDecision') {
-        const actionsDisabled = !isPending || loadingButton !== null || loadingForSession || loadingExecPolicy;
+        const actionsDisabled = !isPending || answerUnconfirmed || loadingButton !== null || loadingForSession || loadingExecPolicy;
         return (
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
-                <View style={styles.buttonContainer}>
+                <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                     {/* Decision protocol: Yes button */}
                     <TouchableOpacity
                         testID="permission-footer.allow"
@@ -1175,11 +1207,11 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         && typeof commandForShell === 'string'
         && isBroadShellGrantEligible(commandForShell)
         && Boolean(commandForShell.trim().split(/\s+/).filter(Boolean)[0]);
-    const primaryActionsDisabled = !isPending || loadingButton !== null || loadingAllEdits || loadingForSession;
+    const primaryActionsDisabled = !isPending || answerUnconfirmed || loadingButton !== null || loadingAllEdits || loadingForSession;
     const ruleActionsDisabled = primaryActionsDisabled || loadingForSessionPrefix || loadingForSessionCommandName;
     return (
         <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
-            <View style={styles.buttonContainer}>
+            <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                 <TouchableOpacity
                     testID="permission-footer.allow"
                     ref={primaryAnswerRef}

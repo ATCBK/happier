@@ -229,7 +229,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
   const watches = new Map<string, ReturnType<typeof createDeferred<ReturnType<typeof agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse>>>>();
   const daemonSessions: Record<string, ReturnType<typeof createSessionFixture>> = {};
   const { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } = await import('@/voice/persistence/voiceTranscriptHistorySession');
-  const history = createSessionFixture({ id: 'mounted-runtime-history', encryptionMode: 'plain', active: false,
+  const history = createSessionFixture({ id: 'mounted-runtime-history', seq: 0, encryptionMode: 'plain', active: false,
     metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() },
   });
   const nativeSession = createSessionFixture({ id: 'mounted-native-session', encryptionMode: 'plain', active: true, activeAt: Date.now(),
@@ -248,6 +248,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
     agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
   }) });
   const httpRequests: Array<Readonly<{ path: string; method: string; settingsPost?: Readonly<{ expectedVersion: unknown; contentType: unknown; responseValid: boolean; status: number }> }>> = [];
+  const transcriptSequences = new Map<string, number>();
   const serverUrl = 'https://voice-mounted-runtime.example.test';
   const settingsHttp = createAccountSettingsHttpBoundary({ serverUrl, initialAccounts: [{ accountId: 'account-a',
     snapshot: AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }),
@@ -356,6 +357,19 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       if (path === '/health') return Response.json({ status: 'ok' });
       if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'mounted-token', leaseId: 'mounted-lease', bindingNonce: 'mounted-nonce', expiresAtMs: Date.now() + 60_000 });
       if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
+      const transcriptWrite = /^\/v2\/sessions\/([^/]+)\/messages$/.exec(path);
+      if (transcriptWrite && init?.method === 'POST') {
+        const { z } = await import('zod/mini');
+        const { RawRecordSchema } = await import('@happier-dev/session-core/raw');
+        const body = z.object({ localId: z.string(), messageRole: z.literal('agent'),
+          content: z.object({ t: z.literal('plain'), v: RawRecordSchema }),
+        }).parse(JSON.parse(String(init.body)));
+        const sessionId = decodeURIComponent(transcriptWrite[1]!);
+        const seq = Math.max(transcriptSequences.get(sessionId) ?? 0, storage.getState().sessions[sessionId]?.seq ?? 0) + 1;
+        transcriptSequences.set(sessionId, seq);
+        return Response.json({ didWrite: true, message: { id: `ack:${body.localId}`,
+          localId: body.localId, seq, createdAt: Date.now() } });
+      }
       if (path === '/v2/sessions/lookup-by-tags') {
         const request = SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body)));
         expect(request.tags).toEqual([VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG]);
@@ -746,6 +760,8 @@ describe('VoiceSessionRuntime', () => {
     const { createVoiceContinuationProjection } = await import('@/voice/transcript/voiceContinuationProjection');
     const { createVoiceTranscriptProjector } = await import('@/voice/transcript/VoiceTranscriptProjector');
     const { persistSessionTranscriptMessage } = await import('@happier-dev/session-core/messages');
+    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
+    const { readVoiceContinuationProvenance } = await import('@/voice/transcript/voiceTranscriptNoteMeta');
     const { createReducer, reducer } = await import('@happier-dev/session-core/reducer');
     const { voiceHooks } = await import('@/voice/context/voiceHooks');
     const { getDeviceAnalyticsId } = await import('@/track/settingsAnalytics/deviceAnalyticsIdentity');
@@ -755,6 +771,10 @@ describe('VoiceSessionRuntime', () => {
     if (!binding) throw new Error('Expected the admitted local binding');
     const attemptId = getVoiceSessionAttemptId();
     const conversation = binding.conversationSessionAddress;
+    // Observe this client's actual first ACK before assigning the independent
+    // client's next sequence. Otherwise the fixture creates two seq-1 notes.
+    await vi.waitFor(() => expect(readStoredSessionMessages(storage.getState(), conversation.sessionId)
+      .some(message => readVoiceContinuationProvenance(message.meta)?.deviceId === getDeviceAnalyticsId())).toBe(true));
     const boundary = storage.getState().sessions[conversation.sessionId]?.seq ?? 0;
     const remoteDevice = `${getDeviceAnalyticsId()}-other-device`;
     const remote = createVoiceContinuationProjection();
@@ -821,6 +841,38 @@ describe('VoiceSessionRuntime', () => {
     expect(getVoiceSessionArrivedAttemptId()).toBe(arrivingAttemptId);
     await act(async () => { voiceHooks.onMessages(conversation, received); });
     expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+  });
+
+  it('persists the connected device continuation before any Agent turn on an empty carrier', async () => {
+    const connection = createDeferred<void>();
+    const mounted = await prepareGeneratedVoiceRuntime({ startGate: connection.promise });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { getVoiceSessionPresentedBinding } = await import('./voiceSessionStore');
+    const { readVoiceContinuationProvenance } = await import('@/voice/transcript/voiceTranscriptNoteMeta');
+    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
+    const { getDeviceAnalyticsId } = await import('@/track/settingsAnalytics/deviceAnalyticsIdentity');
+    let start: Promise<void> | undefined;
+    await act(async () => { start = mounted.lifecycle.toggle(null); });
+    try {
+      await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+      expect(mounted.lifecycle.getSnapshot().status).toBe('connecting');
+      expect(mounted.httpRequests.filter(request => request.method === 'POST' && request.path.endsWith('/messages'))).toEqual([]);
+    } finally {
+      connection.resolve();
+      await act(async () => { await start; });
+    }
+    const binding = getVoiceSessionPresentedBinding();
+    if (!binding) throw new Error('Expected an admitted connected carrier');
+    expect(mounted.agentRequests).toEqual([]);
+    await vi.waitFor(() => {
+      const notes = readStoredSessionMessages(storage.getState(), binding.conversationSessionId)
+        .filter(message => readVoiceContinuationProvenance(message.meta) !== null);
+      expect(notes, JSON.stringify(mounted.httpRequests)).toHaveLength(1);
+      expect(notes[0]?.seq).toBe(1);
+      expect(readVoiceContinuationProvenance(notes[0]?.meta)).toMatchObject({
+        deviceId: getDeviceAnalyticsId(), conversation: binding.conversationSessionAddress,
+      });
+    });
   });
 
   it('does not renormalize materialized Voice settings for connectivity or Profile presentation updates', async () => {

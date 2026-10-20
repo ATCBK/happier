@@ -11,6 +11,7 @@ import {
 } from "@/app/events/eventRouter";
 import { resolveSessionMessageAccountActor } from "@/app/session/messages/projectSessionMessageAccountActors";
 import { db } from "@/storage/db";
+import { RetainedContextPendingMaterializeRequestV5Schema } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V1,
@@ -35,6 +36,7 @@ import { z } from 'zod/mini';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import { admitApiTokenSessionOperation } from "@/app/api/utils/apiTokenRouteAdmission";
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
 import { API_TOKEN_SOCKET_EVENT_ACTIONS } from '@happier-dev/protocol/socketRpc';
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
 import {
@@ -102,7 +104,7 @@ import {
     acknowledgeAccountVoiceFollowInTx,
     observePendingAccountVoiceFollowInTx,
 } from "@/app/session/follow/accountFollowService";
-import { createDiscussionInTx, postDiscussionMessageInTx } from "@/app/discussions/mutations";
+import { createDiscussionInTx, postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
 import { reconcileDiscussionCreationIdentityRace } from '@/app/discussions/createIdentityReconciliation';
 import type { createSessionPublisherPresence, CurrentSessionPublisherAuthority, SessionPublisherBinding } from "@/app/presence/sessionPublisherPresence";
 import type { TeamCredentialExecutionRunCurrentnessResolver } from "@/app/teams/credentials/providerBrokerAdmission";
@@ -606,38 +608,46 @@ export function sessionUpdateHandler(
                 return;
             }
             const publisher = trustedSessionPublisher;
+            const publication = request.data;
+            const actor = {
+                actorAccountId: userId,
+                producer: {
+                    v: 1 as const,
+                    kind: "agent" as const,
+                    sessionId: publication.sessionId,
+                    ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),
+                    ...(publication.runId ? { runId: publication.runId } : {}),
+                    ...(publication.toolCallId ? { toolCallId: publication.toolCallId } : {}),
+                },
+                authentication: readSessionAccessAuthenticationFromSocket(socket),
+            };
+            const append = 'discussionId' in publication ? { ...actor, discussionId: publication.discussionId,
+                request: publication.request,
+                ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
+                ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) } : null;
             const publish = () => publisher.presence.runAsCurrentPublisherInTx({
                 socket,
-                deadlineAtMs: Date.now() + 5_000,
-                isolationLevel: "Serializable", // Discussion creation composes tracked-target admission with the message write.
+                // The Session publisher ACK is lifetime-bound. Waiting behind
+                // its current neighbor must not create a shorter publication
+                // deadline; authority is rechecked below and inTx owns its
+                // resource acquisition/execution budgets.
+                ...(append ? { prepare: () => prepareDiscussionPostMutationAccounts(append) }
+                    : { isolationLevel: "Serializable" as const }), // Creation retains its identity-race transaction.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(
                         tx,
                         authority,
                         userId,
                         request.data.sessionId,
+                        undefined,
+                        { lockMachineAuthority: append !== null },
                     )) {
                         return null;
                     }
                     if (request.data.sourceSession && (request.data.sourceSession.sourceSessionId !== request.data.sessionId
                         || !await isSessionInputSourceCurrentInTx(tx, userId, request.data.sourceSession))) return null;
-                    const actor = {
-                        actorAccountId: userId,
-                        producer: {
-                            v: 1 as const,
-                            kind: "agent" as const,
-                            sessionId: request.data.sessionId,
-                            ...(request.data.sourceSession ? { sourceSession: request.data.sourceSession } : {}),
-                            ...(request.data.runId ? { runId: request.data.runId } : {}),
-                            ...(request.data.toolCallId ? { toolCallId: request.data.toolCallId } : {}),
-                        },
-                        authentication: readSessionAccessAuthenticationFromSocket(socket),
-                    };
-                    const publication = request.data;
                     return 'discussionId' in publication
-                        ? await postDiscussionMessageInTx(tx, { ...actor, discussionId: publication.discussionId, request: publication.request,
-                            ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
-                            ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) })
+                        ? await postPreparedDiscussionMessageInTx(tx, append!)
                         : await createDiscussionInTx(tx, { ...actor, request: publication.request });
                 },
             });
@@ -718,7 +728,13 @@ export function sessionUpdateHandler(
                         : { status: 'held', code: 'session_input_target_unavailable' } } : {}),
             });
         } catch (error) {
-            log({ module: "websocket", level: "warn" }, `Session Follow observation failed: ${error}`);
+            log({
+                module: "websocket",
+                level: "warn",
+                ...(isTransactionDeadlineExceededError(error) && error.transactionClass
+                    ? { transactionClass: error.transactionClass }
+                    : {}),
+            }, `Session Follow observation failed: ${error}`);
             respond({ ok: false, v: 1, error: "internal" });
         }
     });
@@ -727,6 +743,15 @@ export function sessionUpdateHandler(
         const respond = (response: unknown) => callback?.(SessionFollowAcknowledgeResponseV1Schema.parse(response));
         const request = SessionFollowAcknowledgeRequestV1Schema.safeParse(data);
         let phase = 'feature';
+        const diagnose = (causes: ReturnType<typeof sessionFollowAckErrorCauses>) => log({
+            module: 'websocket', level: 'warn', operation: 'session_follow_acknowledge', phase,
+            ...(request.success ? { destinationSessionId: request.data.destinationSessionId,
+                expectedPublisherGeneration: request.data.expectedPublisherGeneration,
+                ...('localInputId' in request.data ? { localInputId: request.data.localInputId } : {}),
+                ...('sourceSessionId' in request.data ? { sourceSessionId: request.data.sourceSessionId } : {}),
+                ...('relation' in request.data ? { relation: request.data.relation } : {}) } : {}),
+            causes,
+        }, 'Session Follow acknowledgment failed');
         try {
             if (!await isServerFeatureEnabledForHome("sessions.following")) {
                 respond({ ok: false, v: 1, error: "unsupported" });
@@ -740,8 +765,9 @@ export function sessionUpdateHandler(
             phase = 'publisher_transaction';
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
-                // ACK advances private route progress, with no Account cursor
-                // publication. Its authority/CAS checks share this snapshot.
+                // Legacy frontier ACK only advances private route progress.
+                // Admitted rule progress conditionally enters canonical Session
+                // publication admission and revalidates inside the edge owner.
                 authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Frontier acceptance composes current edge, source and destination authority.
                 operation: async (authority, tx) => {
@@ -771,21 +797,26 @@ export function sessionUpdateHandler(
                             expected: request.data.expected, observed: request.data.observed, consumed: request.data.consumed,
                             acceptance: request.data.acceptance,
                         });
-                    phase = 'commit';
+                    if (acknowledgement.ok) phase = 'commit';
                     return acknowledgement;
                 },
             });
+            if (result === null) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: 'forbidden' }]);
+                respond({ ok: false, v: 1, error: "forbidden" });
+                return;
+            }
+            if (!result.ok) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: result.rejection }]);
+                respond({ ok: false, v: 1, error: result.rejection });
+                return;
+            }
             phase = 'response';
-            if (result === null) { respond({ ok: false, v: 1, error: "forbidden" }); return; }
-            if (!result.ok) { respond({ ok: false, v: 1, error: result.rejection }); return; }
-            respond({ ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
+            respond('original' in request.data
+                ? { ok: true, v: 1, destinationSessionId, localInputId: request.data.localInputId, original: request.data.original }
+                : { ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
         } catch (error) {
-            log({ module: 'websocket', level: 'warn', operation: 'session_follow_acknowledge', phase,
-                ...(request.success ? { destinationSessionId: request.data.destinationSessionId,
-                    sourceSessionId: request.data.sourceSessionId,
-                    ...('relation' in request.data ? { relation: request.data.relation } : {}) } : {}),
-                causes: sessionFollowAckErrorCauses(error),
-            }, 'Session Follow acknowledgment failed');
+            diagnose(sessionFollowAckErrorCauses(error));
             respond({ ok: false, v: 1, error: isLockAdmissionDeadlineExceededError(error)
                 || isTransactionDeadlineExceededError(error)
                 || isTransactionConflictExhaustedError(error)
@@ -1742,7 +1773,6 @@ export function sessionUpdateHandler(
                         ? projectSessionTranscriptPublicationPendingProjection({
                             ...presenceResult.pendingState,
                             changedByAccountId: userId,
-                            pendingActivationAuthorization: null,
                         }, session, accountId)
                         : null;
                     if (realtimeProjection.kind === "publish") {
@@ -2457,6 +2487,14 @@ export function sessionUpdateHandler(
                 try {
                     if (targetRequest && !targetRequest.success) { respond({ ok: false, error: "invalid-params" }); return; }
                     const raw = data && typeof data === "object" ? data as Record<string, unknown> : {};
+                    // Proof-bearing V5 uses the shared closed parent and child;
+                    // incumbent no-proof revisions retain their existing ingress.
+                    const retainedContext = raw.retainedContext === undefined ? undefined
+                        : RetainedContextPendingMaterializeRequestV5Schema.safeParse(raw);
+                    if (retainedContext && (!retainedContext.success || executionRunTarget)) {
+                        respond({ ok: false, error: 'invalid-params' });
+                        return;
+                    }
                     const sid = targetRequest?.success ? targetRequest.data.sessionId : typeof raw.sid === 'string' ? raw.sid : null;
                     if (!sid) {
                         respond({ ok: false, error: 'invalid-params' });
@@ -2497,6 +2535,7 @@ export function sessionUpdateHandler(
                             deliveryState,
                             deliveryTiming,
                             foregroundState,
+                            ...(retainedContext?.success ? { retainedContext: retainedContext.data.retainedContext } : {}),
                             ...(expectedRuntimeActivityRevision !== null ? { expectedRuntimeActivityRevision } : {}),
                             publisherAuthority,
                             targetExecutionRunId: targetRequest?.success ? targetRequest.data.recipient.runId : null,
@@ -2617,7 +2656,9 @@ export function sessionUpdateHandler(
                         || isTransactionDeadlineExceededError(error)
                         || isTransactionAcquisitionUnavailableError(error)
                     ) throw error;
-                    log({ module: 'websocket', level: 'error' }, `Error in pending-materialize-next: ${error}`);
+                    logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                        sessionId: trustedSessionPublisher?.binding.sessionId,
+                        event: 'pending-materialization-failed', phase: 'materialization' });
                     const failure = mapPendingMaterializationError(error);
                     respond({
                         ok: false,
@@ -2629,6 +2670,9 @@ export function sessionUpdateHandler(
                 }
                 });
             } catch (error) {
+                logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                    sessionId: trustedSessionPublisher?.binding.sessionId,
+                    event: 'pending-materialization-failed', phase: 'admission' });
                 if (
                     isLockAdmissionDeadlineExceededError(error)
                     || isTransactionDeadlineExceededError(error)
@@ -2641,7 +2685,6 @@ export function sessionUpdateHandler(
                     });
                     return;
                 }
-                log({ module: 'websocket', level: 'error' }, `Error admitting pending-materialize-next: ${error}`);
                 respond({ ok: false, error: 'internal' });
             }
         });

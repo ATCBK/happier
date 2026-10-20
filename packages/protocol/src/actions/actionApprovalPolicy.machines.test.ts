@@ -8,6 +8,26 @@ const corridorActionIds = ACTION_IDS.filter(id => /^machines\.(managed\.|presets
   || id.startsWith('connectedServices.authentication.'));
 
 describe('Corridor C approval defaults', () => {
+  it('applies a host-proved sharing reduction directly only for a present UI user, preserving Ask and automation policy', () => {
+    const actionId = 'machines.access.grant.set';
+    const args = { actionId, spec: getActionSpec(actionId), defaultUiConfirmation: false,
+      context: { surface: 'ui', authority: 'present_user' } } as const;
+    const settings = normalizeActionsSettingsV1({ v: 1 });
+    expect(resolveActionApprovalRouting({ ...args, settings }).required).toBe(false);
+    expect(resolveActionApprovalRouting(args).required).toBe(false);
+    expect(resolveActionApprovalRouting({ ...args, defaultUiConfirmation: undefined, settings }).required).toBe(true);
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      const context = { surface, authority: 'account_automation' } as const;
+      expect(resolveActionApprovalRouting({ ...args, settings, context }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ ...args, context, settings: normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { [actionId]: [surface] } }) }).required).toBe(false);
+    }
+    expect(resolveActionApprovalRouting({ ...args, settings,
+      context: { surface: 'ui', authority: 'account_automation' } }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }) }).required).toBe(true);
+  });
+
   it.each([
     'machines.terminal.open',
     'machines.processes.stop',

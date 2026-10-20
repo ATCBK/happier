@@ -63,6 +63,7 @@ export type { ConnectedServiceId } from '../connectedAccounts.js';
 export type { ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '../connectedAccounts.js';
 export type { ConnectedServiceQuotaRecoveryCreditDetailsV1 } from '../connectedAccounts.js';
 export type { ConnectedServiceQuotaRecoveryCreditV1 } from '../connectedAccounts.js';
+export type { ConnectedServiceQuotaRecoveryCreditsV1 } from '../connectedAccounts.js';
 export type { CredentialRequirementOptions } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV } from '../connectedAccounts.js';

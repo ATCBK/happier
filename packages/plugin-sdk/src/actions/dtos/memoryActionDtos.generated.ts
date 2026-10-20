@@ -1107,6 +1107,9 @@ export type MemoryActionResultById = {
             serverId?: string | undefined;
         } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
+        attachmentFailure?: {
+            errorCode: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable' | 'project_context_unavailable' | 'project_context_access_denied' | 'action_account_scope_changed' | 'cancelled' | 'outcome_unknown' | 'home_unreachable' | 'memory_target_unavailable';
+        } | undefined;
     } | {
         ok: false;
         errorCode: 'memory_duplicate_choice_required';
@@ -1162,6 +1165,9 @@ export type MemoryActionResultById = {
             serverId?: string | undefined;
         } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
+        attachmentFailure?: {
+            errorCode: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable' | 'project_context_unavailable' | 'project_context_access_denied' | 'action_account_scope_changed' | 'cancelled' | 'outcome_unknown' | 'home_unreachable' | 'memory_target_unavailable';
+        } | undefined;
     } | {
         ok: false;
         errorCode: 'memory_duplicate_choice_required';
@@ -1217,6 +1223,9 @@ export type MemoryActionResultById = {
             serverId?: string | undefined;
         } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
+        attachmentFailure?: {
+            errorCode: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable' | 'project_context_unavailable' | 'project_context_access_denied' | 'action_account_scope_changed' | 'cancelled' | 'outcome_unknown' | 'home_unreachable' | 'memory_target_unavailable';
+        } | undefined;
     } | {
         ok: false;
         errorCode: 'memory_duplicate_choice_required';
@@ -1272,6 +1281,9 @@ export type MemoryActionResultById = {
             serverId?: string | undefined;
         } | undefined;
         attachment?: 'attached' | 'conflict' | undefined;
+        attachmentFailure?: {
+            errorCode: 'source_unavailable' | 'source_access_denied' | 'source_invalid' | 'source_conflict' | 'artifact_unavailable' | 'artifact_wrong_kind' | 'source_backend_unavailable' | 'project_context_unavailable' | 'project_context_access_denied' | 'action_account_scope_changed' | 'cancelled' | 'outcome_unknown' | 'home_unreachable' | 'memory_target_unavailable';
+        } | undefined;
     };
     readonly "memory.read": {
         body: {

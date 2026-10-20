@@ -8,7 +8,7 @@ import {
     sessionScmRemotePush,
     sessionScmRepositoryRemoveIndexLock,
 } from '@/sync/ops';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';

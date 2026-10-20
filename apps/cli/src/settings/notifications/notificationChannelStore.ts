@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -271,6 +272,7 @@ export function createCliNotificationChannelStore(input: Readonly<{
       return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : !isCurrent() ? 'scope-retired'
         : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'scope-retired'
           || code === 'account-mode-mismatch' ? code
+        : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
         : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable'
           ? 'encryption-material-unavailable' : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
     }

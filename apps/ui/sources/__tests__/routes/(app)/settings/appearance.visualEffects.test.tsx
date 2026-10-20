@@ -11,6 +11,7 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -86,6 +87,7 @@ vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn() }));
 // Load route graphs during collection; interaction deadlines measure the mounted contract.
 await import('@/app/(app)/settings/appearance');
 await import('@/app/(app)/settings/appearance/motion');
+await import('@/app/(app)/settings/appearance/widgets');
 
 afterEach(async () => {
     standardCleanup();
@@ -97,9 +99,78 @@ afterEach(async () => {
     shared.settingsState.animatedNumbers = true;
     shared.settingsState.contextGaugeStyle = 'gauge';
     shared.settingsState.alwaysShowContextSize = false;
+    shared.settingsState.preferredLanguage = null;
+    delete shared.settingsState.actionsSettingsV1;
+    delete shared.settingsState.uiSurfaceFinishOverrides;
 });
 
 describe('Appearance settings — Visual Effects section', () => {
+    it('admits per-role surface finish without replacing neighboring roles, and Auto removes only that role', async () => {
+        shared.settingsState.uiSurfaceFinishOverrides = { card: 'flat', floating: 'soft' };
+        shared.settingsState.actionsSettingsV1 = { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } };
+        const mod = await import('@/app/(app)/settings/appearance/widgets');
+        const screen = await renderSettingsView(React.createElement(mod.default));
+        await screen.pressByTestIdAsync('settings-appearance-finish-customize');
+        const choose = (value: string) => screen.findByProps({ testIDPrefix: 'settings-appearance-finish-card' }).props.onChange(value);
+        await act(async () => { choose('soft'); });
+        expect(storage.getState().localSettings.uiSurfaceFinishOverrides).toEqual({ card: 'flat', floating: 'soft' });
+        await act(async () => { account!.replaceSettings(settingsParse({ ...account!.persistedSettings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        })); });
+        await act(async () => { choose('soft'); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(1));
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[0]!.id, 'reject');
+        expect(storage.getState().localSettings.uiSurfaceFinishOverrides).toEqual({ card: 'flat', floating: 'soft' });
+        await act(async () => { choose('soft'); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(2));
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[1]!.id, 'approve');
+        await vi.waitFor(() => expect(storage.getState().localSettings.uiSurfaceFinishOverrides).toEqual({ card: 'soft', floating: 'soft' }));
+        await act(async () => { account!.replaceSettings(settingsParse({ ...account!.persistedSettings,
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+        })); });
+        await act(async () => { choose('auto'); });
+        await vi.waitFor(() => expect(storage.getState().localSettings.uiSurfaceFinishOverrides).toEqual({ floating: 'soft' }));
+        expect(account!.artifacts.list()).toHaveLength(2);
+    });
+    it.each([
+        { key: 'visualEffectsLevel', initial: 'full', next: 'minimal', route: 'motion' },
+        { key: 'animatedNumbers', initial: true, next: false, route: 'motion' },
+        { key: 'contextGaugeStyle', initial: 'gauge', next: 'hidden', route: 'appearance' },
+    ] as const)('admits $key under Off, Ask rejection/approval and Allowed', async ({ key, initial, next, route }) => {
+        shared.settingsState.preferredLanguage = 'fr';
+        shared.settingsState.actionsSettingsV1 = { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } };
+        const mod = route === 'motion' ? await import('@/app/(app)/settings/appearance/motion')
+            : await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(React.createElement(mod.default));
+        const choose = (value: string | boolean) => {
+            if (key === 'animatedNumbers') screen.findByProps({ title: 'settingsAppearance.visualEffects.animatedNumbers' })
+                .props.rightElement.props.onValueChange(value);
+            else screen.findByProps({ testIDPrefix: `settings-appearance-${key}` }).props.onChange(value);
+        };
+        await act(async () => { choose(next); });
+        expect(storage.getState().settings[key]).toBe(initial);
+        expect(account!.persistedSettings[key]).toBe(initial);
+        expect(account!.settingsWrites).toEqual([]);
+        await act(async () => { account!.replaceSettings(settingsParse({ ...account!.persistedSettings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        })); });
+        await act(async () => { choose(next); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(1));
+        expect(account!.persistedSettings[key]).toBe(initial);
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[0]!.id, 'reject');
+        expect(account!.persistedSettings[key]).toBe(initial);
+        await act(async () => { choose(next); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(2));
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[1]!.id, 'approve');
+        await vi.waitFor(() => expect(account!.persistedSettings[key]).toBe(next));
+        await act(async () => { account!.replaceSettings(settingsParse({ ...account!.persistedSettings,
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+        })); });
+        await act(async () => { choose(initial); });
+        await vi.waitFor(() => expect(account!.persistedSettings[key]).toBe(initial));
+        expect(account!.persistedSettings.preferredLanguage).toBe('fr');
+        expect(account!.artifacts.list()).toHaveLength(2);
+    });
     it('keeps badge controls behind their disclosure and saves the existing preference after opening it', async () => {
         shared.settingsState.tabBarFriendsBadgeEnabled = true;
         const { default: Appearance } = await import('@/app/(app)/settings/appearance');

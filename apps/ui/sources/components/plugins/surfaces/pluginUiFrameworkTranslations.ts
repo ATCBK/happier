@@ -60,6 +60,15 @@ export function resolvePluginUiFrameworkTranslations(): Readonly<Record<string, 
         'happier.plugin-ui.presence.handBack': t('browserPresence.handBack'),
         'happier.plugin-ui.presence.checkAgain': t('browserPresence.checkAgain'),
         'happier.plugin-ui.presence.watch': t('browserTool.watch'),
+        // The public `ReturnedAnswerQuote`: the same words core's own returned answers use.
+        ...Object.fromEntries(([['answer', 'answered'], ['pass', 'passed'], ['failed', 'failed'], ['cancelled', 'cancelled'],
+            ['terminal_no_result', 'noResult']] as const).map(([outcome, copy]) => [`happier.plugin-ui.returnedAnswer.outcome.${outcome}`, t(`session.returnedAnswer.${copy}`)])),
+        'happier.plugin-ui.returnedAnswer.open': t('session.returnedAnswer.open'),
+        'happier.plugin-ui.returnedAnswer.information': t('session.returnedAnswer.asInformation'),
+        'happier.plugin-ui.returnedAnswer.yourQuestion': t('session.returnedAnswer.yourQuestion'),
+        'happier.plugin-ui.returnedAnswer.askedFromHere': t('session.returnedAnswer.askedFromHere'),
+        'happier.plugin-ui.returnedAnswer.openQuestion': t('session.returnedAnswer.openQuestion'),
+        'happier.plugin-ui.returnedAnswer.questionUnavailable': t('session.returnedAnswer.questionUnavailable'),
         // The public `FollowPolicyEditor`: presets, what each means, and every Follow event's name, in the app's words.
         ...resolveFollowPolicyEditorTranslations(),
         // The Work status bucket labels, from the one label owner core's own lists read.

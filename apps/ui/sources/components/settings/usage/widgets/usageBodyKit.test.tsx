@@ -42,8 +42,11 @@ describe('shared Usage identity and dependent coverage', () => {
         const unbounded = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({ period: {} })] }).results[0]!;
         expect(isUsageReadOutstanding(unbounded, ['comparison'])).toBe(false);
     });
-    it('retains the full numeric version in a newer model absent from the static Agent catalog', () => {
-        expect(usageDimensionLabel('model', 'claude-haiku-6-1')).toBe('Claude Haiku 6.1');
+    it('preserves unknown model ids exactly instead of inventing names or casing', () => {
+        for (const id of ['claude-haiku-6-1', 'gpt-6.1-sol', 'third-party/MODEL-snapshot']) {
+            expect(usageDimensionLabel('model', id)).toBe(id);
+            expect(usageDimensionLabel('model', id, id)).toBe(id);
+        }
     });
     it('holds an unanswered usage read as loading, never as "No usage in this period"', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, granularity: 'day' });
@@ -318,9 +321,9 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageDimensionLabel('machine', 'machine-uuid', 'machine-uuid', new Map([['machine-uuid', 'Build Mac']]))).toBe('Build Mac');
         expect(usageDimensionLabel('machine', 'missing-uuid', undefined, new Map())).toBe(t('machine.unlistedMachine'));
     });
-    it('preserves genuine contributed model and source titles while humanizing raw fallback keys', () => {
+    it('preserves genuine contributed model and source titles and raw unknown model ids', () => {
         expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'Research-Lab Model / Preview')).toBe('Research-Lab Model / Preview');
-        expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'third-party/model-snapshot')).toBe('Third Party Model Snapshot');
+        expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'third-party/model-snapshot')).toBe('third-party/model-snapshot');
         expect(usageSourceTitle('native:third.party/research:remote', 'Research-Lab Capture / Preview')).toBe('Research-Lab Capture / Preview');
     });
     it('keeps the date of historical coverage instead of presenting an old observation as today', () => {

@@ -316,6 +316,29 @@ describe('PathSelectionList', () => {
         expect(focus).toHaveBeenCalled();
     });
 
+    it('leaves focus alone when embedded in a page form, so opening the page does not scroll to the field', async () => {
+        const focus = vi.fn();
+        const { PathSelectionList } = await import('./PathSelectionList');
+
+        await renderScreen(
+            <PathSelectionList
+                initialValue=""
+                favorites={[]}
+                recents={[]}
+                machineHomeDir="/Users/leeroy"
+                machineId="m-1"
+                serverId={null}
+                machinePlatform="unix"
+                autoFocusInput={false}
+                onCommit={() => {}}
+                onRequestClose={() => {}}
+            />,
+            { createNodeMock: createInputNodeMock(focus) },
+        );
+
+        expect(focus).not.toHaveBeenCalled();
+    });
+
     it('does not render the IN THIS FOLDER section when the input is empty (idle state)', async () => {
         const { PathSelectionList } = await import('./PathSelectionList');
         const screen = await renderScreen(

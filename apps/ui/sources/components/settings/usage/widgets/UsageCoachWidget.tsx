@@ -38,14 +38,16 @@ import {
   UsageBodyInsufficient,
   UsageBodyReading,
   UsageCoverageLine,
+  UsageShowAllRows,
+  leadingUsageRows,
   SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
   useSettledBodyHeightFloor,
-  useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
-import { formatUsageDuration } from './usageHowYouWorkPresentation';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
+import { formatUsageDuration, formatUsageLookbackPeriod } from './usageHowYouWorkPresentation';
 import {
   createUsageCoachController,
   type UsageCoachAppliedEntry,
@@ -128,13 +130,16 @@ function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; te
   if (!sample) return null;
   const last = sample.points[sample.points.length - 1]!;
   // The headline measurement is the finding's own figure; this line is the series' latest sample, which may differ.
-  const caption = t('usage.board.coach.latestSample', { value: formatMeasurement({ ...sample, value: last.value }) });
+  // Dated, so a latest reading of 0 beside a headline of 56.3k reads as a later moment, not a contradiction.
+  const caption = t('usage.board.coach.latestSample', {
+    value: `${formatMeasurement({ ...sample, value: last.value })} · ${formatUsageObservedAt(last.observedAtMs)}`,
+  });
   return (
     <View style={styles.trend} testID={props.testID}>
       <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
         series={[{ id: sample.metric, label: caption, color: theme.colors.text.secondary,
           points: sample.points.map(point => ({ id: point.evidenceId, x: point.observedAtMs, y: point.value })) }]} />
-      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={2}>{caption}</Text>
+      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]}>{caption}</Text>
     </View>
   );
 }
@@ -242,7 +247,6 @@ function useUsageCoachController(
 export function UsageCoachWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const presentation = useWidgetPresentation();
-  const view = useUsageAnalyticsView(props.slice, props.query);
   const coach = props.slice.coach;
   const { refresh } = props.model;
   const { controller, snapshot } = useUsageCoachController(refresh);
@@ -308,7 +312,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   const summary = [
     { key: 'findings', label: t('usage.board.coach.summaryFindings'), value: visible.length,
       caption: t('usage.board.coach.summaryOfChecks', { count: checked }) },
-    ...(view ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: view.hero.sessions,
+    ...(props.slice.accounting ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: coach.sessionCoverage?.admitted ?? '—',
       caption: usagePeriodPhrase(props.query) }] : []),
     { key: 'insufficient', label: t('usage.board.coach.summaryNeedEvidence'), value: insufficient.length,
       caption: clear.length ? t('usage.board.coach.summaryClearCaption', { count: clear.length }) : undefined },
@@ -442,7 +446,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
       <View style={styles.digestText}>
         <Text style={[styles.checkName, subtitle]} accessibilityRole="header">{t('usage.board.coach.digestTitle')}</Text>
         <Text style={[styles.quiet, subtitle]}>{t('usage.board.coach.digestDescription', {
-          duration: formatUsageDuration(suggestion.lookbackMs),
+          duration: formatUsageLookbackPeriod(suggestion.lookbackMs),
         })}</Text>
       </View>
       {approval ? (
@@ -493,7 +497,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
   );
 }
 
-function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number; caption?: string }>[]; testID: string }>) {
+function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number | string; caption?: string }>[]; testID: string }>) {
   const chartTheme = useUsagePluginTheme();
   return (
     <View style={styles.band} testID={props.testID}>
@@ -524,6 +528,9 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   const presentation = useWidgetPresentation();
   const wide = props.layout === 'row' && (presentation?.geometry?.width ?? 0) >= 560;
   const { finding, applied, controller, snapshot } = props;
+  // A finding can rest on hundreds of observations: Why leads with a few and folds the rest behind Show all.
+  const [evidenceExpanded, setEvidenceExpanded] = React.useState(false);
+  const ledEvidence = leadingUsageRows(finding.evidence, evidenceExpanded);
   const pending = snapshot.pending.some(
     (row) => row.evidenceKey === finding.evidenceKey,
   );
@@ -655,12 +662,15 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
               {formatMeasurement(measurement)}
             </Text>)}
           </View>
-          {finding.evidence.map(reference => <Text key={`${reference.kind}:${reference.id}`}
+          {ledEvidence.rows.map(reference => <Text key={`${reference.kind}:${reference.id}`}
             testID={`${props.testID}.evidence.${reference.id}`} selectable style={[styles.evidence, text('subtitle')]}>
             {`${t(`usage.board.coach.evidence_${reference.kind}`)} · ${formatWithCachedDateTimeFormatter(reference.observedAtMs, getPreferredLanguage(), {
               year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
             })}`}
           </Text>)}
+          <UsageShowAllRows label={t('usage.board.coach.observationsTitle')} testID={`${props.testID}.evidence.showAll`}
+            total={finding.evidence.length} hidden={ledEvidence.hidden} expanded={evidenceExpanded}
+            onToggle={() => setEvidenceExpanded((value) => !value)} />
           {finding.basis.citations.length ? <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.citationsTitle')}</Text> : null}
           {finding.basis.citations.map(citation => <HappierPressable key={citation.url} accessibilityRole="link"
             accessibilityLabel={`${citation.url}, ${t(`usage.board.coach.citation_${citation.sourceKind}`)}, ${citation.asOf}`} onPress={() => { void openExternalUrl(citation.url); }}>

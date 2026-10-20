@@ -25,29 +25,6 @@ export const newSessionScreenStyles = StyleSheet.create((theme, rt) => ({
         paddingTop: 0,
         paddingBottom: theme.space.s16,
     },
-    wizardContainer: {
-        marginBottom: theme.space.s16,
-    },
-    wizardSectionHeaderRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s8,
-        marginBottom: theme.space.s6,
-        marginTop: theme.space.s12,
-        paddingHorizontal: theme.space.s16,
-    },
-    sectionHeader: {
-        ...Typography.variant('heading'),
-        color: theme.colors.text.primary,
-        marginBottom: theme.space.s8,
-        marginTop: theme.space.s12,
-    },
-    sectionDescription: {
-        ...Typography.variant('meta'),
-        color: theme.colors.text.secondary,
-        marginBottom: Platform.OS === 'web' ? 8 : 0,
-        paddingHorizontal: theme.space.s16,
-    },
     wizardSelectionPair: {
         flexDirection: 'row',
         alignItems: 'flex-start',

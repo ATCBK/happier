@@ -203,7 +203,7 @@ describe('Workflow inputs through real Action option resolution', () => {
         expect(choiceTriggers(card).length).toBeGreaterThan(0);
         const { resolveSessionActionDraftHeightBearingPaint } = await import('@/components/sessions/actions/sessionActionDraftPresentation');
         const paint = resolveSessionActionDraftHeightBearingPaint({ draft, sessionId: 'session-1', resolveFieldOptions: options.getCurrent() });
-        expect(paint.fields.find(entry => entry.field.path === 'channels')?.options).toEqual([{ label: 'common.error' }]);
+        expect(paint.fields.find(entry => entry.field.path === 'channels')?.options).toEqual([{ label: 'workflows.start.choicesFailed' }]);
     });
 
     it('keeps every dynamic field in Inputs, reads only on opening, and requires explicit choices', async () => {

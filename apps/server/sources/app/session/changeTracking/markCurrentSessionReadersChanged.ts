@@ -3,9 +3,11 @@ import type { Tx } from "@/storage/inTx";
 import {
     markAccountChangesForSessionAccounts,
     type SessionAccountChangeCursor,
+    type SessionAccountChangePublication,
 } from "./markAccountChangesForSessionAccounts";
 
 export type CurrentSessionReaderCursor = SessionAccountChangeCursor;
+export type CurrentSessionReaderPublication = SessionAccountChangePublication;
 
 /**
  * Wakes every Account that currently reads this Session for a Session-owned
@@ -24,7 +26,7 @@ export async function markCurrentSessionReadersChanged(params: {
     sessionId: string;
     hint?: unknown;
     accountIds?: readonly string[];
-}): Promise<CurrentSessionReaderCursor[]> {
+}): Promise<CurrentSessionReaderPublication[]> {
     const accountIds = params.accountIds ?? await resolveCurrentSessionRecipientAccountIdsInTx(
         params.tx,
         { sessionId: params.sessionId },

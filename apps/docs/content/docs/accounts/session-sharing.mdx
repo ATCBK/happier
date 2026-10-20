@@ -309,10 +309,12 @@ capability, and losing the final applicable access clears the assignment. A
 read-only collaborator can see the assignee but cannot change it unless their
 current Session capabilities allow assignment.
 
-Assignment can opt the assignee into Follow with important notifications through
-their own settings. An explicit per-Session Follow choice still wins, assigning
-yourself does not send a redundant self-notification, and choosing **No one**
-clears the assignment.
+The assignee's default Follow rule can select future activity at Important,
+configured in **Settings → Coordination**. Assignment does not create an
+individual Follow subscription or read-state baseline. An explicit per-session
+Follow choice still wins, assigning yourself does not send a redundant
+self-notification, and choosing **No one** clears the assignment. See
+[Following a session](/organize/following-sessions) for the levels and defaults.
 
 ### See who is viewing (0.3 development)
 
@@ -467,7 +469,9 @@ The important difference is where each kind of attention appears:
 ### Session-to-Session Follow context (0.3 development)
 
 An Agent Session can follow another authorized Session and receive bounded
-optional context from it during a normal turn. The source and destination keep
+context from it on its next turn or request a wake, according to its Follow
+policy. See [Following a session](/organize/following-sessions) for the shared
+levels and delivery limits. The source and destination keep
 their ordinary Session identities and access rules; Follow does not create a
 second Session type or grant access. Before each injection, Happier rechecks the
 current Follow edge and the source/destination audience relationship. It

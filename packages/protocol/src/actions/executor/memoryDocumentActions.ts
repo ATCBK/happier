@@ -9,7 +9,7 @@ import type { PromptDocArtifactRefV1 } from '../../prompts/library/promptArtifac
 import type { PromptStackEntryV1 } from '../../prompts/library/promptStacksV1.js';
 import { readSessionBotV1 } from '../../sessions/identity/sessionBotV1.js';
 import { MemoryRememberInputV1Schema, MemoryDecisionSaveInputV1Schema, MemoryUpdateInputV1Schema, MemoryForgetInputV1Schema, type MemoryScopeTargetV1,
-  type MemoryDuplicateChoiceRequiredV1 } from '../../prompts/library/memoryActionsV1.js';
+  type MemoryDuplicateChoiceRequiredV1, MemoryAttachmentFailureV1Schema, type MemoryAttachmentFailureV1 } from '../../prompts/library/memoryActionsV1.js';
 import { readMemoryDocInLibrary, readReviewedMemoryDocInLibrary, readRestorableMemoryFactV1, createMemoryDocInLibrary, rememberMemoryFactInLibrary, updateMemoryFactInLibrary, forgetMemoryFactInLibrary,
   type PromptLibraryArtifactStore, type MemoryDocMutationTargetV1 } from '../../prompts/library/promptLibraryActionOperations.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
@@ -227,6 +227,7 @@ export async function executeMemoryWriteV1(args: Readonly<{
       const { artifactId, factId } = created;
       const ref = { kind: 'doc' as const, artifactId, serverId: port.serverId };
       let attachment: 'attached' | 'conflict' = 'conflict';
+      let attachmentFailure: MemoryAttachmentFailureV1 | undefined;
       try {
         if (current.attachMemory) {
           if (await current.attachMemory(ref)) attachment = 'attached';
@@ -239,9 +240,21 @@ export async function executeMemoryWriteV1(args: Readonly<{
             expectedMetadataRevision: request.expectedMetadataRevision,
             value: { kind: 'attach', entry: { id: 'session.memory', ref, enabled: true, placement: 'system_append' } } });
           if (result && typeof result === 'object' && 'ok' in result && result.ok === true) attachment = 'attached';
+          else if (result && typeof result === 'object' && 'errorCode' in result) {
+            throw Object.assign(new Error('Memory attachment failed'), { code: result.errorCode });
+          }
         }
-      } catch { /* The durable fact survives attach refusal; the caller receives its exact ref for retry. */ }
-      return { ...created, ok: true as const, artifactId, factId, ref, attachment };
+      } catch (error) {
+        // The fact is durable. A failed attachment is not evidence that its revision moved.
+        const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+        if (code !== 'source_conflict' && code !== 'project_context_conflict' && code !== 'entry_conflict'
+          && code !== 'version_mismatch' && code !== 'conflict') {
+          const failure = MemoryAttachmentFailureV1Schema.safeParse({ errorCode: code });
+          attachmentFailure = failure.success ? failure.data : { errorCode: 'memory_target_unavailable' };
+        }
+      }
+      return { ...created, ok: true as const, artifactId, factId, ref, attachment,
+        ...(attachmentFailure ? { attachmentFailure } : {}) };
     }
     if (!admission.target) refuse('memory_doc_invalid');
     return rememberMemoryFactInLibrary({ store, request: { ...admission.target, text: request.text,

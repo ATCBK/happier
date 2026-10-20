@@ -116,11 +116,14 @@ export type { ExternalSessionsActionResultById } from './dtos/externalSessionsAc
 export type { ExternalSessionsSource } from './dtos/pluginActionDtoSupport.generated.js';
 export type { FilesystemActionInputById } from './dtos/filesystemActionDtos.generated.js';
 export type { FilesystemActionResultById } from './dtos/filesystemActionDtos.generated.js';
+export type { FilesystemTreeNode } from './actionTypeMap.generated.js';
 export type { FindActionInputById } from './dtos/findActionDtos.generated.js';
 export type { FindActionResultById } from './dtos/findActionDtos.generated.js';
 export type { FollowEventDeliveryV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { FollowEventMapV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { FollowPolicyV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { FriendsActionInputById } from './dtos/friendsActionDtos.generated.js';
+export type { FriendsActionResultById } from './dtos/friendsActionDtos.generated.js';
 export type { HomeGovernanceActionInputById } from './dtos/homeGovernanceActionDtos.generated.js';
 export type { HomeGovernanceActionResultById } from './dtos/homeGovernanceActionDtos.generated.js';
 export type { HomeHubLayoutActionInputById } from './dtos/homeHubLayoutActionDtos.generated.js';

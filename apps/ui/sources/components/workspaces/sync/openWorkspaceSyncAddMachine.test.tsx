@@ -13,12 +13,26 @@ import { createWorkspaceSyncHarness, type WorkspaceSyncRpcRequest } from '@/dev/
 const shownModal = vi.hoisted(() => vi.fn());
 const confirmModal = vi.hoisted(() => vi.fn(async () => false));
 const daemonRpc = vi.hoisted(() => vi.fn<(request: WorkspaceSyncRpcRequest) => unknown>());
+const projectsOpenOutcome = vi.hoisted(() => ({ current: null as unknown }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
     translate: (key, vars) => vars ? key + ':' + JSON.stringify(vars) : key,
 }));
+// Genuine boundary: the Home-side `projects.open` Action. Every other Action keeps the real executor.
+vi.mock('@/sync/ops/actions/defaultActionExecutor', async importOriginal => {
+    const real = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
+    return {
+        ...real,
+        createDefaultActionExecutor: (...args: Parameters<typeof real.createDefaultActionExecutor>) => {
+            const executor = real.createDefaultActionExecutor(...args);
+            return { ...executor, execute: (...call: Parameters<typeof executor.execute>) => (
+                call[0] === 'projects.open' && projectsOpenOutcome.current ? Promise.resolve(projectsOpenOutcome.current) : executor.execute(...call)
+            ) } as typeof executor;
+        },
+    };
+});
 vi.mock('@/modal', async () => {
     const boundary = (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
         confirmResult: true, spies: { confirm: confirmModal },
@@ -33,6 +47,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
 const { PathSelectionList } = await import('@/components/ui/pathPicker/PathSelectionList');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const owner = await import('./openWorkspaceSyncAddMachine');
 
 function deferred<T>() {
@@ -45,6 +60,7 @@ let pendingCreate = deferred<unknown>();
 let pendingPreflight = deferred<unknown>();
 let requireApproval = false;
 let holdPreflight = false;
+let targetFolder: 'nonempty' | 'empty' | 'missing' = 'nonempty';
 
 const source = () => ({ id: 'source-ref', serverId: workspace.serverId, machineId: 'machine-a', rootPath: '/source' });
 const callsFor = (method: string) => daemonRpc.mock.calls.map(([request]) => request).filter(request => request.method === method);
@@ -88,6 +104,8 @@ beforeEach(async () => {
     pendingPreflight = deferred();
     requireApproval = false;
     holdPreflight = false;
+    targetFolder = 'nonempty';
+    projectsOpenOutcome.current = null;
     const machines = [['machine-a', 'Source', '/home/source'], ['machine-b', 'Target', '/home/target']].map(([id, displayName, homeDir]) => {
         const machine = createMachineFixture({ id, activeAt: Date.now() });
         return { ...machine, metadata: { ...machine.metadata!, displayName, homeDir } };
@@ -102,7 +120,9 @@ beforeEach(async () => {
         if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE) return pendingCreate.promise;
         if (request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
             const input = request.payload as { path: string };
-            return { ok: true, path: input.path, entries: [], truncated: false };
+            if (targetFolder === 'missing') return { ok: false, error: `ENOENT: no such file or directory, scandir '${input.path}'` };
+            const entries = targetFolder === 'nonempty' ? [{ name: '.git', path: `${input.path}/.git`, type: 'directory' }] : [];
+            return { ok: true, path: input.path, entries, truncated: false };
         }
         if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
         throw new Error('Unexpected workspace sync RPC ' + request.method);
@@ -130,8 +150,11 @@ async function renderOpenedModal() {
     return { config, onClose, screen, submit };
 }
 
-async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, path = '/target') {
-    const target = storage.getState().machines['machine-b'];
+const statusLine = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(SurfaceStateCard)
+    .find(node => node.props.testID === 'workspace-sync-add-machine-status');
+
+async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, path = '/target', machineId = 'machine-b') {
+    const target = storage.getState().machines[machineId];
     await act(async () => { invokeTestInstanceHandler(screen.findByType(MachineSelector), 'onSelect', target); });
     await act(async () => { invokeTestInstanceHandler(screen.findByType(PathSelectionList), 'onCommit', path); });
 }
@@ -195,8 +218,8 @@ describe('Project Add machine modal', () => {
                 expect(menu).toBeTruthy();
                 await act(async () => invokeTestInstanceHandler(menu!, 'onSelect', value));
             };
-            await selectMenu('settingsSession.handoff.workspaceMode.title', 'mirror_exactly');
-            await selectMenu('settingsSession.handoff.targetBootstrap.title', 'materialize_from_source_workspace');
+            await selectMenu('sessionHandoff.targetApproval.modeLabel', 'mirror_exactly');
+            await selectMenu('workspaceSync.addMachine.folderSetup', 'materialize_from_source_workspace');
             const advanced = screen.findAll(node => node.props.title === 'settingsSession.handoff.advanced.title'
                 && typeof node.props.onPress === 'function')[0];
             expect(advanced).toBeTruthy();
@@ -217,11 +240,83 @@ describe('Project Add machine modal', () => {
             expect.stringContaining('sessionHandoff.targetApproval.exactMirror'), expect.anything());
     });
 
+    describe('Use existing folder for a Git source', () => {
+        const unavailable = 'settingsSession.handoff.targetBootstrap.useExistingUnavailable';
+        const destinationMenu = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(DropdownMenu)
+            .find(node => node.props.itemTrigger?.title === 'workspaceSync.addMachine.folderSetup')!;
+        const useExisting = (screen: Awaited<ReturnType<typeof renderScreen>>) => (destinationMenu(screen).props.items as ReadonlyArray<{ id: string; disabled?: boolean; subtitle?: string }>)
+            .find(item => item.id === 'use_existing')!;
+
+        it.each(['missing', 'empty'] as const)('disables it for a %s folder with its reason and prepares the folder instead', async (state) => {
+            targetFolder = state;
+            requireApproval = true;
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(useExisting(modal.screen)).toMatchObject({ disabled: true, subtitle: unavailable }));
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('materialize_from_source_workspace');
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+            expect(storedApproval().actionArgs).toMatchObject({ targetPath: '/target', destinationIntent: 'materialize_from_source_workspace' });
+        });
+
+        it('keeps Use existing folder for a non-empty folder', async () => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            expect(useExisting(modal.screen).disabled).toBeFalsy();
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('use_existing');
+        });
+
+        it('keeps Use existing folder for an empty folder when the link is not a Git selection', async () => {
+            targetFolder = 'empty';
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(useExisting(modal.screen).disabled).toBe(true));
+            const advanced = modal.screen.findAll(node => node.props.title === 'settingsSession.handoff.advanced.title'
+                && typeof node.props.onPress === 'function')[0]!;
+            await pressTestInstanceAsync(advanced, 'show advanced workspace policy');
+            const content = modal.screen.findAllByType(DropdownMenu).find(node => node.props.itemTrigger?.title === 'settingsSession.handoff.contentSelection.title')!;
+            await act(async () => invokeTestInstanceHandler(content, 'onSelect', 'all_files'));
+            await vi.waitFor(() => expect(useExisting(modal.screen).disabled).toBeFalsy());
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('use_existing');
+        });
+    });
+
+    it('says a typed daemon refusal of the link in product words, not the daemon message', async () => {
+        confirmModal.mockResolvedValueOnce(true);
+        const modal = await startAddMachineLink();
+        await act(async () => {
+            pendingCreate.resolve({ error: 'Workspace sync relationship is not ready', errorCode: 'relationship_not_ready' });
+        });
+        await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.error.needsAttention'));
+        expect(modal.screen.getTextContent()).not.toContain('Workspace sync relationship is not ready');
+        // One status line, in the failure tone and announced as an alert.
+        expect(statusLine(modal.screen)?.props).toMatchObject({ kind: 'error', accessibilitySemantics: 'alert' });
+    });
+
+    it('stays quiet when the person declines the Action approval: nothing ran, nothing failed', async () => {
+        owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+        const modal = await renderOpenedModal();
+        await chooseTarget(modal.screen);
+        await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+        await act(async () => { modal.submit().props.onPress(); });
+        await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+        expect(statusLine(modal.screen)).toBeUndefined();
+        expect(modal.screen.getTextContent()).not.toContain('approval_canceled');
+        expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE)).toEqual([]);
+    });
+
     it('keeps an acknowledged committed result visible when the modal is dismissed', async () => {
         confirmModal.mockResolvedValueOnce(true);
         const modal = await startAddMachineLink();
         await act(async () => { pendingCreate.resolve(committedLink()); });
         await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.state.watching'));
+        expect(statusLine(modal.screen)?.props).toMatchObject({ kind: 'success', accessibilitySemantics: 'status' });
         expect(modal.config.onDismissRequest('shared')).toBe(true);
         expect(modal.onClose).not.toHaveBeenCalled();
     });
@@ -268,6 +363,63 @@ describe('Project Add machine modal', () => {
         expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT)).toEqual([]);
         await act(async () => { recordMachineRequestSucceeded({ serverId: workspace.serverId, accountId: workspace.accountId, machineId: 'machine-b' }); });
         expect(modal.submit().props.disabled).toBe(false);
+    });
+
+    describe('same-Machine destination', () => {
+        const blocked = 'workspaceSync.start.blocked.destinationFolder';
+        const chooseOwnMachine = async (path: string) => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen, path, 'machine-a');
+            return modal;
+        };
+
+        it('lists the source Machine, labelled as this machine', async () => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            const items: ReadonlyArray<{ id: string; subtitle?: string }> = modal.screen.findByType(MachineSelector).findByType(DropdownMenu).props.items;
+            expect(items.find(item => item.id === 'machine-a')?.subtitle).toContain('workspaceSync.addMachine.thisMachine');
+            expect(items.find(item => item.id === 'machine-b')?.subtitle ?? '').not.toContain('workspaceSync.addMachine.thisMachine');
+        });
+
+        it.each(['/source', '/source/', '/source//nested', '\\source\\nested'])('blocks %s as equal to the source root or inside it', async (path) => {
+            const modal = await chooseOwnMachine(path);
+            expect(modal.submit().props).toMatchObject({ disabled: true, accessibilityHint: blocked });
+        });
+
+        it('creates the link on the same Machine for a distinct sibling folder', async () => {
+            requireApproval = true;
+            const modal = await chooseOwnMachine('/source-copy');
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+            expect(storedApproval().actionArgs).toMatchObject({ sourceWorkspaceRefId: source().id, targetMachineId: 'machine-a', targetPath: '/source-copy' });
+        });
+    });
+
+    describe('refusing to attach the source checkout', () => {
+        const attachSource = async (outcome: unknown) => {
+            projectsOpenOutcome.current = outcome;
+            const { id: _linked, ...unlinked } = source();
+            owner.openWorkspaceSyncAddMachine(unlinked, vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            return modal;
+        };
+
+        it('names an unreachable source Machine instead of a generic save failure', async () => {
+            const modal = await attachSource({ ok: true, result: { kind: 'refused', code: 'machine_unreachable' } });
+            await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.start.blocked.targetMachineOffline'));
+            expect(modal.screen.getTextContent()).not.toContain('common.saveError');
+            expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE)).toEqual([]);
+        });
+
+        it('keeps the generic message for an Action failure without a Project Open refusal', async () => {
+            const modal = await attachSource({ ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' });
+            await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('common.saveError'));
+        });
     });
 
     it('retires an in-flight destination admission when its Account credential changes', async () => {

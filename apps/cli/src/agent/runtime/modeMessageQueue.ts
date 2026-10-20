@@ -83,6 +83,10 @@ export class MessageQueue2<Mode, Message = string> {
     this.onMessageHandler = handler;
   }
 
+  getContextOnlyMessages(): readonly Message[] {
+    return this.queue.filter(item => item.contextOnly).map(item => item.message);
+  }
+
   push(message: Message, mode: Mode): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');
@@ -311,20 +315,28 @@ export class MessageQueue2<Mode, Message = string> {
     }
 
     const context = this.queue.filter(item => item.contextOnly).map(item => item.message);
-    this.queue = this.queue.filter(item => !item.contextOnly);
-
-    const firstItem = this.queue[0];
+    // Context selection happens after collection. Keep originals available until
+    // the consumer discards the exact identities represented in its final input.
+    const firstItemIndex = this.queue.findIndex(item => !item.contextOnly);
+    const firstItem = this.queue[firstItemIndex];
     const sameModeMessages: Message[] = [];
     const mode = firstItem.mode;
     const isolate = firstItem.isolate;
     const targetModeHash = firstItem.modeHash;
 
     if (firstItem.isolate) {
-      const item = this.queue.shift()!;
+      const item = this.queue.splice(firstItemIndex, 1)[0];
       sameModeMessages.push(item.message);
     } else {
-      while (this.queue.length > 0 && this.queue[0].modeHash === targetModeHash && !this.queue[0].isolate) {
-        const item = this.queue.shift()!;
+      let index = firstItemIndex;
+      while (index < this.queue.length) {
+        const item = this.queue[index];
+        if (item.contextOnly) {
+          index++;
+          continue;
+        }
+        if (item.modeHash !== targetModeHash || item.isolate) break;
+        this.queue.splice(index, 1);
         sameModeMessages.push(item.message);
       }
     }

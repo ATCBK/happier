@@ -11,12 +11,19 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
 import { AgentInputPopoverSurface } from './AgentInputPopoverSurface';
+import { AgentInputDocumentPanelContext } from '@/components/sessions/agentInput/selection/useAgentInputPopoverLayout';
+import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 
 const MOBILE_WEB_AGENT_INPUT_POPOVER_VIEWPORT_MARGIN = 12;
 
 export type AgentInputContentPopoverRenderArgs = Readonly<{
     requestClose: () => void;
     maxHeight: number;
+    /**
+     * The content is laid out in a page section (the New Session wizard's expanded sections) instead
+     * of this popover: it draws page rows and leaves focus alone.
+     */
+    inline?: boolean;
 }>;
 
 export type AgentInputPopoverContent =
@@ -27,6 +34,8 @@ export type AgentInputPopoverContent =
 export type AgentInputContentPopoverHeader = Readonly<{
     title: string;
     description?: string;
+    /** `sheet`: only a phone sheet's band names it; the anchored popover leads with its own first control. */
+    placement?: 'sheet';
 }>;
 
 export type AgentInputContentPopoverConfig = Readonly<{
@@ -78,8 +87,14 @@ function renderPopoverContent(
 export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
     const { width: windowWidth } = useWindowDimensions();
     const usesMobileWebBoundaryLayout = Platform.OS === 'web' && isMobileLayoutWidth(windowWidth);
+    // A form's picker opened inside a floating form (Run now) spans the form's own column: it covers
+    // the form below its chips edge to edge instead of leaving a clipped sliver of the form's footer
+    // beside it. Its content restates what that footer said (the Inputs view leads with readiness).
+    const inDocumentPanel = React.useContext(AgentInputDocumentPanelContext);
+    const containingSurfaceGroup = useContainingGlassSurfaceGroup();
+    const spansFloatingFormColumn = inDocumentPanel && containingSurfaceGroup === 'floating';
     const maxWidthCap = React.useMemo(() => {
-        const baseMaxWidthCap = props.maxWidthCap ?? 420;
+        const baseMaxWidthCap = spansFloatingFormColumn ? Number.MAX_SAFE_INTEGER : props.maxWidthCap ?? 420;
         if (!usesMobileWebBoundaryLayout) {
             return baseMaxWidthCap;
         }
@@ -88,7 +103,7 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
             baseMaxWidthCap,
             Math.max(0, Math.floor(windowWidth - MOBILE_WEB_AGENT_INPUT_POPOVER_VIEWPORT_MARGIN * 2)),
         );
-    }, [props.maxWidthCap, usesMobileWebBoundaryLayout, windowWidth]);
+    }, [props.maxWidthCap, spansFloatingFormColumn, usesMobileWebBoundaryLayout, windowWidth]);
     // The header sits outside the content's own height budget, so the content keeps what is left.
     const [headerHeight, setHeaderHeight] = React.useState(0);
 
@@ -100,7 +115,7 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
             boundaryRef={props.boundaryRef}
             maxHeightCap={props.maxHeightCap ?? 420}
             maxWidthCap={maxWidthCap}
-            portalTopBottomLayout={usesMobileWebBoundaryLayout ? 'boundary' : undefined}
+            portalTopBottomLayout={usesMobileWebBoundaryLayout || spansFloatingFormColumn ? 'boundary' : undefined}
             phonePresentation={props.phonePresentation}
             // A titled popover names itself in the sheet's band; an untitled one (the machine list, led by
             // its own search) keeps only the grabber instead of an empty band with a lone close button.
@@ -111,7 +126,7 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
         >
             {({ maxHeight, presentation }) => {
                 // On a phone sheet the shared band already shows the title and purpose.
-                const header = presentation === 'sheet' ? undefined : props.header;
+                const header = presentation === 'sheet' || props.header?.placement === 'sheet' ? undefined : props.header;
                 const contentMaxHeight = header ? Math.max(0, maxHeight - headerHeight) : maxHeight;
                 return (
                 <AgentInputPopoverSurface

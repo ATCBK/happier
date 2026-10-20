@@ -62,5 +62,6 @@ export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2)
 
 export function cliWidgetCatalogEntryV1(candidate: ReturnType<typeof readCliWidgetCatalogProjectionV1>[number], instanceCount: number): WidgetCatalogSourceEntryV1 {
     return { definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
-        sizeDeclaration: candidate.sizeDeclaration, fields: [...candidate.fields], availability: candidate.availability, instanceCount };
+        sizeDeclaration: candidate.sizeDeclaration, fields: [...candidate.fields],
+        ...(candidate.inputSchema ? { inputSchema: candidate.inputSchema } : {}), availability: candidate.availability, instanceCount };
 }

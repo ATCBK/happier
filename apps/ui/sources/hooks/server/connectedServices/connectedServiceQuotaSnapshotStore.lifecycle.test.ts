@@ -7,14 +7,14 @@ import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncrypt
 import {
     __resetConnectedServiceQuotaSnapshotStore, buildQuotaSnapshotScopeKey, getQuotaSnapshotEntry,
     refreshQuotaSnapshot, retainQuotaSnapshotPolling, retainQuotaSnapshotOnce, subscribeQuotaSnapshotEntry,
-    type LegacyQuotaSnapshotLoadContext,
+    type QuotaSnapshotRefreshContext,
 } from './connectedServiceQuotaSnapshotStore';
 
 let boundary: Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>;
 const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
 let getSnapshotPlain: typeof boundary.plainRead;
 let requestRefresh: typeof boundary.refreshRead;
-let ctx: LegacyQuotaSnapshotLoadContext;
+let ctx: QuotaSnapshotRefreshContext;
 
 describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
     const globalWithDocument = globalThis as unknown as { document?: Document | EventTarget & { visibilityState: string } };

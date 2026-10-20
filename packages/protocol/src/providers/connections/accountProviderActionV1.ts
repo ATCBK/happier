@@ -104,11 +104,11 @@ export function describeAccountProviderConnectionV1(settings: ProviderSettingsV1
     deployment: connection.deployment.kind === 'managedLocal' ? { kind: 'managedLocal', targetMachineId: connection.gatewayPlacement?.kind === 'machine' ? connection.gatewayPlacement.machineId : null,
       effects: managed && identity ? { implementationIdentity: identity, protocols: contribution?.endpointTemplates.filter(endpoint => managed.endpointTemplateIds.includes(endpoint.id)).map(endpoint => endpoint.protocol) ?? [],
         connectedAccountPurposes: managed.connectedAccounts.filter(declaration => connection.purposeBindingDefaults?.[declaration.purpose])
-          .map(({ endpointTemplateIds: _endpoints, ...declaration }) => ({ ...declaration, target: connection.purposeBindingDefaults?.[declaration.purpose] })),
+          .map(({ endpointTemplateIds: _endpoints, staticModels: _models, ...declaration }) => ({ ...declaration, target: connection.purposeBindingDefaults?.[declaration.purpose] })),
         ...(managed.connectedAccountPurposeBindingPolicy ? { connectedAccountPurposeBindingPolicy: managed.connectedAccountPurposeBindingPolicy } : {}) } : null } : { kind: 'external' },
     ...(connection.gatewayPlacement ? { gatewayPlacement: connection.gatewayPlacement } : {}),
     ...(connection.claudeHelperModels ? { claudeHelperModels: connection.claudeHelperModels } : {}),
-    managedLocalOption: managed ? { targetMachineId: null, connectedAccountPurposes: managed.connectedAccounts.map(({ endpointTemplateIds: _endpoints, ...declaration }) => declaration),
+    managedLocalOption: managed ? { targetMachineId: null, connectedAccountPurposes: managed.connectedAccounts.map(({ endpointTemplateIds: _endpoints, staticModels: _models, ...declaration }) => declaration),
       ...(managed.connectedAccountPurposeBindingPolicy ? { connectedAccountPurposeBindingPolicy: managed.connectedAccountPurposeBindingPolicy } : {}) } : null,
     endpoints: source ? accountEndpoints(connection, source).map(({ publicHeaders: _headers, ...endpoint }) => endpoint) : [],
     scope: null, authorized: false, authorizationError: source ? null : createProviderErrorV1('provider_contribution_unavailable', { connectionId: connection.id }),
@@ -382,9 +382,15 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
           output = { status: 'success', action: request.input.action }; break;
         }
         case 'providers.models.experimental.confirm': {
-          const input = request.input; requireRevision(find(input.connectionId), input.expectedConnectionRevision);
+          const input = request.input;
+          if (input.connectedAccountTarget) {
+            if (input.expectedConnectionRevision !== 0 || settings.connections.some(connection => connection.id === input.connectionId)) {
+              refuse('provider_connection_changed', input.connectionId);
+            }
+          } else requireRevision(find(input.connectionId), input.expectedConnectionRevision);
           settings = setProviderExperimentalConfirmationV1(settings, {
             connectionId: input.connectionId, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+            ...(input.connectedAccountTarget ? { connectedAccountTarget: input.connectedAccountTarget } : {}),
             compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: now,
           });
           output = { status: 'success', action: input.action }; break;

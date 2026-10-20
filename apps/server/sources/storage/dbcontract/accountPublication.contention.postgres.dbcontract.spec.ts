@@ -21,7 +21,7 @@ import { initEncrypt } from "@/modules/encrypt";
 import { ConnectedAccountCatalogRowMutationResponseV1Schema, CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from "@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1";
 import { registerConfiguredAgentRowsRoutes } from "@/app/account/agents/registerConfiguredAgentRowsRoutes";
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowMutationResponseV1Schema } from "@happier-dev/protocol/acp/catalog/catalogRowsV1";
-import { readHomeDomainConfirmedRollbackV1 } from "@happier-dev/protocol/actions/homeDomainHttpBinding";
+import { observeLazyPrismaQuery } from "@/app/changes/accountPublicationContention.testkit";
 import { registerPromptLibraryRoutes } from "@/app/account/prompts/registerPromptLibraryRoutes";
 import { registerAccountSettingsHistoryRoutes } from "@/app/api/routes/account/registerAccountSettingsHistoryRoutes";
 import { registerSessionDraftRoutes } from "@/app/account/sessionDrafts/registerSessionDraftRoutes";
@@ -57,6 +57,151 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         await initEncrypt();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it.each(['set', 'remove'] as const)('preserves concurrent Account mute set/%s changes', async secondOperation => {
+        const scopes = [0, 1].map(() => ({ kind: 'sender_session' as const, sessionId: randomUUID() }));
+        const account = await db.account.create({ data: { encryptionMode: 'plain',
+            deliveryMutes: JSON.stringify(secondOperation === 'remove' ? [scopes[1]] : []) } });
+        const captured = deferred(), release = deferred();
+        const transaction = db.$transaction;
+        let firstPid = 0, secondPid = 0;
+        let paused = false;
+        let transactionCount = 0;
+        // Only schedule the real Prisma boundary. Both public HTTP operations,
+        // Account admission, list merging and terminal publication remain real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            const index = transactionCount++;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                if (index === 0) firstPid = pid;
+                else secondPid = pid;
+                return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                    if (property !== 'account' || index !== 0) return Reflect.get(inner, property, innerReceiver);
+                    return new Proxy(inner.account, { get(model, method, modelReceiver) {
+                        if (method !== 'findUnique') return Reflect.get(model, method, modelReceiver);
+                        return async (...queryArgs: unknown[]) => {
+                            const row: unknown = await Reflect.apply(model.findUnique, model, queryArgs);
+                            const query = queryArgs[0];
+                            if (!paused && typeof query === 'object' && query !== null && 'select' in query
+                                && typeof query.select === 'object' && query.select !== null && 'deliveryMutes' in query.select) {
+                                paused = true;
+                                captured.resolve();
+                                await release.promise;
+                            }
+                            return row;
+                        };
+                    } });
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(registerSessionFollowRoutes, async app => {
+                const url = '/v2/account/session-delivery-mutes';
+                const headers = { 'x-test-user-id': account.id };
+                const first = app.inject({ method: 'PUT', url, headers, payload: { scope: scopes[0] } });
+                const firstOutcome = Promise.allSettled([first]);
+                let secondOutcome: Promise<PromiseSettledResult<Awaited<typeof first>>[]> | undefined;
+                try {
+                    await Promise.race([captured.promise, first.then(() => { throw new Error('First mute never read its receiver'); })]);
+                    let settled = false;
+                    const second = app.inject({ method: secondOperation === 'set' ? 'PUT' : 'DELETE', url, headers,
+                        payload: { scope: scopes[1] } });
+                    secondOutcome = Promise.allSettled([second]).finally(() => { settled = true; });
+                    // Before the fix, the peer commits through compatible entry.
+                    // After it, the merge holds terminal Account publication and
+                    // the peer waits there; either schedule must retain both edits.
+                    while (!settled) {
+                        const rows = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                            SELECT ${firstPid} = ANY(pg_blocking_pids(pid)) AS blocked
+                            FROM pg_stat_activity WHERE pid = ${secondPid}
+                        `;
+                        if (rows[0]?.blocked) break;
+                    }
+                } finally { release.resolve(); }
+                const outcomes = [...await firstOutcome, ...await secondOutcome ?? []];
+                for (const outcome of outcomes) {
+                    if (outcome.status === 'rejected') throw outcome.reason;
+                    expect(outcome.value.statusCode).toBe(200);
+                    expect(ChangeDeliveryMuteResponseV1Schema.parse(outcome.value.json())).toEqual({ changed: true,
+                        disposition: outcome === outcomes[0] || secondOperation === 'set' ? 'muted' : 'unmuted' });
+                }
+                db.$transaction = transaction;
+                const read = await app.inject({ method: 'GET', url, headers });
+                expect(read.statusCode).toBe(200);
+                const finalScopes = ListDeliveryMutesResponseV1Schema.parse(read.json()).scopes;
+                expect(finalScopes).toHaveLength(secondOperation === 'set' ? 2 : 1);
+                expect(finalScopes).toEqual(expect.arrayContaining(secondOperation === 'set' ? scopes : [scopes[0]]));
+            });
+        } finally {
+            release.resolve();
+            db.$transaction = transaction;
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it("preserves both delivery-mute scopes when different Accounts edit one Session", async () => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const editor = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: editor.id, accessLevel: "edit" } });
+        const captured = deferred(), release = deferred();
+        const transaction = db.$transaction;
+        let paused = false;
+        // Schedule only the Prisma boundary: both HTTP writers and their
+        // access decisions, scope merging, publication and persistence stay real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== "session") return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.session, { get(model, method, modelReceiver) {
+                    if (method !== "findUnique") return Reflect.get(model, method, modelReceiver);
+                    return async (...queryArgs: unknown[]) => {
+                        const row = await Reflect.apply(model.findUnique, model, queryArgs);
+                        const query = queryArgs[0];
+                        if (!paused && typeof query === "object" && query !== null && "select" in query
+                            && typeof query.select === "object" && query.select !== null && "deliveryMutes" in query.select) {
+                            paused = true;
+                            captured.resolve();
+                            await release.promise;
+                        }
+                        return row;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(registerSessionFollowRoutes, async app => {
+                const url = `/v2/sessions/${session.id}/delivery-mutes`;
+                const scopes = [{ kind: "sender_session", sessionId: session.id }, { kind: "sender_session", sessionId: randomUUID() }];
+                const first = app.inject({ method: "PUT", url, headers: { "x-test-user-id": owner.id }, payload: { scope: scopes[0] } });
+                await Promise.race([captured.promise, first.then(() => { throw new Error("First writer did not reach its receiver read"); })]);
+                let settled = false;
+                const second = app.inject({ method: "PUT", url, headers: { "x-test-user-id": editor.id }, payload: { scope: scopes[1] } });
+                void second.finally(() => { settled = true; }).catch(() => undefined);
+                try {
+                    while (!settled) {
+                        const [{ waiting }] = await db.$queryRawUnsafe<Array<{ waiting: boolean }>>(
+                            `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                                AND wait_event_type = 'Lock' AND query LIKE '%"Account"%') AS waiting`,
+                        );
+                        if (waiting) break;
+                    }
+                } finally { release.resolve(); }
+                const responses = await Promise.all([first, second]);
+                expect(responses.map(response => response.statusCode)).toEqual([200, 200]);
+                for (const response of responses) expect(ChangeDeliveryMuteResponseV1Schema.parse(response.json()))
+                    .toEqual({ changed: true, disposition: "muted" });
+                db.$transaction = transaction;
+                const read = await app.inject({ method: "GET", url, headers: { "x-test-user-id": owner.id } });
+                expect(read.statusCode).toBe(200);
+                expect(ListDeliveryMutesResponseV1Schema.parse(read.json()).scopes).toEqual(expect.arrayContaining(scopes));
+            });
+        } finally { release.resolve(); db.$transaction = transaction; }
+    });
 
     it("keeps the ACP row CAS authoritative for concurrent definition writes", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
@@ -214,9 +359,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         },
     );
 
-    it.each(["configuration", "mode-change", "archive", "archive-active", "unarchive", "credential", "credential-mode-change", "group", "acp", "acp-mode-change", "acp-reference", "prompt", "prompt-mode-change",
+    it.each(["configuration", "mode-change", "archive", "archive-active", "unarchive", "credential", "credential-mode-change", "group", "acp", "acp-mode-change", "prompt", "prompt-mode-change",
         "manager", "manager-cas", "manager-inactive", "follow", "follow-remove", "voice", "follow-preferences", "follow-source", "follow-source-remove", "read-mark-read", "read-mark-unread", "read-advance",
-        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive", "draft-account", "draft-session", "draft-session-inactive", "draft-session-mode-change", "draft-session-shared-revoked",
+        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive",
+        "delivery-mute-session", "delivery-mute-session-remove", "delivery-mute-session-inactive",
+        "delivery-mute-session-shared-revoked", "delivery-mute-session-shared-downgraded",
+        "draft-account", "draft-session", "draft-session-inactive", "draft-session-mode-change", "draft-session-shared-revoked",
         "notification", "notification-mode-change", "remote-host", "remote-host-mode-change", "kv", "pet-remove", "profile", "profile-mode-change", "profile-conversion",
         "directory-upsert", "directory-remove", "directory-preferred"] as const)(
         "settles %s after a held Account writer commits", async operation => {
@@ -234,14 +382,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 data: { preferredHomeServerIdentityId: descriptor.homeServerIdentityId } });
             const relationOperation = operation.startsWith("manager") || operation.startsWith("follow")
                 || operation === "voice" || operation.startsWith("read-") || operation.startsWith("delivery-mute");
-            const draftOwner = operation === "draft-session-shared-revoked" ? await db.account.create({ data: { encryptionMode: "plain" } }) : account;
+            const sharedMute = operation === "delivery-mute-session-shared-revoked" || operation === "delivery-mute-session-shared-downgraded";
+            const draftOwner = operation === "draft-session-shared-revoked" || sharedMute
+                ? await db.account.create({ data: { encryptionMode: "plain" } }) : account;
             const session = operation === "archive" || operation === "archive-active" || operation === "unarchive"
                 || relationOperation || operation.startsWith("draft-session")
                 ? await db.session.create({ data: { accountId: draftOwner.id, tag: randomUUID(), metadata: "{}",
                     encryptionMode: "plain", active: false, seq: 10, archivedAt: operation === "unarchive" ? new Date(123) : null } })
                 : null;
-            if (operation === "draft-session-shared-revoked" && session) await db.sessionShare.create({ data: {
-                sessionId: session.id, sharedWithUserId: account.id, sharedByUserId: draftOwner.id, accessLevel: "view",
+            if ((operation === "draft-session-shared-revoked" || sharedMute) && session) await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedWithUserId: account.id, sharedByUserId: draftOwner.id, accessLevel: sharedMute ? "edit" : "view",
             } });
             const lead = relationOperation ? await db.session.create({ data: { accountId: account.id,
                 tag: randomUUID(), metadata: "{}", encryptionMode: "plain", active: false } }) : null;
@@ -261,11 +411,39 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 accountId: account.id, sessionId: session.id, lastViewedSessionSeq: operation === "read-mark-unread" ? 10 : 0,
             } });
             const transaction = db.$transaction;
+            // Count attempts that reach an Account lock/write. A replay may
+            // refuse a revoked shared Session before reaching that boundary.
             let attempts = 0;
             let waits = 0;
+            let interleaved = false;
+            let expectedWait: boolean | undefined;
+            const observationName = `r34-${randomUUID()}`;
             const failures: string[] = [];
+            const peerChangesAccountKey = (operation === "mode-change" || operation.endsWith("-mode-change"))
+                && operation !== "draft-session-mode-change";
+            const assertInterleaving = () => {
+                expect(interleaved).toBe(true);
+                expect(expectedWait).toBeDefined();
+                expect(waits).toBe(expectedWait ? 1 : 0);
+                if (operation.startsWith("directory-")) {
+                    // Serializable may reject the first captured version, but
+                    // one real competing commit must converge on replay.
+                    expect(failures.length).toBeLessThanOrEqual(1);
+                    for (const code of failures) expect(["P2034", "P2010"]).toContain(code);
+                    expect(attempts).toBe(failures.length + 1);
+                } else if (operation === "draft-session-shared-revoked") {
+                    expect(failures).toEqual(["P2010"]);
+                    expect(attempts).toBe(1);
+                } else {
+                    expect(failures).toEqual([]);
+                    expect(attempts).toBe(1);
+                }
+            };
             if (session && operation === "delivery-mute-remove") await db.account.update({
                 where: { id: account.id }, data: { deliveryMutes: JSON.stringify([{ kind: "sender_session", sessionId: session.id }]) },
+            });
+            if (session && operation === "delivery-mute-session-remove") await db.session.update({
+                where: { id: session.id }, data: { deliveryMutes: JSON.stringify([{ kind: "sender_session", sessionId: session.id }]) },
             });
             // Only the Prisma transport is scheduled. HTTP, mode admission,
             // Account fences, lifecycle effects and publication execute unchanged.
@@ -273,16 +451,23 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 const callback = args[0];
                 if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
                 return Reflect.apply(target, receiver, [async (tx: Tx) => {
-                    let interleaved = false;
-                    const interleave = async <T>(run: () => Promise<T>): Promise<T> => {
+                    // Tag only this transaction without taking an extra read
+                    // snapshot before the production owner's first query.
+                    await tx.$executeRawUnsafe(`SET LOCAL application_name = '${observationName}'`);
+                    let observedAttempt = false;
+                    const interleave = async (run: () => Promise<unknown>, keyShare: boolean): Promise<unknown> => {
+                        if (!observedAttempt) { observedAttempt = true; attempts++; }
                         if (interleaved) return run();
                         interleaved = true;
-                        attempts++;
+                        // A non-key Account UPDATE is compatible with KEY
+                        // SHARE. A key update, stronger lock or UPDATE waits.
+                        expectedWait = !keyShare || peerChangesAccountKey;
                         const locked = deferred(), release = deferred();
                         const peer = Reflect.apply(transaction, db, [async (peerTx: Tx) => {
-                            await peerTx.account.update({ where: { id: account.id }, data: (operation === "mode-change" || operation.endsWith("-mode-change")) && operation !== "draft-session-mode-change"
+                            await peerTx.account.update({ where: { id: account.id }, data: peerChangesAccountKey
                                 ? { encryptionMode: "e2ee", ...createSignedAccountContentBinding() }
-                                : operation === "manager-inactive" || operation === "delivery-mute-inactive" ? { status: "disabled", seq: { increment: 1 } }
+                                : operation === "manager-inactive" || operation === "delivery-mute-inactive" || operation === "delivery-mute-session-inactive"
+                                    ? { status: "disabled", seq: { increment: 1 } }
                                 : { seq: { increment: 1 } } });
                             if (operation === "archive-active" && session) {
                                 await peerTx.session.update({ where: { id: session.id }, data: { active: true } });
@@ -296,41 +481,55 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             if (operation === "draft-session-shared-revoked" && session) {
                                 await peerTx.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: account.id } });
                             }
+                            if (sharedMute && session) {
+                                if (operation === "delivery-mute-session-shared-revoked") {
+                                    await peerTx.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: account.id } });
+                                } else {
+                                    await peerTx.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: account.id }, data: { accessLevel: "view" } });
+                                }
+                            }
                             locked.resolve();
                             await release.promise;
                         }]) as Promise<unknown>;
-                        await locked.promise;
-                        const waiting = Promise.resolve(run());
-                        // Attach immediately while PostgreSQL's actual wait is observed.
-                        void waiting.catch(() => undefined);
-                        let settled = false;
-                        void waiting.finally(() => { settled = true; }).catch(() => undefined);
+                        const peerOutcome = Promise.allSettled([peer]);
+                        let waiting: Promise<unknown> | undefined;
+                        let queryOutcome: Promise<PromiseSettledResult<unknown>[]> | undefined;
                         try {
+                            await Promise.race([locked.promise, peer.then(() => { throw new Error("Peer exited before its Account write"); })]);
+                            let settled = false;
+                            waiting = run();
+                            queryOutcome = Promise.allSettled([waiting]).finally(() => { settled = true; });
                             while (!settled) {
                                 const [{ waiting: blocked }] = await db.$queryRawUnsafe<Array<{ waiting: boolean }>>(
                                     `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
-                                        AND wait_event_type = 'Lock' AND query LIKE '%"Account"%') AS waiting`,
+                                        AND application_name = $1 AND wait_event_type = 'Lock') AS waiting`, observationName,
                                 );
                                 if (blocked) { waits++; break; }
                             }
-                        } finally { release.resolve(); }
-                        await peer;
-                        try { return await waiting; }
-                        catch (error) {
-                            failures.push(typeof error === "object" && error !== null && "code" in error ? String(error.code) : "unknown");
-                            throw error;
+                        } finally {
+                            release.resolve();
+                            await peerOutcome;
+                            if (queryOutcome) await queryOutcome;
                         }
+                        await peer;
+                        return waiting;
                     };
+                    const observe = (query: unknown, keyShare: boolean) => observeLazyPrismaQuery(query, () => ({
+                        started() {},
+                        settled(succeeded, error) {
+                            if (!succeeded) failures.push(typeof error === "object" && error !== null && "code" in error ? String(error.code) : "unknown");
+                        },
+                    }), undefined, consume => interleave(consume, keyShare));
                     return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
                         if (property === "account") return new Proxy(inner.account, { get(model, method, modelReceiver) {
                             if (method !== "update" && method !== "updateMany") return Reflect.get(model, method, modelReceiver);
-                            return (...queryArgs: unknown[]) => interleave(() => Reflect.apply(model[method], model, queryArgs));
+                            return (...queryArgs: unknown[]) => observe(Reflect.apply(model[method], model, queryArgs), false);
                         } });
                         if (property !== "$queryRawUnsafe") return Reflect.get(inner, property, innerReceiver);
                         return (query: string, ...values: unknown[]) => {
-                            const run = () => inner.$queryRawUnsafe(query, ...values);
+                            const result = inner.$queryRawUnsafe(query, ...values);
                             return query.includes('FROM "Account"') && query.includes("FOR ") || query.includes('UPDATE "Account"')
-                                ? interleave(run) : run();
+                                ? observe(result, query.includes("FOR KEY SHARE")) : result;
                         };
                     } }));
                 }, ...args.slice(1)]);
@@ -362,9 +561,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         }
                         expect(await listAccountHomeDirectory(account.id)).toMatchObject(operation === "directory-remove"
                             ? { homes: [] } : { preferredHomeServerIdentityId: descriptor.homeServerIdentityId });
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation === "profile-conversion") {
@@ -378,9 +575,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             }) });
                         expect(response.statusCode).toBe(200);
                         expect(response.json()).toMatchObject({ status: "updated", settingsVersion: 1, providerRevision: 0 });
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation.startsWith("profile")) {
@@ -396,9 +591,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         db.$transaction = transaction;
                         const read = await app.inject({ method: "POST", url: PROFILE_RECORD_READ_ROUTE_V1, headers, payload: { id } });
                         expect(read.json()).toMatchObject(operation.endsWith("-mode-change") ? { status: "absent" } : { status: "present", content });
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation === "kv") {
@@ -406,9 +599,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         const result = await kvMutate({ uid: account.id }, [{ key, value: "Zml4dHVyZQ==", version: -1 }]);
                         expect(result.success).toBe(true);
                         expect(await kvGet({ uid: account.id }, key)).toEqual({ key, value: "Zml4dHVyZQ==", version: 0 });
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         db.$transaction = transaction;
                         const contenders = await Promise.all([0, 1].map(() => kvMutate({ uid: account.id }, [{ key, value: null, version: 0 }])));
                         expect(contenders.map(result => result.success).sort()).toEqual([false, true]);
@@ -421,9 +612,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         expect(await persistence.deleteAccountPet(account.id, pet.id)).toMatchObject({ ok: true });
                         expect(await persistence.readAccountPet(account.id, pet.id)).toBeNull();
                         expect((await db.accountPetPackage.findUniqueOrThrow({ where: { id: pet.id } })).deletedAt).not.toBeNull();
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation.startsWith("draft-")) {
@@ -454,11 +643,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             const read = await app.inject({ method: "POST", url: "/v1/account/session-drafts/read", headers, payload: { address } });
                             expect(SessionDraftReadResponseV1Schema.parse(read.json())).toMatchObject({ status: "present", record: { revision: 0, content } });
                         }
-                        expect(waits).toBeGreaterThan(0);
-                        // Shared access is outside the Account fence: its retained
-                        // Serializable replay must re-admit a revoked grant.
-                        expect(failures).toEqual(operation === "draft-session-shared-revoked" ? ["P2010"] : []);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation.startsWith("notification") || operation.startsWith("remote-host")) {
@@ -473,37 +658,36 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         expect(response.statusCode).toBe(200);
                         expect(response.json()).toMatchObject(operation.endsWith("-mode-change") ? { status: "account-mode-mismatch" } : { status: "updated", revision: 0 });
                         expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(operation.endsWith("-mode-change") ? 0 : 1);
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation.startsWith("delivery-mute") && session) {
                         const scope = { kind: "sender_session", sessionId: session.id };
-                        const removing = operation === "delivery-mute-remove";
-                        const inactive = operation === "delivery-mute-inactive";
+                        const sessionReceiver = operation.startsWith("delivery-mute-session");
+                        const url = sessionReceiver ? `/v2/sessions/${session.id}/delivery-mutes` : "/v2/account/session-delivery-mutes";
+                        const removing = operation.endsWith("-remove");
+                        const inactive = operation.endsWith("-inactive");
                         const response = await app.inject({ method: removing ? "DELETE" : "PUT",
-                            url: "/v2/account/session-delivery-mutes",
+                            url,
                             headers: { "x-test-user-id": account.id }, payload: { scope },
                         });
                         console.info("B4_DELIVERY_MUTE_PUBLICATION", { operation, attempts, waits, failures, status: response.statusCode });
-                        expect(response.statusCode).toBe(inactive ? 403 : 200);
-                        if (inactive) {
-                            expect(response.json()).toEqual({ error: "account_inactive" });
+                        expect(response.statusCode).toBe(inactive ? 403 : sharedMute ? 404 : 200);
+                        if (inactive || sharedMute) {
+                            expect(response.json()).toEqual({ error: inactive ? "account_inactive" : "session_not_found" });
                             expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).deliveryMutes).toBeNull();
+                            expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).deliveryMutes).toBeNull();
                         } else {
                             expect(ChangeDeliveryMuteResponseV1Schema.parse(response.json())).toEqual({
                                 changed: true, disposition: removing ? "unmuted" : "muted",
                             });
-                            const read = await app.inject({ method: "GET", url: "/v2/account/session-delivery-mutes",
+                            const read = await app.inject({ method: "GET", url,
                                 headers: { "x-test-user-id": account.id } });
                             expect(read.statusCode).toBe(200);
                             expect(ListDeliveryMutesResponseV1Schema.parse(read.json())).toEqual({ scopes: removing ? [] : [scope] });
                         }
-                        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(inactive ? 1 : 2);
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(inactive || sharedMute ? 1 : 2);
+                        assertInterleaving();
                         return;
                     }
                     if (relationOperation && session && lead) {
@@ -524,9 +708,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             } });
                             expect(frontier.lastViewedSessionSeq).toBe(operation === "read-mark-read" ? 10 : operation === "read-advance" ? 5 : 9);
                             expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBeGreaterThan(1);
-                            expect(waits).toBeGreaterThan(0);
-                            expect(failures).toEqual([]);
-                            expect(attempts).toBe(1);
+                            assertInterleaving();
                             return;
                         }
                         const response = await app.inject({
@@ -551,9 +733,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             expect(SessionManagerSetResultV1Schema.parse(response.json())).toEqual({ ok: false, error: "manager_forbidden", reason: "read" });
                             expect(await db.sessionFollowEdge.count({ where: { managerSourceSessionId: session.id } })).toBe(0);
                             expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(1);
-                            expect(waits).toBeGreaterThan(0);
-                            expect(failures).toEqual([]);
-                            expect(attempts).toBe(1);
+                            assertInterleaving();
                             return;
                         }
                         if (manager) {
@@ -577,9 +757,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         const committedCursor = (await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq;
                         if (operation === "manager-cas") expect(committedCursor).toBe(1);
                         else expect(committedCursor).toBeGreaterThan(1);
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     if (operation === "group" || operation === "credential" || operation === "credential-mode-change") {
@@ -595,9 +773,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         if (operation === "credential-mode-change") {
                             expect(await db.serviceAccountToken.count({ where: { accountId: account.id } })).toBe(0);
                         }
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
+                        assertInterleaving();
                         return;
                     }
                     const acp = operation.startsWith("acp");
@@ -608,7 +784,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         headers: { "x-test-user-id": account.id },
                         ...(session ? {} : { payload: { expectedRevision: "absent", sourceSettingsVersion: 0,
                             ...(acp ? { source: "fresh" } : {}),
-                            referencedSavedSecretIds: operation === "acp-reference" ? ["happier:shared-secret:v1:held-reference"] : [],
+                            referencedSavedSecretIds: [],
                             content: { t: "plain", v: acp ? { v: 1, definitions: [] }
                                 : prompt ? { key: "skill-rules", value: { v: 1, rules: [] } } : { key: "configurations", value: { v: 1, entries: [] } } } } }),
                     });
@@ -620,20 +796,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         expect(await db.session.findUniqueOrThrow({ where: { id: session.id } }))
                             .toMatchObject({ active: true, archivedAt: null });
                         expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(1);
-                        expect(waits).toBeGreaterThan(0);
-                        expect(failures).toEqual([]);
-                        expect(attempts).toBe(1);
-                        return;
-                    }
-                    if (operation === "acp-reference") {
-                        // A referenced grant can change under another Account. Its
-                        // retained SSI rollback must reach the canonical HTTP error owner.
-                        expect(response.statusCode).toBe(503);
-                        expect(response.json()).toMatchObject({ error: "database_transaction_conflict_exhausted", statusCode: 503 });
-                        expect(readHomeDomainConfirmedRollbackV1(response.statusCode, response.json())?.code)
-                            .toBe("database_transaction_conflict_exhausted");
-                        expect(failures.length).toBeGreaterThan(0);
-                        expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+                        assertInterleaving();
                         return;
                     }
                     expect(response.statusCode).toBe(200);
@@ -652,9 +815,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         );
                         expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(modeChanged ? 0 : 1);
                     }
-                    expect(waits).toBeGreaterThan(0);
-                    expect(failures).toEqual([]);
-                    expect(attempts).toBe(1);
+                    assertInterleaving();
                 });
             } finally { db.$transaction = transaction; }
         },

@@ -35,7 +35,10 @@ vi.mock('@expo/vector-icons', () => ({
 
 describe('SessionRuntimeSettingsView', () => {
     beforeEach(async () => {
-        await account.restore({ settings: { sessionUseTmux: false, sessionTerminalHost: 'herdr' } });
+        await account.restore({ waivedActions: ['settings.set'], settings: {
+            sessionUseTmux: false, sessionTerminalHost: 'herdr', sessionTmuxSessionName: 'work',
+            sessionTmuxIsolated: true, sessionTmuxTmpDir: '/tmp/work-tmux',
+        } });
     });
 
     afterEach(async () => {
@@ -107,15 +110,11 @@ describe('SessionRuntimeSettingsView', () => {
     });
 
     it('shows the existing account tmux settings only for tmux, retaining the saved values', async () => {
-        const { sync } = await import('@/sync/sync');
-        sync.applySettings({ sessionUseTmux: true, sessionTerminalHost: 'tmux',
-            sessionTmuxSessionName: 'work', sessionTmuxIsolated: true, sessionTmuxTmpDir: '/tmp/work-tmux' },
-        { expectedSettingsScope: storage.getState().settingsScope! });
-        await vi.waitFor(() => expect(storage.getState().settings).toMatchObject({
-            sessionTerminalHost: 'tmux', sessionTmuxSessionName: 'work', sessionTmuxIsolated: true,
-        }));
         const { SessionRuntimeSettingsView } = await import('./SessionRuntimeSettingsView');
         const screen = await renderSettingsView(React.createElement(SessionRuntimeSettingsView));
+        expect(screen.findByTestId('settings-session-tmux-name')).toBeNull();
+        await act(async () => { screen.findByTestId('settings-session-terminal-host:tmux')!.props.onPress(); });
+        await vi.waitFor(() => expect(screen.findByTestId('settings-session-tmux-name')?.props.value).toBe('work'));
         expect(screen.findByTestId('settings-session-tmux-name')?.props.value).toBe('work');
         expect(screen.findByTestId('settings-session-tmux-isolated')?.props.value).toBe(true);
         expect(screen.findByTestId('settings-session-tmux-tmpdir')?.props.value).toBe('/tmp/work-tmux');

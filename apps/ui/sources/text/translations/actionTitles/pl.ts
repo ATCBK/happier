@@ -578,7 +578,7 @@ export const pl = {
     connectedServices_accounts_revoke: "Unieważnij połączenie konta",
     connectedServices_accounts_default_set: "Ustaw domyślne połączone konto",
     connectedServices_accounts_purposeDefault_set: "Wybierz domyślne logowanie agenta",
-    connectedServices_purposes_default_set: "Wybierz domyślne połączone konto zasobu",
+    connectedServices_purposes_default_set: "Wybierz domyślne połączone konto",
     connectedServices_pools_create: "Utwórz pulę połączonej usługi",
     connectedServices_pools_patch: "Edytuj pulę połączonej usługi",
     connectedServices_pools_delete: "Usuń pulę połączonej usługi",

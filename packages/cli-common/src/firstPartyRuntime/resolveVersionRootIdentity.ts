@@ -55,6 +55,23 @@ function relativeForPathShape(from: string, to: string): string {
     : relative(from, to);
 }
 
+function resolvePhysicalPathOrSelf(pathLike: string): string {
+  try {
+    return realpathSync(pathLike);
+  } catch {
+    // Preserve marker-only pointers and typed unavailable-root diagnostics.
+    return resolvePathForPathShape(pathLike);
+  }
+}
+
+function resolveParentAliases(pathLike: string): string {
+  const path = resolvePathForPathShape(pathLike);
+  const pathShape = isWin32ShapedAbsolutePath(path) ? win32Path : { dirname, basename };
+  // Resolve only the parent: dereferencing current/previous here would bypass
+  // their markers, and dereferencing a version could hide an escaping symlink.
+  return joinPathForPathShape(resolvePhysicalPathOrSelf(pathShape.dirname(path)), pathShape.basename(path));
+}
+
 function resolvePhysicalVersionRoot(
   layout: FirstPartyInstallLayout,
   runtimeRoot: string,
@@ -142,14 +159,15 @@ export function resolveFirstPartyVersionRootIdentity(params: Readonly<{
   runtimeRoot: string;
 }>): FirstPartyVersionRootIdentity {
   const runtimeRoot = resolvePathForPathShape(params.runtimeRoot);
-  if (pathsEqual(runtimeRoot, params.layout.currentPath)) {
+  const membershipRoot = resolveParentAliases(runtimeRoot);
+  if (pathsEqual(membershipRoot, resolveParentAliases(params.layout.currentPath))) {
     return resolveMarkedPointer(params.layout, runtimeRoot, 'current');
   }
-  if (pathsEqual(runtimeRoot, params.layout.previousPath)) {
+  if (pathsEqual(membershipRoot, resolveParentAliases(params.layout.previousPath))) {
     return resolveMarkedPointer(params.layout, runtimeRoot, 'previous');
   }
 
-  const relativeVersionPath = relativeForPathShape(params.layout.versionsDir, runtimeRoot);
+  const relativeVersionPath = relativeForPathShape(resolvePhysicalPathOrSelf(params.layout.versionsDir), membershipRoot);
   const versionSegments = relativeVersionPath.split(/[\\/]/u);
   if (
     relativeVersionPath.length > 0
@@ -171,7 +189,7 @@ export function resolveFirstPartyVersionRootIdentity(params: Readonly<{
     });
   }
 
-  const relativeInstallPath = relativeForPathShape(params.layout.installRoot, runtimeRoot);
+  const relativeInstallPath = relativeForPathShape(resolvePhysicalPathOrSelf(params.layout.installRoot), membershipRoot);
   const insideInstallRoot = relativeInstallPath === '' || (
     relativeInstallPath !== '..'
     && !relativeInstallPath.startsWith(`..${isWin32ShapedAbsolutePath(runtimeRoot) ? '\\' : '/'}`)

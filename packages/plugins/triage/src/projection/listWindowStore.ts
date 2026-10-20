@@ -86,6 +86,13 @@ export type TriageListWindowSnapshotV1 = Readonly<{
     /** The last admitted window. Retained across a failed refresh. */
     window?: TriageListWindowV1;
     freshness: 'unknown' | 'fresh' | 'stale';
+    /**
+     * Oldest last-successful configured-lane read, on this store's clock — the
+     * same completion fact used for age staleness. Absent until every configured
+     * lane has completed a read (and when none are configured). Failed refreshes
+     * retain this time; re-folding or a paced-away demand cannot advance it.
+     */
+    completedAtMs?: number;
     pending: 'idle' | 'initial' | 'refresh';
     /** The host is still establishing its Machine binding; original diagnostics remain available. */
     /**
@@ -408,21 +415,30 @@ export function createTriageListWindowStore(deps: Readonly<{
         return !disposed;
     }
 
-    function freshness(): TriageListWindowSnapshotV1['freshness'] {
+    function completedAtMs(): number | undefined {
+        let oldest: number | undefined;
+        for (const summary of configuredSources) {
+            const completed = lanes.get(summary.sourceInstanceId)?.completedAtMs;
+            if (completed == null) return undefined;
+            oldest = oldest === undefined ? completed : Math.min(oldest, completed);
+        }
+        return oldest;
+    }
+
+    function freshness(completed: number | undefined): TriageListWindowSnapshotV1['freshness'] {
         if (window === null) return 'unknown';
         if (error !== null) return 'stale';
         // Each connection ages from its own completed read, not the final
         // transport batch. A slow tail cannot make earlier lanes newly fresh.
-        const nowMs = deps.nowMs();
         for (const summary of configuredSources) {
             const lane = lanes.get(summary.sourceInstanceId);
             if (
                 lane === undefined
                 || lane.error !== null
-                || lane.completedAtMs === null
-                || nowMs - lane.completedAtMs >= TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS
+                || completed === undefined
             ) return 'stale';
         }
+        if (completed !== undefined && deps.nowMs() - completed >= TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS) return 'stale';
         return 'fresh';
     }
 
@@ -550,9 +566,11 @@ export function createTriageListWindowStore(deps: Readonly<{
         const unreadable = unreadableSources();
         const blocked = refreshBlock();
         const appendable = loadMore();
+        const completed = completedAtMs();
         const next: TriageListWindowSnapshotV1 = Object.freeze({
             ...(window === null ? {} : { window }),
-            freshness: freshness(),
+            freshness: freshness(completed),
+            ...(completed === undefined ? {} : { completedAtMs: completed }),
             pending,
             passes,
             ...(appendable === null ? {} : { loadMore: appendable }),
@@ -580,7 +598,7 @@ export function createTriageListWindowStore(deps: Readonly<{
      * Keep the same snapshot object until a published fact actually changes.
      */
     function readSnapshot(): TriageListWindowSnapshotV1 {
-        const current = freshness();
+        const current = freshness(snapshot.completedAtMs);
         if (current !== snapshot.freshness) snapshot = Object.freeze({ ...snapshot, freshness: current });
         const blocked = refreshBlock();
         if (blocked === null) {

@@ -11,7 +11,7 @@ import { useHomeAiLaunchProfileCatalog } from '@/sync/store/useAiLaunchProfiles'
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
-import { PROMPTS_CONTEXT_ROUTE } from './context/promptsContextSettings';
+import { PROMPTS_CONTEXT_ROUTE } from './context/promptsContextNavigation';
 import { Icon } from '@/components/ui/icons/Icon';
 
 /**

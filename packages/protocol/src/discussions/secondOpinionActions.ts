@@ -2,7 +2,7 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { DiscussionAddressV1Schema, DiscussionLocalIdSchema, DiscussionTitleV1Schema } from './content.js';
 import { DiscussionMessageRefV1Schema } from './messageRefs.js';
-import { DiscussionInitialParticipantsV1Schema } from './participants.js';
+import { DiscussionInitialAccountParticipantsV1Schema } from './participants.js';
 import { SessionSpawnNewInputV2Schema } from '../sessions/creation/sessionSpawnNewInputV2.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { RPC_METHODS } from '../rpc/methods.js';
@@ -28,7 +28,7 @@ export const DiscussionSecondOpinionStartInputV1Schema = lazyZodSchema(() => z.s
   title: DiscussionTitleV1Schema.shape.title,
   question: z.string().check(z.refine(value => value === value.normalize('NFC'), 'A question must contain normalized text')),
   reviewers: z.array(DiscussionSecondOpinionReviewerV1Schema),
-  participants: z.optional(DiscussionInitialParticipantsV1Schema),
+  participants: z.optional(DiscussionInitialAccountParticipantsV1Schema),
   /** The actual invoking Agent Session is shown as the publishing participant; never alternate producer authority. */
   publisherSessionId: z.optional(DiscussionSessionParticipantRefV1Schema.shape.sessionId),
   retry: DiscussionSecondOpinionRetryV1Schema,

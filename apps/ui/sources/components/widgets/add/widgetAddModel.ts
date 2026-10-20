@@ -64,6 +64,11 @@ export type WidgetAddSection = Readonly<{
     hint?: string;
     /** A plugin's own section: its installed mark leads the title. */
     pluginId?: string;
+    /**
+     * A built-in family with a page of its own (Machines, Usage). A short Add list (a Board's, lab
+     * `dashboards` L1) leads with the other groups and reaches a family through its gallery or search.
+     */
+    family?: true;
     entries: readonly WidgetAddEntry[];
 }>;
 

@@ -81,7 +81,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** The canonical prepared filesystem owner installed by the daemon. */
     filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
     skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
-    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction'>;
+    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction' | 'readSessionFollowRules'>;
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
     pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
@@ -202,6 +202,8 @@ export function createCliActionExecutor(
       ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
       ...(params.sessionFollowActionDeps ?? createSessionFollowActionDeps({
         token: params.token,
+        ...(params.credentials ? { credentials: params.credentials } : {}),
+        ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
         ...exactHome,
         ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
         ...(params.externalActionMachineRequestPrivateKey
@@ -401,8 +403,12 @@ export function createCliActionExecutor(
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return { kind: 'settled' as const,
         result: actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable') };
+      // The daemon binds drafts before signing, but an unchanged signed reply
+      // must still refuse if its current participant policy now requires a draft.
+      // Already-bound drafts carry discussionReplyReturn and skip this recheck.
       const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
-        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction,
+        credentials: { token: params.token }, serverHttpBaseUrl: params.serverHttpBaseUrl });
       if ('failure' in bound) return { kind: 'settled' as const, result: bound.failure };
       return await base.prepare(bound.actionId, bound.input, bound.context);
     },
@@ -412,8 +418,10 @@ export function createCliActionExecutor(
       if (denied) return denied;
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
+      // Retain the same current-policy recheck as prepare; never rewrite signed operands.
       const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
-        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction,
+        credentials: { token: params.token }, serverHttpBaseUrl: params.serverHttpBaseUrl });
       if ('failure' in bound) return bound.failure;
       return await daemonAware.execute(bound.actionId, bound.input, bound.context);
     },

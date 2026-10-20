@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { randomUUID } from 'node:crypto';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -6,18 +7,19 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { beginActiveProviderConnectionsCatalogRefresh, commitActiveProviderConnectionsCatalog,
   getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation, observeProviderCatalogPhase } from './catalogStore';
 export { readActiveProviderConnectionsCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const pending = new Map<string, {
-  completion: Promise<ProviderConnectionsCatalogSnapshotV1>; readers: Set<() => void>; readable: boolean;
+  completion: Promise<ProviderConnectionsCatalogSnapshotV1>; readers: Set<() => void>;
 }>();
 const reloadAfterPending = new Set<string>();
 type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
   isCredentialCurrent?(): boolean | Promise<boolean> }>;
 
 type CliCatalogInput = Readonly<{
-  expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal;
+  expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal; credentials?: StoredCredentials;
 }>;
 
 /** Retained runtime admission demand-loads its captured catalog once. */
@@ -38,7 +40,7 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
   if (operationContext && !await observeProviderCatalogPhase({ catalogReadId: randomUUID(), phase: 'admission_currentness' },
     () => operationContext.isCurrent())) return { status: 'unavailable', reason: 'scope-retired' };
   if (!reobserve && snapshot.providerConnectionsCatalog?.status === 'ready') return snapshot.providerConnectionsCatalog;
-  const credentials = input.operationContext?.credentials ?? await readStoredCredentials();
+  const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
   if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
   if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
   const refreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };
@@ -51,7 +53,7 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
   };
   // Readiness belongs to the refresh, including an equal-row publication
   // which intentionally produces no broad Account notification.
-  const completion = refresh(refreshInput, reobserve, observeReadable);
+  const completion = refresh(refreshInput, reobserve ? 'reobserve' : 'read', observeReadable);
   // Source preference handoff still precedes this publication; optional
   // history maintenance remains with the loader without holding admission.
   const result = await Promise.race([completion, readable]);
@@ -70,10 +72,10 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
 /** Demand-load the sole catalog in the caller's existing Account custody. */
 export function refreshActiveProviderConnectionsCatalog(input: RefreshInput,
   options?: Readonly<{ afterChange?: boolean }>): Promise<ProviderConnectionsCatalogSnapshotV1> {
-  return refresh(input, options?.afterChange === true);
+  return refresh(input, options?.afterChange === true ? 'change' : 'read');
 }
 
-function refresh(input: RefreshInput, afterChange = false, onReadable?: () => void): Promise<ProviderConnectionsCatalogSnapshotV1> {
+function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 'read', onReadable?: () => void): Promise<ProviderConnectionsCatalogSnapshotV1> {
   const context = input.operationContext;
   const scopeKey = resolveAccountSettingsScopeKey(input.credentials);
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
@@ -84,17 +86,17 @@ function refresh(input: RefreshInput, afterChange = false, onReadable?: () => vo
   if (!current() || input.signal?.aborted) return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
   const existing = context ? undefined : pending.get(key);
   if (existing) {
-    if (afterChange) {
-      existing.readable = false;
+    // Pending covers observation through publication, never optional history.
+    // Read demand joins this pass; only an actual change invalidates its basis.
+    if (intent === 'change') {
       reloadAfterPending.add(key); beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
     }
-    if (onReadable) {
-      if (existing.readable) onReadable();
-      else existing.readers.add(onReadable);
-    }
+    if (onReadable) existing.readers.add(onReadable);
     return existing.completion;
   }
-  if (!context) beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
+  if (!context && (intent !== 'reobserve' || readSnapshot()?.providerConnectionsCatalog?.status !== 'ready')) {
+    beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
+  }
   const store = context ? createCliProviderConnectionsStoreForOperation({ operationContext: context, signal: input.signal })
     : createCliProviderConnectionsStore(input);
   const publish = async (catalog: ProviderConnectionsCatalogSnapshotV1) => {
@@ -109,8 +111,6 @@ function refresh(input: RefreshInput, afterChange = false, onReadable?: () => vo
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       if (!context) reloadAfterPending.delete(key);
-      const request = context ? undefined : pending.get(key);
-      if (request) request.readable = false;
       let catalog: ProviderConnectionsCatalogSnapshotV1;
       let publishedReady: ProviderConnectionsCatalogSnapshotV1 | undefined;
       try {
@@ -118,28 +118,39 @@ function refresh(input: RefreshInput, afterChange = false, onReadable?: () => vo
           if (!context && reloadAfterPending.has(key)) return;
           if (await publish(ready)) {
             if (!context && reloadAfterPending.has(key)) return;
-            publishedReady = ready;
+            const admitted = readSnapshot()?.providerConnectionsCatalog;
+            publishedReady = admitted?.status === 'ready' ? admitted : ready;
             if (context) onReadable?.();
             else {
               const request = pending.get(key);
               if (request) {
-                request.readable = true;
                 const readers = [...request.readers];
                 request.readers.clear();
+                // A later explicit reobservation can start immediately. Its
+                // readers share that next pass while this pass cleans history.
+                pending.delete(key);
                 for (const reader of readers) reader();
               }
             }
           }
-        }, hasPendingCleanup: () => !context && reloadAfterPending.has(key) });
+        }, hasPendingCleanup: () => !context && pending.get(key)?.completion === work && reloadAfterPending.has(key) });
       } catch (error) {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
         catalog = { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled'
           : !current() || code === 'scope-retired' ? 'scope-retired'
           : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
+          : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
           : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
           : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
+      if (!context && publishedReady) {
+        // Maintenance from an older observation cannot overwrite a later
+        // publication or a genuine change's withdrawal.
+        const result = catalog.status === 'unavailable' && catalog.reason === 'cancelled' ? publishedReady : catalog;
+        if (sameProviderConnectionsCatalogAuthority(publishedReady, readSnapshot()?.providerConnectionsCatalog)) await publish(result);
+        return result;
+      }
       if (!context && reloadAfterPending.has(key)) continue;
       if (!context && pending.get(key)?.completion === work) pending.delete(key);
       // Cancelling optional maintenance cannot withdraw a row already admitted
@@ -151,7 +162,7 @@ function refresh(input: RefreshInput, afterChange = false, onReadable?: () => vo
   })().finally(() => {
     if (pending.get(key)?.completion === work) { pending.delete(key); reloadAfterPending.delete(key); }
   });
-  if (!context) pending.set(key, { completion: work, readers: new Set(onReadable ? [onReadable] : []), readable: false });
+  if (!context) pending.set(key, { completion: work, readers: new Set(onReadable ? [onReadable] : []) });
   return work;
 }
 
@@ -160,5 +171,5 @@ export async function refreshDemandedActiveProviderConnectionsCatalog(input: Rea
   if (getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog === undefined) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await refresh({ credentials, signal: input.signal }, true);
+  await refresh({ credentials, signal: input.signal }, 'change');
 }

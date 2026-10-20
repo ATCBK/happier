@@ -173,10 +173,10 @@ export function createCliAcpCatalogStore(input: Readonly<{
     }
     return result.data;
   };
-  const publish = async (catalog: AcpCatalogSnapshotV1) => {
+  const publish = async (catalog: AcpCatalogSnapshotV1) => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
     if (operation) return await operation.commitAcpCatalog({ catalog });
     return commitActiveAcpCatalog({ scopeKey, lifetimeToken, catalog });
-  };
+  });
   return { assertCurrent, admitCurrent, readStorageContext, readRow, readSourceSnapshot, readCatalog, writeRecord, publish,
     updateCatalog: async (mutate: (current: unknown) => unknown, expectation?: Readonly<{
       expectedRevision?: number | 'absent'; sourceSettingsVersion?: number;

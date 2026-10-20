@@ -9,7 +9,7 @@ import { z } from "zod/mini";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { findExactMaterializedPluginCollectionContractTx, readMaterializedPluginCollectionContract } from "./contracts";
 import { readPluginCollectionIndexEntriesByRawOrdinalKey } from "./rawOrdinalIndex";
 
@@ -570,7 +570,9 @@ async function resolveCurrentContract(input: Readonly<{
             ? persisted
             : await findExactMaterializedPluginCollectionContractTx({ tx: database, ref: requestedRef });
         if (!requestedRow) throw new PluginCollectionReadOperationError("collection_update_required");
-        const requested = readMaterializedPluginCollectionContract(requestedRow);
+        const requested = requestedRow === persisted
+            ? currentWriter
+            : readMaterializedPluginCollectionContract(requestedRow);
         const access = resolvePluginCollectionContractAccessV1({ currentWriter, requested });
         if (!access) throw new PluginCollectionReadOperationError("collection_update_required");
         return {
@@ -840,7 +842,7 @@ export async function getPluginCollection(input: Readonly<{
     accountId: string;
     request: PluginCollectionGetRequestV1;
 }>): Promise<PluginCollectionGetResultV1> {
-    const snapshot = await inTx(async (tx) => {
+    const snapshot = await inReadSnapshot(async (tx) => {
         const current = await resolveCurrentContract(input, tx);
         const row = await tx.pluginCollectionRow.findFirst({
             where: {
@@ -883,7 +885,7 @@ export async function getPluginCollection(input: Readonly<{
             }),
             expectedMode: current.account.encryptionMode,
         };
-    }, { /* Collection contract, indexes, rows and cursor must share one query snapshot. */ isolationLevel: "Serializable", readOnly: true });
+    });
     await readCurrentAccountChangeCursor({
         accountId: input.accountId,
         expectedMode: snapshot.expectedMode,
@@ -900,7 +902,7 @@ export async function queryPluginCollection(input: Readonly<{
     accountId: string;
     request: PluginCollectionQueryRequestV1;
 }>): Promise<PluginCollectionQueryResultV1> {
-    const snapshot = await inTx(async (tx) => {
+    const snapshot = await inReadSnapshot(async (tx) => {
         const current = await resolveCurrentContract(input, tx);
         const bounds = buildDirectQueryBounds({
             accountId: input.accountId,
@@ -936,7 +938,7 @@ export async function queryPluginCollection(input: Readonly<{
             }),
             expectedMode: current.account.encryptionMode,
         };
-    }, { /* Collection contract, indexes, rows and cursor must share one query snapshot. */ isolationLevel: "Serializable", readOnly: true });
+    });
     // Recheck the Account mode after materializing row content so a mode
     // transition cannot disclose data under the no-longer-current policy.
     // Deliberately discard this later cursor: the response rows and cursor
@@ -957,7 +959,7 @@ export async function queryPluginCollectionUiQuery(input: Readonly<{
     accountId: string;
     request: PluginCollectionUiQueryRequestV1;
 }>): Promise<PluginCollectionUiQueryTransportResultV1> {
-    const snapshot = await inTx(async (tx) => {
+    const snapshot = await inReadSnapshot(async (tx) => {
         const current = await resolveCurrentContract(input, tx);
         const descriptor = current.contract.uiQueries.find((candidate) => candidate.id === input.request.uiQueryId);
         if (!descriptor) throw new PluginCollectionUiQueryOperationError("collection_query_invalid");
@@ -1059,7 +1061,7 @@ export async function queryPluginCollectionUiQuery(input: Readonly<{
         } catch {
             throw new PluginCollectionUiQueryOperationError("collection_contract_inconsistent");
         }
-    }, { /* Collection contract, indexes, rows and cursor must share one query snapshot. */ isolationLevel: "Serializable", readOnly: true });
+    });
     // Match the direct reader's post-materialization mode validation without
     // advancing the cursor returned from its transaction snapshot.
     await readCurrentAccountChangeCursor({

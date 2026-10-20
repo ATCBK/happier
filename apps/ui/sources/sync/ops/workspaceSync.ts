@@ -1,7 +1,7 @@
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ReadWorkspaceSyncFileResultV1Schema, ReadWorkspaceSyncFileV1Schema, WorkspaceSyncConflictPageRequestV1Schema, WorkspaceSyncConflictPageV1Schema, WorkspaceSyncRelationshipIdV1Schema, WorkspaceSyncLegacyStateInspectionV1Schema, WorkspaceSyncStatusV1Schema, WorkspaceSyncConflictResolveActionInputV1Schema, WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncConflictInspectRpcRequestV1Schema, WorkspaceSyncConflictInspectRpcResultV1Schema, type WorkspaceSyncConflictResolutionV1, type WorkspaceSyncConflictResolutionResultV1, type WorkspaceSyncConflictInspectRpcRequestV1, type WorkspaceSyncConflictInspectRpcResultV1, type ReadWorkspaceSyncFileResultV1, type ReadWorkspaceSyncFileV1, type WorkspaceSyncConflictPageV1, type WorkspaceSyncStatusV1, type WorkspaceSyncLegacyStateInspectionV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { ProjectWorkerCopyRetireInputV1Schema, type ProjectWorkerCopyRetireInputV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { WorkspaceSyncCommittedCopyPreviewV1, WorkspaceSyncCommittedCopyPreviewResultV1,
 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncCommittedCopyV1';
@@ -62,13 +62,25 @@ async function callWorkspaceSync<R>(
     payload: unknown,
 ): Promise<R> {
     const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
-    return await machineRpcWithServerScope<R, unknown>({
+    const response = await machineRpcWithServerScope<R, unknown>({
         machineId: scope.controllerMachineId,
         serverId: scope.serverId,
         method,
         payload,
         ...(scope.signal ? { signal: scope.signal } : {}),
     });
+    // An encrypted transport hands a daemon handler's refusal back as the response value. Raise it here, once,
+    // so every caller keeps the daemon's typed code instead of reading it as an unsupported response.
+    if (isHandlerRefusal(response)) throw createRpcCallError({ error: response.error, errorCode: response.errorCode });
+    return response;
+}
+
+function isHandlerRefusal(value: unknown): value is Readonly<{ error: string; errorCode?: string }> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Readonly<Record<string, unknown>>;
+    return typeof record.error === 'string'
+        && (record.errorCode === undefined || typeof record.errorCode === 'string')
+        && Object.keys(record).every((key) => key === 'error' || key === 'errorCode');
 }
 
 function parseStatusEnvelope(raw: unknown, method: string): WorkspaceSyncStatusV1 {

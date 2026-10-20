@@ -27,6 +27,9 @@ it('routes a source-only Account change through the installed private rule cache
     const pending: unknown[] = [];
     const observed: string[] = [];
     const httpRequests: string[] = [];
+    const runRouteReads: unknown[] = [];
+    const workflowIds = ['followed-workflow', 'unrelated-workflow'];
+    const discussionId = 'followed-discussion';
     const metadata = JSON.stringify({ path: homeDir, host: 'host', machineId });
     const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
       metadata, ownerAccountId: 'foreign-source-owner', origin: { kind: 'none' }, seq: 2, archivedAt: null, active: true });
@@ -48,6 +51,15 @@ it('routes a source-only Account change through the installed private rule cache
         sourceSessionId, delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, throughSeq: 2,
       }] } } : {}) }));
     app.get('/v2/account/session-follow-preferences', async () => ({ assigned: false, direct: false, team: false, group: false }));
+    app.get('/v2/account/session-follows', async () => ({ follows: [...workflowIds.map(runId => ({
+      source: { kind: 'workflow_run', runId }, following: true, persistent: true, policy: { preset: 'important' },
+    })), { source: { kind: 'discussion', discussionId }, following: true, persistent: true, policy: { preset: 'important' } }] }));
+    app.post('/v2/follows/sources/run-occurrence-routes', async request => {
+      runRouteReads.push(request.body);
+      // This is a source owner read, not fabricated terminal evidence. The
+      // real stored-source/Activity acceptance composition has separate coverage.
+      return { ok: false, v: 1, error: 'source_unavailable' };
+    });
     app.get(`/v2/sessions/${sourceSessionId}`, async () => ({ session: source }));
     app.get(`/v2/sessions/${destinationSessionId}`, async () => ({ session: destination }));
     app.get(`/v2/sessions/${destinationSessionId}/delivery-mutes`, async () => ({ scopes: [] }));
@@ -66,14 +78,19 @@ it('routes a source-only Account change through the installed private rule cache
     app.post(`/v2/sessions/${destinationSessionId}/pending`, async request => { pending.push(request.body); return { didWrite: true }; });
     const restoreHttp = installAxiosFastifyAdapter({ app, origin });
     let changedSession: Parameters<ApiMachineClient['onSessionChanged']>[0] | undefined;
+    const changedFollows = new Set<Parameters<ApiMachineClient['onSessionFollowRulesChanged']>[0]>();
+    let connectOptions: Parameters<ApiMachineClient['connect']>[0];
     // This is the Machine socket boundary; startup, the private cache, source
     // reader, destination admission and Pending producer all execute for real.
     const transport = { ...createApiMachineTransportFixture(),
       onSessionChanged: (listener: NonNullable<typeof changedSession>) => { changedSession = listener; return () => { changedSession = undefined; }; },
-      onSessionFollowRulesChanged: () => () => {},
+      onSessionFollowRulesChanged: (listener: Parameters<ApiMachineClient['onSessionFollowRulesChanged']>[0]) => {
+        changedFollows.add(listener); return () => { changedFollows.delete(listener); };
+      },
       resolveInstalledAccountObservationRuntime: async () => ({ accountId, credentials, machineId, serverId,
         serverHttpBaseUrl: origin, isCurrent: async () => true }),
-      setRPCHandlers: () => ({}), registerLiveStreamRelayRoutes: vi.fn(), connect: vi.fn(),
+      setRPCHandlers: () => ({}), registerLiveStreamRelayRoutes: vi.fn(),
+      connect: (options: typeof connectOptions) => { connectOptions = options; },
       registerMachineAccessLossReceiver: () => {}, registerLocalServicesRoutes: () => {}, registerSimulatorPreviewRoutes: () => {},
       updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
       emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(), sendTransferRelayV2Envelope: vi.fn(),
@@ -96,6 +113,7 @@ it('routes a source-only Account change through the installed private rule cache
         createConnectedApiMachine: () => apiMachine as NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>,
         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSessionForInternalResume: async () => { throw new Error('A quiet Follow update must not spawn'); },
         spawnSession: async () => { throw new Error('A quiet Follow update must not spawn'); },
         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => true,
         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: serverId, machineId }),
@@ -111,6 +129,16 @@ it('routes a source-only Account change through the installed private rule cache
       expect(pending[0]).toMatchObject({ followDeliveryV1: { original: { sourceSessionId, sourceMessage: { localId: 'new-original', seq: 2 } } },
         followSources: [{ evaluation: 'receiver', rule: { ruleId: 'new-rule', ruleVersion: 0 } }] });
       expect(pending[0]).not.toHaveProperty('followRelations');
+      if (!changedFollows.size) throw new Error('Missing Account Follow observer');
+      await Promise.all([...changedFollows].map(listener => listener({ full: false, workflowRunIds: [workflowIds[0]!] })));
+      expect(runRouteReads).toEqual([{ v: 1, source: { kind: 'workflow_run', runId: workflowIds[0] } }]);
+      runRouteReads.length = 0;
+      await Promise.all([...changedFollows].map(listener => listener({ full: false, workflowRunIds: [], discussionIds: [discussionId] })));
+      expect(runRouteReads).toEqual([{ v: 1, source: { kind: 'discussion', discussionId } }]);
+      runRouteReads.length = 0;
+      await connectOptions?.onConnect?.();
+      expect(runRouteReads).toEqual([...workflowIds.map(runId => ({ v: 1, source: { kind: 'workflow_run', runId } })),
+        { v: 1, source: { kind: 'discussion', discussionId } }]);
     } finally {
       if (runtime) await retireMachineSyncRuntimeAttempt(runtime);
       await host.dispose(); restoreHttp(); await app.close();

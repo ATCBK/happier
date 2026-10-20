@@ -18,6 +18,11 @@ export function sessionWorkflowRunWindowId(scope: ServerAccountScope, sessionId:
     return `session:${serverAccountScopedResourceKey(scope, sessionId, relation)}`;
 }
 
+/** Discussion membership uses the same retained query windows as Session relations. */
+export function discussionWorkflowRunWindowId(scope: ServerAccountScope, discussionId: string): `discussion:${string}` {
+    return `discussion:${serverAccountScopedResourceKey(scope, discussionId, 'origin')}`;
+}
+
 /**
  * One Run, including an Automation failure before Session creation, as this Account can read it.
  *
@@ -50,6 +55,9 @@ export type WorkflowRunRow = Readonly<{
     automation: AutomationDefinitionRun | null;
     /** Opened exact content; list/control projections never erase this observation. */
     detail?: WorkflowRunGetResultV1;
+    /** Authored support, opened by the list owner; lifecycle and permission stay separate. */
+    supportsAnotherRound?: boolean;
+    callerAccess?: WorkflowRunGetResultV1['callerAccess'];
 }>;
 
 export type WorkflowRunsById = Record<string, WorkflowRunRow>;
@@ -61,7 +69,7 @@ export type WorkflowRunsById = Record<string, WorkflowRunRow>;
  */
 export type WorkflowRunsDomain = {
     workflowRunsById: WorkflowRunsById;
-    workflowRunListWindows: Partial<Record<WorkflowRunListWindowId | `session:${string}`, WorkflowRunListWindow>>;
+    workflowRunListWindows: Partial<Record<WorkflowRunListWindowId | `session:${string}` | `discussion:${string}`, WorkflowRunListWindow>>;
     /** Per Run: the one invocation fact map plus the windows and evidence that reference it. */
     workflowRunInvocationsByRunId: Record<string, WorkflowRunInvocations>;
     /**
@@ -73,10 +81,12 @@ export type WorkflowRunsDomain = {
     removeWorkflowRun: (runId: string, scope?: ServerAccountScope | null) => void;
     applyWorkflowRunListPage: (input: Readonly<{
         scope?: ServerAccountScope | null;
-        windowId: WorkflowRunListWindowId | `session:${string}`;
+        windowId: WorkflowRunListWindowId | `session:${string}` | `discussion:${string}`;
         runs: readonly WorkflowRunSummaryV1[];
         automationRuns?: readonly AutomationDefinitionRun[];
         metadataByRunId?: Readonly<Record<string, WorkflowRunPrivateMetadataV1 | null>>;
+        supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
+        callerAccessByRunId?: Readonly<Record<string, WorkflowRunGetResultV1['callerAccess']>>;
         nextCursor: string | null;
         mode: WorkflowLoadedSpanMode;
         attentionRunIds?: readonly string[];
@@ -133,7 +143,7 @@ export type WorkflowRunsDomain = {
  */
 export type WorkflowLoadedSpanMode = 'replace' | 'append' | 'refresh';
 
-export type WorkflowRunListWindowId = 'all' | 'active' | 'attention' | 'automationAttention' | `automation:${string}` | `destination:${string}`;
+export type WorkflowRunListWindowId = 'all' | 'active' | 'attention' | 'automationAttention' | `automation:${string}` | `destination:${string}` | `under:${string}`;
 export type WorkflowRunListWindow = Readonly<{
     runIds: readonly string[];
     nextCursor: string | null;
@@ -548,6 +558,8 @@ function toEpochMilliseconds(value: string): number {
 export function workflowRunRowFromSummary(
     summary: WorkflowRunSummaryV1,
     metadata: WorkflowRunPrivateMetadataV1 | null = null,
+    supportsAnotherRound?: boolean,
+    callerAccess?: WorkflowRunGetResultV1['callerAccess'],
 ): WorkflowRunRow {
     return {
         id: summary.id,
@@ -556,6 +568,8 @@ export function workflowRunRowFromSummary(
         summary,
         metadata,
         automation: null,
+        ...(supportsAnotherRound === undefined ? {} : { supportsAnotherRound }),
+        ...(callerAccess === undefined ? {} : { callerAccess }),
     };
 }
 
@@ -674,7 +688,11 @@ function mergeRow(stored: WorkflowRunRow, incoming: WorkflowRunRow): WorkflowRun
     const detail = incoming.detail && (!stored.detail || incoming.detail.run.revision >= stored.detail.run.revision)
         ? (stored.detail && sameStrictJsonValue(stored.detail, incoming.detail) ? stored.detail : incoming.detail)
         : stored.detail;
-    if (summary === stored.summary && automation === stored.automation && metadata === stored.metadata && detail === stored.detail) return stored;
+    const supportsAnotherRound = incoming.supportsAnotherRound ?? stored.supportsAnotherRound;
+    const callerAccess = incoming.callerAccess === undefined ? stored.callerAccess
+        : incoming.callerAccess.canEdit === stored.callerAccess?.canEdit ? stored.callerAccess : incoming.callerAccess;
+    if (summary === stored.summary && automation === stored.automation && metadata === stored.metadata && detail === stored.detail
+        && supportsAnotherRound === stored.supportsAnotherRound && callerAccess === stored.callerAccess) return stored;
     const revision = Math.max(summary?.revision ?? 0, automation?.revision ?? 0);
     // `updatedAt` follows whichever projection carries the newest revision, so
     // list ordering never regresses when only the other transport refreshes.
@@ -683,7 +701,9 @@ function mergeRow(stored: WorkflowRunRow, incoming: WorkflowRunRow): WorkflowRun
         : automation && automation.revision === revision
             ? automation.updatedAt
             : stored.updatedAt;
-    return { id: stored.id, revision, updatedAt, summary, metadata, automation, ...(detail ? { detail } : {}) };
+    return { id: stored.id, revision, updatedAt, summary, metadata, automation, ...(detail ? { detail } : {}),
+        ...(supportsAnotherRound === undefined ? {} : { supportsAnotherRound }),
+        ...(callerAccess === undefined ? {} : { callerAccess }) };
 }
 
 /**
@@ -813,14 +833,15 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
             delete workflowRunInvocationsByRunId[key];
             return { ...state, workflowRunsById, workflowRunListWindows, workflowRunInvocationsByRunId };
         }),
-        applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, automationRuns = [], metadataByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
+        applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
             set((state) => {
                 const previous = state.workflowRunListWindows[windowId];
                 // Bodies merge first so the refreshed span can be measured
                 // against the rows the page just restated.
                 const workflowRunsById = mergeWorkflowRunBodies(
                     state.workflowRunsById,
-                    [...runs.map((run) => workflowRunRowFromSummary(run, metadataByRunId?.[run.id] ?? null)),
+                    [...runs.map((run) => workflowRunRowFromSummary(run, metadataByRunId?.[run.id] ?? null,
+                        supportsAnotherRoundByRunId?.[run.id], callerAccessByRunId?.[run.id])),
                         ...automationRuns.map(workflowRunRowFromAutomationRun)],
                     scope,
                 );
@@ -831,7 +852,7 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                         ? refreshWorkflowRunListWindow({ runsById: workflowRunsById, previous, pageRunIds, nextCursor, scope })
                         : { runIds: pageRunIds, nextCursor, loaded: true };
                 const window: WorkflowRunListWindow = { ...membership,
-                    ...(windowId.startsWith('session:') && scope ? { scope } : {}),
+                    ...((windowId.startsWith('session:') || windowId.startsWith('discussion:')) && scope ? { scope } : {}),
                     ...(attentionRunIds === undefined ? {} : { attentionRunIds }),
                     ...(lastSuccessfulReadAt === undefined ? {} : { lastSuccessfulReadAt }),
                 };

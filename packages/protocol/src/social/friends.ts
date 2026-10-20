@@ -36,6 +36,15 @@ export type UserProfile = z.infer<typeof UserProfileSchema>;
 export const UserResponseSchema = lazyZodSchema(() => z.object({ user: UserProfileSchema }));
 export type UserResponse = z.infer<typeof UserResponseSchema>;
 
+/** The incumbent Friends writers take one Account id and may find no profile. */
+export const FriendsMutationInputSchema = lazyZodSchema(() => z.strictObject({ uid: z.string() }));
+export const FriendsMutationResponseSchema = lazyZodSchema(() => z.strictObject({ user: z.nullable(UserProfileSchema) }));
+export const FriendsMutationErrorSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ error: z.literal('provider-required'), provider: z.string() }),
+  z.strictObject({ error: z.literal('username-required') }),
+  z.strictObject({ error: z.enum(['not_found', 'User not found']) }),
+]));
+
 /** Authenticated exact-user projection consumed by trusted direct-grant hosts. */
 export const UserRecipientEnvelopeResponseSchema = lazyZodSchema(() => z.object({
   user: z.pipe(z.extend(UserProfileFieldsSchema, {

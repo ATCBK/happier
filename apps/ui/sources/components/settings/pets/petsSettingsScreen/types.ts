@@ -4,6 +4,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import type { LocalPetPreviewAsset } from '@/sync/domains/pets/localPetSourceTypes';
+import type { PetDeviceOverrideV1 } from '@happier-dev/protocol/pets/selection';
 
 export type PetEnabledOverride = 'inherit' | 'enabled' | 'disabled';
 export type DesktopPetOverlayVisibilityModeOverride =
@@ -30,10 +31,7 @@ export type LocalDevicePetRow = Readonly<{
     previewAsset: LocalPetPreviewAsset;
 }>;
 
-export type PetSelectedPetOverride =
-    | { kind: 'inherit' }
-    | { kind: 'detectedCodexHome'; sourceKey: string }
-    | { kind: 'happierManagedLocal'; sourceKey: string };
+export type PetSelectedPetOverride = PetDeviceOverrideV1;
 
 export type CodexDetectionState = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'noTarget' | 'daemonMismatch';
 

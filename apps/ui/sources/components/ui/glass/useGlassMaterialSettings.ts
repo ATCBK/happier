@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useSettingsSelector } from '@/sync/domains/state/storage';
+import { useSettingsSelector } from '@/sync/store/settingsReadHooks';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { GlassMaterialSettings } from './glassMaterial';
 

@@ -306,7 +306,7 @@ describe('inline transcript workflow Run result', () => {
         await settle();
 
         await screen.pressByTestIdAsync(`transcript-workflow-run-${RUN_ID}-open`);
-        expect(pushSpy).toHaveBeenCalledWith(`/workflows/runs/${RUN_ID}`);
+        expect(pushSpy).toHaveBeenCalledWith(`/workflows/runs/${RUN_ID}?serverId=${encodeURIComponent(serverId)}`);
     });
 
     it('mirrors the same row-level outcome in the timeline chrome', async () => {

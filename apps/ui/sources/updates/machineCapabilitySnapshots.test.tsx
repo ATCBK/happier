@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup, type RenderHookResult } from '@/dev/testkit';
+import { act, renderHook, standardCleanup, type RenderHookResult } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 // Install the physical transport boundary before importing the real cache owner.
@@ -11,6 +11,33 @@ afterEach(() => standardCleanup());
 afterAll(() => network.dispose());
 
 describe('useMachinesCapabilitySnapshots', () => {
+    it('follows readiness invalidation without losing the last answer and never retains another Account snapshot', async () => {
+        const home = await network.addHome('https://snapshot-readiness.test', 'snapshot-account');
+        const { prefetchMachineCapabilities } = await import('@/hooks/server/useMachineCapabilitiesCache');
+        const { publishMachineContributionRegistryProjectionInvalidation, getMachineContributionRegistryProjectionRevision } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+        const target = { machineId: 'snapshot-machine', serverId: home.id };
+        const accountLifetime = { scope: { serverId: home.id, accountId: home.accountId },
+            isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const prefetch = () => prefetchMachineCapabilities({ ...target, accountLifetime,
+            cacheKeySalt: getMachineContributionRegistryProjectionRevision(target) || null,
+            request: { requests: [{ id: 'cli.codex' }] } });
+        network.respond('capabilities.detect', { protocolVersion: 1, results: { 'cli.codex': { ok: true, checkedAt: 1, data: { version: '1' } } } });
+        await prefetch();
+        const hook = await renderHook(({ accountId }) => useMachinesCapabilitySnapshots(home.id, [target.machineId], accountId), {
+            initialProps: { accountId: home.accountId },
+        });
+        const first = hook.getCurrent().get(target.machineId);
+        expect(first?.response.results['cli.codex']).toMatchObject({ data: { version: '1' } });
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation(target));
+        expect(hook.getCurrent().get(target.machineId)).toBe(first);
+        network.respond('capabilities.detect', { protocolVersion: 1, results: { 'cli.codex': { ok: true, checkedAt: 2, data: { version: '2' } } } });
+        await act(async () => prefetch());
+        expect(hook.getCurrent().get(target.machineId)?.response.results['cli.codex']).toMatchObject({ data: { version: '2' } });
+        await hook.rerender({ accountId: 'another-account' });
+        expect(hook.getCurrent().get(target.machineId)).toBeNull();
+        await hook.unmount();
+    });
+
     it('keeps unchanged snapshots stable when the requested IDs contain duplicates', async () => {
         const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
         let hook: RenderHookResult<ReturnType<typeof useMachinesCapabilitySnapshots>, void> | undefined;

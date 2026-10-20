@@ -400,6 +400,27 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('session-list-item-child-session')).toBeNull();
   });
 
+  it('offers no sub-session disclosure for a Bot whose only report is archived, and counts the rest otherwise', async () => {
+    const serverId = connection!.home.id;
+    storage.getState().applyServerScopedSessionListRows(serverId, [
+      createSessionListRenderableSessionFixture({ id: 'archived-only-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
+        managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+      createSessionListRenderableSessionFixture({ id: 'mixed-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
+        managedSessions: { total: 3, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+    ], { source: 'ordinary', mode: 'replace' });
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <BotsPopoverContent close={() => {}} maxHeight={520} />
+    </InjectedAuthProvider>);
+    await flushHookEffects({ cycles: 3 });
+    expect(screen.findByTestId('session-row-reports-disclosure:archived-only-bot')).toBeNull();
+    expect(screen.findByTestId('session-row-reports-chip:archived-only-bot')).toBeNull();
+    expect(screen.findByTestId('session-row-reports-disclosure:mixed-bot')).not.toBeNull();
+    expect(screen.findByTestId('session-row-reports-chip:mixed-bot')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('2');
+    expect(screen.getTextContent()).not.toContain('3');
+  });
+
   it('moves a rail Bot with the keyboard through qualified Action admission and the mounted organization writer', async () => {
     const serverId = resolveServerProfileScopeIdForIdentifier(connection!.home.id);
     const ids = ['first-bot', 'list-only', 'last-bot'];

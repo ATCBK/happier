@@ -384,6 +384,19 @@ describe('Project Local Changes', () => {
         expect(url.searchParams.get('initialFile')).toBe(relation === 'same-project' ? 'src/current.ts' : null);
         expect(url.searchParams.get('comparisonId')).toBe(relation === 'same-project' ? 'saved-comparison' : null);
     });
+    it('names a checkout on a machine the Home does not list as unlisted, never by its raw machine id', async () => {
+        const accountScope = storage.getState().profileScope;
+        if (!accountScope) throw new Error('Connected fixture has no Account scope');
+        const checkout = { id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 };
+        const elsewhere = { ...checkout, id: 'wr_2', machineId: 'machine-not-in-inventory-4d2e', rootPath: '/srv/repo' };
+        storage.getState().activateProjectAccountRowsScope(accountScope);
+        storage.getState().applyProjectAccountRowsForScope(accountScope, { scope: accountScope, status: 'ready', coverage: 'complete',
+            workspaceRefs: [checkout, elsewhere], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+        const screen = await mount('/repo', 'project_checkouts');
+        const text = screen.getTextContent();
+        expect(text).not.toContain('machine-not-in-inventory-4d2e');
+        expect(text).toMatch(/machine\.unlistedMachine|Unlisted machine/);
+    });
     it('publishes Clear only for atomic selection and clears the real shared checkout selection', async () => {
         const scope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo' };
         storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true }, scmCommitStrategy: 'git_staging' });
@@ -550,6 +563,8 @@ describe('Project Local Changes', () => {
         // Checkouts keeps the row and says this one is offline.
         const here = screen.root.findAll(node => node.props.testID === 'project_checkouts.here' && node.props.fact !== undefined)[0];
         expect(String(here?.props.fact)).toContain('offline');
+        // "Here" and "offline" would contradict each other on one row.
+        expect(here?.props.tag).toBeUndefined();
         expect(boundary.writes).toEqual([]);
     });
     it('keeps the Code widget the folder itself in any framed placement, sized or not', async () => {

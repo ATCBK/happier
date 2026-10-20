@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -26,6 +27,7 @@ export function projectMcpServerCatalogRefreshFailure(input: Readonly<{
     : !input.current || code === 'scope-retired' ? 'scope-retired'
     : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch'
       || code === 'database_transaction_conflict_exhausted' ? code
+    : isRetryableAccountEncryptionCurrentnessError(input.error) ? 'unreachable'
     : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
     : input.error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
 }

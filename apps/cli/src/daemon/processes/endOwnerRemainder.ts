@@ -2,9 +2,9 @@ import { resolveProcessOwnership } from './ownership/resolveProcessOwnership';
 import { equalProcessStart, processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef, type ResolvedProcessOwnership } from './ownership/types';
 import type { createProcessOwnershipRuntime } from './ownership/processOwnershipRuntime';
 import { captureProcessTree, createProcessTreeTerminator, type ProcessTreeTerminationResult } from '@/processes/terminate/terminateProcessTree';
-import type { ProcessStartIdentity } from '@/processes/census/processCensus';
+import type { ProcessCensusSnapshot, ProcessStartIdentity } from '@/processes/census/processCensus';
 import { logger } from '@/ui/logger';
-import { indexCensus, membersOfCgroup, membersOfJob } from '@/processes/tree/processTree';
+import { descendantsOf, indexCensus, membersOfCgroup, membersOfJob } from '@/processes/tree/processTree';
 
 export type OwnerRemainderCapture = Readonly<{
     roots: readonly HappierProcessRoot[];
@@ -53,6 +53,20 @@ export function createEndOwnerRemainder(input: Readonly<{
             logger.infoFile('[process-remainder] Left-behind observation unavailable', { code: 'left_behind_observation_unavailable' });
         });
     }
+    function liveCapturedTreePids(owner: ProcessOwnerRef, roots: readonly HappierProcessRoot[], snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }>,
+        targets: readonly Readonly<{ pid: number; start: ProcessStartIdentity }>[]) {
+        const index = indexCensus(snapshot.rows);
+        const live = roots.filter(root => {
+            // A wrapper's reported worker and its Session-owned Runs share the
+            // retiring lifetime. Only a different lifecycle protects a subtree.
+            if (processOwnerKey(root.owner) === processOwnerKey(owner)
+                || owner.kind === 'session' && root.owner.kind === 'run' && root.owner.sessionId === owner.sessionId) return false;
+            const row = index.byPid.get(root.pid);
+            return root.live && row && row.state !== 'zombie' && equalProcessStart(row.start, root.start)
+                && targets.some(target => target.pid === root.pid && equalProcessStart(target.start, root.start));
+        });
+        return new Set([...live.map(root => root.pid), ...descendantsOf(index, live.map(root => root.pid)).map(row => row.pid)]);
+    }
     return {
         async capture(owner) {
             const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
@@ -64,7 +78,13 @@ export function createEndOwnerRemainder(input: Readonly<{
         async captureTree(owner, root) {
             const capture = await captureProcessTree(root);
             if (capture.status !== 'ok') { reportUnavailable(); return undefined; }
-            return { scope: 'subtree', ownership: [], roots: capture.capturedTargets.map(target => ({
+            const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
+            if (view.status !== 'ok') { reportUnavailable(); return undefined; }
+            // Aliases of the retiring owner are one lifetime. Independently tracked
+            // descendant roots and their subtrees keep their own lifecycle.
+            const independent = liveCapturedTreePids(owner, view.roots, view.snapshot,
+                capture.capturedTargets.filter(target => target.pid !== root.pid));
+            return { scope: 'subtree', ownership: [], roots: capture.capturedTargets.filter(target => !independent.has(target.pid)).map(target => ({
                 owner, ...target, live: true, ownerCreatedAtMs: capture.capturedAtMs,
                 ownerCreatedStartTimeMs: target.start.startTimeMs,
             })) };
@@ -94,26 +114,39 @@ export function createEndOwnerRemainder(input: Readonly<{
                 if (view.status !== 'ok') { reportUnavailable(); return { status: 'unavailable', outcomes: [] }; }
                 const key = processOwnerKey(owner);
                 if (captured?.scope === 'subtree') {
-                    const capturedGenerationIsLive = (roots: readonly HappierProcessRoot[], snapshot = view.snapshot) => roots.some(root =>
-                        root.live
-                        && captured.roots.some(target => target.pid === root.pid && equalProcessStart(target.start, root.start))
-                        && snapshot.rows.some(row => row.pid === root.pid && row.state !== 'zombie' && equalProcessStart(row.start, root.start)));
-                    if (capturedGenerationIsLive(view.roots)) return { status: 'complete', outcomes: [] };
+                    const live = liveCapturedTreePids(owner, view.roots, view.snapshot, captured.roots);
+                    const targets = captured.roots.filter(target => !live.has(target.pid));
                     // An exact pre-exit tree is physical custody, including
                     // Run-tagged descendants. Logical owner projection cannot
                     // erase it after reparenting, or transfer it to a new PID.
-                    endedRoots([], key, captured);
-                    const result = await terminate({ targets: captured.roots.map(({ pid, start }) => ({ pid, start })), tree: false,
-                        async authorizeSignal() {
-                            const current = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
-                            return current.status === 'ok' && !capturedGenerationIsLive(current.roots, current.snapshot);
-                        },
-                        async authorizeSnapshot(snapshot) {
-                            const current = await input.processOwnershipRuntime.resolveSnapshot(snapshot, undefined, { requesterAttribution: 'retained' });
-                            return current.status === 'ok' && !capturedGenerationIsLive(current.roots, snapshot);
-                        },
-                    });
-                    return { status: result.status, outcomes: result.outcomes };
+                    endedRoots([], key, { ...captured, roots: targets });
+                    const results: ProcessTreeTerminationResult[] = [];
+                    // A reowned member protects only its own tree, never the
+                    // other captured targets. Preserve descendants-first order.
+                    for (const target of [...targets].reverse()) {
+                        const observed = view.snapshot.rows.find(row => row.pid === target.pid);
+                        if ((!observed && !view.snapshot.partial?.some(row => row.pid === target.pid))
+                            || observed?.state === 'zombie' && equalProcessStart(observed.start, target.start)) {
+                            // This fresh census already proves the captured generation
+                            // departed. Re-reading the entire machine for each dead
+                            // child delays both Stop and the waiting replacement.
+                            results.push({ status: 'complete', outcomes: [{ pid: target.pid, outcome: 'gone_before' }] });
+                            continue;
+                        }
+                        results.push(await terminate({ targets: [{ pid: target.pid, start: target.start }], tree: false,
+                            async authorizeSignal() {
+                                const current = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
+                                return current.status === 'ok' && !liveCapturedTreePids(owner, current.roots, current.snapshot, captured.roots).has(target.pid);
+                            },
+                            async authorizeSnapshot(snapshot) {
+                                const current = await input.processOwnershipRuntime.resolveSnapshot(snapshot, undefined, { requesterAttribution: 'retained' });
+                                return current.status === 'ok' && !liveCapturedTreePids(owner, current.roots, snapshot, captured.roots).has(target.pid);
+                            },
+                        }));
+                    }
+                    return { status: results.some(result => result.status === 'unavailable') ? 'unavailable'
+                        : results.some(result => result.status === 'incomplete') ? 'incomplete' : 'complete',
+                        outcomes: results.flatMap(result => result.outcomes) };
                 }
                 // A resumed owner reowns its tagged processes. An older exit cannot retire it.
                 const liveOwner = view.roots.some(root => root.live && processOwnerKey(root.owner) === key

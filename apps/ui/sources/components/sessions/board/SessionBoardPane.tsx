@@ -95,6 +95,16 @@ export function SessionBoardPane(props: SessionBoardPaneProps): React.ReactEleme
         [props.serverId, props.sessionId],
     );
     const mounted = useMountedSessionBoardController(boardAddress);
+    // Opening an item here is the person's latest placement, so a "Show here" request for its
+    // transcript reply is taken back and this host runs it.
+    const releaseInlineTranscriptItem = mounted?.releaseInlineTranscriptItem;
+    const onOpenItemHere = props.onOpenItemHere;
+    const openItemHere = React.useMemo(() => onOpenItemHere
+        ? (itemId: string) => {
+            releaseInlineTranscriptItem?.(itemId);
+            onOpenItemHere(itemId);
+        }
+        : undefined, [onOpenItemHere, releaseInlineTranscriptItem]);
     const acquireContent = mounted?.acquireContent;
     React.useEffect(() => {
         if (props.retained) return;
@@ -317,14 +327,14 @@ export function SessionBoardPane(props: SessionBoardPaneProps): React.ReactEleme
                     onViewActionsFocusTargetChange: mounted.onViewActionsFocusTargetChange,
                     viewActionsFocusTargetRef: mounted.viewActionsFocusTargetRef,
                 } : {})}
-                {...(props.onOpenItemHere ? { onOpenItemHere: props.onOpenItemHere } : {})}
+                {...(openItemHere ? { onOpenItemHere: openItemHere } : {})}
                 {...(props.onOpenBoardDetails ? { onOpenBoardDetails: props.onOpenBoardDetails } : {})}
                 {...(pluginRuntime ? { pluginRuntime } : {})}
                 {...(callerHostedHtmlRuntime ? { callerHostedHtmlRuntime } : {})}
                 {...(props.onReadFullItem
                     ? { onReadFullItem: props.onReadFullItem }
-                    : navigationOnly && props.onOpenItemHere
-                        ? { onReadFullItem: props.onOpenItemHere }
+                    : navigationOnly && openItemHere
+                        ? { onReadFullItem: openItemHere }
                         : {})}
                 {...(!retained && canAddToCompanion ? {
                     companionItemIds: companionWidgetIds,

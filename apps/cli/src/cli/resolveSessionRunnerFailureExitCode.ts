@@ -2,6 +2,7 @@ import { HostTerminalTranscriptFollowAdmissionError } from '@/agent/runtime/sess
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { logger } from '@/ui/logger';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
   isAgentSessionContinuationUnreachableError,
   SESSION_RUNNER_EXIT_CODES,
@@ -27,11 +28,16 @@ export function resolveSessionRunnerFailureExitCode(error: unknown): number {
 
 /** Report the command failure and preserve its existing supervised process exit. */
 export function reportSessionRunnerFailure(error: unknown): number {
+  const exitCode = resolveSessionRunnerFailureExitCode(error);
+  logger.infoFile('[Session] Runner failed', {
+    phase: 'runner_exit', exitCode,
+    ...readUnexpectedActionErrorDiagnosticV1(error),
+  });
   const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error });
   if (issue.source === 'dependency_failure' && issue.code === 'preparation_pending') {
     logger.infoFile('[Session] Startup preparation pending', { code: issue.code, source: issue.source });
   } else {
     logger.fatal(error);
   }
-  return resolveSessionRunnerFailureExitCode(error);
+  return exitCode;
 }

@@ -5,12 +5,12 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import { type FileSystemService } from '@happier-dev/plugin-sdk/fs';
 import { type PluginPath } from '@happier-dev/plugin-sdk';
+import { readPortablePathSegmentViolation } from '@happier-dev/protocol/filesystem/portablePathSegment';
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
 const MAX_IO_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ITEMS = 100;
 const MAX_CURSOR_CHARS = 96;
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 type Access = 'read' | 'write' | 'delete';
 export type PluginFileSystemScope = Readonly<{ root: PluginPath['root']; projectId?: string; pathPrefix?: string; access: readonly Access[] }>;
 export type PluginFileSystemDisclosureMismatch = Readonly<{
@@ -51,12 +51,8 @@ async function withStableFileSystemErrors<T>(operation: () => Promise<T>): Promi
 }
 
 function isInvalidPortableComponent(part: string): boolean {
-  return !part
-    || part === '.'
-    || part === '..'
-    || /[\u0000-\u001f<>:"|?*]/u.test(part)
-    || /[ .]$/u.test(part)
-    || WINDOWS_RESERVED_NAME.test(part);
+  // Validate the canonical spelling without changing existing workspace names.
+  return readPortablePathSegmentViolation(part.normalize('NFC')) !== null;
 }
 
 function normalizedRelativePath(value: string): string {

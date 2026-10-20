@@ -451,8 +451,8 @@ describe('BrowserShell', () => {
         // No inner tab strip — the shell is a single-active-view renderer; tab order/active live on
         // the details-workspace engine. The sole view's content/address renders directly.
         expect(screen.findByTestId('browser-shell-tab-view_1')).toBeNull();
-        // Blurred address field shows the pretty display URL (scheme/trailing-slash trimmed).
-        expect(screen.findByTestId('browser-shell-address')?.props.value).toBe('preview.happier.test');
+        // Blurred address field names a relay preview by the service it exposes, not its isolated host.
+        expect(screen.findByTestId('browser-shell-address')?.props.value).toBe('localhost:5173');
         // The `webIframe` engine in this fixture declares no history capability, and a control the
         // active engine can NEVER fulfil is HIDDEN, not shipped permanently disabled
         // (`selectBrowserToolbarModel`'s `showBackForward`). `disabled` is reserved for the
@@ -1383,9 +1383,10 @@ describe('BrowserShell', () => {
             />,
         );
 
-        // Diagnostics now render inside the collapsible bottom drawer; the
-        // host-owned fidelity/trust badge stays on the active section.
-        expect(screen.findByTestId('browser-shell-diagnostics-container-collapsed')).toBeTruthy();
+        // Diagnostics render inside the bottom drawer, which opens closed (the page leads); once
+        // opened, the host-owned fidelity/trust badge stays on the active section.
+        expect(screen.findByTestId('browser-shell-diagnostics-container-closed')).toBeTruthy();
+        await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
         expect(screen.findByTestId('browser-shell-diagnostics-body')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-fidelity-nativeCallback')).toBeTruthy();
 
@@ -1751,7 +1752,8 @@ describe('BrowserShell', () => {
         }));
         // Console is the default drawer section; its family panel + row render
         // inside the drawer body with the trust/fidelity badge preserved.
-        expect(screen.findByTestId('browser-shell-diagnostics-container-collapsed')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-diagnostics-container-closed')).toBeTruthy();
+        await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
         expect(screen.findByTestId('browser-shell-diagnostics-body-fidelity-cdp')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-console-panel')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-console-row-evt_daemon_console_1')).toBeTruthy();

@@ -1,10 +1,12 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
     TriageSourceLinkSessionResultV1Schema,
     TriageSourceReadSessionLinksResultV1Schema,
     type TriageEntryRefV1,
 } from '@happier-dev/triage-protocol/v1';
 import { indexTriageAdmittedSourcesV1 } from '../actions/listEntries.js';
+import { TriageListInvocationErrorV1Schema } from '../actions/listEntriesProtocol.js';
+import type { TriageReadSourceSessionLinksResultV1, TriageSourceSessionLinksLaneV1 } from '../actions/sessionLinksProtocol.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
 import { readActiveConfiguredSourceRows } from '../corpus/configuration/readConfiguredSourceRows.js';
 import { configuredSourceInstanceIsOwnedBy } from '../corpus/configuration/administerConfiguredSourceInstance.js';
@@ -76,45 +78,76 @@ export function createTriageSourceSessionRelations(
                     display: input.display, nowMs: Date.now(), signal: context.signal });
             } catch { return { status: 'failed' }; }
         },
-        async read(input: Readonly<{ entryRef?: TriageEntryRefV1; sourceInstanceId?: string; sessionId?: string }>): Promise<Readonly<{
-            kind: 'complete' | 'failed'; links: readonly TriageSourceSessionLinkV1[]; sourceOwned: boolean;
-        }>> {
+        async read(input: Readonly<{ entryRef?: TriageEntryRefV1; sourceInstanceId?: string; sessionId?: string }>): Promise<
+            TriageReadSourceSessionLinksResultV1 & Readonly<{ sourceOwned: boolean }>
+        > {
             const { sources, configured } = await readView();
             const links: TriageSourceSessionLinkV1[] = [];
-            let failed = false;
+            const lanes: TriageSourceSessionLinksLaneV1[] = [];
             let sourceOwned = false;
             for (const row of configured.rows) {
                 if (input.sourceInstanceId !== undefined && row.configured.instance.sourceInstanceId !== input.sourceInstanceId) continue;
                 if (input.entryRef !== undefined && !configuredSourceInstanceIsOwnedBy(row, input.entryRef.source)) continue;
-                if (row.sourceQualifiedId !== renderSourceQualifiedId(row.configured.instance.source)) { failed = true; continue; }
                 const source = sources.get(row.sourceQualifiedId);
-                if (source === undefined) { failed = true; sourceOwned = true; continue; }
+                const lane = { source: row.configured.instance.source, sourceInstanceId: row.configured.instance.sourceInstanceId,
+                    displayLabel: row.configured.locator?.displayLabel ?? source?.descriptor.displayName ?? row.sourceQualifiedId };
+                if (row.sourceQualifiedId !== renderSourceQualifiedId(row.configured.instance.source)) {
+                    lanes.push({ ...lane, health: { kind: 'failed', failure: { class: 'unsupportedContract', code: 'sourceIdentityMismatch' } } });
+                    sourceOwned = true;
+                    continue;
+                }
+                if (source === undefined) { lanes.push({ ...lane, health: { kind: 'unavailable' } }); sourceOwned = true; continue; }
                 const operation = source?.operations?.readSessionLinks;
                 if (operation === undefined) {
-                    if (source.operations?.linkSession !== undefined) { failed = true; sourceOwned = true; }
+                    if (source.operations?.linkSession !== undefined) {
+                        lanes.push({ ...lane, health: { kind: 'failed', failure: { class: 'unsupportedContract', code: 'sessionLinksReadUnsupported' } } });
+                        sourceOwned = true;
+                    } else {
+                        // No source relation roles: the Account Collection is
+                        // the authoritative reader, not a missing source API.
+                        lanes.push({ ...lane, health: { kind: 'complete' } });
+                    }
                     continue;
                 }
                 sourceOwned = true;
                 try {
                     const entry = input.entryRef;
-                    const result = TriageSourceReadSessionLinksResultV1Schema.parse(await context.services.actions.executeAdmittedTargetedOperation(operation, {
+                    const parsed = TriageSourceReadSessionLinksResultV1Schema.safeParse(await context.services.actions.executeAdmittedTargetedOperation(operation, {
                         v: 1, instance: row.configured,
                         ...(entry === undefined ? {} : { localRef: { kindId: entry.kindId, collisionScope: entry.collisionScope, entryId: entry.entryId } }),
                         ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
                     }, options));
-                    if (result.kind !== 'complete') { failed = true; continue; }
+                    if (!parsed.success) {
+                        lanes.push({ ...lane, health: { kind: 'failed', failure: { class: 'unsupportedContract', code: 'sessionLinksInvalidResult' } } });
+                        continue;
+                    }
+                    const result = parsed.data;
+                    if (result.kind !== 'complete') { lanes.push({ ...lane, health: result }); continue; }
+                    if (result.links.some((link) => {
+                        const entryRef = { source: row.configured.instance.source, ...link.localRef };
+                        return !source.descriptor.kinds.some((kind) => kind.id === entryRef.kindId)
+                            || (entry !== undefined && !sameTriageEntryReference(entry, entryRef))
+                            || (input.sessionId !== undefined && input.sessionId !== link.sessionId);
+                    })) {
+                        lanes.push({ ...lane, health: { kind: 'failed', failure: { class: 'unsupportedContract', code: 'sessionLinksInvalidResult' } } });
+                        continue;
+                    }
+                    lanes.push({ ...lane, health: { kind: 'complete' } });
                     for (const link of result.links) {
                         const entryRef = { source: row.configured.instance.source, ...link.localRef };
-                        if (!source?.descriptor.kinds.some((kind) => kind.id === entryRef.kindId)
-                            || (entry !== undefined && !sameTriageEntryReference(entry, entryRef))
-                            || (input.sessionId !== undefined && input.sessionId !== link.sessionId)) { failed = true; continue; }
                         if (!links.some((existing) => existing.sessionId === link.sessionId && sameTriageEntryReference(existing.entryRef, entryRef))) {
                             links.push({ entryRef, sessionId: link.sessionId, linkedAtMs: link.linkedAtMs, displayPath: link.displayPath });
                         }
                     }
-                } catch { failed = true; }
+                } catch (error) {
+                    const diagnostic = isPluginError(error) ? TriageListInvocationErrorV1Schema.safeParse({ code: error.code, retryable: error.retryable }) : null;
+                    lanes.push({ ...lane, health: { kind: 'failed', failure: { class: 'transient', code: 'sessionLinksReadFailed' },
+                        ...(diagnostic?.success ? { invocationError: diagnostic.data } : {}),
+                    } });
+                }
             }
-            return { kind: failed ? 'failed' : 'complete', links, sourceOwned };
+            const complete = lanes.filter((lane) => lane.health.kind === 'complete').length;
+            return { kind: complete === lanes.length ? 'complete' : complete > 0 ? 'partial' : 'failed', links, lanes, sourceOwned };
         },
     };
 }

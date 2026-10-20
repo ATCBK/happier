@@ -17,7 +17,7 @@ import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInp
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
-import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { readWidgetSourcePluginName, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
@@ -157,25 +157,23 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
                 widgetPresentation={widgetPresentation}
                 mark={candidate?.icon ?? 'squares-four'}
                 title={rename.field ?? frameTitle}
-                source={bindingLabel ?? candidate?.pluginName}
+                source={bindingLabel ?? readWidgetSourcePluginName(appRuntime.pluginUiProjection, candidate)}
                 menu={(
-                    <View style={styles.controls}>
-                        <View ref={inputs.anchorRef} collapsable={false}>
-                            <ItemRowActions
-                                title={title}
-                                compactThreshold={ALWAYS_OVERFLOW}
-                                compactActionIds={[]}
-                                overflowTriggerTestID={`${props.testID}.menu`}
-                                overflowTriggerAccessibilityLabel={t('boards.widgets.menuA11y', { widget: title })}
-                                onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
-                                renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${props.testID}.size`)}
-                                overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
-                                actions={actions}
-                            />
-                        </View>
-                        {props.grip}
+                    <View ref={inputs.anchorRef} collapsable={false}>
+                        <ItemRowActions
+                            title={title}
+                            compactThreshold={ALWAYS_OVERFLOW}
+                            compactActionIds={[]}
+                            overflowTriggerTestID={`${props.testID}.menu`}
+                            overflowTriggerAccessibilityLabel={t('boards.widgets.menuA11y', { widget: title })}
+                            onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
+                            renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${props.testID}.size`)}
+                            overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
+                            actions={actions}
+                        />
                     </View>
                 )}
+                {...(props.grip ? { grip: props.grip } : {})}
                 body={body}
                 {...(props.fresh ? { fresh: true } : {})}
                 accessibilityLabel={`${title}, ${t('boards.widgets.kind')}`}
@@ -191,6 +189,3 @@ export function describeBoardWidgetTitle(placement: WorkBoardWidgetPlacementV1, 
     return readWidgetInstanceName(placement.instance, candidate) ?? t('boards.widgets.kind');
 }
 
-const styles = {
-    controls: { flexDirection: 'row', alignItems: 'center' },
-} as const;

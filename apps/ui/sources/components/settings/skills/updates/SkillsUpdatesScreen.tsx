@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
@@ -52,15 +53,6 @@ function formatTime(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(ms);
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  })
-    .format(value)
-    .toLowerCase();
 }
 
 function fileText(file: SkillUpdateFileV1['mine']): string {
@@ -196,22 +188,19 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
           />
         </ItemGroup>
       ) : nothing ? (
-        <ItemGroup surface="none">
-          <SurfaceStateCard
-            testID="skills.updates.upToDate"
-            size="line"
-            kind="empty"
-            title={
-              !sourced
-                ? t('capabilities.skillsUpdates.updates.noSources')
-                : updates.check.checkedAt !== null
-                ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
-                    time: formatTime(updates.check.checkedAt),
-                  })
-                : t('capabilities.skillsUpdates.updates.upToDate')
-            }
-          />
-        </ItemGroup>
+        // Nothing to review is a state of the page, on its column's edge, not a line floating in a blank one.
+        <SurfaceStateCard
+          testID="skills.updates.upToDate"
+          size="page"
+          kind="empty"
+          scene="checksPassed"
+          title={!sourced ? t('capabilities.skillsUpdates.updates.noSources') : t('capabilities.skillsUpdates.updates.upToDate')}
+          reason={
+            sourced && updates.check.checkedAt !== null
+              ? t('capabilities.skillsUpdates.updates.checkedAt', { time: formatTime(updates.check.checkedAt) })
+              : undefined
+          }
+        />
       ) : null}
       {groups.ready.length > 0 || applied.length > 0 ? (
         // Once only receipts remain, the group no longer promises a safe update: it says what happened.
@@ -323,7 +312,7 @@ function ReadyRow(
               ? { cost: { tokensWhenUsed: cost.to } }
               : {
                   extra: [
-                    `${formatCount(cost.tokens)} → ${t('capabilities.facts.tokensWhenUsed', { count: formatCount(cost.to) })}`,
+                    `${formatCapabilityCount(cost.tokens)} → ${t('capabilities.facts.tokensWhenUsed', { count: formatCapabilityCount(cost.to) })}`,
                   ],
                 }
             : {}),

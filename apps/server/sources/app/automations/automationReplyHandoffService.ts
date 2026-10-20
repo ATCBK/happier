@@ -9,14 +9,14 @@ import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     acquireAccountEncryptionTransitionFenceInTx,
 } from "@/app/encryption/accountEncryptionTransition";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 
 import { resolveClaimLeaseExpiresAt } from "./automationClaimService";
 import { emitAutomationRunUpdated } from "./automationChangePublisher";
 import {
     automationAccountCurrentnessSelect,
+    captureAutomationAccountCurrentnessAfterPublication,
     deriveAutomationAccountCurrentnessWitness,
-    fetchAutomationAccountCurrentnessWitnessTx,
 } from "./automationAccountCurrentness";
 import {
     automationRunCauseSelect,
@@ -354,7 +354,7 @@ async function publishAutomationRunMutationTx(
         entityId: run.automationId,
     });
     afterTx(tx, () => {
-        emitAutomationRunUpdated({ accountId: run.accountId, run, cursor });
+        emitAutomationRunUpdated({ accountId: run.accountId, run, cursor: cursor.resolveCursor() });
     });
 }
 
@@ -495,7 +495,7 @@ export async function claimNextAutomationReplyHandoff(params: Readonly<{
         });
         if (!initialCandidate) return null;
 
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, initialCandidate.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, initialCandidate.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const candidate = await findDueCandidateTx(tx, params.now, initialCandidate.id);
         if (!candidate) return null;
@@ -548,12 +548,8 @@ export async function claimNextAutomationReplyHandoff(params: Readonly<{
         // change cursor. Return the post-publication witness—the value a
         // daemon will read from the canonical currentness endpoint—not the
         // pre-claim sequence that this transaction intentionally advanced.
-        const accountCurrentness = await fetchAutomationAccountCurrentnessWitnessTx(
-            tx,
-            candidate.accountId,
-        );
-        if (!accountCurrentness) return null;
-        return {
+        const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(tx, candidate.accountId);
+        const claim = {
             accountId: candidate.accountId,
             automationId: candidate.automationId,
             runId: candidate.id,
@@ -561,7 +557,6 @@ export async function claimNextAutomationReplyHandoff(params: Readonly<{
             occurrenceKey: candidate.occurrenceKey,
             cause: decodeAutomationRunCause(candidate),
             attempt: candidate.replyHandoffAttempt + 1,
-            accountCurrentness,
             runRevision: candidate.revision + 1,
             recipeKind: candidate.workflowCustodyState !== null ? "workflow-v2" as const : "legacy" as const,
             resultEnvelope: candidate.resultEnvelope,
@@ -573,7 +568,11 @@ export async function claimNextAutomationReplyHandoff(params: Readonly<{
                 machineInstallationId: candidate.replyHandoffTargetMachineInstallationId,
                 materializationId: candidate.replyHandoffTargetMaterializationId,
             },
-        };
+        } satisfies Omit<AutomationReplyHandoffClaim, "accountCurrentness">;
+        return transactionResult(() => {
+            const accountCurrentness = terminalCurrentness.resolveResult();
+            return accountCurrentness ? { ...claim, accountCurrentness } : null;
+        });
     }, { transactionClass: "automation-reply-handoff-claim" });
 }
 
@@ -612,7 +611,7 @@ export async function retryBlockedAutomationReplyHandoff(params: Readonly<{
     if (!isValidDate(now)) return null;
 
     return await inTx(async (tx) => {
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const current = await tx.automationRun.findFirst({
             where: {
@@ -687,7 +686,7 @@ export async function authorizeAutomationReplyHandoffRedelivery(params: Readonly
     if (!Number.isSafeInteger(params.expectedRevision) || params.expectedRevision < 0) return null;
 
     return await inTx(async (tx) => {
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const current = await tx.automationRun.findFirst({
             where: {
@@ -839,7 +838,7 @@ export async function settleAutomationReplyHandoff(params: Readonly<{
     }
 
     return await inTx(async (tx) => {
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.claim.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.claim.accountId, "content");
         if (accountFence.status !== "ready") return { applied: false };
         const current = await tx.automationRun.findFirst({
             where: {

@@ -3,7 +3,7 @@ import type { QualifiedConnectedAccountPurposeV1 } from './connectedAccountPurpo
 import { sameQualifiedConnectedAccountRef } from './qualifiedConnectedAccountPersistence.js';
 import { isQualifiedConnectedAccountProfileActiveV4, resolveQualifiedConnectedAccountGroupActiveAccountV4, type QualifiedConnectedAccountProfileV4, type QualifiedConnectedAccountGroupV4 } from './qualifiedConnectedAccountsV4.js';
 import type { PluginConnectedAccountAuthenticationV2 } from './pluginConnectedAccountAuthenticationV2.js';
-import type { PluginProjectedMachineProvisionerEntryV1, PluginProjectedResourceV2, PluginProjectionInstalledPackageV2 } from '../daemon/contributionRegistryProjection.js';
+import type { PluginProjectedActionV2, PluginProjectedMachineProvisionerEntryV1, PluginProjectedResourceV2, PluginProjectionInstalledPackageV2 } from '../daemon/contributionRegistryProjection.js';
 
 /** The installed Resource is the declaration authority, shared by setup and Action admission. */
 export function readDeclaredConnectedAccountResourcePurposeV1(input: Readonly<{
@@ -22,11 +22,12 @@ export function readDeclaredConnectedAccountResourcePurposeV1(input: Readonly<{
   return declarations.length === 1 ? declarations[0]! : null;
 }
 
-/** Setup reads existing consumer declarations; this does not authorize Resource-default writes. */
+/** Canonical declaration lookup for host setup and default-target admission. */
 export function readDeclaredConnectedAccountPurposeV1(input: Readonly<{
   purpose: QualifiedConnectedAccountPurposeV1;
   projection: Parameters<typeof readDeclaredConnectedAccountResourcePurposeV1>[0]['projection'] & Readonly<{
     machineProvisionersById?: Readonly<Record<string, PluginProjectedMachineProvisionerEntryV1>>;
+    actionsById?: Readonly<Record<string, PluginProjectedActionV2>>;
   }>;
 }>) {
   const resource = readDeclaredConnectedAccountResourcePurposeV1(input);
@@ -36,10 +37,15 @@ export function readDeclaredConnectedAccountPurposeV1(input: Readonly<{
     entry.pluginId === consumer.pluginId && entry.definition.id === consumer.localId);
   const declarations = provisioners.length === 1 ? provisioners[0]!.connectedAccountPurposes?.filter(declaration =>
     declaration.purpose === input.purpose.purpose) ?? [] : [];
-  // A qualified purpose has exactly one consumer, never a Resource/provisioner collision.
-  if (resource && declarations.length) return null;
+  const actions = Object.values(input.projection.actionsById ?? {}).filter(entry =>
+    entry.pluginId === consumer.pluginId && entry.id === consumer.localId && entry.available !== false);
+  const actionDeclarations = actions.length === 1 ? actions[0]!.connectedAccountPurposes?.filter(declaration =>
+    declaration.purpose === input.purpose.purpose) ?? [] : [];
+  // A qualified purpose identifies one consumer, including across contribution families.
+  if (Number(Boolean(resource)) + declarations.length + actionDeclarations.length !== 1) return null;
   return resource ? { ...resource, consumerKind: 'resource' as const }
-    : declarations.length === 1 ? { ...declarations[0]!, consumerKind: 'machineProvisioner' as const } : null;
+    : declarations.length === 1 ? { ...declarations[0]!, consumerKind: 'machineProvisioner' as const }
+    : { ...actionDeclarations[0]!, consumerKind: 'action' as const };
 }
 
 /** Read-only projection of one existing selected purpose, never a selection writer. */

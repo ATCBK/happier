@@ -1,9 +1,9 @@
 import { z } from 'zod/mini';
 
-import {
-  type WorkflowDefinitionV1,
-  type WorkflowIngressContextV1,
-  type WorkflowValidationIssue,
+import type {
+  WorkflowDefinitionV1,
+  WorkflowIngressContextV1,
+  WorkflowValidationIssue,
 } from './workflowV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
 

@@ -35,6 +35,8 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
     description: string;
     serverId: string;
     entry: PromptStackEntryV1 | null;
+    /** The context owner must finish its read before a missing attachment means empty. */
+    attachmentStatus?: 'loading' | 'ready' | 'unavailable';
     footer: string | ((shared: boolean | null) => string | undefined);
     emptyText: string;
     readOnly?: boolean;
@@ -60,14 +62,14 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
         serverId, scopeKey: JSON.stringify(props.scopeTarget), attachedRef,
     });
     const unattached = receipt?.attachment === 'conflict';
-    const source = useMemoryDocument({ ref, serverId });
+    const source = useMemoryDocument({ ref, serverId, attachmentStatus: props.attachmentStatus });
     const canRemember = !props.readOnly && Boolean(source.target || (!entry && source.status === 'none' && props.scopeTarget));
     const [composing, setComposing] = React.useState(false);
     // Search takes the section's body while it is open (the same panel Work › Memory opens).
     const [searching, setSearching] = React.useState(false);
     const navigateToSession = useNavigateToSession();
-    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string }>) => {
-        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId }), { tag: 'ContextMemorySection.openSession' });
+    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
+        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId, messageId: session.messageId }), { tag: 'ContextMemorySection.openSession' });
     }, [navigateToSession]);
     const [budgetOpen, setBudgetOpen] = React.useState(false);
     const maxChars = entry?.maxChars;

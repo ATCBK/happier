@@ -5,6 +5,9 @@ import { definePlugin, PluginError } from '@happier-dev/plugin-sdk';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { Button, Text, defineUiSurface } from '@happier-dev/plugin-ui';
+import type { PluginUiDataClient, PluginUiAccountCollectionForDefinition } from '@happier-dev/plugin-ui/data';
+import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
+import { useTriageEntryDetail, type TriageEntryDetailInputSourceV1 } from './detail/useTriageEntryDetail.js';
 import { useTriageFixPullRequests } from './detail/useTriageFixPullRequests.js';
 import { useTriageActions } from './actions/useTriageActions.js';
 import { useTriageSavedViews } from './views/useTriageSavedViews.js';
@@ -37,6 +40,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluginUiContextEnrichmentV1 } from '@happier-dev/plugin-sdk/ui';
 import { TriageMountedUiInputV1Schema } from '../actions/mountedUiProtocol.js';
+import { TriageEditTaskActionInputV1Schema } from '../actions/tasksProtocol.js';
 import { unlinkEntryFromSession } from '../sessions/entrySessionLinks.js';
 import { TriageUnlinkEntryFromSessionActionInputV1Schema, TriageUnlinkEntryFromSessionActionResultV1Schema } from '../actions/entrySessionProtocol.js';
 import { invokeTriageMountedUiAction } from './mountedActions.js';
@@ -77,8 +81,12 @@ import {
     buildTriageRouteSubPathV1,
 } from './navigation/location.js';
 import { TRIAGE_SHELL_FILL_TEST_ID_V1, TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 } from './shell/root.js';
-import { refreshTriageListWindow } from './window/mountedWindow.js';
+import { TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1 } from './detail/region.js';
+import { readTriageListWindowSnapshot, refreshTriageListWindow } from './window/mountedWindow.js';
 import { renderSurface as renderShellSurface } from './surface.js';
+import { renderSurface as renderTasksSurface } from './tasksSurface.js';
+import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
+import { TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS } from '../refresh/refreshEligibility.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 
 /**
@@ -150,6 +158,8 @@ const DESCRIPTOR = Object.freeze({
         pluralDisplayName: 'Pull requests',
     }],
 });
+const TASK_DESCRIPTOR = { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map(kind => ({ ...kind, task: true,
+    taskCapabilities: { editFields: ['title', 'body'] } })) };
 
 /** The contributor's real public manifest, as the host reads it at admission. */
 const CONTRIBUTOR_MANIFEST = definePlugin({
@@ -332,12 +342,12 @@ const OTHER_ADMITTED_MOUNT = Object.freeze({
 });
 
 function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedDetail?: boolean; sourceSessionTab?: boolean;
-    fixPullRequestState?: 'unprojected' | 'unreachable'; }> = {}) {
+    fixPullRequestState?: 'unprojected' | 'unreachable'; taskEdit?: boolean }> = {}) {
     const contributesDetail = options.contributesDetail !== false;
     return createSurfaceContextFixture({
         mount: {
             kind: 'destination',
-            destination: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: 'triage' },
+            destination: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: options.taskEdit ? 'tasks' : 'triage' },
             container: 'appPage',
         },
         targetedContributions: {
@@ -364,7 +374,7 @@ function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedD
                     }, {
                         contributor: CONTRIBUTOR,
                         protocol: PROTOCOL,
-                        descriptor: options.sourceSessionTab ? (() => {
+                        descriptor: options.taskEdit ? TASK_DESCRIPTOR : options.sourceSessionTab ? (() => {
                             const admitted = admitTriageSourceDescriptorV1({ ...DESCRIPTOR, kinds: [{ ...DESCRIPTOR.kinds[0], detailTabs: [
                                 { kind: 'shared', id: 'overview' }, { kind: 'shared', id: 'files' },
                                 { kind: 'source', id: 'session', title: 'Session history' },
@@ -384,7 +394,10 @@ function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedD
                                 { kind: 'shared', id: 'files' }, { kind: 'shared', id: 'checks' },
                             ] })),
                         } : DESCRIPTOR,
-                        operations: [],
+                        operations: options.taskEdit ? ['get', 'edit'].map(role => ({
+                            point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol: PROTOCOL },
+                            contributor: CONTRIBUTOR, role, action: { pluginId: SOURCE.pluginId, localId: role },
+                        })) : [],
                         surfaces: contributesDetail ? [DETAIL_SURFACE] : [],
                     }],
                 }],
@@ -470,13 +483,16 @@ function createHarness(options: Readonly<{
     secondInstance?: boolean;
     secondInstanceObservesEntry?: boolean;
     otherSourceEntry?: boolean;
+    deferLinkedEntry?: boolean;
+    taskEdit?: boolean;
+    uninstalledSource?: boolean;
 }> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
     if (options.secondInstance === true) {
         control.sourceInstances.seed(toCorpusStoredValue(instanceRow(SECOND_INSTANCE)));
     }
-    if (options.otherSourceEntry === true) {
+    if (options.otherSourceEntry === true || options.uninstalledSource === true) {
         control.sourceInstances.seed(toCorpusStoredValue(otherSourceInstanceRow()));
     }
     /** Every connection the mounted detail actually ran a read under. */
@@ -504,7 +520,7 @@ function createHarness(options: Readonly<{
     const admitted = [{
         contributor: CONTRIBUTOR,
         protocol: PROTOCOL,
-        descriptor: DESCRIPTOR,
+        descriptor: options.taskEdit ? TASK_DESCRIPTOR : DESCRIPTOR,
         operations: { listInstances: {}, scan: { role: 'scan' }, get: {} },
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1, ...(options.otherSourceEntry === true ? [{
@@ -515,7 +531,23 @@ function createHarness(options: Readonly<{
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1] : [])];
 
-    const executeScan: TriageAdmittedOperationExecutorV1 = async (operation, input) => ({
+    const executeScan: TriageAdmittedOperationExecutorV1 = async (operation, input) => {
+        if (options.deferLinkedEntry && input.page.kind === 'initial') {
+            return {
+                kind: 'page',
+                observations: Array.from({ length: MAX_TRIAGE_LIST_WINDOW_ROWS_V1 }, (_, index) => ({
+                    kind: 'present' as const,
+                    localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: `preceding-${index}` },
+                    locator: testkitLocator(),
+                    snapshot: testkitSnapshot({ title: `Earlier change ${index}` }),
+                    viewer: testkitViewer(),
+                    sourceUpdatedAtMs: observationRevision.current,
+                })),
+                evidence: { kind: 'partial', reason: 'more-pages' },
+                continuation: { v: 1, token: 'linked-entry' },
+            } satisfies TriageScanResultV1;
+        }
+        return {
         kind: 'complete',
         observations: observes.current
             && (options.secondInstanceObservesEntry !== false
@@ -528,7 +560,7 @@ function createHarness(options: Readonly<{
                     ? 'Another source matching entry'
                     : 'Replace the duplicated normalizer',
             }),
-            viewer: testkitViewer(),
+            viewer: testkitViewer({ involvement: options.taskEdit ? ['assignee'] : [] }),
             sourceUpdatedAtMs: observationRevision.current,
         }, {
             kind: 'present',
@@ -548,8 +580,9 @@ function createHarness(options: Readonly<{
             viewer: testkitViewer(),
             sourceUpdatedAtMs: 2_000,
         }] : [],
-        evidence: { kind: 'walkFinished' },
-    } satisfies TriageScanResultV1);
+        evidence: options.uninstalledSource === true ? { kind: 'partial', reason: 'projection-budget' } : { kind: 'walkFinished' },
+        } satisfies TriageScanResultV1;
+    };
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>) {
         const action = String(request.action);
@@ -627,6 +660,7 @@ function createHarness(options: Readonly<{
                         kind: 'present',
                         locator: testkitLocator(),
                         snapshot: testkitSnapshot({
+                            ...(options.taskEdit ? { projectionTruncated: true } : {}),
                             title: isLongEntry
                                 ? LONG_REF_ROW_TITLE
                                 : isOtherSource
@@ -635,7 +669,7 @@ function createHarness(options: Readonly<{
                                         ? 'Replace the duplicated normalizer after mutation'
                                         : 'Replace the duplicated normalizer',
                         }),
-                        viewer: testkitViewer(),
+                        viewer: testkitViewer({ involvement: options.taskEdit ? ['assignee'] : [] }),
                         sourceUpdatedAtMs: observationRevision.current,
                     },
                 },
@@ -756,6 +790,7 @@ async function mountShell(
         secondInstance?: boolean;
         secondInstanceObservesEntry?: boolean;
         otherSourceEntry?: boolean;
+        deferLinkedEntry?: boolean;
         linkedSessionCount?: number;
         sessionTitle?: string;
         hostedDetail?: boolean;
@@ -770,6 +805,9 @@ async function mountShell(
         onNotification?: (notification: Readonly<{ message: string; severity?: string }>) => void;
         onDiagnostic?: (data: Readonly<{ code: string }>) => void;
         fixPullRequestState?: 'unprojected' | 'unreachable';
+        taskEdit?: boolean;
+        uninstalledSource?: boolean;
+        onTaskEdit?: (input: unknown) => void;
         publishCurrentUiContext?: (context: PluginUiContextEnrichmentV1 | null) => void;
         replacePageLocation?: (request: Readonly<{
             subPath: string;
@@ -784,6 +822,9 @@ async function mountShell(
             ? {}
             : { secondInstanceObservesEntry: options.secondInstanceObservesEntry }),
         ...(options.otherSourceEntry === undefined ? {} : { otherSourceEntry: options.otherSourceEntry }),
+        ...(options.deferLinkedEntry === undefined ? {} : { deferLinkedEntry: options.deferLinkedEntry }),
+        ...(options.taskEdit === undefined ? {} : { taskEdit: options.taskEdit }),
+        ...(options.uninstalledSource === undefined ? {} : { uninstalledSource: options.uninstalledSource }),
     });
     currentHarness = harness;
     if (options.linkedSessionCount !== undefined) {
@@ -802,7 +843,8 @@ async function mountShell(
             ...(options.launchInput === undefined ? {} : { launchInput: options.launchInput }),
             // The semantic host's RenderContext omits its activity snapshot;
             // supply this genuine host boundary fact for mounted-action cases.
-            surface: (context) => renderShellSurface({ ...context, activity: { active: options.activeSurface === true } }),
+            surface: (context) => (options.taskEdit ? renderTasksSurface : renderShellSurface)(
+                { ...context, activity: { active: options.activeSurface === true } }),
             surfaceContext: options.hostTarget?.ready === false
                 ? { ...accountSurface, machineConnectionPending: options.hostTarget.pending ?? true,
                     ...(options.hostTarget.executionReady === undefined ? {} : { machineExecutionReady: options.hostTarget.executionReady }) } : admittedSurface,
@@ -833,6 +875,18 @@ async function mountShell(
                 diagnostic: ({ data }) => { options.onDiagnostic?.(data); },
                 publishCurrentUiContext: ({ enrichment }) => options.publishCurrentUiContext?.(enrichment),
                 executeAction: async ({ action, input }) => {
+                    if (options.taskEdit && typeof action !== 'string' && action.localId === 'get') {
+                        return { kind: 'present', localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                            locator: testkitLocator(), snapshot: testkitSnapshot({ projectionTruncated: true }), viewer: testkitViewer(),
+                            taskFields: { title: 'Replace the duplicated normalizer', body: 'Complete source notes\n\nPreserve Markdown.  \n' } };
+                    }
+                    if (options.taskEdit && action === 'tasks/edit-v1') {
+                        options.onTaskEdit?.(input);
+                        return { kind: 'applied', observation: {
+                            kind: 'present', localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+                        } };
+                    }
                     if (typeof action === 'string' && options.refusedHostReads?.has(action)) throw new PluginError({
                         code: 'unavailable', retryable: true,
                         diagnostics: [{ code: 'plugin_surface_connection_pending', severity: 'error' }],
@@ -887,6 +941,38 @@ async function openTheRow(shell: PluginUiTestkit): Promise<void> {
     await act(async () => { await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
 }
+
+it.each(['current', 'uninstalled', 'aged'] as const)('edits the selected task despite truncated row facts and list freshness: %s', async (state) => {
+    const edits: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
+    const shell = await mountShell({ taskEdit: true, uninstalledSource: state === 'uninstalled',
+        onTaskEdit: input => edits.push(TriageEditTaskActionInputV1Schema.parse(input)) });
+    if (state === 'aged') {
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS);
+        await act(async () => { await shell.updateSurface(surfaceContext({ taskEdit: true })); });
+        expect(readTriageListWindowSnapshot(shell.context.hostApi, currentHarness!.ephemeralSharedScope).freshness).toBe('stale');
+    }
+    if (state === 'uninstalled') {
+        const snapshot = readTriageListWindowSnapshot(shell.context.hostApi, currentHarness!.ephemeralSharedScope);
+        expect(snapshot).toMatchObject({ pending: 'idle', freshness: 'stale' });
+        expect(snapshot.configuredSources).toHaveLength(2);
+        expect(snapshot.window?.lanes).toEqual(expect.arrayContaining([
+            expect.objectContaining({ sourceInstanceId: OTHER_INSTANCE, health: { kind: 'unavailable' } }),
+        ]));
+    }
+    await openTheRow(shell);
+    await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Edit task' })); });
+    // The open editor takes the story's place instead of squeezing into the header's share of the pane.
+    const notes = document.querySelector<HTMLTextAreaElement>(`[data-testid="${TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1}"] textarea[aria-label="Notes"]`);
+    expect(notes?.value).toBe('Complete source notes\n\nPreserve Markdown.  \n');
+    await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(notes, 'Updated source notes\n');
+        notes!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Save changes' })); });
+    expect(edits).toMatchObject([{ entryRef: { source: SOURCE, entryId: '17' }, sourceInstanceId: INSTANCE,
+        fields: { body: 'Updated source notes\n' } }]);
+    expect(edits[0]?.fields).not.toHaveProperty('title');
+});
 
 type LayoutHandler = (event: Readonly<{
     nativeEvent: Readonly<{ layout: Readonly<{ x: number; y: number; width: number; height: number }> }>;
@@ -956,6 +1042,68 @@ function openedFixtureEntry(): string {
 }
 
 describe('opening a row into the source detail', () => {
+    it.each([false, true])('uses the selected detail transport for readiness with mounted Account data (source-owned links: %s)', async (sourceOwned) => {
+        const harness = createHarness();
+        const protocol = PROTOCOL;
+        const initial = surfaceContext();
+        const targetedContributions = initial.targetedContributions!;
+        const context = { ...initial, machineConnectionPending: true, machineExecutionReady: false,
+            targetedContributions: { ...targetedContributions, points: targetedContributions.points.map(point => ({ ...point,
+                protocols: point.protocols.map(candidate => ({ ...candidate,
+                    contributions: candidate.contributions.map(contribution => contribution.contributor.pluginId !== SOURCE.pluginId
+                        ? contribution : { ...contribution, operations: sourceOwned ? [{
+                            point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
+                            contributor: CONTRIBUTOR, role: 'readSessionLinks',
+                            action: { pluginId: SOURCE.pluginId, localId: 'read-links' },
+                        }] : [] }),
+                })),
+            })) } };
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const input = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000,
+            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        const dataClient: PluginUiDataClient = {
+            collection<TDefinition extends PluginAccountCollectionDefinition>(definition: TDefinition) {
+                const collection = definition.id === 'source-instances' ? harness.collections.sourceInstances
+                    : definition.id === 'session-links' ? harness.collections.sessionLinks
+                    : definition.id === 'user-marks' ? harness.collections.userMarks : null;
+                if (collection === null) throw new Error(`Undeclared test Collection: ${definition.id}`);
+                // Real Collection boundary fixtures share one codec; the generic definition selects its handle.
+                return collection as unknown as PluginUiAccountCollectionForDefinition<TDefinition>;
+            },
+            accountKv: createTestkitAccountKv().kv,
+            openCollectionQuery: async () => { throw new Error('This detail does not open a UI query'); },
+        };
+        const surface = defineUiSurface(() => {
+            const read = useTriageEntryDetail(input);
+            return <Text value={read?.kind ?? 'none'} />;
+        });
+        let pending = true;
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'source-detail-read', mountNonce: 'source-detail-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface: renderContext => {
+                const entry = surface(renderContext);
+                if (!entry || (typeof entry.type !== 'function' && typeof entry.type !== 'object') || entry.type === null
+                    || !Reflect.get(entry.type, Symbol.for('happier.pluginUi.privateSurfaceEntryProvider.v1'))) {
+                    throw new Error('Expected the host-cloned surface entry provider');
+                }
+                return React.cloneElement(entry as unknown as React.ReactElement<{ dataClient?: PluginUiDataClient }>, { dataClient });
+            },
+            surfaceContext: context, adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: async request => {
+                if (pending) throw new PluginError({ code: 'unavailable', retryable: true,
+                    diagnostics: [{ code: 'plugin_surface_connection_pending', severity: 'error' }] });
+                return await harness.executeAction(request);
+            } },
+        });
+        mounted.push(shell);
+        await vi.waitFor(() => { expect(document.body.textContent).toBe(sourceOwned ? 'reading' : 'ready'); });
+        pending = false;
+        await act(async () => { await shell.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true }); });
+        await vi.waitFor(() => { expect(document.body.textContent).toBe('ready'); });
+    });
+
     it('applies the same pending and re-acquisition lifecycle to mounted catalog reads', async () => {
         let withdrawn = true;
         const kv = createTestkitAccountKv();
@@ -994,7 +1142,7 @@ describe('opening a row into the source detail', () => {
         const shell = await mountShell({ refusedHostReads, activeSurface: true });
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: true, machineExecutionReady: false }); });
         await openTheRow(shell);
-        await expect(shell.queryByText('Your account could not be read')).resolves.toBeUndefined();
+        await expect(shell.queryByText('These details could not be read')).resolves.toBeUndefined();
         refusedHostReads.clear();
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: false, machineExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined(); });
@@ -1299,7 +1447,7 @@ describe('opening a row into the source detail', () => {
         expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Activity');
     });
 
-    it('retries an Account-read failure without closing the selected entry', async () => {
+    it('retries a detail-read failure without closing the selected entry', async () => {
         const shell = await mountShell();
         const harness = currentHarness;
         if (harness === null) throw new Error('the shell was not mounted');
@@ -1307,7 +1455,7 @@ describe('opening a row into the source detail', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByText('Your account could not be read')).resolves.toBeDefined();
+        await expect(shell.getByText('These details could not be read')).resolves.toBeDefined();
         await expect(shell.getByRole('heading', { name: 'Replace the duplicated normalizer' }))
             .resolves.toBeDefined();
         harness.setDetailReadsUnavailable(false);
@@ -1319,7 +1467,7 @@ describe('opening a row into the source detail', () => {
         }
 
         await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
-        await expect(shell.queryByText('Your account could not be read')).resolves.toBeUndefined();
+        await expect(shell.queryByText('These details could not be read')).resolves.toBeUndefined();
     });
 
     it('restores the settled list and announces a host-rejected selection', async () => {
@@ -1686,6 +1834,25 @@ describe('opening a row into the source detail', () => {
             .resolves.toBeUndefined();
         await expect(shell.getByText('Reading this entry')).resolves.toBeDefined();
         releaseOther();
+    });
+
+    it('opens a deep-linked entry beyond the first source window through the existing continuation', async () => {
+        const subPath = buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1,
+            selection: {
+                source: SOURCE,
+                kindId: 'pull-request',
+                collisionScope: 'example/repository',
+                entryId: '17',
+            },
+        });
+        const shell = await mountShell({ subPath, deferLinkedEntry: true, activeSurface: true });
+        await act(async () => {
+            await vi.waitFor(async () => {
+                await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+            });
+        });
+        expect(currentHarness?.readDetailInstanceIds).toContain(INSTANCE);
     });
 
     it('keeps one source detail mount while the open shell crosses split and stacked layouts', async () => {

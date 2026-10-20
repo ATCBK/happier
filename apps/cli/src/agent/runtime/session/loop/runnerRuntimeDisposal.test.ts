@@ -22,6 +22,7 @@ describe('runner runtime disposal', () => {
     let settled = false;
     let terminationRequested = false;
     const stopping = requestExplicitRunnerStop({
+      retireUndispatchedInput: () => {},
       abortActiveTurn: () => cancellation,
       disposeRuntime: async (reason) => {
         expect(reason).toBe('session_closed');
@@ -50,6 +51,7 @@ describe('runner runtime disposal', () => {
     const order: string[] = [];
 
     await requestExplicitRunnerStop({
+      retireUndispatchedInput: () => { order.push('input_fenced'); },
       abortActiveTurn: async () => {
         order.push('turn_aborted');
       },
@@ -63,6 +65,7 @@ describe('runner runtime disposal', () => {
     });
 
     expect(order).toEqual([
+      'input_fenced',
       'turn_aborted',
       'runtime_disposed:session_closed',
       'termination_requested',
@@ -74,6 +77,7 @@ describe('runner runtime disposal', () => {
     const requestTermination = vi.fn();
 
     await expect(requestExplicitRunnerStop({
+      retireUndispatchedInput: () => {},
       abortActiveTurn: async () => undefined,
       disposeRuntime: async () => {
         throw disposalError;
@@ -91,6 +95,7 @@ describe('runner runtime disposal', () => {
     let releaseCancellation!: () => void;
     const cancellation = new Promise<void>((resolve) => { releaseCancellation = resolve; });
     const cleanup = abortAndDisposeRunnerRuntime({
+      retireUndispatchedInput: () => {},
       abortActiveTurn: () => cancellation,
       disposeRuntime: async (reason) => {
         expect(reason).toBe('host_shutdown');
@@ -111,6 +116,7 @@ describe('runner runtime disposal', () => {
     let disposed = false;
     let terminationRequested = false;
     await requestExplicitRunnerStop({
+      retireUndispatchedInput: () => {},
       abortActiveTurn: async () => { throw new Error('native cancel rejected'); },
       disposeRuntime: async () => { disposed = true; },
       requestTermination: () => { terminationRequested = true; },

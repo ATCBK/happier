@@ -229,6 +229,7 @@ async function waitForActionDelay(delayMs, signal) {
 const issueDogfoodPlugin = definePlugin({
   id: 'acme.composer.issue-dogfood',
   version: '0.0.0',
+  entrypoints: { daemon: './dist/daemon.mjs' },
   settings: {
     'action-preferences': {
       title: 'External Action preferences',
@@ -323,7 +324,6 @@ const issueDogfoodPlugin = definePlugin({
         'applyComposer',
         'focusComposer',
         'acquireComposerInputLock',
-        'disposeHostResource',
       ],
     }],
   },

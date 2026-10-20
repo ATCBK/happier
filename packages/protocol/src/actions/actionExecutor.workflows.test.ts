@@ -6,8 +6,41 @@ import { createWorkflowDefinitionActions } from './executor/workflowDefinitions.
 import { createWorkflowAccountRunActionOwner } from './executor/workflowRunActions.js';
 import { resolveWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionResolverV1.js';
 import { getBuiltinWorkflowCatalogV1 } from '../workflows/builtins/catalog.js';
+import { getActionSpec } from './actionSpecs.js';
+import { ActionExecuteFailureSchema } from './actionExecutionResult.js';
+import { PLAN_WITH_A_PANEL_WORKFLOW_V1 } from '../workflows/builtins/planWithAPanel.js';
 
 describe('createActionExecutor (Workflow family)', () => {
+  it('returns declared Workflow input names so discovery can recover and resolve a real consuming field', async () => {
+    const consumer = { kind: 'workflow', workflow: 'builtin:plan-with-a-panel' } as const;
+    const targetKey = 'agent:example.agent/planner';
+    // Only the installed Agent inventory is a host boundary. Built-in lookup,
+    // consumer-field admission and options-source dispatch remain real.
+    const executor = createActionExecutor({ agentsBackendsList: async () => ({
+      items: [{ targetKey, title: 'Planner' }],
+    }) } as unknown as ActionExecutorDeps);
+    const context = { surface: 'agent', authority: 'account_automation' } as const;
+
+    expect(getActionSpec('action.options.resolve').inputSchema.safeParse({ consumer }).success).toBe(false);
+    const refused = ActionExecuteFailureSchema.parse(await executor.execute('action.options.resolve', {
+      consumer, fieldPath: 'inputs',
+    }, context));
+    expect(refused).toMatchObject({ errorCode: 'input_type_consumer_unavailable', details: {
+      fieldPath: 'inputs', availableFields: PLAN_WITH_A_PANEL_WORKFLOW_V1.inputs.map(input => input.name),
+    } });
+    const fields = (refused.details as { availableFields: string[] }).availableFields;
+    const fieldPath = fields.find(name => name === 'engines');
+    expect(fieldPath).toBeDefined();
+    const request = getActionSpec('action.options.resolve').inputSchema.parse({ consumer, fieldPath });
+    const result = await executor.execute('action.options.resolve', request, context);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(getActionSpec('action.options.resolve').outputSchema!.parse(result.result)).toMatchObject({ fieldPath: 'engines',
+      optionsSourceId: 'execution.backends.enabled', options: [{ value: targetKey, label: 'Planner' }] });
+    await expect(executor.execute('action.options.resolve', {
+      consumer: { ...consumer, workflow: 'builtin:missing' }, fieldPath: 'inputs',
+    }, context)).resolves.toEqual({ ok: false, errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable' });
+  });
   it('discovers builtins and every Account library page through the real workflow owner', async () => {
     const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
     // Only the Account Artifact transport is substituted; catalog, definition

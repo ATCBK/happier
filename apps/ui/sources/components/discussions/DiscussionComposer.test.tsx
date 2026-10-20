@@ -21,6 +21,7 @@ import { ComposerReadResultV1Schema, ComposerTransactionResultV1Schema, Composer
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { applyDiscussionParticipantReference, createDiscussionParticipantQuestion, postDiscussionComposerContent } from '../../../../../packages/tests/fixtures/plugin-platform/composer-external-dogfood/src/discussionComposer.mjs';
 import { DiscussionPostInputV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { DISCUSSION_MODEL_SLOT_MENTION_KIND } from './discussionComposerDocument';
 
 import { DiscussionComposer, type DiscussionComposerValue } from '@/components/discussions/DiscussionComposer';
 
@@ -405,7 +406,7 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
         }
     });
 
-    it('offers only current roster Sessions and bound models, including uncached or offline participants', async () => {
+    it('offers current roster Sessions and inert reserved model slots, including uncached or offline participants', async () => {
         const store = getStorage();
         const previous = store.getState();
         store.getState().applySessions([
@@ -430,14 +431,17 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
         const screen = await render(<Harness />);
         try {
             const rows = await composer().autocompleteSuggestions('@session:', new AbortController().signal);
-            const references = rows.map(({ structuredInput }) => structuredInput
+            const references = rows.flatMap(({ structuredInput }) => structuredInput
                 && structuredInput.kind === MENTION_KIND_V1.session && 'ref' in structuredInput
-                ? structuredInput.ref : undefined);
+                ? [structuredInput.ref] : []);
             expect(references.sort()).toEqual(['session:invited-bot', 'session:model-session']);
+            expect(rows.find(row => row.key === 'discussion-model:unbound-slot')?.structuredInput).toMatchObject({
+                kind: DISCUSSION_MODEL_SLOT_MENTION_KIND, ref: 'discussion-participant:unbound-slot',
+            });
             const uncached = rows.find(row => row.key === 'session-model-session');
             expect(uncached).toBeDefined();
             expect(uncached?.description).toBe(uncached?.label);
-            for (const row of rows) {
+            for (const row of rows.filter(row => row.structuredInput?.kind === MENTION_KIND_V1.session)) {
                 expect(row.description).not.toContain('invited-bot');
                 expect(row.description).not.toContain('model-session');
             }

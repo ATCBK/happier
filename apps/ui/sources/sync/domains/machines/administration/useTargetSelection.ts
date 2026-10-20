@@ -27,7 +27,8 @@ import {
     useSetting,
     useActiveServerAccountScope,
 } from '@/sync/store/hooks';
-import { useApplySettings, useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 
 import {
@@ -116,7 +117,9 @@ export function resolveFreshMachineAdministrationExecutionTarget(
     const activeMachines = Object.values(state.machines ?? {});
     const resolution = resolvePortableMachineAdministrationTarget({
         target,
-        activeServerId,
+        // Execution must resolve the scoped row admitted below. During refresh,
+        // the active display fallback can hold a different presence object.
+        activeServerId: '',
         activeMachines,
         machineListByServerId,
         machineListStatusByServerId: state.machineListStatusByServerId,
@@ -161,6 +164,8 @@ export type MachineAdministrationTargetSelectionV1 = Readonly<{
 }>;
 
 export type MachineAdministrationTargetSelectionOptions = Readonly<{
+    /** Explicit navigation intent. Unknown targets stay selected and unavailable until admitted. */
+    initialTarget?: MachineAdministrationTargetV1 | null;
     /** Defer detailed inventory and execution while the consuming surface is idle. */
     enabled?: boolean;
     /**
@@ -200,10 +205,28 @@ export function useMachineAdministrationTargetSelection(
     const reachabilityRevision = useMachineReachabilityRevision();
     const explicitSelection = options.explicitSelection ?? 'live';
     const selections = useSetting('machineAdministrationTargetsLocalV1');
-    const applySettings = useApplySettings();
     const expectedSettingsScope = useAccountSettingsScope();
     const activeAccountScope = useActiveServerAccountScope();
-    const storedTarget = selections[selectionKey] ?? null;
+    const initialTarget = options.initialTarget ?? null;
+    const initialTargetKey = options.initialTarget === undefined ? undefined : JSON.stringify(initialTarget);
+    // Consuming a route changes the rendered target even when its preference write is a no-op.
+    const [initialTargetIntentState, setInitialTargetIntentState] = React.useState({ key: initialTargetKey, applied: false });
+    let currentInitialTargetIntent = initialTargetIntentState;
+    if (currentInitialTargetIntent.key !== initialTargetKey) {
+        currentInitialTargetIntent = { key: initialTargetKey, applied: false };
+        setInitialTargetIntentState(currentInitialTargetIntent);
+    }
+    const initialTargetIntent = React.useRef(currentInitialTargetIntent);
+    initialTargetIntent.current = currentInitialTargetIntent;
+    const releaseInitialTarget = React.useCallback(() => {
+        const current = initialTargetIntent.current;
+        if (current.key !== initialTargetKey || initialTargetKey === undefined || current.applied) return;
+        const released = { ...current, applied: true };
+        initialTargetIntent.current = released;
+        setInitialTargetIntentState(released);
+    }, [initialTargetKey]);
+    const initialTargetPending = initialTargetKey !== undefined && !initialTargetIntent.current.applied;
+    const storedTarget = initialTargetPending ? initialTarget : selections[selectionKey] ?? null;
     const selectionRevisionRef = React.useRef<MachineAdministrationSelectionRevisionState>({
         selectionKey,
         target: storedTarget,
@@ -234,7 +257,7 @@ export function useMachineAdministrationTargetSelection(
         [pickerRows],
     );
     const allowSoleCandidate = enabled && areMachineAdministrationInventoriesKnown(snapshots)
-        && options.allowSoleCandidate !== false;
+        && options.allowSoleCandidate !== false && !initialTargetPending;
     const targetState = React.useMemo(() => resolveMachineAdministrationTargetState({
         storedTarget,
         candidates,
@@ -243,15 +266,31 @@ export function useMachineAdministrationTargetSelection(
     }), [allowSoleCandidate, candidates, snapshots, storedTarget]);
 
     React.useEffect(() => {
+        if (!enabled || !initialTargetPending || !initialTarget || initialTargetIntent.current.applied
+            || initialTargetIntent.current.key !== initialTargetKey) return;
+        const candidate = candidates.find(item => item.target.machineId === initialTarget.machineId
+            && item.target.serverIdentityId === initialTarget.serverIdentityId);
+        if (!candidate || !isMachineAdministrationCandidateExplicitlySelectable(candidate, explicitSelection)) return;
+        const current = storage.getState();
+        if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
+        releaseInitialTarget();
+        const previous = current.settings.machineAdministrationTargetsLocalV1[selectionKey];
+        if (previous?.machineId === candidate.target.machineId && previous.serverIdentityId === candidate.target.serverIdentityId) return;
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+            current.settings.machineAdministrationTargetsLocalV1, selectionKey, candidate.target,
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [candidates, enabled, expectedSettingsScope, explicitSelection, initialTarget, initialTargetKey, initialTargetPending, releaseInitialTarget, selectionKey]);
+
+    React.useEffect(() => {
         if (storedTarget || !allowSoleCandidate || targetState.kind !== 'online') return;
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         if (current.settings.machineAdministrationTargetsLocalV1[selectionKey]) return;
         // Initial-target memory is local; mounting a route never mutates Account policy.
-        applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey, targetState.target,
-        ) });
-    }, [allowSoleCandidate, applySettings, expectedSettingsScope, selectionKey, storedTarget, targetState]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [allowSoleCandidate, expectedSettingsScope, selectionKey, storedTarget, targetState]);
 
     const selectTarget = React.useCallback((target: MachineAdministrationTargetV1) => {
         const candidate = candidates.find((item) => (
@@ -261,22 +300,26 @@ export function useMachineAdministrationTargetSelection(
         if (!candidate || !isMachineAdministrationCandidateExplicitlySelectable(candidate, explicitSelection)) return;
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
-        applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+        releaseInitialTarget();
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey, candidate.target,
-        ) });
-    }, [applySettings, candidates, expectedSettingsScope, explicitSelection, selectionKey]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [candidates, expectedSettingsScope, explicitSelection, releaseInitialTarget, selectionKey]);
 
     const clearTarget = React.useCallback(() => {
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
-        applySettings({ machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
+        releaseInitialTarget();
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey,
-        ) });
-    }, [applySettings, expectedSettingsScope, selectionKey]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [expectedSettingsScope, releaseInitialTarget, selectionKey]);
 
     const resolveExecutionTarget = React.useCallback((options?: MachineAdministrationExecutionTargetOptions) => {
         if (!enabled) return null;
-        const target = storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null;
+        if (initialTargetIntent.current.key !== initialTargetKey) return null;
+        const target = initialTargetKey !== undefined && !initialTargetIntent.current.applied
+            ? initialTarget : storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null;
         selectionRevisionRef.current = advanceMachineAdministrationSelectionRevision(
             selectionRevisionRef.current,
             selectionKey,
@@ -289,7 +332,7 @@ export function useMachineAdministrationTargetSelection(
                 ...resolved,
                 selectionRevision: selectionRevisionRef.current.revision,
             });
-    }, [enabled, selectionKey, resolveScopedTarget]);
+    }, [enabled, initialTarget, initialTargetKey, selectionKey, resolveScopedTarget]);
 
     return React.useMemo(() => ({
         candidates,

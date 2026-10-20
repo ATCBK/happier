@@ -1536,7 +1536,7 @@ describe("review comment durable storage", () => {
         try {
             await Promise.race([latch.entered, pendingCreate.then(() => { throw new Error("Writer never reached persistence"); })]);
             await inTx(async (tx) => {
-                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id);
+                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive");
                 expect(fence.status).toBe("ready");
                 if (fence.status !== "ready") throw new Error("Missing Account fence");
                 await applyAccountEncryptionTransitionInTx(tx, {
@@ -1597,7 +1597,7 @@ describe("review comment durable storage", () => {
             try {
                 await Promise.race([latch.entered, pendingCreate.then(response => { throw new Error(`Writer never reached persistence: ${response.statusCode}`); })]);
                 await inTx(async (tx) => {
-                    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id);
+                    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive");
                     expect(fence.status).toBe("ready");
                     if (fence.status !== "ready") throw new Error("Missing Account fence");
                     await tx.account.update({

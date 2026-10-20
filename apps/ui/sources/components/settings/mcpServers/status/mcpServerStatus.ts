@@ -2,7 +2,7 @@ import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/
 import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
-import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { pickMostBlockingCapabilityStatus, presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { describeCapabilityNoticeReason, readCapabilityNoticeReason } from '@/components/capabilities/status/capabilityNoticeReason';
 
@@ -123,6 +123,27 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
             ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
     }
     return statuses;
+}
+
+/**
+ * What a list says about a server: the most blocking status the person must act on (sign-in family or key), the
+ * same one the page's banner leads with. Quiet while signing in, when connected and for a server that needs nothing;
+ * null when it needs nothing. `open` is where every fix leads (the server's page); without it the status is drawn
+ * fix-less, for a list whose action column owns the fix.
+ */
+export function mcpServerAttentionStatus(input: Pick<McpServerStatusInput, 'entry' | 'signIn' | 'savedSecretCatalog'> & Readonly<{ open?: () => void }>): CapabilityStatus | null {
+    const go = input.open ?? (() => {});
+    const needsYou = mcpServerStatus({
+        entry: input.entry,
+        signIn: input.signIn,
+        savedSecretCatalog: input.savedSecretCatalog,
+        tests: {},
+        machines: [],
+        fixes: { signIn: go, reconnect: go, grantAccess: go, addKey: go, howToFix: go, tryAgain: go },
+    }).filter((status) => presentCapabilityStatus(status, 'row').tone === 'needs_you');
+    const top = pickMostBlockingCapabilityStatus(needsYou, 'row');
+    if (top === null || input.open !== undefined) return top;
+    return { kind: top.kind, ...(top.detail ? { detail: top.detail } : {}) };
 }
 
 /** Each machine's own status (offline, can't run, stopped), keyed by machine id; healthy machines are absent. */

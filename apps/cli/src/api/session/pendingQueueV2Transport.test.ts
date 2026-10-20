@@ -372,6 +372,7 @@ describe('pendingQueueV2Transport', () => {
     });
 
     it('degrades a conditional-steer settlement to a strict block on an older server', async () => {
+        const signal = new AbortController().signal;
         mockPost
             .mockRejectedValueOnce({ isAxiosError: true, response: { status: 400 } })
             .mockResolvedValueOnce({
@@ -383,11 +384,13 @@ describe('pendingQueueV2Transport', () => {
             sessionId: 'session-1',
             localId: 'conditional-steer-1',
             reason: 'conditional_steer_unavailable',
+            signal,
         })).resolves.toMatchObject({ usedLegacySteeringUnavailableFallback: true });
         expect(mockPost.mock.calls.map((call) => call[1])).toEqual([
             { reason: 'conditional_steer_unavailable' },
             { reason: 'steering_unavailable' },
         ]);
+        expect(mockPost.mock.calls.map((call) => call[2].signal)).toEqual([signal, signal]);
     });
 
     it('uses the exact released-server socket request and accepts only its strict positive ACK', async () => {

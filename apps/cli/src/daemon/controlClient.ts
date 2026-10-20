@@ -4,7 +4,7 @@
  */
 
 import { isPidPresent, isPidProvablyAbsent } from '@happier-dev/cli-common/process';
-import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import type { SessionFollowOccurrenceNotification } from './sessions/sessionActivityChangedContract';
 import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 export type { SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import {
@@ -13,6 +13,7 @@ import {
 } from '@happier-dev/cli-common/processInstance';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorContext } from '@happier-dev/protocol';
+import { projectActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { logger } from '@/ui/logger';
 import {
   clearReplaceableDaemonLock,
@@ -62,7 +63,7 @@ import {
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
 import { RestartAllSessionRunnersRequestV1Schema, RestartAllSessionRunnersResultV1Schema, RestartSessionRunnerRequestV1Schema, RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
-import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
+import { RestartSessionRunnerRequestV2Schema, RestartSessionRunnerConfirmedBackgroundRequestSchema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import type { ConnectedServiceBindingsV2, ConnectedAccountServiceKey, ConnectedServiceId, ConnectedServiceUsageSourceV1, ProviderAccountUsageSnapshotV1, RestartAllSessionRunnersRequestV1, RestartAllSessionRunnersResultV1, RestartSessionRunnerRequestV1, RestartSessionRunnerRequestV2, RestartSessionRunnerResultV1, SessionRunnerRestartModeV1, SessionMetadataPublisherPreconditionV1, SshTunnelEnsureRequest, SshTunnelEnsureResponse, SshTunnelListResponse, SshTunnelMutationResponse, SshTunnelProbeResponse, SessionUsageLimitRecoveryResumePromptModeV1, SpawnSessionNonceResolution } from '@happier-dev/protocol';
 import {
   StopSessionResultSchema,
@@ -663,23 +664,24 @@ export async function requestDaemonSignedRootActionExecution(
     || request.actionId === 'plugins.list';
   const result = await daemonPost(SIGNED_ROOT_ACTION_EXECUTE_PATH, request, {
     ...options,
-    // Idle observation owns its deadline; client and contributed Actions may
-    // wait for approval and completion under the caller lifetime.
+    // Stop/refresh completion and idle observation have domain-owned lifetimes;
+    // client and contributed Actions may also wait for approval and completion.
     timeoutMs: options.timeoutMs !== undefined ? options.timeoutMs
       : usesPluginControl ? pluginControlOptions(options).timeoutMs
-      : request.actionId === 'session.wait.idle' || request.actionId === 'action.invoke' || executionPlacement === 'client'
+      : request.actionId === 'session.wait.idle' || request.actionId === 'session.stop'
+        || request.actionId === 'session.runtime.refresh' || request.actionId === 'action.invoke' || executionPlacement === 'client'
         || request.actionId === 'daemon.filesystem.upload' || request.actionId === 'daemon.filesystem.download'
         || (request.actionId === 'daemon.filesystem.copy' && request.input && typeof request.input === 'object'
           && 'kind' in request.input && request.input.kind === 'prepared_transfer') ? null : 300_000,
     mutation: sideEffectClass !== 'none' && sideEffectClass !== 'read',
   });
   if (result && typeof result === 'object' && typeof result.error === 'string') {
-    return {
+    return projectActionExecuteFailure({
+      ...result,
       ok: false,
       errorCode: result.errorCode ?? 'daemon_unavailable',
       error: result.error,
-      ...(result.details !== undefined ? { details: result.details } : {}),
-    };
+    });
   }
   return result as ActionExecuteResult;
 }
@@ -888,7 +890,7 @@ export async function notifyDaemonConnectedServiceTurnLifecycle(
 }
 
 /** Invalidation only: the daemon re-reads the current host and never trusts a reported idle Boolean. */
-export async function notifyDaemonSessionActivityChanged(sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1): Promise<SessionActivityChangedResult> {
+export async function notifyDaemonSessionActivityChanged(sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification): Promise<SessionActivityChangedResult> {
   const response: unknown = await daemonPost('/session-activity-changed', { sessionId, ...(followOccurrence ? { followOccurrence } : {}) });
   const parsed = SessionActivityChangedResponseSchema.safeParse(response);
   if (!parsed.success || (parsed.data.personalFollow && parsed.data.personalFollow.sourceSessionId !== sessionId)) {
@@ -1026,44 +1028,43 @@ export type DaemonSessionRunnerRestartMode = SessionRunnerRestartModeV1;
 export type RestartAllDaemonSessionRunnersRequest = RestartAllSessionRunnersRequestV1;
 export type RestartAllDaemonSessionRunnersResult = RestartAllSessionRunnersResultV1;
 
+async function requestDaemonSessionRunnerRestartOperation(
+  path: '/session-runners/restart' | '/session-runners/restart-confirmed-background' | '/session-runners/restart-v2',
+  request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2,
+  options: DaemonControlRequestOptions,
+): Promise<RestartSessionRunnerResultV1> {
+  const body = path === '/session-runners/restart-confirmed-background'
+    ? RestartSessionRunnerConfirmedBackgroundRequestSchema.parse(request)
+    : path === '/session-runners/restart-v2'
+      ? RestartSessionRunnerRequestV2Schema.parse(request)
+      : RestartSessionRunnerRequestV1Schema.parse(request);
+  // The canonical retirement and respawn lifecycle owns completion; caller cancellation remains live.
+  const result = await daemonPost(path, body, { timeoutMs: null, ...options });
+  if (result?.error) throw new Error(String(result.error));
+  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
+  if (!parsed.success) throw new Error('Invalid daemon session runner restart response');
+  return parsed.data;
+}
+
 export async function requestDaemonSessionRunnerRestart(
   request: RestartSessionRunnerRequestV1,
   options: DaemonControlRequestOptions = {},
 ): Promise<RestartSessionRunnerResultV1> {
-  const body = RestartSessionRunnerRequestV1Schema.parse(request);
-  const result = await daemonPost('/session-runners/restart', body, {
-    // Planned retirement and respawn own completion. Observe under the caller
-    // lifetime; an explicit caller deadline may still narrow that lifetime.
-    timeoutMs: null,
-    ...options,
-  });
-  if (result?.error) {
-    throw new Error(String(result.error));
-  }
-  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
-  if (!parsed.success) {
-    throw new Error('Invalid daemon session runner restart response');
-  }
-  return parsed.data;
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart', request, options);
+}
+
+export async function requestDaemonSessionRunnerRestartConfirmedBackground(
+  request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2,
+  options: DaemonControlRequestOptions = {},
+): Promise<RestartSessionRunnerResultV1> {
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart-confirmed-background', request, options);
 }
 
 export async function requestDaemonSessionRunnerRestartV2(
   request: RestartSessionRunnerRequestV2,
   options: DaemonControlRequestOptions = {},
 ): Promise<RestartSessionRunnerResultV1> {
-  const body = RestartSessionRunnerRequestV2Schema.parse(request);
-  const result = await daemonPost('/session-runners/restart-v2', body, {
-    timeoutMs: null,
-    ...options,
-  });
-  if (result?.error) {
-    throw new Error(String(result.error));
-  }
-  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
-  if (!parsed.success) {
-    throw new Error('Invalid daemon session runner V2 restart response');
-  }
-  return parsed.data;
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart-v2', request, options);
 }
 
 export async function restartAllDaemonSessionRunners(

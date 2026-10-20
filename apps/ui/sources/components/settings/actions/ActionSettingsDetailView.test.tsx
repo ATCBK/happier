@@ -1,9 +1,18 @@
 import * as React from 'react';
 
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 import { renderScreen as renderRealScreen, standardCleanup } from '@/dev/testkit';
-import { installSettingsViewCommonModuleMocks, resetSettingsViewCommonModuleMockState } from '../settingsViewTestHelpers';
-import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
+import { createSecretSettingsTestHarness, type SecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
     createMachineAdministrationTargetSelectionFixture,
@@ -17,28 +26,20 @@ const capture = vi.hoisted(() => ({
     itemListsWithSearchHeader: 0,
     itemGroupsWithSearchHeader: 0,
     renderOrder: [] as string[],
-    rawSettings: { v: 1, actions: {} } as unknown,
     rawPolicy: { v: 1, allowEnvironmentVariables: false, allowCrossMachine: false } as unknown,
     rawAllowLists: { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: null } as unknown,
-    setPolicy: vi.fn(),
-    setAllowLists: vi.fn(),
     stackOptions: null as Record<string, unknown> | null,
     windowWidth: 800,
     routeActionId: 'review.start',
-    setRawSettings: vi.fn(),
     reset() {
         this.itemListsWithSearchHeader = 0;
         this.itemGroupsWithSearchHeader = 0;
         this.renderOrder = [];
-        this.rawSettings = { v: 1, actions: {} };
         this.rawPolicy = { v: 1, allowEnvironmentVariables: false, allowCrossMachine: false };
         this.rawAllowLists = { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: null };
-        this.setPolicy.mockReset();
-        this.setAllowLists.mockReset();
         this.stackOptions = null;
         this.windowWidth = 800;
         this.routeActionId = 'review.start';
-        this.setRawSettings.mockReset();
     },
 }));
 
@@ -86,8 +87,7 @@ vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
     },
 }));
 
-installSettingsViewCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Dimensions: { get: () => ({ width: capture.windowWidth, height: 844, scale: 2, fontScale: 1 }) },
@@ -98,8 +98,12 @@ installSettingsViewCommonModuleMocks({
                 fontScale: 1,
             }),
         });
-    },
-    router: async () => {
+});
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('expo-router', async () => {
         const { createExpoRouterMock, createStackOptionsCapture } = await import('@/dev/testkit/mocks/router');
         const stackOptionsCapture = createStackOptionsCapture();
         const routerMock = createExpoRouterMock({
@@ -117,25 +121,6 @@ installSettingsViewCommonModuleMocks({
                 },
             }),
         };
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: createUseSettingMutableMockFromReader((key) => key === 'sessionAgentSpawnPolicyV1'
-                    ? [capture.rawPolicy, capture.setPolicy] as const
-                    : key === 'sessionAgentStartAllowListsV1'
-                        ? [capture.rawAllowLists, capture.setAllowLists] as const
-                        : [capture.rawSettings, (next: unknown) => {
-                    const value = typeof next === 'function' ? next(capture.rawSettings) : next;
-                    capture.rawSettings = value;
-                    capture.setRawSettings(value);
-                }] as const),
-                useSetting: createUseSettingMock({ fallback: () => ({ privacy: { shareDeviceInventory: true } }) }),
-            },
-        });
-    },
 });
 
 
@@ -148,17 +133,26 @@ installSettingsViewCommonModuleMocks({
 
 
 
-afterEach(() => {
+let account: SecretSettingsTestHarness;
+beforeEach(async () => {
+    account = await createSecretSettingsTestHarness({ settings: settingsParse({
+        sessionAgentSpawnPolicyV1: capture.rawPolicy,
+        sessionAgentStartAllowListsV1: capture.rawAllowLists,
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'actions.policy.set': ['ui'], 'settings.set': ['ui'] } },
+    }) });
+});
+afterEach(async () => {
     standardCleanup();
+    await account.dispose();
     capture.reset();
     administrationTargetSelection.controller.reset();
     administrationSelectionCalls.length = 0;
     daemonProjection.reset();
-    resetSettingsViewCommonModuleMockState();
 });
 
 // Resolve the shared catalog/module graph during collection, outside individual
 // interaction-test deadlines; the page and domain logic remain real.
+await loadSyncSingletonForTests();
 await import('./ActionSettingsDetailView');
 const { Item } = await import("@/components/ui/lists/Item");
 const { SearchHeader } = await import("@/components/ui/forms/SearchHeader");
@@ -194,7 +188,7 @@ describe('ActionSettingsDetailView', () => {
         expect(screen.findAllByType(Item)).toEqual(renderedItems);
     });
 
-    it('lets the user waive host capture viewing only for the selected plugin', async () => {
+    it('admits host capture approval changes under Off, Ask and Allowed only for the selected plugin', async () => {
         daemonProjection.byMachineId = {
             'machine-a': { phase: 'ready', inputs: { pluginProjectionById: {
                 'acme.viewer': { pluginId: 'acme.viewer', title: 'My viewer', actions: [] },
@@ -203,16 +197,42 @@ describe('ActionSettingsDetailView', () => {
         };
         administrationTargetSelection.controller.select('machine-a');
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
+        account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: {
+            v: 1, actions: { 'actions.policy.set': { disabledSurfaces: ['ui'] } },
+            pluginHostCaptureApprovalWaived: ['acme.retained'],
+        } }));
         await renderScreen(<ActionSettingsDetailContent actionId="capture.view" />);
-        const control = renderedProps(SegmentedTabBar).find(bar => (
+        const control = () => renderedProps(SegmentedTabBar).find(bar => (
             bar.testIDPrefix === 'settings-actions:host-capture:acme.viewer:mode'
         ));
-        expect(control?.activeTabId).toBe('ask_first');
-        expect(control?.accessibilityLabel).toBe('My viewer');
-        (control?.onSelectTab as (value: string) => void)('allowed');
-        expect(capture.setRawSettings).toHaveBeenLastCalledWith(expect.objectContaining({
-            pluginHostCaptureApprovalWaived: ['acme.viewer'],
-        }));
+        const choose = (value: string) => (control()?.onSelectTab as (value: string) => void)(value);
+        expect(control()?.activeTabId).toBe('ask_first');
+        expect(control()?.accessibilityLabel).toBe('My viewer');
+        expect(storage.getState().settings.actionsSettingsV1.actions['actions.policy.set']?.disabledSurfaces).toEqual(['ui']);
+        expect(storage.getState().settings.actionsSettingsV1.approvalWaivedSurfaces?.['actions.policy.set']).toBeUndefined();
+        await React.act(async () => { choose('allowed'); });
+        expect(account.settingsWrites).toEqual([]);
+        const setAdmission = async (ask: boolean) => {
+            await React.act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { ...account.persistedSettings.actionsSettingsV1,
+                    actions: { 'actions.policy.set': ask ? { approvalRequiredSurfaces: ['ui'] } : {} },
+                    approvalWaivedSurfaces: ask ? {} : { 'actions.policy.set': ['ui'] },
+                },
+            })); });
+        };
+        await setAdmission(true);
+        await React.act(async () => { choose('allowed'); });
+        await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+        expect(account.persistedSettings.actionsSettingsV1.pluginHostCaptureApprovalWaived).toEqual(['acme.retained']);
+        await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+        expect(account.persistedSettings.actionsSettingsV1.pluginHostCaptureApprovalWaived).toEqual(['acme.retained']);
+        await React.act(async () => { choose('allowed'); });
+        await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(2));
+        await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[1]!.id, 'approve');
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.pluginHostCaptureApprovalWaived).toEqual(['acme.retained', 'acme.viewer']));
+        await setAdmission(false);
+        await React.act(async () => { choose('ask_first'); });
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.pluginHostCaptureApprovalWaived).toEqual(['acme.retained']));
     });
 
     it('renders approval-capable targets as mode tabs and ordinary placements as switches', async () => {
@@ -270,7 +290,10 @@ describe('ActionSettingsDetailView', () => {
         const spec = getActionSpec(actionId);
         const descriptor = Object.getOwnPropertyDescriptor(spec, 'approvalPolicy')!;
         Object.defineProperty(spec, 'approvalPolicy', { ...descriptor, value: { ...spec.approvalPolicy, nonWaivable: true } });
-        capture.rawSettings = { v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] } };
+        account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: {
+            ...account.persistedSettings.actionsSettingsV1,
+            approvalWaivedSurfaces: { [actionId]: ['agent'] },
+        } }));
         try {
             const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
             await renderScreen(<ActionSettingsDetailContent actionId={actionId} />);
@@ -327,32 +350,25 @@ describe('ActionSettingsDetailView', () => {
         );
         expect(cliMode).toBeTruthy();
 
-        (cliMode?.onSelectTab as (tabId: string) => void)('ask_first');
-
-        expect(capture.setRawSettings).toHaveBeenCalledWith({
-            v: 1,
-            actions: {
-                'review.start': {
-                    enabledPlacements: [],
-                    disabledSurfaces: [],
-                    disabledPlacements: [],
-                    approvalRequiredSurfaces: ['cli'],
-                    toolExposureModes: {},
-                },
-            },
-        });
+        await React.act(async () => { (cliMode?.onSelectTab as (tabId: string) => void)('ask_first'); });
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.actions['review.start']?.approvalRequiredSurfaces).toEqual(['cli']));
     });
 
     it('persists the MCP Allowed choice for widget rename through the real detail control', async () => {
-        capture.rawSettings = { v: 1, actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } } };
+        account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: {
+            ...account.persistedSettings.actionsSettingsV1,
+            actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } },
+        } }));
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
         const screen = await renderScreen(<ActionSettingsDetailContent actionId="widgets.item.rename" />);
         const prefix = 'settings-actions:action:widgets.item.rename:target:mcp:mode';
         // Inheriting: no way back to a default it is already on.
         expect(screen.findByTestId(`${prefix}:useDefault`)).toBeNull();
         await screen.pressByTestIdAsync(`${prefix}:allowed`);
-        expect(capture.rawSettings).toMatchObject({ actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } },
-            approvalWaivedSurfaces: { 'widgets.item.rename': ['mcp'] } });
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1).toMatchObject({
+            actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } },
+            approvalWaivedSurfaces: { 'widgets.item.rename': ['mcp'] },
+        }));
         // The boundary fixture records persisted bytes; remount reads those acknowledged bytes.
         await screen.update(<ActionSettingsDetailContent key="readback" actionId="widgets.item.rename" />);
         expect(screen.findByTestId(`${prefix}:allowed`)?.props.accessibilityState.checked).toBe(true);
@@ -414,22 +430,8 @@ describe('ActionSettingsDetailView', () => {
         });
         expect(sessionAgentExposure).toBeTruthy();
 
-        (sessionAgentExposure?.onSelect as (itemId: string) => void)('direct');
-
-        expect(capture.setRawSettings).toHaveBeenLastCalledWith({
-            v: 1,
-            actions: {
-                'review.start': {
-                    enabledPlacements: [],
-                    disabledSurfaces: [],
-                    disabledPlacements: [],
-                    approvalRequiredSurfaces: [],
-                    toolExposureModes: {
-                        agent: 'direct',
-                    },
-                },
-            },
-        });
+        await React.act(async () => { (sessionAgentExposure?.onSelect as (itemId: string) => void)('direct'); });
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.actions['review.start']?.toolExposureModes?.agent).toBe('direct'));
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
         const resetSessionAgentExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
@@ -437,12 +439,8 @@ describe('ActionSettingsDetailView', () => {
         });
         expect(resetSessionAgentExposure).toBeTruthy();
 
-        (resetSessionAgentExposure?.onSelect as (itemId: string) => void)('default');
-
-        expect(capture.setRawSettings).toHaveBeenLastCalledWith({
-            v: 1,
-            actions: {},
-        });
+        await React.act(async () => { (resetSessionAgentExposure?.onSelect as (itemId: string) => void)('default'); });
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.actions['review.start']?.toolExposureModes?.agent).toBeUndefined());
     });
 
     it('renders and persists session-agent spawn policy toggles for Create session', async () => {
@@ -458,18 +456,14 @@ describe('ActionSettingsDetailView', () => {
 
         const onDirectoryToggleChange = directoryToggle?.onValueChange;
         expect(typeof onDirectoryToggleChange).toBe('function');
-        (onDirectoryToggleChange as (next: boolean) => void)(false);
-
-        expect(capture.setPolicy).toHaveBeenCalledWith(expect.objectContaining({
-            v: 1,
-            allowCustomDirectory: false,
-            allowCrossMachine: false,
-            allowEnvironmentVariables: false,
+        await React.act(async () => { (onDirectoryToggleChange as (next: boolean) => void)(false); });
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentSpawnPolicyV1).toMatchObject({
+            allowCustomDirectory: false, allowCrossMachine: false, allowEnvironmentVariables: false,
         }));
-        const written = capture.setPolicy.mock.calls.at(-1)?.[0];
+        const written = account.persistedSettings.sessionAgentSpawnPolicyV1;
         expect(written).not.toHaveProperty('allowedRoleIds');
         expect(written).not.toHaveProperty('allowedAgentTargetKeys');
-        expect(capture.setAllowLists).not.toHaveBeenCalled();
+        expect(account.persistedSettings.sessionAgentStartAllowListsV1).toMatchObject({ allowedRoleIds: null, allowedAgentTargetKeys: null });
     });
 
     it('restores the environment-variables policy toggle and writes it with the rest of the policy', async () => {
@@ -481,17 +475,16 @@ describe('ActionSettingsDetailView', () => {
             switchProps.testID === 'settings-actions:session-spawn-policy:allowEnvironmentVariables',
         );
         expect(environmentToggle?.value).toBe(false);
-        (environmentToggle?.onValueChange as (next: boolean) => void)(true);
-
-        expect(capture.setPolicy).toHaveBeenLastCalledWith(expect.objectContaining({
-            v: 1,
-            allowEnvironmentVariables: true,
-            allowCrossMachine: false,
+        await React.act(async () => { (environmentToggle?.onValueChange as (next: boolean) => void)(true); });
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentSpawnPolicyV1).toMatchObject({
+            allowEnvironmentVariables: true, allowCrossMachine: false,
         }));
     });
 
     it('writes engine allow-lists only to their separate Account setting', async () => {
-        capture.rawAllowLists = { v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: null };
+        account.replaceSettings(settingsParse({ ...account.persistedSettings,
+            sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: null },
+        }));
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
         const screen = await renderScreen(<ActionSettingsDetailContent actionId="session.spawn_new" />);
         await screen.pressByTestIdAsync('settings-actions:session-start-allow-lists:agents');
@@ -499,9 +492,9 @@ describe('ActionSettingsDetailView', () => {
         expect(menu).toBeTruthy();
         const select = menu?.onSelect;
         if (typeof select !== 'function') throw new Error('allow-list selection unavailable');
-        select('none');
-        expect(capture.setAllowLists).toHaveBeenCalledWith({ v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: [] });
-        expect(capture.setPolicy).not.toHaveBeenCalled();
+        await React.act(async () => { select('none'); });
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1).toEqual({ v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: [] }));
+        expect(account.persistedSettings.sessionAgentSpawnPolicyV1.allowEnvironmentVariables).toBe(false);
     });
 
     it('moves approval mode controls into the target text column on narrow mobile widths', async () => {

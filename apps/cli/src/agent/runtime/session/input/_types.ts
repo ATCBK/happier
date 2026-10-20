@@ -1,3 +1,4 @@
+import type { HostRuntimeActivitySnapshot } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import type {
   MaterializeNextPendingOptions,
   MaterializeNextPendingResult,
@@ -9,6 +10,8 @@ import type { AgentState } from '@/api/types';
 export type SessionInputLiveWork = Readonly<{
   session: 'active' | 'settled' | 'unknown';
   input: 'active' | 'settled' | 'unknown';
+  /** Native provider work, excluding child Execution Runs; omission is unknown. */
+  nativeRuntimeActivity?: 'active' | 'settled' | 'unknown';
   /** Older runners omit these fields; omission cannot prove settlement. */
   agents?: 'active' | 'settled' | 'unknown';
   attention?: 'active' | 'settled' | 'unknown';
@@ -31,6 +34,7 @@ export type SessionProviderInputConsumerSession = Readonly<{
   getAgentStateSnapshot?: () => AgentState | null;
   readSubagentLiveWork?: () => Readonly<{ state: 'active' | 'settled' | 'unknown'; activeCount: number }>;
   subscribeSubagentLiveWork?: (listener: () => void) => () => void;
+  readNativeRuntimeActivitySnapshot?: () => HostRuntimeActivitySnapshot;
   readRuntimeActivitySnapshotTail?: () => RuntimeActivitySnapshotTail;
   waitForRuntimeActivitySnapshotTailChange?: (
     sequence: number,
@@ -71,6 +75,8 @@ export type DrainPendingOptions = Readonly<{
 export type DrainPendingResult = Readonly<{
   materialized: number;
   stoppedReason: DrainPendingStoppedReason;
+  /** The materialization owner's delay for rejoining its retained claim. */
+  retryAfterMs?: number;
 }>;
 
 export type ActiveTurnPendingPumpOptions = Omit<DrainPendingOptions, 'abortSignal'> & Readonly<{

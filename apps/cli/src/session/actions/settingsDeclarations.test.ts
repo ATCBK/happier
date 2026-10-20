@@ -76,6 +76,37 @@ describe('CLI declared Account settings', () => {
   const user = { surface: 'cli', authority: 'present_user', actionsSettings,
     presentUserConfirmation: { actionId: 'settings.set' } } as const;
 
+  it('applies typed global, placement and tool policy intents through the real Account CAS owner', async () => {
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], actionsSettingsV1: { v: 1, actions: {
+      'capture.view': { futurePolicy: { retained: true } },
+    } } } };
+    concurrentContent = { t: 'plain', v: { favoriteMachines: ['concurrent'], actionsSettingsV1: { v: 1, actions: {
+      'capture.view': { futurePolicy: { retained: true }, disabledSurfaces: ['cli'] },
+      'session.stop': { enabled: false },
+    } } } };
+    conflict = true;
+    const owner = executor();
+    const context = { ...user, presentUserConfirmation: { actionId: 'actions.policy.set' } } as const;
+    for (const change of [
+      { kind: 'enabled', enabled: false },
+      { kind: 'audience_enabled', audience: 'agent', enabled: false },
+      { kind: 'placement', placement: 'agent_input_chips', enabled: true },
+      { kind: 'placement_policy', placement: 'slash_command', mode: 'ask_first' },
+      { kind: 'tool_exposure', surface: 'mcp', mode: 'discoverable_only' },
+      { kind: 'plugin_host_capture', pluginId: 'acme.capture', approvalRequired: false },
+    ]) {
+      const input = { actionId: change.kind === 'tool_exposure' ? 'settings.get' : 'capture.view', change };
+      expect(await owner.execute('actions.policy.set', input, context))
+        .toMatchObject({ ok: true, result: input });
+    }
+    expect(content).toMatchObject({ t: 'plain', v: { favoriteMachines: ['concurrent'], actionsSettingsV1: { actions: {
+      'capture.view': { enabled: false, disabledSurfaces: ['cli', 'agent'], enabledPlacements: ['agent_input_chips'],
+        approvalRequiredSurfaces: ['ui'], futurePolicy: { retained: true } },
+      'settings.get': { toolExposureModes: { mcp: 'discoverable_only' } },
+      'session.stop': { enabled: false },
+    }, pluginHostCaptureApprovalWaived: ['acme.capture'] } } });
+  });
+
   it('changes exact Action policy headlessly and restores Default over a conflicting Account snapshot', async () => {
     const prior = { v: 1, actions: {
       'prompt_doc.update': { enabled: false, disabledSurfaces: ['agent', 'cli'], approvalRequiredSurfaces: ['mcp'],

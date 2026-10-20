@@ -3,8 +3,9 @@ import { clearFulfilledAccountSessionFollowOnceInTx } from '@/app/session/follow
 import { projectViewerReadStateV1, type ViewerReadStateV1 } from '@happier-dev/protocol/sessions';
 
 import { db } from "@/storage/db";
-import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { inReadSnapshot, inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
+import type { AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { AccountStatus } from "@/storage/prisma";
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
@@ -290,6 +291,11 @@ export type ApplyViewerReadCursorOperationResult =
     }>
     | Readonly<{ ok: false; error: ViewerReadCursorOperationError }>;
 
+type ViewerReadCursorSuccess = Extract<ApplyViewerReadCursorOperationResult, { ok: true }>;
+export type ViewerReadCursorOperationInTxResult =
+    | Extract<ApplyViewerReadCursorOperationResult, { ok: false }>
+    | (Omit<ViewerReadCursorSuccess, "actorChangeCursor"> & TransactionResult<ViewerReadCursorSuccess>);
+
 function isValidOperation(operation: SessionReadCursorOperation): boolean {
     if (operation.kind === "mark-read" || operation.kind === "mark-unread") return true;
     return operation.kind === "advance"
@@ -382,7 +388,7 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
         return await inTx(async (tx) => {
             // Follow entry and this reader's frontier share the existing Account
             // publication fence, acquired before baseline/tracking admission.
-            await acquireAccountChangePublicationLocksInTx(tx, [accountId], { includeSingleAccount: true });
+            await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [accountId]);
             if (operation.kind !== "advance") {
                 const admitted = await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication });
                 if (!admitted.ok) return admitted;
@@ -421,7 +427,7 @@ export async function applyViewerReadCursorOperationInTx(
         latestMainMessageSeq?: number | null;
         initialVisibleSeq?: number | null;
     }>,
-): Promise<ApplyViewerReadCursorOperationResult> {
+): Promise<ViewerReadCursorOperationInTxResult> {
     const { accountId, sessionId, operation, latestMainMessageSeq = null, initialVisibleSeq = null } = params;
     const admission = await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication });
     if (!admission.ok) return admission;
@@ -452,30 +458,32 @@ export async function applyViewerReadCursorOperationInTx(
     const buildResult = (
         row: ViewerReadStateRow | null,
         didChange: boolean,
-        actorChangeCursor: number | null = null,
-    ): ApplyViewerReadCursorOperationResult => ({
-        ok: true,
-        accountId,
-        lastViewedSessionSeq: row ? Math.min(row.lastViewedSessionSeq, visibleSessionSeq) : null,
-        unreadSince: row?.unreadSince ?? null,
-        didChange,
-        readState: resolved.readState,
-        viewerReadState: projectViewerReadState({ tracked: true, row, visibleSessionSeq }),
-        visibleSessionSeq,
-        actorChangeCursor,
-    });
+        publication?: AccountChangePublication,
+    ): Extract<ViewerReadCursorOperationInTxResult, { ok: true }> => {
+        const result = {
+            ok: true as const,
+            accountId,
+            lastViewedSessionSeq: row ? Math.min(row.lastViewedSessionSeq, visibleSessionSeq) : null,
+            unreadSince: row?.unreadSince ?? null,
+            didChange,
+            readState: resolved.readState,
+            viewerReadState: projectViewerReadState({ tracked: true, row, visibleSessionSeq }),
+            visibleSessionSeq,
+        };
+        return { ...result, ...transactionResult(() => ({ ...result, actorChangeCursor: publication?.resolveCursor() ?? null })) };
+    };
 
     // Actor-private wake. Cross-device convergence for the same Account
     // uses the existing AccountChange/user-room delivery; no other
     // Account's socket learns this frontier (L09B-I4).
-    const markActorChanged = async (nextLastViewedSessionSeq: number): Promise<number | null> => {
-        const [cursor] = await markAccountChangesForSessionAccounts({
+    const markActorChanged = async (nextLastViewedSessionSeq: number): Promise<AccountChangePublication | undefined> => {
+        const [publication] = await markAccountChangesForSessionAccounts({
             tx,
             sessionId,
             accountIds: [accountId],
             hint: { lastViewedSessionSeq: nextLastViewedSessionSeq },
         });
-        return cursor?.cursor ?? null;
+        return publication;
     };
 
     if (!resolved.didChange || typeof nextCursor !== "number") {

@@ -736,7 +736,7 @@ function MergeWrite({
       : buildGithubPullRequestMergeInputV1(input, mergeMethod)),
     [input, mergeMethod],
   );
-  const head = input.observation.nativeRevision;
+  const head = input.observation.snapshot.reviewRevision?.headSha;
   const allowedMethods = GITHUB_MERGE_METHODS_V1.filter((method) => {
     if (capabilities.kind !== 'ready') return true;
     const availability = capabilities.value.mergeMethods[method];
@@ -1794,7 +1794,7 @@ function githubOverviewEntries(
   const headRevision = overview?.kindId === 'pull-request'
     ? overview.headRevision
     : overview === null
-      ? input.observation.nativeRevision
+      ? input.observation.snapshot.reviewRevision?.headSha
       : undefined;
   const entries: MetadataEntry[] = [
     {

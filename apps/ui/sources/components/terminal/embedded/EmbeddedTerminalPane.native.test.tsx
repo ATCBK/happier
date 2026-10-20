@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { TerminalNativeQaRendererCrashInjectionResult } from '@happier-dev/terminal-native';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -43,20 +46,23 @@ const nativeQaState = vi.hoisted(() => ({
     ),
 }));
 
-const localSettingState = vi.hoisted(() => ({
-    terminalRendererPreference: 'auto',
-    terminalNativeRendererQuarantine: null as unknown,
-}));
+const initialStorageState = storage.getState();
+const localSettingState = {
+    get terminalRendererPreference() { return storage.getState().localSettings.terminalRendererPreference; },
+    set terminalRendererPreference(value: LocalSettings['terminalRendererPreference']) {
+        storage.getState().applyLocalSettings({ terminalRendererPreference: value }, { source: 'test' });
+    },
+    get terminalNativeRendererQuarantine() { return storage.getState().localSettings.terminalNativeRendererQuarantine; },
+    set terminalNativeRendererQuarantine(value: LocalSettings['terminalNativeRendererQuarantine']) {
+        storage.getState().applyLocalSettings({ terminalNativeRendererQuarantine: value }, { source: 'test' });
+    },
+};
+
+afterEach(() => { standardCleanup(); storage.setState(initialStorageState, true); });
 
 const screenReaderState = vi.hoisted(() => ({
     enabled: false,
     notify: null as ((enabled: boolean) => void) | null,
-}));
-
-const localSettingMutations = vi.hoisted(() => ({
-    setTerminalNativeRendererQuarantine: vi.fn((value: unknown) => {
-        localSettingState.terminalNativeRendererQuarantine = value;
-    }),
 }));
 
 const clipboardState = vi.hoisted(() => ({
@@ -84,20 +90,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
 });
-
-vi.mock('@/sync/domains/state/storage', () => ({
-    useLocalSetting: (key: string) => {
-        if (key === 'terminalRendererPreference') return localSettingState.terminalRendererPreference;
-        if (key === 'terminalNativeRendererQuarantine') return localSettingState.terminalNativeRendererQuarantine;
-        return 1;
-    },
-    useLocalSettingMutable: (key: string) => {
-        if (key === 'terminalNativeRendererQuarantine') {
-            return [localSettingState.terminalNativeRendererQuarantine, localSettingMutations.setTerminalNativeRendererQuarantine];
-        }
-        return [1, vi.fn()];
-    },
-}));
 
 vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => 0,
@@ -217,7 +209,8 @@ function resetSurfaceState() {
     screenReaderState.notify = null;
     localSettingState.terminalRendererPreference = 'auto';
     localSettingState.terminalNativeRendererQuarantine = null;
-    localSettingMutations.setTerminalNativeRendererQuarantine.mockClear();
+    storage.setState(state => ({ settings: settingsParse({ ...state.settings,
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) }));
     clipboardState.setClipboardStringSafe.mockReset();
     nativeAvailabilityState.availability = {
         available: false,
@@ -616,7 +609,7 @@ describe('EmbeddedTerminalPane native renderer selection', () => {
                 });
             });
 
-            expect(localSettingMutations.setTerminalNativeRendererQuarantine).toHaveBeenCalledWith({
+            expect(storage.getState().localSettings.terminalNativeRendererQuarantine).toEqual({
                 renderer: 'ios-ghosttykit',
                 expiresAtMs: 1_700_086_400_000,
             });
@@ -702,7 +695,7 @@ describe('EmbeddedTerminalPane native renderer selection', () => {
             });
 
             expect(nativeQaState.injectRendererCrash).toHaveBeenCalledWith('embedded-terminal:android-termux:terminal');
-            expect(localSettingMutations.setTerminalNativeRendererQuarantine).toHaveBeenCalledWith({
+            expect(storage.getState().localSettings.terminalNativeRendererQuarantine).toEqual({
                 renderer: 'android-termux',
                 expiresAtMs: 1_700_086_400_000,
             });
@@ -758,7 +751,7 @@ describe('EmbeddedTerminalPane native renderer selection', () => {
         });
 
         expect(surfaceState.xtermProps).not.toBeNull();
-        expect(localSettingMutations.setTerminalNativeRendererQuarantine).not.toHaveBeenCalled();
+        expect(storage.getState().localSettings.terminalNativeRendererQuarantine).toBeNull();
     });
 
     it('uses an unexpired fatal quarantine for xterm fallback and clears it once it expires', async () => {
@@ -808,7 +801,7 @@ describe('EmbeddedTerminalPane native renderer selection', () => {
             );
 
             expect(surfaceState.ghosttyProps).not.toBeNull();
-            expect(localSettingMutations.setTerminalNativeRendererQuarantine).toHaveBeenCalledWith(null);
+            expect(storage.getState().localSettings.terminalNativeRendererQuarantine).toBeNull();
         } finally {
             now.mockRestore();
         }
@@ -1252,7 +1245,7 @@ describe('EmbeddedTerminalPane native renderer selection', () => {
             });
 
             expect(surfaceState.xtermProps).not.toBeNull();
-            expect(localSettingMutations.setTerminalNativeRendererQuarantine).toHaveBeenCalledWith({
+            expect(storage.getState().localSettings.terminalNativeRendererQuarantine).toEqual({
                 renderer: 'ios-ghosttykit',
                 expiresAtMs: 1_700_086_400_000,
             });

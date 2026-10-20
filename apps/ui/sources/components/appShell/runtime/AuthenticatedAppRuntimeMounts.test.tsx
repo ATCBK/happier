@@ -45,6 +45,10 @@ vi.mock('@tauri-apps/api/event', () => ({
         return () => { listeners.delete(listener); };
     },
 }));
+vi.mock('@tauri-apps/api/core', async importOriginal => ({
+    ...await importOriginal<typeof import('@tauri-apps/api/core')>(),
+    invoke: (command: string, args?: Record<string, unknown>) => invokeNative(command, args),
+}));
 vi.mock('expo-widgets', () => ({
     addUserInteractionListener: vi.fn(() => ({ remove: vi.fn() })),
 }));
@@ -234,10 +238,6 @@ async function waitForDaemonStatus() {
     expect([...nativeTasks.values()].map(spec => spec.kind)).toContain('daemon.service.status.v1');
     for (const [taskId, spec] of nativeTasks) {
         if (spec.kind === 'daemon.service.status.v1') {
-            const result = getSystemTasksRunner().getSnapshot(taskId)?.result;
-            if (result?.ok === false) console.info('[runtime-native-subscription-error]', JSON.stringify({
-                code: result.error.code, message: result.error.message,
-            }));
             expect(getSystemTasksRunner().getSnapshot(taskId)?.result?.ok).not.toBe(false);
         }
     }

@@ -1,12 +1,11 @@
 import { HappierFormActions } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-import { useBareRowBleedPx } from './bareRowBleed';
+import { BareSectionContent } from './BareSectionContent';
 
 /**
  * Core's adapter over the shared action cluster (`HappierFormActions`, public as `Form.Actions`): a
@@ -25,9 +24,8 @@ export function SectionButtonRow(props: Readonly<{
     footnoteTestID?: string;
     testID?: string;
 }>) {
-    // In a bare section that bleeds by its row inset the buttons carry no inset of their own: put it back.
-    const bleedPx = useBareRowBleedPx();
-    const actions = (
+    return (
+        <BareSectionContent>
         <HappierFormActions
             testID={props.testID}
             trailing={props.trailing}
@@ -41,8 +39,8 @@ export function SectionButtonRow(props: Readonly<{
         >
             {props.children}
         </HappierFormActions>
+        </BareSectionContent>
     );
-    return bleedPx > 0 ? <View style={{ paddingHorizontal: bleedPx }}>{actions}</View> : actions;
 }
 
 const styles = StyleSheet.create((theme) => ({

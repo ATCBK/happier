@@ -31,10 +31,12 @@ import {
     type SessionPersonalDiscussionFacts,
 } from "@/app/session/personal/discussionFacts";
 import { createSessionPersonalProjectionSelect, projectSessionViewer } from "@/app/session/personal/projection";
+import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     projectEffectiveSessionAccess,
     projectSessionEffectiveAccessV1,
     type EffectiveSessionAccess,
+    type SessionAccessProjectionContext,
 } from "@/app/session/access/sessionAccess";
 import {
     ACCOUNT_DISPLAY_PROFILE_SELECT,
@@ -171,22 +173,22 @@ type V2SessionRowCompat = V2SessionListRowCompat | V2SessionOwnerRow;
  * shared rows resolve their key the same way and the list stays one query. The
  * direct-share row no longer carries key material at all.
  */
-function createSessionPersonalListProjectionSelect(accountId: string) {
+function createSessionPersonalListProjectionSelect(accountId: string, context: SessionAccessProjectionContext = {}) {
     return {
-        ...createSessionPersonalProjectionSelect(accountId),
+        ...createSessionPersonalProjectionSelect(accountId, context),
         ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: accountId }),
     } as const satisfies Prisma.SessionSelect;
 }
 
-export function createV2SessionListRowSelect(params: Readonly<{ userId: string }>) {
+export function createV2SessionListRowSelect(params: Readonly<{ userId: string }> & SessionAccessProjectionContext) {
     return {
         ...V2_SESSION_LIST_ROW_BASE_SELECT,
-        ...createSessionPersonalListProjectionSelect(params.userId),
+        ...createSessionPersonalListProjectionSelect(params.userId, params),
     } as const satisfies Prisma.SessionSelect;
 }
 
-export function createV2SessionListLegacyRowSelect(params: Readonly<{ userId: string }>) {
-    const { responsibleAccountId: _responsibility, ...personalSelect } = createSessionPersonalListProjectionSelect(params.userId);
+export function createV2SessionListLegacyRowSelect(params: Readonly<{ userId: string }> & SessionAccessProjectionContext) {
+    const { responsibleAccountId: _responsibility, ...personalSelect } = createSessionPersonalListProjectionSelect(params.userId, params);
     return {
         ...V2_SESSION_LIST_ROW_LEGACY_SELECT,
         ...personalSelect,
@@ -336,6 +338,7 @@ export function mapV2SessionListRow(params: Readonly<{
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
     hasOtherNamedCollaborator?: boolean;
     effectiveAccess?: EffectiveSessionAccess;
+    recipientReadiness?: AccountRecipientEnvelopeReadinessReadScope;
     /**
      * The caller has already verified the exact Session-scoped runtime
      * principal through `resolveSessionAccessForOperation`. Runtime credentials
@@ -432,6 +435,7 @@ export function mapV2SessionListRow(params: Readonly<{
         : projectSessionViewer({
             row,
             viewerAccountId: userId,
+            recipientReadiness: params.recipientReadiness,
             discussion: params.discussionFacts?.get(row.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: params.qualifiedTeamIds,
             effectiveAccess,

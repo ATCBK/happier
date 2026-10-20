@@ -1,58 +1,67 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import 'fake-indexeddb/auto';
 import { renderSettingsView } from '@/dev/testkit';
-import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
 
-const setters = vi.hoisted(() => ({ directory: vi.fn(), bytes: vi.fn() }));
-installSettingsViewCommonModuleMocks({
-    storage: async () => {
-        const { createStorageModuleStub, createStorageStoreMock, createUseSettingMutableMockFromReader } = await import('@/dev/testkit/mocks/storage');
-        const store = createStorageStoreMock({ settings: { ...settingsDefaults, experiments: true, featureToggles: { 'attachments.uploads': true } } });
-        return createStorageModuleStub({
-            storage: store,
-            getStorage: () => store,
-            useSettingMutable: createUseSettingMutableMockFromReader((key) => {
-                if (key === 'attachmentsUploadsWorkspaceRelativeDir') return ['.happier/uploads', setters.directory];
-                if (key === 'attachmentsUploadsMaxFileBytes') return [26214400, setters.bytes];
-                return [settingsDefaults[key], vi.fn()];
-            }),
-        });
-    },
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-afterEach(() => vi.unstubAllGlobals());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const originalState = storage.getState();
+afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
+
+// Load the real screen after transport installation, outside the interaction deadline.
+const { AttachmentsSettingsView } = await import('./AttachmentsSettingsView');
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('AttachmentsSettingsView inline fields', () => {
-    it('retains invalid drafts without saving and commits normalized directory and byte values', async () => {
-        setters.directory.mockClear();
-        setters.bytes.mockClear();
-        // The feature request is the real network boundary; retain feature policy and parsing.
-        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({
-            features: { attachments: { uploads: { enabled: true } } }, capabilities: {},
-        })), { status: 200, headers: { 'content-type': 'application/json' } })));
-        const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
-        const features = await getServerFeaturesSnapshot();
-        expect(features.status).toBe('ready');
-        const { AttachmentsSettingsView } = await import('./AttachmentsSettingsView');
-        const screen = await renderSettingsView(<AttachmentsSettingsView />);
-        expect(screen.findByTestId('settings-attachments-uploads-directory')).toBeTruthy();
-        expect(screen.findByTestId('settings-attachments-uploads-directory-input')).toBeTruthy();
-        act(() => screen.changeTextByTestId('settings-attachments-uploads-directory-input', '../outside'));
-        act(() => screen.findByTestId('settings-attachments-uploads-directory-input')!.props.onBlur());
-        expect(setters.directory).not.toHaveBeenCalled();
-        expect(screen.findByTestId('settings-attachments-uploads-directory-input.error')).toBeTruthy();
-        act(() => screen.changeTextByTestId('settings-attachments-uploads-directory-input', ' folder\\uploads '));
-        act(() => screen.findByTestId('settings-attachments-uploads-directory-input')!.props.onSubmitEditing());
-        expect(setters.directory).toHaveBeenCalledWith('folder/uploads');
-        act(() => screen.changeTextByTestId('settings-attachments-max-size-input', '1'));
-        act(() => screen.findByTestId('settings-attachments-max-size-input')!.props.onBlur());
-        expect(setters.bytes).not.toHaveBeenCalled();
-        expect(screen.findByTestId('settings-attachments-max-size-input.error')).toBeTruthy();
-        act(() => screen.changeTextByTestId('settings-attachments-max-size-input', ' 4096 '));
-        act(() => screen.findByTestId('settings-attachments-max-size-input')!.props.onSubmitEditing());
-        expect(setters.bytes).toHaveBeenCalledWith(4096);
+    it('keeps drafts valid and admits directory and existing size controls only when Allowed', async () => {
+        const baseline = settingsParse({ experiments: true, featureToggles: { 'attachments.uploads': true },
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } });
+        const account = await createSecretSettingsTestHarness({ settings: baseline });
+        try {
+            const screen = await renderSettingsView(<AttachmentsSettingsView />);
+            const directory = 'settings-attachments-uploads-directory-input';
+            const bytes = 'settings-attachments-max-size-input';
+            await vi.waitFor(() => expect(screen.findByTestId(directory)).toBeTruthy());
+            act(() => screen.changeTextByTestId(directory, '../outside'));
+            act(() => screen.findByTestId(directory)!.props.onBlur());
+            expect(screen.findByTestId(`${directory}.error`)).toBeTruthy();
+            expect(account.settingsWrites).toEqual([]);
+            act(() => screen.changeTextByTestId(directory, ' folder\\uploads '));
+            await act(async () => { screen.findByTestId(directory)!.props.onSubmitEditing(); });
+            act(() => screen.changeTextByTestId(bytes, '4096'));
+            await act(async () => { screen.findByTestId(bytes)!.props.onSubmitEditing(); });
+            expect(account.settingsWrites).toEqual([]);
+            expect(account.persistedSettings.attachmentsUploadsWorkspaceRelativeDir).toBe(baseline.attachmentsUploadsWorkspaceRelativeDir);
+            expect(account.persistedSettings.attachmentsUploadsMaxFileBytes).toBe(baseline.attachmentsUploadsMaxFileBytes);
+            await act(async () => { account.replaceSettings(settingsParse({ ...baseline,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            act(() => screen.changeTextByTestId(directory, ' allowed\\uploads '));
+            await act(async () => { screen.findByTestId(directory)!.props.onSubmitEditing(); });
+            await vi.waitFor(() => expect(account.persistedSettings.attachmentsUploadsWorkspaceRelativeDir).toBe('allowed/uploads'));
+            act(() => screen.changeTextByTestId(bytes, '1'));
+            act(() => screen.findByTestId(bytes)!.props.onBlur());
+            expect(screen.findByTestId(`${bytes}.error`)).toBeTruthy();
+            expect(account.persistedSettings.attachmentsUploadsMaxFileBytes).toBe(baseline.attachmentsUploadsMaxFileBytes);
+            act(() => screen.changeTextByTestId(bytes, ' 8192 '));
+            await act(async () => { screen.findByTestId(bytes)!.props.onSubmitEditing(); });
+            await vi.waitFor(() => expect(account.persistedSettings.attachmentsUploadsMaxFileBytes).toBe(8192));
+            expect(account.persistedSettings.attachmentsUploadsWorkspaceRelativeDir).toBe('allowed/uploads');
+        } finally { standardCleanup(); await account.dispose(); }
     });
 });

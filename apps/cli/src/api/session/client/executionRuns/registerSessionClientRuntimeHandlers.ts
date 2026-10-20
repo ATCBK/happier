@@ -230,7 +230,7 @@ export function registerSessionClientRuntimeHandlers(
             serverUrl: params.serverUrl, session: params.session, readOwnerAccountCredentials: params.readOwnerAccountCredentials,
             isApprovalExecutionOriginCurrent: args => isApprovalExecutionOriginCurrent(args),
             executeSourceAction: async (actionId, input, context) => {
-                if (actionId !== 'session.transcript.get' && actionId !== 'doc.read') {
+                if (actionId !== 'session.transcript.get' && actionId !== 'doc.read' && actionId !== 'workflow.run.invocations.get') {
                     return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
                 }
                 const credentialed = await resolveCredentialedRoleParams(context.signal);
@@ -695,6 +695,7 @@ export function registerSessionClientRuntimeHandlers(
         getCurrentSessionMetadata: params.getSessionMetadata,
         ...(parentSessionForTools ? {
             postSessionUpdate: async (report: SessionUpdatePostInputV1) => await parentSessionForTools.enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
+            sessionMessageReplyPublisher: parentSessionForTools,
         } : {}),
         getCurrentSessionSkillItems: () => params.getCurrentSessionSkillItems
             ? params.getCurrentSessionSkillItems()
@@ -819,7 +820,7 @@ export function registerSessionClientRuntimeHandlers(
     registerActionSpecRpcHandlers({
         rpcHandlerManager: params.rpcHandlerManager,
         resolveActionExecutor: async ({ actionId, ingress }) => {
-            if (actionId === 'session.update.post') return transcriptActionExecutor;
+            if (actionId === 'session.update.post' || actionId === 'session.message.reply') return transcriptActionExecutor;
             if (actionId === 'skills.read') {
                 const credentials = await readOwnerAccountCredentials();
                 if (!credentials) return {
@@ -841,7 +842,7 @@ export function registerSessionClientRuntimeHandlers(
                 }),
             };
         },
-        actionIds: [...ROLE_ACTION_IDS_V1.filter((actionId) => actionId.startsWith('session.')), 'skills.read', 'session.update.post'],
+        actionIds: [...ROLE_ACTION_IDS_V1.filter((actionId) => actionId.startsWith('session.')), 'skills.read', 'session.update.post', 'session.message.reply'],
     });
     registerSessionRoleConfigurationHandler({
         rpcHandlerManager: params.rpcHandlerManager,

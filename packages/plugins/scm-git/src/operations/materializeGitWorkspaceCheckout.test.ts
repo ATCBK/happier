@@ -484,4 +484,39 @@ describe('materializeGitWorkspaceCheckout', { timeout: 20_000 }, () => {
             await rm(repoRoot, { recursive: true, force: true });
         }
     });
+
+    it('creates a new branch at a path whose earlier linked worktree was deleted by hand', async () => {
+        const repoRoot = await makeTempDir('git-materialize-stale-path-repo-');
+        const targetRoot = join(await makeTempDir('git-materialize-stale-path-target-'), 'prepared');
+
+        try {
+            await runGit(repoRoot, ['init']);
+            await configureGitRepo(repoRoot);
+            await runGit(repoRoot, ['branch', '-M', 'main']);
+            await writeTrackedFile(repoRoot, 'README.md', 'main\n');
+            await runGit(repoRoot, ['commit', '-m', 'initial']);
+            await runGit(repoRoot, ['worktree', 'add', '-b', 'earlier-prepare', targetRoot]);
+            await rm(targetRoot, { recursive: true, force: true });
+            expect(await runGit(repoRoot, ['worktree', 'list', '--porcelain']))
+                .toContain('prunable gitdir file points to non-existent location');
+
+            const materialized = await runWithRealGitScmRuntime(() => materializeGitWorkspaceCheckoutAtPath({
+                repoRoot,
+                targetPath: targetRoot,
+                displayName: 'next-prepare',
+                baseRef: null,
+                branchMode: 'new',
+            }));
+            const identity = await runWithRealGitScmRuntime(() => inspectGitCheckoutIdentity({ cwd: targetRoot }));
+
+            expect(materialized).toMatchObject({ branchName: 'next-prepare', reused: false });
+            expect(identity).toEqual(expect.objectContaining({
+                branchName: 'next-prepare',
+                registeredWorktreePath: await realpath(targetRoot),
+            }));
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+            await rm(join(targetRoot, '..'), { recursive: true, force: true });
+        }
+    });
 });

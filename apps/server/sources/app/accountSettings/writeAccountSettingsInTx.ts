@@ -2,7 +2,7 @@ import type { AccountRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/s
 import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import type { Prisma } from "@prisma/client";
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { beforeAccountChangePublication, enqueueAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -69,9 +69,66 @@ export type AccountSettingsWriteInTxInput = Readonly<{
         }>;
 }>;
 
+/** A final Settings CAS conflict must roll back every composed domain write. */
+export class AccountSettingsPublicationConflict extends Error {
+    constructor(readonly result: Exclude<AccountSettingsWriteInTxResult, { status: "success" }>) {
+        super("Account Settings changed before terminal publication");
+        this.name = "AccountSettingsPublicationConflict";
+    }
+}
+
+function profileTransferAuthorityRejection(
+    control: Awaited<ReturnType<typeof readProfileTransferControlInTx>>,
+    expectedRevision: number | 'absent' | undefined,
+): Readonly<{ status: 'storage_unavailable' }> | Readonly<{ status: 'profile_transfer_mismatch'; currentRevision: number | 'absent' }> | null {
+    if (control.status !== 'present' && control.status !== 'deleted' && control.status !== 'absent') {
+        return { status: 'storage_unavailable' };
+    }
+    const revision = control.status === 'absent' ? 'absent' : control.revision;
+    return expectedRevision !== undefined && revision !== expectedRevision
+        ? { status: 'profile_transfer_mismatch', currentRevision: revision } : null;
+}
+
+async function readAccountSettingsPublicationConflictInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; kind?: "v1" | "v2" }>,
+): Promise<Extract<AccountSettingsWriteInTxResult, { status: "version_mismatch" }> | Readonly<{ status: "storage_unavailable" }>> {
+    const account = await tx.account.findUnique({
+        where: { id: input.accountId },
+        select: {
+            settings: true, settingsVersion: true, publicKey: true, encryptionMode: true,
+            contentPublicKey: true, contentPublicKeySig: true,
+        },
+    });
+    const currentness = account ? deriveAccountEncryptionCurrentnessFromRow(account) : null;
+    if (currentness?.status === "inconsistent") return { status: "storage_unavailable" };
+    const currentContent: AccountSettingsStoredContentEnvelope | null = currentness?.currentness.encryptionMode === "plain"
+        ? openPlainAccountSettingsDbValue({ accountId: input.accountId, dbValue: account?.settings ?? null })
+        : account?.settings ? { t: "encrypted", c: account.settings } : null;
+    return {
+        status: "version_mismatch", currentVersion: account?.settingsVersion ?? 0,
+        currentSettings: input.kind === "v1" ? account?.settings || null : account?.settings ?? null,
+        currentContent,
+    };
+}
+
+/** Source transfers recheck their captured Settings version after terminal Account locking. */
+export function validateAccountSettingsVersionAtPublicationInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; expectedVersion: number }>,
+): void {
+    beforeAccountChangePublication(tx, [input.accountId], async (publicationTx) => {
+        const current = await readAccountSettingsPublicationConflictInTx(publicationTx, input);
+        if (current.status !== "version_mismatch" || current.currentVersion !== input.expectedVersion) {
+            throw new AccountSettingsPublicationConflict(current);
+        }
+    });
+}
+
 /**
- * Applies one mode-fenced Account Settings CAS, history update, durable change,
- * and post-commit publication inside the caller's existing transaction.
+ * Stages one mode-fenced Account Settings CAS for terminal publication after
+ * domain history/resource writes. The caller's inTx must commit before exposing
+ * success; a final version conflict rolls the whole composed transaction back.
  */
 export async function writeAccountSettingsInTx(
     input: AccountSettingsWriteInTxInput,
@@ -79,6 +136,7 @@ export async function writeAccountSettingsInTx(
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         input.tx,
         input.accountId,
+        "content",
     );
     if (fence.status === "account_not_found") {
         return { status: "account_not_found" };
@@ -89,12 +147,8 @@ export async function writeAccountSettingsInTx(
 
     const currentAccount = fence.account;
     const profileTransferControl = await readProfileTransferControlInTx(input.tx, { accountId: input.accountId });
-    if (profileTransferControl.status !== 'present' && profileTransferControl.status !== 'deleted'
-        && profileTransferControl.status !== 'absent') return { status: 'storage_unavailable' };
-    if (input.expectedProfileTransferRevision !== undefined) {
-        const revision = profileTransferControl.status === 'absent' ? 'absent' : profileTransferControl.revision;
-        if (revision !== input.expectedProfileTransferRevision) return { status: 'profile_transfer_mismatch', currentRevision: revision };
-    }
+    const transferRejection = profileTransferAuthorityRejection(profileTransferControl, input.expectedProfileTransferRevision);
+    if (transferRejection) return transferRejection;
     const mode = currentAccount.currentness.encryptionMode;
     if (input.next.kind === "v1" && mode === "plain") {
         return { status: "plain_requires_v2" };
@@ -125,48 +179,63 @@ export async function writeAccountSettingsInTx(
         };
     }
 
-    if (mode === 'plain' && input.next.kind === 'v2') {
-        const currentSettings = currentContent?.t === 'plain' ? currentContent.v : {};
-        const nextSettings = input.next.content?.t === 'plain' ? input.next.content.v : {};
-        if (profileTransferControl.status === 'present' && profileTransferControl.envelope.t === 'plain'
-            && profileTransferControl.envelope.v.phase === 'active'
-            && (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'profiles')
-                || !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'secretBindingsByProfileId'))) {
-            return { status: 'invalid_content' };
-        }
-        const acpSourceChanged = Object.hasOwn(currentSettings, 'acpCatalogSettingsV1') !== Object.hasOwn(nextSettings, 'acpCatalogSettingsV1')
-            || (Object.hasOwn(currentSettings, 'acpCatalogSettingsV1')
-                && !pluginJsonValuesEqual(currentSettings.acpCatalogSettingsV1, nextSettings.acpCatalogSettingsV1));
-        if (acpSourceChanged) {
-            const catalog = await readConfiguredAgentCatalogRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status !== 'present' && catalog.status !== 'deleted' && catalog.status !== 'absent') return { status: 'storage_unavailable' };
-            if (catalog.status === 'present' && catalog.content.t === 'plain'
-                && openAcpCatalogContentV1({ mode: 'plain', material: null, content: catalog.content }).status !== 'opened') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent' && !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'acpCatalogSettingsV1')) {
+    const validateSourceAuthority = async (
+        tx: Tx,
+        control: Awaited<ReturnType<typeof readProfileTransferControlInTx>>,
+    ): Promise<Readonly<{ status: 'invalid_content' | 'storage_unavailable' }> | null> => {
+        if (mode === 'plain' && input.next.kind === 'v2') {
+            const currentSettings = currentContent?.t === 'plain' ? currentContent.v : {};
+            const nextSettings = input.next.content?.t === 'plain' ? input.next.content.v : {};
+            if (control.status === 'present' && control.envelope.t === 'plain'
+                && control.envelope.v.phase === 'active'
+                && (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'profiles')
+                    || !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'secretBindingsByProfileId'))) {
                 return { status: 'invalid_content' };
             }
+            const acpSourceChanged = Object.hasOwn(currentSettings, 'acpCatalogSettingsV1') !== Object.hasOwn(nextSettings, 'acpCatalogSettingsV1')
+                || (Object.hasOwn(currentSettings, 'acpCatalogSettingsV1')
+                    && !pluginJsonValuesEqual(currentSettings.acpCatalogSettingsV1, nextSettings.acpCatalogSettingsV1));
+            if (acpSourceChanged) {
+                const catalog = await readConfiguredAgentCatalogRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status !== 'present' && catalog.status !== 'deleted' && catalog.status !== 'absent') return { status: 'storage_unavailable' };
+                if (catalog.status === 'present' && catalog.content.t === 'plain'
+                    && openAcpCatalogContentV1({ mode: 'plain', material: null, content: catalog.content }).status !== 'opened') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent' && !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'acpCatalogSettingsV1')) {
+                    return { status: 'invalid_content' };
+                }
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'providerSettingsV1')) {
+                const catalog = await readProviderConnectionsRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'mcpServersSettingsV1')) {
+                const catalog = await readMcpServerCatalogRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountServiceConfigurationsV1')) {
+                const catalog = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'configurations' });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountPurposeBindingsV1')) {
+                const catalog = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'purposes' });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
         }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'providerSettingsV1')) {
-            const catalog = await readProviderConnectionsRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'mcpServersSettingsV1')) {
-            const catalog = await readMcpServerCatalogRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountServiceConfigurationsV1')) {
-            const catalog = await readConnectedAccountCatalogRowInTx(input.tx, { accountId: input.accountId, key: 'configurations' });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountPurposeBindingsV1')) {
-            const catalog = await readConnectedAccountCatalogRowInTx(input.tx, { accountId: input.accountId, key: 'purposes' });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-    }
+        return null;
+    };
+    const sourceRejection = await validateSourceAuthority(input.tx, profileTransferControl);
+    if (sourceRejection) return sourceRejection;
+
+    beforeAccountChangePublication(input.tx, [input.accountId], async (tx) => {
+        const currentControl = await readProfileTransferControlInTx(tx, { accountId: input.accountId });
+        const rejection = profileTransferAuthorityRejection(currentControl, input.expectedProfileTransferRevision)
+            ?? await validateSourceAuthority(tx, currentControl);
+        if (rejection) throw new AccountSettingsPublicationConflict(rejection);
+    });
 
     const nextSettingsDbValue =
         input.next.kind === "v1"
@@ -195,57 +264,24 @@ export async function writeAccountSettingsInTx(
                         } as Prisma.InputJsonValue,
             }
             : {};
-    const updated = await input.tx.account.updateMany({
-        where: {
-            id: input.accountId,
-            settingsVersion: input.expectedVersion,
-        },
-        data: {
-            settings: nextSettingsDbValue,
-            settingsVersion: nextVersion,
-            updatedAt: new Date(),
-            ...remoteAlertPolicyWrite,
-        },
-    });
-    if (updated.count === 0) {
-        const account = await input.tx.account.findUnique({
-            where: { id: input.accountId },
-            select: {
-                settings: true,
-                settingsVersion: true,
-                publicKey: true,
-                encryptionMode: true,
-                contentPublicKey: true,
-                contentPublicKeySig: true,
+    enqueueAccountChangePublication(input.tx, [input.accountId], async (tx) => {
+        const updated = await tx.account.updateMany({
+            where: {
+                id: input.accountId,
+                settingsVersion: input.expectedVersion,
+            },
+            data: {
+                settings: nextSettingsDbValue,
+                settingsVersion: nextVersion,
+                updatedAt: new Date(),
+                ...remoteAlertPolicyWrite,
             },
         });
-        const refreshedCurrentness = account
-            ? deriveAccountEncryptionCurrentnessFromRow(account)
-            : null;
-        if (refreshedCurrentness?.status === "inconsistent") {
-            return { status: "storage_unavailable" };
+        if (updated.count === 0) {
+            throw new AccountSettingsPublicationConflict(await readAccountSettingsPublicationConflictInTx(tx,
+                { accountId: input.accountId, kind: input.next.kind }));
         }
-        const refreshedMode =
-            refreshedCurrentness?.currentness.encryptionMode ?? mode;
-        const refreshedContent: AccountSettingsStoredContentEnvelope | null =
-            refreshedMode === "plain"
-                ? openPlainAccountSettingsDbValue({
-                    accountId: input.accountId,
-                    dbValue: account?.settings ?? null,
-                })
-                : account?.settings
-                    ? { t: "encrypted", c: account.settings }
-                    : null;
-        return {
-            status: "version_mismatch",
-            currentVersion: account?.settingsVersion ?? 0,
-            currentSettings:
-                input.next.kind === "v1"
-                    ? account?.settings || null
-                    : account?.settings ?? null,
-            currentContent: refreshedContent,
-        };
-    }
+    });
 
     if (input.next.kind === 'v2' && input.next.remoteAlertPolicy !== undefined) {
         await reconcileMachineRecoveryNoticeRequestsInTx({ tx: input.tx, accountId: input.accountId,
@@ -284,7 +320,7 @@ export async function writeAccountSettingsInTx(
             payload: buildUpdateAccountUpdate(
                 input.accountId,
                 settingsUpdate,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
             ),
             recipientFilter: { type: "user-scoped-only" },
@@ -293,7 +329,7 @@ export async function writeAccountSettingsInTx(
             userId: input.accountId,
             payload: buildAccountSettingsChangedUpdate(
                 nextVersion,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
             ),
             recipientFilter: { type: "user-machine-scoped-only" },

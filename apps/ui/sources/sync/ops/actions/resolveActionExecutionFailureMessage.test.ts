@@ -28,6 +28,21 @@ describe('Action failure presentation', () => {
         expect(resolveActionExecutionErrorMessage({ kind: 'refused', errorCode: 'something_else' }, 'Couldn’t add it.')).toBe('Couldn’t add it.');
     });
 
+    it('says what is wrong with a widget input the Home refused, from the refusal\'s own reason', () => {
+        const refusal = (status: string, reasonCode: string) => ({ kind: 'refused', errorCode: 'widget_inputs_invalid',
+            details: { status, fields: [{ path: 'session', status, reasonCode }] } });
+        const message = (status: string, reasonCode: string) => resolveActionExecutionErrorMessage(refusal(status, reasonCode), 'Couldn’t add it.');
+        // A pinned Session the person cannot read, a choice that is gone, and choices that could not load say different things.
+        expect(message('denied', 'widget_session_access_denied')).toBe(t('widgetAdd.refusals.inputsAccessDenied'));
+        expect(message('invalid', 'input_type_option_invalid')).toBe(t('widgetAdd.refusals.inputsChoiceGone'));
+        expect(message('unavailable', 'input_type_options_unavailable')).toBe(t('widgetAdd.refusals.inputsChoicesUnavailable'));
+        expect(new Set([message('denied', 'widget_session_access_denied'), message('invalid', 'input_type_option_invalid'),
+            message('unavailable', 'input_type_options_unavailable')]).size).toBe(3);
+        // Without a reason the refusal keeps the general sentence.
+        expect(resolveActionExecutionErrorMessage({ kind: 'refused', errorCode: 'widget_inputs_invalid' }, 'Couldn’t add it.'))
+            .toBe(t('widgetAdd.refusals.inputsInvalid'));
+    });
+
     it('retains ordinary Action failure and successful-result behavior', () => {
         expect(resolveActionExecutionFailureMessage({ ok: false, errorCode: 'other_failure', error: 'Details' }, 'Fallback'))
             .toBe('Details');

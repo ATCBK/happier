@@ -23,7 +23,8 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { buildConnectedAccountSettingsRoute, buildNewConnectedAccountPoolRoute } from '@/sync/domains/connectedServices/connectedAccountSettingsRoute';
-import { useActiveServerAccountScope, useAllMachines, useLocalSettingMutable } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useAllMachines, useLocalSetting } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
 import { ConnectedAccountActionApprovalNotice } from './ConnectedAccountActionApprovalNotice';
@@ -73,7 +74,10 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution: purposeExecution } = useConnectedAccountPurposeDefaults();
   const labelsByKey = useConnectedMetadataCatalog(activeAccountScope, selectConnectedMetadataLabels);
   const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
-  const [presentationSetting, setPresentation] = useLocalSettingMutable('connectedServicesIndexViewV1');
+  const presentationSetting = useLocalSetting('connectedServicesIndexViewV1');
+  const setPresentation = React.useCallback((next: ConnectedServicesIndexPresentation) => {
+    getStorage().getState().applyLocalSettings({ connectedServicesIndexViewV1: next }, { source: 'ui' });
+  }, []);
   const presentation: ConnectedServicesIndexPresentation = presentationSetting === 'grid' ? 'grid' : 'list';
   const layout = useHappierCollectionLayout();
   const phone = useDeviceType() === 'phone';

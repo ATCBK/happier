@@ -222,7 +222,7 @@ describe('cross-plugin contribution public authoring example', () => {
                             listInstances: {
                                 required: true,
                                 input: { kind: 'protocolDefined' },
-                                action: { surfaces: ['plugin', 'ui'], dangerLevel: 'safe' },
+                                action: { surfaces: ['plugin', 'ui', 'agent', 'mcp', 'cli'], dangerLevel: 'safe' },
                             },
                             scan: { required: true },
                             get: { required: true },
@@ -527,7 +527,7 @@ describe('cross-plugin contribution public authoring example', () => {
                             listInstances: {
                                 required: true,
                                 input: { kind: 'protocolDefined' },
-                                action: { surfaces: ['plugin', 'ui'], dangerLevel: 'safe' },
+                                action: { surfaces: ['plugin', 'ui', 'agent', 'mcp', 'cli'], dangerLevel: 'safe' },
                             },
                             scan: { required: true },
                             get: { required: true },

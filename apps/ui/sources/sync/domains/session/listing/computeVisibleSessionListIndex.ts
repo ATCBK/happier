@@ -91,6 +91,7 @@ export type ComputeVisibleSessionListIndexParams = Readonly<{
     workspaceRefs?: readonly WorkspaceRefV1[];
     viewerAccountIdByServerId?: ReadonlyMap<string, string>;
     workflowRuns?: readonly Readonly<{ serverId: string; summary: WorkflowRunSummaryV1 }>[];
+    workflowRunUnderSessionId?: string;
     folderFocus?: SessionFolderFocusScope | null;
 }>;
 
@@ -1409,7 +1410,8 @@ function projectWorkflowRunRows(
     });
     const runs = params.corpusStorage === 'archived' || !canSessionListFilterIncludeRunsV1(filter) ? [] : (params.workflowRuns ?? [])
         .filter((run) => workflowRunMatchesSessionListFilter(run.summary, run.serverId, filter,
-            params.viewerAccountIdByServerId?.get(resolveServerProfileScopeIdForIdentifier(run.serverId) || run.serverId)))
+            params.viewerAccountIdByServerId?.get(resolveServerProfileScopeIdForIdentifier(run.serverId) || run.serverId),
+            params.workflowRunUnderSessionId === filter.underSessionId && filter.underSessionId !== undefined))
         .filter((run) => {
             if (!params.folderFocus) return true;
             const parentSessionId = resolveWorkflowRunParentSessionId(run.summary);

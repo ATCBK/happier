@@ -29,6 +29,7 @@ import {
 } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import { decodeAutomationTemplate } from '@/sync/domains/automations/automationTemplateCodec';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
+import { PluginUiJsonObjectV1Schema } from '@happier-dev/protocol/plugins/ui';
 
 function modelSelection(
     agentTargetKey: string,
@@ -202,6 +203,17 @@ describe('sessionAuthoringDraftAdapters', () => {
         expect(restricted).toEqual({ ...edited, allowedTools: [], unlistedTools: 'ask',
             organizationPlacement: { folderId: null, tagIds: ['mail'] }, permissionMode: 'default',
             configuration: { ...edited.configuration, permissionIntent: { value: 'default', updatedAtMs: 100 } } });
+        const cleared = applySessionServerStartSpawnDraftEdits({
+            draft: restricted,
+            edits: { profileId: undefined, modelSelection: undefined, agentModeId: undefined,
+                capabilitySelection: undefined, connectedServices: undefined, allowedTools: undefined, unlistedTools: undefined },
+            configurationUpdatedAtMs: 101,
+        });
+        expect(PluginUiJsonObjectV1Schema.safeParse(cleared).success).toBe(true);
+        for (const field of ['profileId', 'modelSelection', 'agentModeId', 'capabilitySelection', 'connectedServices', 'allowedTools', 'unlistedTools']) {
+            expect(cleared).not.toHaveProperty(field);
+        }
+        expect(cleared.configuration).toMatchObject({ mode: { value: null }, model: { value: null } });
     });
 
     it('preserves MCP and skill session overrides through persisted drafts and temporary handoffs', () => {

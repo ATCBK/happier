@@ -1,4 +1,5 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactCoarseKindV1Schema, deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema,
     ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
     type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -8,6 +9,8 @@ import { Buffer } from 'buffer';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
+import { CoordinationMessageRefV1Schema, type CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { ChangesResponseSchema, CurrentCursorResponseSchema, CursorGoneErrorSchema, type ChangeEntry } from '@happier-dev/protocol/changes';
 
 /**
  * A Home's Artifact rows and explicitly seeded Account grants, answered over HTTP.
@@ -25,7 +28,7 @@ import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken'
  * its at-rest sealing is opened again.
  */
 export type ArtifactStoreBoundary = Readonly<{
-    /** Answers one Artifact route, or returns `null` for any other path. */
+    /** Answers Artifact routes and their Account cursor/change feed; other paths return `null`. */
     handle(path: string, init?: RequestInit): Promise<Response> | null;
     /** The stored row, exactly as the Home would serve it. */
     read(artifactId: string): Artifact | null;
@@ -75,11 +78,31 @@ function isVersion(value: unknown): value is number {
 export function createArtifactStoreBoundary(params: Readonly<{
     ownerAccountId: () => string | null;
     encryptionMode: 'plain' | 'e2ee';
+    /** Model the Home's source admission with explicitly admitted fixture messages. Absent = older Home. */
+    admitMemoryDecisionSource?: (source: CoordinationMessageRefV1) => boolean;
 }>): ArtifactStoreBoundary {
     const rows = new Map<string, Artifact>();
     const accountGrants = new Map<string, Map<string, ArtifactAccessGrantRowV1>>();
+    // Mirror Account.seq and the Home's coalesced (Account, kind, entityId) ledger.
+    // Keep publication at this boundary so HTTP writes and externally seeded
+    // commits are equally visible to the real warm-inventory reader.
+    const accountChanges = new Map<string, { cursor: number; entries: Map<string, ChangeEntry> }>();
+    const publish = (row: Artifact, accountIds = [row.ownerAccountId, ...(accountGrants.get(row.id)?.keys() ?? [])]) => {
+        for (const accountId of new Set(accountIds)) {
+            const ledger = accountChanges.get(accountId) ?? { cursor: 0, entries: new Map<string, ChangeEntry>() };
+            ledger.entries.set(row.id, { cursor: ++ledger.cursor, kind: 'artifact', entityId: row.id,
+                changedAt: Date.now(), hint: null });
+            accountChanges.set(accountId, ledger);
+        }
+    };
     let pendingBeforeUpdate: (() => Promise<void>) | null = null;
     let pendingAfterCreate: (() => Promise<void>) | null = null;
+    const storedKind = (header: string, supplied: unknown) => {
+        if (params.encryptionMode !== 'plain') return ArtifactCoarseKindV1Schema.safeParse(supplied).data ?? null;
+        const decoded = decodePlainArtifactStoredContent(header);
+        if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return null;
+        return deriveArtifactCoarseKindV1(decoded as Readonly<Record<string, unknown>>);
+    };
 
     const accessFor = (row: Artifact, accountId: string): Artifact['access'] | null =>
         row.ownerAccountId === accountId ? 'owner' : accountGrants.get(row.id)?.get(accountId)?.accessLevel ?? null;
@@ -128,8 +151,10 @@ export function createArtifactStoreBoundary(params: Readonly<{
             id, header, headerVersion: 1, body, bodyVersion: 1, dataEncryptionKey, seq: 0, createdAt: now, updatedAt: now,
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
+            kind: storedKind(header, input?.kind),
         };
         rows.set(id, row);
+        publish(row);
         return json(row);
     };
 
@@ -164,10 +189,12 @@ export function createArtifactStoreBoundary(params: Readonly<{
             ...(bodyChange ? { body: bodyChange.bytes, bodyVersion: bodyChange.expected + 1 } : {}),
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
+            ...(headerChange ? { kind: storedKind(headerChange.bytes, input?.kind) } : {}),
             seq: current.seq + 1,
             updatedAt: Math.max(Date.now(), current.updatedAt + 1),
         };
         rows.set(artifactId, next);
+        publish(next);
         return json({
             success: true,
             ...(headerChange ? { headerVersion: next.headerVersion } : {}),
@@ -179,11 +206,29 @@ export function createArtifactStoreBoundary(params: Readonly<{
         handle(path: string, init?: RequestInit): Promise<Response> | null {
             const method = (init?.method ?? 'GET').toUpperCase();
             const url = new URL(path, 'https://artifact-boundary.example');
-            if (url.pathname !== ARTIFACTS_PATH && !url.pathname.startsWith(`${ARTIFACTS_PATH}/`)) return null;
+            const changesRoute = url.pathname === '/v2/cursor' || url.pathname === '/v2/changes';
+            if (!changesRoute && url.pathname !== ARTIFACTS_PATH && !url.pathname.startsWith(`${ARTIFACTS_PATH}/`)) return null;
             // Mirror the Home preHandler: capture this request's authenticated
             // Account once, before any row access or acknowledgement hook.
             const callerAccountId = params.ownerAccountId();
             if (!callerAccountId) return Promise.resolve(json({ error: 'Missing authorization header' }, 401));
+            if (changesRoute) {
+                if (method !== 'GET') return null;
+                const ledger = accountChanges.get(callerAccountId);
+                const currentCursor = ledger?.cursor ?? 0;
+                if (url.pathname === '/v2/cursor') return Promise.resolve(json(CurrentCursorResponseSchema.parse({ cursor: currentCursor, changesFloor: 0 })));
+                const after = Number(url.searchParams.get('after') ?? 0);
+                const limit = Number(url.searchParams.get('limit') ?? 200);
+                if (!Number.isInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+                    return Promise.resolve(json({ error: 'invalid_params' }, 400));
+                }
+                if (after > currentCursor) return Promise.resolve(json(CursorGoneErrorSchema.parse({ error: 'cursor-gone', currentCursor }), 410));
+                const page = [...(ledger?.entries.values() ?? [])].filter(entry => entry.cursor > after)
+                    .sort((left, right) => left.cursor - right.cursor).slice(0, limit);
+                const nextCursor = page.at(-1)?.cursor ?? after;
+                const changes = url.searchParams.has('sessionId') ? [] : page;
+                return Promise.resolve(json(ChangesResponseSchema.parse({ changes, nextCursor })));
+            }
             if (url.pathname === `${ARTIFACTS_PATH}/read` && method === 'POST') {
                 const input = ArtifactReadBatchInputV1Schema.safeParse(parseBody(init));
                 if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
@@ -219,13 +264,18 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 const inventory = [...rows.values()].flatMap(row => {
                     const readable = readableRow(row, callerAccountId);
                     return readable ? [readable] : [];
-                }).filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
+                });
+                const kind = url.searchParams.get('kind');
+                if (kind !== null && !ArtifactCoarseKindV1Schema.safeParse(kind).success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
+                const selected = inventory.filter(row => kind === null || row.kind === kind)
+                    .filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
                     .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
-                return Promise.resolve(json(inventory.slice(0, limit).map(row => {
+                const items = selected.slice(0, limit).map(row => {
                     if (url.searchParams.get('includeBody') === 'true') return row;
                     const { body: _body, ...header } = row;
                     return header;
-                })));
+                });
+                return Promise.resolve(json(kind === null ? items : { items, hasUnclassified: inventory.some(row => row.kind == null) }));
             }
             if (path === ARTIFACTS_PATH) {
                 if (method !== 'POST') return null;
@@ -236,6 +286,21 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 return Promise.resolve(hook?.()).then(() => response);
             }
             if (!path.startsWith(`${ARTIFACTS_PATH}/`)) return null;
+            if (params.admitMemoryDecisionSource && method === 'POST') {
+                const isCreate = url.pathname === `${ARTIFACTS_PATH}/memory-decision/create`;
+                const target = /^\/v1\/artifacts\/([^/]+)\/memory-decision$/.exec(url.pathname);
+                if (isCreate || target) {
+                    const input = parseBody(init);
+                    const source = CoordinationMessageRefV1Schema.safeParse(input?.memoryDecisionSource);
+                    if (!source.success || !params.admitMemoryDecisionSource(source.data)) return Promise.resolve(json({ error: 'memory_decision_source_unavailable' }, 404));
+                    if (!isCreate) return update(callerAccountId, decodeURIComponent(target![1]!), input);
+                    const response = create(callerAccountId, input);
+                    if (!response.ok) return Promise.resolve(response);
+                    const hook = pendingAfterCreate;
+                    pendingAfterCreate = null;
+                    return Promise.resolve(hook?.()).then(() => response);
+                }
+            }
             const recipientTarget = /^\/v1\/artifacts\/([^/]+)\/access\/recipients$/.exec(url.pathname);
             if (recipientTarget && method === 'GET') {
                 const row = rows.get(decodeURIComponent(recipientTarget[1]!));
@@ -265,6 +330,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     return Promise.resolve(json({ error: 'version-mismatch' }, 409));
                 }
                 rows.delete(artifactId);
+                publish(row);
                 accountGrants.delete(artifactId);
                 return Promise.resolve(json({ success: true }));
             }
@@ -284,7 +350,11 @@ export function createArtifactStoreBoundary(params: Readonly<{
             return row ? { ...row } : null;
         },
         replaceStoredRow(artifact: Artifact): void {
-            rows.set(artifact.id, { ...artifact });
+            // Omitted hints model a current producer; explicit null still models
+            // a retained pre-backfill row for inventory compatibility tests.
+            const row = { ...artifact, kind: artifact.kind === undefined ? storedKind(artifact.header, undefined) : artifact.kind };
+            rows.set(artifact.id, row);
+            publish(row);
         },
         seedAccountGrant(artifactId: string, accountId: string, accessLevel: ArtifactAccessLevelV1): void {
             const row = rows.get(artifactId);
@@ -294,6 +364,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 createdByAccountId: row.ownerAccountId, createdAt: grants.get(accountId)?.createdAt ?? Date.now(),
                 display: { name: null, username: null } });
             accountGrants.set(artifactId, grants);
+            publish(row, [accountId]);
         },
         list(): Artifact[] {
             return [...rows.values()].map((row) => ({ ...row }));
@@ -313,6 +384,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             pendingAfterCreate = hook;
         },
         clear(): void {
+            for (const row of rows.values()) publish(row);
             rows.clear();
             accountGrants.clear();
             pendingBeforeUpdate = null;
@@ -329,6 +401,7 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     currentAccount?: boolean;
     /** Optional real wire payload for feature-gated consumers using this Home fixture. */
     serverFeatures?: unknown;
+    admitMemoryDecisionSource?: (source: CoordinationMessageRefV1) => boolean;
     /** Additional real Home HTTP routes needed by the consumer under test. */
     handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>;
     /** Public catalogs leave the Home; the caller supplies their HTTP boundary. */
@@ -346,7 +419,8 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     const token = `header.${encodeBase64(Buffer.from(JSON.stringify({ sub: accountId, ...(options?.currentAccount ? {
         provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'account', authority: 'present_user' }), tokenEpoch: 0,
     } : {}) })), 'base64url')}.signature`;
-    const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
+    const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain',
+        admitMemoryDecisionSource: options?.admitMemoryDecisionSource });
     const requests: Readonly<{ path: string; method: string }>[] = [];
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 
 import type { DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 import { loadWorkspaceRouteLayout, workspaceRouteBodies } from './workspaceRouteBodies';
@@ -34,6 +35,14 @@ const PluginAppPageScreen = retryableLazy(async () => ({
     default: (await import('@/components/appShell/plugins/PluginAppPageScreen')).PluginAppPageScreen,
 }));
 
+/**
+ * A lazy body still loading says so once. Beside a column, the column already speaks for its destination
+ * ("Opening Boards"), so the page waits quietly, as a reading pane does; without one the page says it.
+ */
+function DestinationBodyLoading() {
+    return useAppShellColumn().columnVisible ? null : <SurfaceStateCard kind="loading" title={t('common.loading')} />;
+}
+
 /** Renders the catalog-admitted identity; the Expo entrypoint is only its URL sink. */
 export function WorkspaceDestinationBody(props: Readonly<{
     target: DestinationRef;
@@ -46,7 +55,7 @@ export function WorkspaceDestinationBody(props: Readonly<{
     const match = matchWorkspaceDestinationRoute(props.pathname);
     const Body = match ? bodies[match.routeKey] : undefined;
     if (props.target.params.pluginId && props.target.params.localId && props.pathname.startsWith('/plugins/')) {
-        return <React.Suspense fallback={<SurfaceStateCard kind="loading" title={t('common.loading')} />}>
+        return <React.Suspense fallback={<DestinationBodyLoading />}>
             <PluginAppPageScreen pluginId={props.target.params.pluginId}
                 localId={props.target.params.localId} subPath={props.target.params.subPath ?? ''} />
         </React.Suspense>;
@@ -58,7 +67,7 @@ export function WorkspaceDestinationBody(props: Readonly<{
         const Layout = hostedLayout(key);
         content = <WorkspaceRouteOutlet.Provider key={key} value={content}><Layout /></WorkspaceRouteOutlet.Provider>;
     }
-    return <React.Suspense fallback={<SurfaceStateCard kind="loading" title={t('common.loading')} />}>
+    return <React.Suspense fallback={<DestinationBodyLoading />}>
         {content}
     </React.Suspense>;
 }

@@ -5,6 +5,9 @@ import { resolveCurrentSessionRecipientAccountIds } from "@/app/session/access/s
 import { readCurrentSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
+import { registerAccountProfileRoute } from "@/app/api/routes/account/registerAccountProfileRoute";
+import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
+import { loadSessionViewerProjection } from "@/app/session/personal/projection";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("snapshot-only readers (PostgreSQL)", () => {
     const applicationName = `ovbfix-readers-${randomUUID()}`;
@@ -26,7 +29,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("s
 
     // A real relation lock pauses a later query after the reader's first
     // snapshot has been taken. No production test hook or internal mock.
-    async function acrossCommit<T>(table: "AccountHomeDirectoryEntry" | "SessionShare", change: (tx: Tx) => Promise<unknown>, read: () => Promise<T>) {
+    async function acrossCommit<T>(table: "AccountHomeDirectoryEntry" | "SessionShare" | "AccountIdentity", change: (tx: Tx) => Promise<unknown>, read: () => Promise<T>) {
         let release!: () => void;
         const released = new Promise<void>(resolve => { release = resolve; });
         let ready!: (pid: number) => void;
@@ -88,6 +91,52 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("s
             if (reader) await Promise.allSettled([reader]);
         }
     }
+
+    it("captures profile name and linked identities together without predicate locks", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), name: "before" } });
+        await db.accountIdentity.create({ data: { accountId: account.id, provider: "github", providerUserId: randomUUID(),
+            providerLogin: "before", profile: { login: "before" } } });
+        try {
+            await withAuthenticatedTestApp(registerAccountProfileRoute, async app => {
+                const read = async () => {
+                    const response = await app.inject({ method: "GET", url: "/v1/account/profile",
+                        headers: { "x-test-user-id": account.id } });
+                    expect(response.statusCode).toBe(200);
+                    return response.json();
+                };
+                const result = await acrossCommit("AccountIdentity", async tx => {
+                    await tx.account.update({ where: { id: account.id }, data: { name: "after" } });
+                    await tx.accountIdentity.updateMany({ where: { accountId: account.id }, data: {
+                        providerLogin: "after", profile: { login: "after" },
+                    } });
+                }, read);
+                expect(result.before).toMatchObject({ name: "before", linkedProviders: [{ id: "github", login: "before" }] });
+                expect(result.after).toMatchObject({ name: "after", linkedProviders: [{ id: "github", login: "after" }] });
+                expect(result.predicateLocks).toBe(0);
+            });
+        } finally { await db.account.delete({ where: { id: account.id } }); }
+    });
+
+    it("keeps personal projection access coherent and refuses committed suspension without predicate locks", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const viewer = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: viewer.id, accessLevel: "view" } });
+        try {
+            const result = await acrossCommit("SessionShare", async tx => {
+                await tx.account.update({ where: { id: viewer.id }, data: { status: "suspended" } });
+                await tx.sessionShare.deleteMany({ where: { sessionId: session.id } });
+            }, () => loadSessionViewerProjection({ accountId: viewer.id, sessionId: session.id,
+                authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] } }));
+            expect(result.before).not.toBeNull();
+            expect(result.after).toBeNull();
+            expect(result.predicateLocks).toBe(0);
+        } finally {
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, viewer.id] } } });
+        }
+    });
 
     it("keeps preferred Home and directory entries coherent across commit without predicate locks", async () => {
         const account = await db.account.create({ data: { publicKey: randomUUID(), preferredHomeServerIdentityId: "srv_before" } });

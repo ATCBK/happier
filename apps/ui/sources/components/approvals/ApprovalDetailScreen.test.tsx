@@ -1269,6 +1269,24 @@ describe('ApprovalDetailScreen', () => {
     }))).toBe('approvals.failureGeneric');
   });
 
+  it('says what failed when a recorded failure carries only a machine code, never that the decision could not be saved', async () => {
+    const artifact = await createDaemonRoutedApprovalArtifact();
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const reasonOf = async (errorCode: string) => {
+      const request = ApprovalRequestV2Schema.parse({
+        ...JSON.parse(artifact.body), status: 'failed', updatedAtMs: 2,
+        decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 2, ok: false, errorCode, error: errorCode, effectAttempted: true },
+      });
+      currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+      const screen = await renderScreen(<ApprovalDetailScreen artifactId={currentArtifact.id} />);
+      return approvalItem(screen, 'approvals.execution-failure')?.props.subtitle;
+    };
+
+    expect(await reasonOf('plugin_change_daemon_unavailable')).toBe('approvals.pluginChangeDaemonUnavailable');
+    expect(await reasonOf('executor_failed')).toBe('approvals.failureNoReason');
+  });
+
   it('presents a durable Provider refusal through the shared Provider error copy', async () => {
     const artifact = await createDaemonRoutedApprovalArtifact();
     const request = ApprovalRequestV2Schema.parse({
@@ -1434,7 +1452,7 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.actions')).toBeNull();
   });
 
-  it('refuses a target requester decision from a different Account with the same View grant', async () => {
+  it('shows another Account who can confirm a requester-bound request instead of a decision it cannot make', async () => {
     currentArtifact = await createRequesterTargetApprovalArtifact('another-requester');
     includeExactApprovalMachine = false;
     machineFixtures = {};
@@ -1444,14 +1462,25 @@ describe('ApprovalDetailScreen', () => {
     const received = homes.artifacts(account.serverId).readPlainBody('requester-target');
     expect(storage.getState().artifacts['requester-target']?.access).toBe('view');
 
-    await screen.pressByTestIdAsync('approvals.approve');
-
+    expect(screen.findByTestId('approvals.requester-confirmation.waiting')).not.toBeNull();
+    expect(screen.findByTestId('approvals.actions')).toBeNull();
+    expect(screen.findByTestId('approvals.approve')).toBeNull();
     expect(daemonDecisions()).toHaveLength(0);
     expect(artifactWrites()).toHaveLength(0);
     expect(homes.artifacts(account.serverId).readPlainBody('requester-target')).toBe(received);
-    expect(screen.findByTestId('approvals.actions')).not.toBeNull();
-    const { Modal } = await import('@/modal');
-    expect(Modal.alert).toHaveBeenCalled();
+  });
+
+  it('offers the requester-bound decision only to the Account that asked', async () => {
+    currentArtifact = await createRequesterTargetApprovalArtifact();
+    includeExactApprovalMachine = false;
+    machineFixtures = {};
+    machineFixturesByServerId = {};
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="requester-target" serverId="ui-A" />);
+
+    expect(screen.findByTestId('approvals.requester-confirmation')).not.toBeNull();
+    expect(screen.findByTestId('approvals.requester-confirmation.waiting')).toBeNull();
+    expect(screen.findByTestId('approvals.approve')).not.toBeNull();
   });
 
   it('routes an API target-action approval to its stamped daemon instead of mutating the Artifact locally', async () => {
@@ -2633,9 +2662,9 @@ describe('ApprovalDetailScreen', () => {
 
     expect(readRenderedText(screen)).not.toContain('Private cached title');
     expect(readRenderedText(screen)).not.toContain('secret-project');
-    expect(readRenderedText(screen)).toContain(
-      'detailPages.approval.sessionOnHome',
-    );
+    // The fixture's request is the person's own (UI origin): the locked Session is context, never the requester.
+    expect(readRenderedText(screen)).toContain('detailPages.approval.requesterYou');
+    expect(readRenderedText(screen)).not.toContain('detailPages.approval.sessionOnHome');
     expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(
       false,
     );

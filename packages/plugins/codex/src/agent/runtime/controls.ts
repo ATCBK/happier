@@ -6,6 +6,7 @@ import type {
   AgentSessionGoalControlContext,
   AgentSessionUsageLimitRecoveryControl,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
   listCodexAppServerSkills,
@@ -164,8 +165,13 @@ const continuation: AgentSessionContinuationControl = {
         includeTurns: false,
       }));
       return { status: 'reachable' };
-    } catch {
-      return { status: 'unreachable', diagnostic: diagnostic('codex_continuation_unreachable') };
+    } catch (error) {
+      const { errorClass, errorCode, httpStatus } = readUnexpectedActionErrorDiagnosticV1(error);
+      const details = { errorClass, errorCode, httpStatus };
+      // Required verification is refused before sessions.open. Record the safe
+      // cause here, before the host replaces this diagnostic with exit 78.
+      context.services.logger.warn('codex_continuation_unreachable', details);
+      return { status: 'unreachable', diagnostic: { ...diagnostic('codex_continuation_unreachable'), details } };
     }
   },
 };

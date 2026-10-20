@@ -83,6 +83,11 @@ export type CustomModalChromeCardConfig = Readonly<{
      * `title` stays the dialog's accessible name. Esc and the backdrop still close it.
      */
     header?: 'band' | 'none';
+    /**
+     * `wide`: the title band's text and close control stand on the content's own 24 edge instead of the band's
+     * 16 (a dialog whose tools band and rows are inset to 24). A phone keeps the page gutter.
+     */
+    headerInset?: 'wide';
     leading?: ReactNode;
     title?: ReactNode;
     subtitle?: ReactNode;

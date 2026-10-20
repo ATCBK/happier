@@ -8,6 +8,7 @@ import {
   usageNightGridPresentation,
   formatUsageUtcOffset,
   formatUsageDurationCompact,
+  formatUsageLookbackPeriod,
 } from './usageHowYouWorkPresentation';
 
 const MIN = 60_000;
@@ -162,5 +163,15 @@ describe('Compact usage durations', () => {
     expect(formatUsageDurationCompact(18 * MIN)).toBe('18m');
     expect(formatUsageDurationCompact(40_000)).toBe('40s');
     expect(formatUsageDurationCompact(0)).toBe('0m');
+  });
+});
+
+describe('Lookback period wording', () => {
+  it('names a rolling window in whole days or hours, never as the measured span it resolves to partway through a day', () => {
+    const HOUR = 60 * MIN;
+    expect(formatUsageLookbackPeriod(153 * HOUR + 59 * MIN)).toBe('7 days');
+    expect(formatUsageLookbackPeriod(7 * 24 * HOUR)).toBe('7 days');
+    expect(formatUsageLookbackPeriod(14 * HOUR + 20 * MIN)).toBe('15 hours');
+    expect(formatUsageLookbackPeriod(5 * MIN)).toBe('1 hour');
   });
 });

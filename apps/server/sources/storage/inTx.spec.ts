@@ -4,6 +4,7 @@ import { PrismaClientKnownRequestError, PrismaClientUnknownRequestError } from "
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
 import { installDbModuleMock, inTxPostgresControlStatementMock } from "../app/api/testkit/dbMocks";
 import { withWebLatencyTrace } from "@/utils/webLatencyTrace";
+import { initDbPostgres, prismaRuntime, shutdownDbClient } from "@/storage/prisma";
 import type { Tx } from "./inTx";
 
 // PostgreSQL command execution is the database boundary, including LOCAL settings.
@@ -31,10 +32,10 @@ vi.mock("@/app/monitoring/metrics/sessionWriteMetrics", () => ({
 // either. Paying the file's first transform inside a case's 20 s test budget
 // is what made the first case time out under host load and leave its still
 // running `inTx` to land an extra `$transaction` call in the next case. The
-// module reads the environment per call (`inTx.ts:115-116`), so one load here,
-// during collection, serves every case.
+// module reads retry settings per call, while Prisma owns the initialized
+// pool's lifetime, so one load here during collection serves every case.
 const inTxModule = await import("./inTx");
-const { inTx, afterTx } = inTxModule;
+const { inTx, afterTx, transactionResult } = inTxModule;
 
 describe("inTx", () => {
     const envSnapshot = snapshotEnv();
@@ -47,6 +48,100 @@ describe("inTx", () => {
         delayMock.mockClear();
         logMock.mockClear();
         recordDatabaseTransactionRetry.mockClear();
+    });
+
+    it("keeps transaction admission within the initialized pool budget until database reinitialization", async () => {
+        applyEnvValues({
+            HAPPIER_DB_PROVIDER: "postgres",
+            DATABASE_URL: "postgresql://test:test@localhost:5432/test?connection_limit=3",
+            HAPPIER_DB_CONNECTION_LIMIT: "2",
+            HAPPY_DB_CONNECTION_LIMIT: undefined,
+        });
+        initDbPostgres();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let entered!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        const holder = inTx(async () => { entered(); await held; });
+        try {
+            await ready;
+            // The native pool still has two slots. A later environment edit
+            // must not let transactions consume its reserved discovery slot.
+            process.env.HAPPIER_DB_CONNECTION_LIMIT = "5";
+            await expect(inTx(async () => "unexpected admission", { maxWaitMs: 20 }))
+                .rejects.toBeInstanceOf(inTxModule.TransactionAcquisitionUnavailableError);
+        } finally {
+            release();
+            await holder;
+            await shutdownDbClient();
+        }
+
+        process.env.HAPPIER_DB_CONNECTION_LIMIT = "3";
+        initDbPostgres();
+        let releaseReinitialized!: () => void;
+        const heldReinitialized = new Promise<void>(resolve => { releaseReinitialized = resolve; });
+        let reinitializedEntries = 0;
+        const readers = [0, 1].map(() => inTx(async () => {
+            reinitializedEntries++;
+            await heldReinitialized;
+        }));
+        try {
+            await vi.waitFor(() => expect(reinitializedEntries).toBe(2));
+        } finally {
+            releaseReinitialized();
+            await Promise.all(readers);
+            await shutdownDbClient();
+        }
+    });
+
+    it("resolves an explicit transaction result once before commit and exposes it after commit", async () => {
+        const phases: string[] = [];
+        transaction.mockImplementationOnce(async fn => {
+            const result = await fn(transactionBoundary());
+            phases.push("commit");
+            return result;
+        });
+        const project = vi.fn(() => {
+            phases.push("project");
+            return { cursor: 7 };
+        });
+
+        await expect(inTx(async tx => {
+            afterTx(tx, () => { phases.push("after-commit"); });
+            phases.push("domain");
+            return transactionResult(project);
+        })).resolves.toEqual({ cursor: 7 });
+
+        expect(project).toHaveBeenCalledTimes(1);
+        expect(phases).toEqual(["domain", "project", "commit", "after-commit"]);
+    });
+
+    it("rolls back a failing transaction result without running after-commit work", async () => {
+        let committed = false;
+        transaction.mockImplementationOnce(async fn => {
+            const result = await fn(transactionBoundary());
+            committed = true;
+            return result;
+        });
+        const afterCommit = vi.fn();
+        const failure = new Error("publication result unavailable");
+
+        await expect(inTx(async tx => {
+            afterTx(tx, afterCommit);
+            return transactionResult(() => { throw failure; });
+        })).rejects.toBe(failure);
+
+        expect(committed).toBe(false);
+        expect(afterCommit).not.toHaveBeenCalled();
+    });
+
+    it("preserves ordinary function and object transaction results", async () => {
+        const ordinaryFunction = vi.fn(() => "caller-owned");
+        const ordinaryObject = { resolve: ordinaryFunction };
+
+        await expect(inTx(async () => ordinaryFunction)).resolves.toBe(ordinaryFunction);
+        await expect(inTx(async () => ordinaryObject)).resolves.toBe(ordinaryObject);
+        expect(ordinaryFunction).not.toHaveBeenCalled();
     });
 
     it("reports a failed after-commit callback instead of discarding it", async () => {
@@ -461,7 +556,6 @@ describe("inTx", () => {
 
     it.each([
         { provider: "postgres", code: "42601" },
-        { provider: "postgres", code: "57014" },
         { provider: "mysql", code: "40001" },
         { provider: "sqlite", code: "40P01" },
     ])("does not retry unrelated raw-query failures on $provider ($code)", async ({ provider, code }) => {
@@ -476,6 +570,51 @@ describe("inTx", () => {
         })).rejects.toBe(failure);
         expect(published).not.toHaveBeenCalled();
         expect(delayMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        "A query cannot be executed on an expired transaction.",
+        "A batch query cannot be executed on an expired transaction.",
+        "A commit cannot be executed on an expired transaction.",
+    ])("replays a transaction that Prisma expired whichever operation found it (%s)", async operation => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const expired = new PrismaClientKnownRequestError("Expired", {
+            code: "P2028", clientVersion: "6.19.2",
+            meta: { error: `Transaction already closed: ${operation} The timeout for this transaction was 15000 ms, however 31000 ms passed since the start of the transaction.` },
+        });
+        let attempts = 0;
+        const published: number[] = [];
+        await expect(inTx(async tx => {
+            const attempt = ++attempts;
+            afterTx(tx, () => published.push(attempt));
+            if (attempt === 1) throw expired;
+            return "committed";
+        })).resolves.toBe("committed");
+        expect(published).toEqual([2]);
+
+        applyEnvValues({ HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        await expect(inTx(async () => { throw expired; })).rejects.toBeInstanceOf(inTxModule.TransactionConflictExhaustedError);
+    });
+
+    it("classifies a statement the transaction budget cancelled as a rolled-back conflict and replays it", async () => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const cancelled = new PrismaClientKnownRequestError("Raw query failed", {
+            code: "P2010", clientVersion: "6.19.2", meta: { code: "57014", message: "canceling statement due to statement timeout" },
+        });
+        let attempts = 0;
+        const published: number[] = [];
+        await expect(inTx(async tx => {
+            const attempt = ++attempts;
+            afterTx(tx, () => published.push(attempt));
+            if (attempt === 1) throw cancelled;
+            return "committed";
+        })).resolves.toBe("committed");
+        expect(published).toEqual([2]);
+
+        applyEnvValues({ HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        await expect(inTx(async () => { throw cancelled; })).rejects.toBeInstanceOf(inTxModule.TransactionConflictExhaustedError);
+        expect(logMock).toHaveBeenCalledWith(expect.objectContaining({ event: "transaction-rollback", sqlState: "57014" }),
+            "Database transaction rollback recovery exhausted");
     });
 
     it("retries repeated postgres P2034 conflicts until a later attempt succeeds", async () => {
@@ -504,7 +643,7 @@ describe("inTx", () => {
         expect(delayMock.mock.calls).toEqual([[200], [400], [800], [1600], [3200], [5000], [5000], [5000]]);
     });
 
-    it.each(["postgres", "mysql"])("retries transaction acquisition P2028 before the callback starts on %s", async (provider) => {
+    it.each(["postgres", "mysql", "sqlite"].flatMap(provider => ["P2028", "P2024"].map(code => ({ provider, code }))))("retries transaction acquisition $code before the callback starts on $provider", async ({ provider, code }) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -512,7 +651,7 @@ describe("inTx", () => {
         });
         const acquisitionError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         transaction
             .mockRejectedValueOnce(acquisitionError)
@@ -526,7 +665,7 @@ describe("inTx", () => {
         expect(delayMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reports exhausted transaction acquisition as typed unavailability with the original cause", async () => {
+    it.each(["P2028", "P2024"])("reports exhausted transaction acquisition %s as typed unavailability with the original cause", async (code) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -535,7 +674,7 @@ describe("inTx", () => {
         });
         const acquisitionError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         transaction.mockRejectedValue(acquisitionError);
         const transactionBody = vi.fn(async () => 791);
@@ -547,7 +686,7 @@ describe("inTx", () => {
         expect(transactionBody).not.toHaveBeenCalled();
     });
 
-    it("does not classify an acquisition-shaped P2028 thrown after the callback starts as transaction acquisition", async () => {
+    it.each(["P2028", "P2024"])("does not classify %s thrown after the callback starts as transaction acquisition", async (code) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -555,7 +694,7 @@ describe("inTx", () => {
         });
         const operationError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         const transactionBody = vi.fn(async () => {
             throw operationError;
@@ -588,6 +727,40 @@ describe("inTx", () => {
         await expect(inTx(async () => { throw failure; })).rejects.toBe(failure);
         expect(transaction).toHaveBeenCalledTimes(1);
         expect(delayMock).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])("keeps native missing-transaction recovery inside its unfinished callback (callback completed: %s)", async completed => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const failure = new prismaRuntime.PrismaClientKnownRequestError("Transaction API error", {
+            code: "P2028", clientVersion: "6.19.2",
+            meta: { error: "Transaction not found. Transaction ID is invalid, refers to an old closed transaction Prisma doesn't have information about anymore, or was obtained before disconnecting." },
+        });
+        const published: number[] = [];
+        let attempts = 0;
+        transaction.mockImplementation(async fn => {
+            attempts += 1;
+            if (completed) {
+                await fn({ ...transactionBoundary(), $queryRawUnsafe: async () => [] });
+                throw failure;
+            }
+            return fn({ ...transactionBoundary(),
+                $queryRawUnsafe: async () => { if (attempts === 1) throw failure; return []; },
+            });
+        });
+        const result = inTx(async tx => {
+            afterTx(tx, () => { published.push(attempts); });
+            await tx.$queryRawUnsafe("callback read");
+            return "committed";
+        });
+        if (completed) {
+            await expect(result).rejects.toBe(failure);
+            expect(attempts).toBe(1);
+            expect(published).toEqual([]);
+        } else {
+            await expect(result).resolves.toBe("committed");
+            expect(attempts).toBe(2);
+            expect(published).toEqual([2]);
+        }
     });
 
     it("retries raw postgres serialization aborts that are not wrapped as P2034", async () => {
@@ -640,6 +813,7 @@ describe("inTx", () => {
     it.each([
         { code: "P2034", message: "Transaction rolled back after a write conflict" },
         { code: "P2028", message: "Unable to start a transaction in the given time." },
+        { code: "P2024", message: "Timed out fetching a new connection from the connection pool." },
         { code: "P2028", message: "A query cannot be executed on an expired transaction." },
     ])("does not claim definite no-effect after an earlier ambiguous SQLite attempt ($code)", async ({ code, message }) => {
         restoreEnv(envSnapshot);

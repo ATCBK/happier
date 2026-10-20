@@ -324,7 +324,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       definition: { kind: 'builtin', id: 'usage_period_summary' } }, fieldPath: 'breakdown' }, { serverId: 'home' })).toMatchObject({ ok: false });
     expect(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_breakdowns' })?.inputs?.fields.find(field => field.path === 'breakdown')?.widget).toBe('multiselect');
   });
-  it('discovers builtin choices before a core-page preset is persisted without admitting missing-layout operations or another Account', async () => {
+  it('discovers builtin choices and reads an unpersisted core-page preset without admitting an unknown layout or another Account', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } };
     const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1({
       read: async () => null,
@@ -338,7 +338,13 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(await executor.execute('action.options.resolve', request, { serverId: 'home' })).toMatchObject({ ok: true, result: {
       options: expect.arrayContaining([{ value: ['agent'], label: 'Agent' }, { value: ['source', 'machine'], label: 'Source · Machine' }]),
     } });
-    expect(await executor.execute('widgets.item.list', { surface }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'widget_area_not_found' });
+    expect(await executor.execute('widgets.item.list', { surface }, { serverId: 'home' })).toMatchObject({ ok: true,
+      result: { preset: { id: 'overview' }, instances: expect.arrayContaining([
+        expect.objectContaining({ instance: expect.objectContaining({ definition: { kind: 'builtin', id: 'usage_period_summary' } }) }),
+      ]) } });
+    expect(await executor.execute('widgets.item.list', { surface: { ...surface,
+      owner: { ...surface.owner, layoutId: 'unknown-layout' } } }, { serverId: 'home' }))
+      .toMatchObject({ ok: false, errorCode: 'widget_area_not_found' });
     expect(await executor.execute('action.options.resolve', { ...request, consumer: { ...request.consumer,
       surface: { ...surface, accountId: 'other' } } }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     expect(await executor.execute('action.options.resolve', request, { serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
@@ -357,6 +363,41 @@ describe('createActionExecutor (inventory/discovery)', () => {
     // A machine that can answer now leads; the offline ones follow in their listed order.
     expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-1' }, label: 'Machine 1', description: 'Online' });
     expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Offline' });
+  });
+  it('offers the Account checkouts as stable complete refs, named with their machine, through the typed Checkout input', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const ref = (id: string, machineId: string, rootPath: string, extra: Record<string, unknown> = {}) =>
+      ({ id, serverId: 'home', machineId, rootPath, label: null, createdAtMs: 1, lastOpenedAtMs: 99, ...extra });
+    const executor = createActionExecutor({ ...createDeps(),
+      projectWorkspaceRefs: async () => ({ workspaceRefs: [ref('ws-1', 'm1', '/work/happier'), ref('ws-2', 'm2', '/srv/happier', { label: 'Happier (server)' })] }),
+      machinesList: async () => ({ items: [{ serverId: 'home', machineId: 'm1', label: 'Laptop', active: true }, { serverId: 'home', machineId: 'm2', label: 'Dev box', active: true }] }),
+      widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+    const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+      definition: { kind: 'builtin', id: 'project_checkouts' } }, fieldPath: 'checkout' }, { serverId: 'home' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { optionsSourceId: 'host-input:workspace' } });
+    if (!result.ok) return;
+    // The saved pin must still match its option after the checkout is opened again, so recency is not part of the value.
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options).toEqual([
+      { value: { id: 'ws-1', serverId: 'home', machineId: 'm1', rootPath: '/work/happier', label: null, createdAtMs: 1 }, label: 'happier', description: 'Laptop · /work/happier' },
+      { value: { id: 'ws-2', serverId: 'home', machineId: 'm2', rootPath: '/srv/happier', label: 'Happier (server)', createdAtMs: 1 }, label: 'Happier (server)', description: 'Dev box · /srv/happier' },
+    ]);
+  });
+  it('names a checkout whose machine is not a named listed machine with the host\'s unlisted word, never a placeholder label', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const ref = (id: string, machineId: string, rootPath: string) => ({ id, serverId: 'home', machineId, rootPath, label: null, createdAtMs: 1, lastOpenedAtMs: 99 });
+    const refs = [ref('ws-1', 'm1', '/work/a'), ref('ws-2', 'm2', '/work/b'), ref('ws-3', 'gone', '/work/c')];
+    const resolve = async (machinesResult: unknown) => {
+      const executor = createActionExecutor({ ...createDeps(), projectWorkspaceRefs: async () => ({ workspaceRefs: refs }),
+        machinesList: async () => machinesResult, widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+      const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+        definition: { kind: 'builtin', id: 'project_checkouts' } }, fieldPath: 'checkout' }, { serverId: 'home' });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      return PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options.map(option => option.description);
+    };
+    const items = [{ serverId: 'home', machineId: 'm1', label: 'Laptop', named: true }, { serverId: 'home', machineId: 'm2', label: 'Loading…', named: false }];
+    expect(await resolve({ items, unlistedLabel: 'Unlisted machine' })).toEqual(['Laptop · /work/a', 'Unlisted machine · /work/b', 'Unlisted machine · /work/c']);
+    // A host with no word for it (the CLI) leaves the path to tell checkouts apart.
+    expect(await resolve({ items })).toEqual(['Laptop · /work/a', '/work/b', '/work/c']);
   });
   it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };

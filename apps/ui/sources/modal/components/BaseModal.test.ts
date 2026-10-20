@@ -29,6 +29,8 @@ installModalComponentCommonModuleMocks({
     },
 });
 
+await import('./BaseModal');
+
 async function renderBaseModalScreen(
     BaseModal: React.ComponentType<any>,
     props: Record<string, unknown> = {},

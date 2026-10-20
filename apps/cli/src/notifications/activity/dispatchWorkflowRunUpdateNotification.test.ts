@@ -1,8 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import { createWorkflowRunCommittedNotificationHandler } from './dispatchWorkflowRunUpdateNotification';
 
 describe('createWorkflowRunCommittedNotificationHandler', () => {
+  it.each([['disabled', 404, 'feature_unavailable', true], ['unavailable', 503, 'internal', false]] as const)(
+    'keeps implicit Workflow notifications separate from %s Follow support', async (_kind, status, error, delivers) => {
+      const transport = vi.spyOn(axios, 'get').mockResolvedValue({ status, data: { error } });
+      const dispatch = vi.fn(async () => ({ attemptedChannels: 1, deliveredChannels: 1 }));
+      try {
+        const handler = createWorkflowRunCommittedNotificationHandler({ dispatch, getSettingsSnapshot: () => ({ settings: null }),
+          followSource: { token: 'token', serverHttpBaseUrl: 'https://home.test' } });
+        await handler({ run: { id: 'run-1' }, result: { state: 'failed' } });
+        expect(dispatch).toHaveBeenCalledTimes(delivers ? 1 : 0);
+      } finally { transport.mockRestore(); }
+    },
+  );
   it('emits review required only for a durable held-entry event', async () => {
     const dispatch = vi.fn(async () => ({ attemptedChannels: 1, deliveredChannels: 1 }));
     const handler = createWorkflowRunCommittedNotificationHandler({ getSettingsSnapshot: () => ({ settings: null }), dispatch });

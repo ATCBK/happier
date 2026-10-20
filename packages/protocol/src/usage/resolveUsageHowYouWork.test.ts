@@ -51,6 +51,29 @@ describe('How-you-work admitted projection', () => {
             .toMatchObject({ detailStatus: 'unknown', intervals: null, todayInParallel: null, permissions: null, inputs: null, footprint: null });
     });
 
+    it('does not turn an empty partial lifecycle subset into no runs today or no approvals', () => {
+        const project = (status: 'partial' | 'available') => resolveUsageHowYouWork({
+            period: { startMs: day - 24 * hour, endMs: day + hour }, timeZoneOffsetMinutes: 0, nowMs: day,
+            detail: { status, facts: [], permissions: [] },
+        });
+        expect(project('partial')).toMatchObject({ detailStatus: 'partial', todayInParallel: null, permissions: null });
+        // A genuinely complete empty observation can establish zero; partial historical coverage cannot.
+        expect(project('available')).toMatchObject({ todayInParallel: { agentTimeMs: 0, maxParallel: 0 },
+            permissions: { requestCount: 0 } });
+        const olderRuns = resolveUsageHowYouWork({
+            period: { startMs: day - 24 * hour, endMs: day + hour }, timeZoneOffsetMinutes: 0, nowMs: day,
+            detail: { status: 'partial', facts: [fact('yesterday', day - 2 * hour, day - hour)] },
+        });
+        expect(olderRuns.intervals?.agentTimeMs).toBe(hour);
+        expect(olderRuns.todayInParallel).toBeNull();
+        const unfinished = resolveUsageHowYouWork({
+            period: { startMs: day, endMs: day + hour }, timeZoneOffsetMinutes: 0, nowMs: day,
+            detail: { status: 'available', facts: [{ ...fact('unfinished', day, day + hour), endMs: null }] },
+        });
+        expect(unfinished.intervals?.unknownEndCount).toBe(1);
+        expect(unfinished.todayInParallel).toBeNull();
+    });
+
     it('projects today in the queried calendar and keeps steering distinct from other accepted deliveries', () => {
         const result = resolveUsageHowYouWork({
             period: { startMs: day - 24 * hour, endMs: day + 24 * hour }, timeZoneOffsetMinutes: 120, nowMs: day,

@@ -42,6 +42,48 @@ describe("Discussion grant service (SQLite)", () => {
         return { owner, invitee, outsider, discussionId: created.value.discussion.id };
     }
 
+    it('keeps atomic encrypted initial Session bindings subject to actual runtime recipient readiness', async () => {
+        const ownerKeys = tweetnacl.box.keyPair();
+        const colleagueKeys = tweetnacl.box.keyPair();
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
+        const colleague = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(colleagueKeys.publicKey) } });
+        await db.userRelationship.create({ data: { fromUserId: owner.id, toUserId: colleague.id, status: 'friend' } });
+        const own = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'e2ee' } });
+        const foreign = await db.session.create({ data: { accountId: colleague.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.sessionShare.create({ data: { sessionId: foreign.id, sharedByUserId: colleague.id, sharedWithUserId: owner.id, accessLevel: 'edit' } });
+        const dataKey = tweetnacl.randomBytes(32);
+        const envelope = (recipientPublicKey: Uint8Array) => privacyKit.encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+            dataKey, recipientPublicKey, randomBytes: tweetnacl.randomBytes,
+        }));
+        const request = {
+            creationLocalId: crypto.randomUUID(), titleContent: { t: 'encrypted' as const, c: 'opaque-title' },
+            creationEqualityEvidenceV1: { kind: 'e2eeTag' as const, tag: 'A'.repeat(43) },
+            dataEncryptionKey: envelope(ownerKeys.publicKey), expectedOwnerContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(ownerKeys.publicKey),
+            participants: [{ kind: 'session' as const, sessionId: own.id }],
+            firstMessage: { localId: crypto.randomUUID(), content: { t: 'encrypted' as const, c: 'opaque-message' },
+                requestEqualityEvidenceV1: { kind: 'e2eeTag' as const, tag: 'B'.repeat(43) }, mentionedAccountIds: [] },
+        };
+        expect(await createDiscussion({ actorAccountId: owner.id, authentication, request }))
+            .toMatchObject({ ok: true, value: { discussion: { participantSessionIds: [own.id] } } });
+        const sharedRequest = { ...request, creationLocalId: crypto.randomUUID(), firstMessage: { ...request.firstMessage, localId: crypto.randomUUID() },
+            participants: [{ kind: 'account' as const, accountId: colleague.id },
+                { kind: 'session' as const, sessionId: own.id }, { kind: 'session' as const, sessionId: foreign.id }] };
+        expect(await createDiscussion({ actorAccountId: owner.id, authentication, request: sharedRequest }))
+            .toEqual({ ok: false, error: 'discussion_content_unavailable' });
+        expect(await db.discussion.count({ where: { createdByAccountId: owner.id } })).toBe(1);
+        expect(await db.discussionAccountGrant.count({ where: { discussion: { createdByAccountId: owner.id } } })).toBe(0);
+        expect(await db.discussionParticipant.count({ where: { discussion: { createdByAccountId: owner.id } } })).toBe(1);
+        expect(await db.discussionMessage.count({ where: { discussion: { createdByAccountId: owner.id } } })).toBe(1);
+        const prepared = await createDiscussion({ actorAccountId: owner.id, authentication, request: { ...sharedRequest,
+            recipientKeyEnvelopes: [{ recipientAccountId: colleague.id, encryptedDataKey: envelope(colleagueKeys.publicKey),
+                recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(colleagueKeys.publicKey) }],
+        } });
+        expect(prepared).toMatchObject({ ok: true, value: { discussion: { participantSessionIds: expect.arrayContaining([own.id, foreign.id]) } } });
+        if (!prepared.ok) throw new Error(prepared.error);
+        expect(await inTx(tx => resolveDiscussionContextInTx(tx, { discussionId: prepared.value.discussion.id, accountId: colleague.id, authentication })))
+            .toMatchObject({ keyReadiness: true });
+    });
+
     it("projects real invited participant faces without expanding a Team's private membership", async () => {
         const { owner, invitee, outsider, discussionId } = await fixture();
         await db.account.update({ where: { id: invitee.id }, data: { name: 'Quiet invitee', avatar: { path: 'avatar', width: 1, height: 1, thumbhash: 'x' } } });

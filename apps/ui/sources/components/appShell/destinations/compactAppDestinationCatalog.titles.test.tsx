@@ -31,6 +31,7 @@ import {
     useDestinationInstanceTitles,
 } from './compactAppDestinationCatalog';
 
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 // Keep real translations throughout this graph: late panel mocks split the title
@@ -237,6 +238,15 @@ describe('Project destination instance titles', () => {
         expect(hook.getCurrent()).toBe(unchanged);
         await act(async () => storage.getState().updateArtifact({ ...workflow, title: 'Renamed checks', headerVersion: 2 }));
         expect(hook.getCurrent().get('inactive-0')).toBe('Renamed checks');
+        await hook.unmount();
+    });
+    it('names a built-in Workflow tab from its catalog entry, never as a missing artifact', async () => {
+        storage.getState().applyArtifacts([], storage.getState().artifacts);
+        const entries = [{ key: 'builtin', ref: destination(`/workflows/${encodeURIComponent('builtin:plan-with-a-panel')}`) }];
+        const hook = await renderHook(() => useDestinationInstanceTitles(catalog, entries));
+        const panel = t('workflows.builtins.planWithAPanel.title');
+        expect(readDestinationInstanceTitle(catalog, entries[0]!.ref)).toBe(panel);
+        expect([...hook.getCurrent().values()]).toEqual([panel]);
         await hook.unmount();
     });
     it('names restored nested Session tabs from the live title projection without mounting their screens', async () => {

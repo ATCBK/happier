@@ -11,6 +11,9 @@ import { createVersionRuntimeRefreshAttemptHandoff } from './versionRuntimeRefre
 import { observePlannedRunnerRetirement, waitForTrackedRunnerProcessesExit } from '../sessions/waitForTrackedRunnerProcessesExit';
 import type { PlannedRunnerRestartSignalRequest } from './types';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createSessionRunnerRestartAdmission, prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
   return {
@@ -25,6 +28,45 @@ function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('requestPlannedRunnerRestart', () => {
+  it('does not signal when its live receiving hold is lost after readiness', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    const admission = createSessionRunnerRestartAdmission(() => rpc);
+    const connection = new AbortController();
+    const tracked = makeTracked({ pid: process.pid });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      await expect(requestPlannedRunnerRestart({ sessionId: 'session', tracked, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: (request, signal) => admission(request, AbortSignal.any([signal!, connection.signal])) }),
+        canSignal: async () => { connection.abort(); await Promise.resolve(); return true; },
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: tracked.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      })).resolves.toEqual({ signaled: false, notSignaledReason: 'activity_in_progress' });
+      expect(kill).not.toHaveBeenCalled();
+    } finally { connection.abort(); kill.mockRestore(); }
+  });
+  it('reopens receiving creation admission when the final activity gate refuses the signal', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => ({ admitted: true }));
+    const admission = createSessionRunnerRestartAdmission(() => rpc);
+    const tracked = makeTracked({ pid: process.pid });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      await expect(requestPlannedRunnerRestart({ sessionId: 'session', tracked, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: (request, signal) => admission(request, signal) }),
+        canSignal: () => 'turn_in_progress',
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: tracked.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      })).resolves.toEqual({ signaled: false, notSignaledReason: 'turn_in_progress' });
+      expect(kill).not.toHaveBeenCalled();
+      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
+    } finally { kill.mockRestore(); }
+  });
   it('captures the retiring generation after child work settles and revalidates it before signaling', async () => {
     const tracked = makeTracked();
     const trackedByPid = new Map([[tracked.pid, tracked]]);
@@ -40,6 +82,7 @@ describe('requestPlannedRunnerRestart', () => {
         // Capture can suspend on the OS. A replaced runner cannot inherit the
         // previous generation's signal authority after it returns.
         trackedByPid.set(tracked.pid, { ...tracked });
+        return { scope: 'subtree', roots: [], ownership: [] };
       },
       requestSignal: async request => {
         signaled = await request.shouldSignal();
@@ -49,6 +92,26 @@ describe('requestPlannedRunnerRestart', () => {
     expect(capturedAfterIdle).toBe(true);
     expect(signaled).toBe(false);
     expect(result).toMatchObject({ signaled: false, notSignaledReason: 'stale_owner' });
+  });
+  it('refuses native work that becomes active during remainder capture', async () => {
+    const tracked = makeTracked();
+    let nativeActive = false;
+    let signaled = false;
+    const result = await requestPlannedRunnerRestart({ sessionId: 'sess-1', tracked,
+      deferral: { kind: 'none' }, restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+      isProcessSafeToSignal: async () => true,
+      canSignal: () => nativeActive ? 'turn_in_progress' : true,
+      captureRunnerRemainder: async () => {
+        nativeActive = true;
+        return { scope: 'subtree', roots: [], ownership: [] };
+      },
+      requestSignal: async request => {
+        signaled = await request.shouldSignal();
+        return { status: signaled ? 'requested' : 'skipped_stale_owner' };
+      },
+    });
+    expect(signaled).toBe(false);
+    expect(result).toEqual({ signaled: false, notSignaledReason: 'turn_in_progress' });
   });
   it.each(['none', 'connected_service_switch'] as const)('does not signal after shutdown begins during the final process probe (%s)', async (kind) => {
     const tracked = makeTracked();

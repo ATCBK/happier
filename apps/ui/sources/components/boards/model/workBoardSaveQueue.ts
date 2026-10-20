@@ -29,7 +29,8 @@ export type WorkBoardSaveState = Readonly<{
 
 export type WorkBoardSaveOutcome = Readonly<{ status: 'applied'; boards: WorkBoardsV1 }>
     | Readonly<{ status: 'pending'; code: 'approval_required' }>
-    | Readonly<{ status: 'refused' | 'unknown'; code: string }>;
+    /** `details` is the Action refusal's own reason (a widget's refused inputs), kept so its Add can say what is wrong. */
+    | Readonly<{ status: 'refused' | 'unknown'; code: string; details?: unknown }>;
 
 const INITIAL_STATE: WorkBoardSaveState = Object.freeze({ pending: Object.freeze([]), failure: null });
 

@@ -1,24 +1,6 @@
 import { BackendTargetKeyV2Schema } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { z } from 'zod/mini';
-
-export const FavoriteBackendTargetKeysV1Schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
-    const values = Array.isArray(value) ? value : [];
-    const uniqueKeys: string[] = [];
-    const seen = new Set<string>();
-
-    for (const raw of values) {
-        if (typeof raw !== 'string') continue;
-        const key = raw.trim();
-        if (!BackendTargetKeyV2Schema.safeParse(key).success) continue;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        uniqueKeys.push(key);
-    }
-
-    return uniqueKeys;
-}), z._default(z.array(BackendTargetKeyV2Schema), []));
-
-export type FavoriteBackendTargetKeysV1 = z.infer<typeof FavoriteBackendTargetKeysV1Schema>;
+import { FavoriteBackendTargetKeysV1Schema } from '@happier-dev/protocol/account/settings/accountSettings';
+export { FavoriteBackendTargetKeysV1Schema, type FavoriteBackendTargetKeysV1 } from '@happier-dev/protocol/account/settings/accountSettings';
 
 export function toggleFavoriteBackendTargetKey(
     favoriteTargetKeys: ReadonlyArray<string>,

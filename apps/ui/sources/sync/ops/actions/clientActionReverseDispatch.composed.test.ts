@@ -101,10 +101,15 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
     const { useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
     const { currentUiContextCommandClientRpcMethod, currentUiContextReadClientRpcMethod } = await import('@happier-dev/protocol/actions/clientDispatchV1');
-    const machine = createMachineFixture({ id: 'stable-context-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'stable-context-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const offline = createMachineFixture({ id: 'offline-machine', active: false, activeAt: 1 });
+    const revoked = createMachineFixture({ id: 'revoked-machine', activeAt: Date.now(), revokedAt: 1 });
+    const replaced = createMachineFixture({ id: 'replaced-machine', activeAt: Date.now(), replacedByMachineId: machine.id });
+    const foreign = createMachineFixture({ id: 'foreign-home-machine', activeAt: Date.now() });
     await act(async () => {
       storage.setState(state => ({ profile: { ...state.profile!, id: 'relay-account' },
-        machines: { [machine.id]: machine }, machineListByServerId: {} }));
+        machines: { [machine.id]: machine, [offline.id]: offline, [revoked.id]: revoked, [replaced.id]: replaced },
+        machineListByServerId: { 'foreign-home': [foreign] } }));
     });
     const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
     if (!socket) throw new Error('Account transport did not install its reverse receiver');
@@ -147,10 +152,21 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       expect(registered.has(`${machine.id}:${RPC_METHODS.UI_ACTION_EXECUTE}`)).toBe(true);
       expect(registered.has(`${machine.id}:${currentUiContextReadClientRpcMethod()}`)).toBe(true);
       expect(registered.has(method(command.id))).toBe(true);
+      expect([...new Set([...registered].map(method => method.slice(0, method.indexOf(':'))))]).toEqual([machine.id]);
       const beforeRefresh = [...registrations];
       await act(async () => { refreshDeclaration?.(); });
       expect(readContext?.()?.commands[0]?.id).toBe(command.id);
       expect(registrations).toEqual(beforeRefresh);
+      await act(async () => {
+        storage.setState(state => ({ machines: { ...state.machines, [offline.id]: { ...offline, active: true, activeAt: Date.now() } } }));
+      });
+      expect(registered.has(`${offline.id}:${currentUiContextCommandClientRpcMethod(command.id)}`)).toBe(true);
+      const stableRegistrations = registrations.filter(method => method.startsWith(`${machine.id}:`));
+      await act(async () => {
+        storage.setState(state => ({ machines: { ...state.machines, [offline.id]: { ...offline, revokedAt: 1 } } }));
+      });
+      expect([...registered].some(method => method.startsWith(`${offline.id}:`))).toBe(false);
+      expect(registrations.filter(method => method.startsWith(`${machine.id}:`))).toEqual(stableRegistrations);
       await act(async () => { replaceCommand?.(); });
       const replacement = readContext?.()?.commands[0];
       expect(replacement?.id).not.toBe(command.id);
@@ -165,7 +181,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
     const { usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
-    const machine = createMachineFixture({ id: 'current-ui-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'current-ui-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));
@@ -233,7 +249,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { registerMountedWorkReadOwner } = await import('./mountedWorkReadAction');
     const { projectWork } = await import('@/components/sessions/work/workProjection');
-    const machine = createMachineFixture({ id: 'work-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'work-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));
@@ -294,7 +310,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       useWorkflowLibraryView(rows, null, true);
       return null;
     }
-    const machine = createMachineFixture({ id: 'driver-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'driver-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));
@@ -678,7 +694,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       .toMatchObject({ ok: false, errorCode: 'VOICE_TELEPORT_UNAVAILABLE' });
     const unavailable = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => null) });
     expect(await unavailable.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
-      .toMatchObject({ ok: false, errorCode: 'unavailable' });
+      .toMatchObject({ ok: false, errorCode: 'machine_transport_unavailable' });
     expect(homes.requests.some(request => request.path.startsWith('/v2/sessions/unbound-root'))).toBe(false);
   });
 
@@ -703,8 +719,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
 
   it('keeps a mounted Machine continuation current when another Machine appears, and retires it on unmount', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
-    const machine = createMachineFixture({ id: 'machine-one' });
-    const another = createMachineFixture({ id: 'machine-two' });
+    const machine = createMachineFixture({ id: 'machine-one', activeAt: Date.now() });
+    const another = createMachineFixture({ id: 'machine-two', activeAt: Date.now() });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...(state.profile ?? {}), id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));

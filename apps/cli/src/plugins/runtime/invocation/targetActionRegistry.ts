@@ -4,6 +4,7 @@ import { readTargetActionDiagnosticConfidentiality } from './diagnostics';
 import { runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 
 import { ActionOperationProgressV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import type { ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { createPluginActionInvocation, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
@@ -320,6 +321,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
         correlationId: string;
         signal: AbortSignal;
         isCurrent(): boolean;
+        recordOperationCredentialUse?: import('@happier-dev/protocol').ActionExecutorContext['recordOperationCredentialUse'];
     }>): Promise<TargetActionConnectedAccountOperationBinding | TargetActionPreDispatchResult | null>;
 }>): Readonly<{
     expects(pluginId: string, localId: string): boolean;
@@ -603,6 +605,9 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         localId: registration.localId,
                         input,
                         correlationId,
+                        ...(seed.approvalContext?.recordOperationCredentialUse
+                            ? { recordOperationCredentialUse: seed.approvalContext.recordOperationCredentialUse }
+                            : {}),
                         signal: lifetime.signal,
                         isCurrent: () => (
                             !signal.aborted
@@ -852,7 +857,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
                     ...(invocation.signal ? { signal: invocation.signal } : {}),
                 }),
-                invoke: async (action, _args, serviceBinding) => {
+                invoke: async (action, args, serviceBinding) => {
                     const current = actionsByKey.get(key);
                     if (!current || !indexed.isCurrent() || current.invocation !== indexed.invocation) {
                         return unavailable('plugin_action_generation_retired', 'Plugin action occurrence is no longer current');
@@ -898,11 +903,19 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                             'Admitted target occurrence is no longer current',
                         );
                     }
+                    const recordOperationCredentialUse = args.recordOperationCredentialUse;
                     return await invokeHandler(
                         current,
                         preparedInput,
                         Object.freeze({
                             ...invocation,
+                            ...(recordOperationCredentialUse ? { approvalContext: {
+                                ...invocation.approvalContext,
+                                recordOperationCredentialUse: (use: ActionOperationCredentialUseV1) => {
+                                    recordOperationCredentialUse(use);
+                                    invocation.approvalContext?.recordOperationCredentialUse?.(use);
+                                },
+                            } } : {}),
                             ...(operationProgress ? { operationProgress } : {}),
                         }),
                         serviceBinding,

@@ -89,6 +89,8 @@ export const CurrentSessionPresentationIntentV1Schema = lazyZodSchema(() => z.di
   z.strictObject({ kind: z.literal('viewer.restore') }),
   // Instance transport is host-only; the public author subset below excludes it.
   z.strictObject({ kind: z.literal('companion.instance.network.set'), instanceId: z.string().check(z.trim(), z.minLength(1)), network: UiSurfaceNetworkRequestV1Schema }),
+  // Appended, never inserted: the public author subset below selects options by position.
+  z.strictObject({ kind: z.literal('chat.item.show'), widgetId: IdentifierSchema }),
 ]));
 export type CurrentSessionPresentationIntentV1 = z.infer<
   typeof CurrentSessionPresentationIntentV1Schema
@@ -123,6 +125,7 @@ export const CurrentSessionPresentationAuthorIntentV1Schema = lazyZodSchema(() =
   CurrentSessionPresentationIntentV1Schema._zod.def.options[19],
   CurrentSessionPresentationIntentV1Schema._zod.def.options[20],
   CurrentSessionPresentationIntentV1Schema._zod.def.options[21],
+  CurrentSessionPresentationIntentV1Schema._zod.def.options[23],
 ]));
 export type CurrentSessionPresentationAuthorIntentV1 = z.infer<typeof CurrentSessionPresentationAuthorIntentV1Schema>;
 

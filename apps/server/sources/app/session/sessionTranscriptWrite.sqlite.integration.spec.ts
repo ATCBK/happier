@@ -148,6 +148,12 @@ describe("canonical transcript sequence writer on SQLite", () => {
             authorAccountId: editor.id,
             inputAdmissionReceipt: { v: 1, issuer: "authenticatedAccount", actorAccountId: editor.id, sessionRelationship: "sharedEditor" },
         } });
+        if (!created.ok) throw new Error("expected committed transcript message");
+        expect(created.recipientCursors).toEqual(await db.accountChange.findMany({
+            where: { kind: "session", entityId: session.id },
+            orderBy: { accountId: "asc" },
+            select: { accountId: true, cursor: true },
+        }));
         await db.sessionShare.update({ where: { id: share.id }, data: { accessLevel: "admin" } });
         expect(await createSessionMessage(input)).toMatchObject({ ok: true, didWrite: false, message: {
             authorAccountId: editor.id, inputAdmissionReceipt: { sessionRelationship: "sharedEditor" },

@@ -1,11 +1,13 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
+import { act, create } from 'react-test-renderer';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { DestinationInstanceHost } from './DestinationInstanceHost';
 import { Stack, useLocalSearchParams } from './destinationRoute';
 import { WorkspaceDestinationBody } from './WorkspaceDestinationBody';
+import { AppShellColumnContext } from '@/components/navigation/shell/appRail/appShellColumnContext';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { registerWorkspaceRouteContext } from './workspaceRouteContext';
 import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 
@@ -38,6 +40,7 @@ function WorkflowBody() {
     const [draft, setDraft] = React.useState('');
     return React.createElement('HostedWorkflow', { params: useLocalSearchParams(), draft, setDraft });
 }
+function BoardsBody() { return React.createElement('HostedBoards'); }
 function RunSettingsBody() { return React.createElement('HostedRunSettings', { params: useLocalSearchParams() }); }
 
 // Expo's context/module loader is the boundary. Fixture modules retain real React providers,
@@ -70,6 +73,8 @@ beforeAll(async () => {
         './(app)/workflows/[id]/index.tsx': { WorkspaceRouteBody: WorkflowBody },
         './(app)/workflows/settings.tsx': { WorkspaceRouteBody: RunSettingsBody },
         './(app)/automations/settings.tsx': { WorkspaceRouteBody: AutomationSettingsRoute },
+        './(app)/boards/index.tsx': { WorkspaceRouteBody: BoardsBody },
+        './(app)/boards/[boardId].tsx': { WorkspaceRouteBody: BoardsBody },
     };
     registerWorkspaceRouteContext(Object.assign((key: string) => {
         if (!(key in modules)) throw new Error(`Unexpected route module: ${key}`);
@@ -91,6 +96,28 @@ function hosted(pathname: string, params: Record<string, string> = {}) {
 }
 
 describe('workspace destination route composition', () => {
+    // A lazy body that is still loading says it once: beside a column, the column already speaks for the
+    // destination ("Opening Boards"), so the page waits quietly; without a column the page says it.
+    it.each([
+        [true, '/boards', 0],
+        [false, '/boards/board-a', 1],
+    ] as const)('with the column showing (%s) says a loading body %s %i time(s)', async (columnVisible, pathname, cards) => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: true, friends: false,
+        } });
+        const target = resolveDestinationRefFromHref(catalog, pathname)!;
+        let renderer!: ReturnType<typeof create>;
+        act(() => {
+            renderer = create(<AppShellColumnContext.Provider value={{ present: true, columnVisible }}>
+                <WorkspaceDestinationBody target={target} pathname={pathname} renderSession={() => null} renderSessionDetails={() => null} />
+            </AppShellColumnContext.Provider>);
+        });
+        expect(renderer.root.findAllByType('HostedBoards')).toHaveLength(0);
+        expect(renderer.root.findAllByType(SurfaceStateCard)).toHaveLength(cards);
+        await act(async () => {});
+        expect(renderer.root.findAllByType('HostedBoards')).toHaveLength(1);
+        act(() => renderer.unmount());
+    });
     it('adjudicates the retired settings alias as Run settings rather than a Workflow entity or collection', async () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
             externalSessions: false, inbox: false, workflows: true, friends: false,

@@ -64,6 +64,22 @@ vi.mock('@/configuration', async (importOriginal) => {
 });
 
 describe('createAccountArtifactStore', () => {
+  it.each([
+    { status: 503, serverError: 'database_transaction_conflict_exhausted', code: 'database_transaction_conflict_exhausted' },
+    { status: 503, serverError: 'database_connection_unavailable', code: 'database_connection_unavailable' },
+    { status: 403, serverError: 'PRIVATE_RESPONSE', code: 'create_failed' },
+    { status: 500, serverError: 'PRIVATE_RESPONSE', code: 'create_failed' },
+    { status: 409, serverError: 'PRIVATE_RESPONSE', code: 'conflict' },
+  ])('preserves safe create failure status/code ($status, $code)', async ({ status, serverError, code }) => {
+    mockPost.mockResolvedValue({ status, data: { error: serverError, private: 'PRIVATE_RESPONSE' } });
+    const store = createAccountArtifactStore({ credentials: { token: 'synthetic-token', encryption: null }, getAccountEncryptionMode: async () => 'plain' });
+    const failure: unknown = await store.create({ header: {}, body: 'approval' }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code });
+    expect(readHttpStatus(failure)).toBe(status);
+    expect(JSON.stringify(failure)).not.toContain('PRIVATE_RESPONSE');
+    expect(JSON.stringify(failure)).not.toContain('synthetic-token');
+  });
+
   it.each([503, 403])('preserves typed HTTP status without response secrets on Artifact list, header and body failures (%s)', async status => {
     mockGet.mockResolvedValue({ status, data: { error: 'PRIVATE_RESPONSE' } });
     mockPost.mockResolvedValue({ status, data: { error: 'PRIVATE_RESPONSE' } });
@@ -84,6 +100,20 @@ describe('createAccountArtifactStore', () => {
     mockDelete.mockReset();
     mockGet.mockReset();
     mockPost.mockReset();
+  });
+
+  it('retains the typed storage failure after the existing revision update retry budget is exhausted', async () => {
+    const store = createAccountArtifactStore({ credentials: { token: 'synthetic-token', encryption: null }, getAccountEncryptionMode: async () => 'plain' });
+    mockGet.mockResolvedValue({ status: 200, data: {
+      id: 'approval', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent({}),
+      body: encodePlainArtifactStoredContent({ body: 'original' }), headerVersion: 1, bodyVersion: 1,
+      seq: 1, createdAt: 1, updatedAt: 1,
+    } });
+    mockPost.mockResolvedValue({ status: 503, data: { error: 'database_transaction_conflict_exhausted' } });
+    await expect(store.update({ artifactId: 'approval', expectedRevision: { headerVersion: 1, bodyVersion: 1 },
+      header: {}, body: 'replacement' })).resolves.toMatchObject({ ok: false,
+        errorCode: 'database_transaction_conflict_exhausted', error: 'database_transaction_conflict_exhausted' });
   });
 
   it.each(['retired', 'aborted', 'forbidden'] as const)('does not retry a revision update after live admission is %s', async outcome => {
@@ -636,6 +666,11 @@ describe('createAccountArtifactStore', () => {
     const server = createServer((request, response) => {
       request.resume();
       const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+      if (path === '/v1/features') {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ features: {}, capabilities: {} }));
+        return;
+      }
       if (path === '/v1/artifacts/cancel') { cancelled.abort(); return; }
       if (path === '/v1/artifacts/network-failure') { request.socket.destroy(); return; }
       const data = request.method === 'DELETE' ? {}
@@ -1292,6 +1327,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       .resolves.toEqual({ ok: true, revision: { headerVersion: 4, bodyVersion: 5 } });
     expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/shared/revisions/2/restore'),
       { expectedHeaderVersion: 3, expectedBodyVersion: 4,
+        kind: 'other',
         header: encodePlainArtifactStoredContent({ title: 'Shared', ...(typeof priorBody === 'string' ? { excerpt: priorBody } : {}) }) }, expect.any(Object));
   });
 
@@ -1321,7 +1357,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     // it selects retained bytes while the real CLI owner prepares the header and CAS.
     mockPost.mockImplementationOnce(async (url: string, wire: unknown) => {
       expect(url).toContain('/shared/revisions/2/restore');
-      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string() }).parse(wire);
+      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string(), kind: z.literal('other') }).parse(wire);
       stored = { ...stored, header: request.header, body: retainedBody, headerVersion: 4, bodyVersion: 5 };
       return { status: 200, data: { success: true, headerVersion: 4, bodyVersion: 5 } };
     });
@@ -1567,7 +1603,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       mockPost.mockImplementationOnce(async (rawUrl: string, wire: unknown) => {
         expect(new URL(rawUrl).pathname).toBe(`/v1/artifacts/${artifactId}/revisions/2/restore`);
         const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4),
-          header: z.string(), provenance: z.string() }).parse(wire);
+          header: z.string(), provenance: z.string(), kind: z.literal('other') }).parse(wire);
         expect(decodePlainArtifactStoredContent(request.provenance)).toMatchObject({ artifactId, bodyVersion: 5,
           provenance: { savedBy: { kind: 'person', accountId: 'owner' }, restoredFromBodyVersion: 2 } });
         stored = { ...stored, header: request.header, body: retainedBody, provenance: request.provenance, headerVersion: 4, bodyVersion: 5 };

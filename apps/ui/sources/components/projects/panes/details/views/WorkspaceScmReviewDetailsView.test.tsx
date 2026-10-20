@@ -243,6 +243,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
         await vi.waitFor(() => expect(screen.findHostByTestId('changed-files-review-empty')).toBeTruthy());
         expect(screen.findHostByTestId('scm-comparison-explain-with-agent')).toBeNull();
         expect(screen.getTextContent()).not.toContain(t('scmComparison.fileCount', { count: 0 }));
+        // The empty state says what the page is for, not only that it is empty.
+        expect(screen.getTextContent()).toContain(t('files.noChangesPurpose'));
     });
     it('opens review comments from the Files menu instead of a row above the bar', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>

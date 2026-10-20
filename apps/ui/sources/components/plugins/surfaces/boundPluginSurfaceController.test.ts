@@ -34,6 +34,7 @@ import {
     useBoundPluginSurfaceController,
     usePluginSurfaceDaemonInteraction,
     type BoundPluginSurfaceBinding,
+    type BoundPluginSurfaceFacts,
 } from './boundPluginSurfaceController';
 import type { PluginSurfaceResourceReadTransport } from './pluginSurfaceResourceRead';
 import type { PluginSurfaceResourceWatchTransport } from './pluginSurfaceResourceWatch';
@@ -342,6 +343,45 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }
     });
 
+    it('preserves a failed target read through Action and Resource refusals instead of claiming Machine incapability', async () => {
+        let failed = true;
+        let pending = true;
+        const facts = {
+            ...FACTS,
+            machineDisplayName: 'Studio Mac',
+            isDaemonConnectionPending: () => pending,
+            get daemonInteractionEnabled() { return !failed; },
+            get daemonConnectionFailure() {
+                return failed ? { code: 'timeout' as const, reasonCode: 'targeted_contributions_timeout' } : undefined;
+            },
+        };
+        const executeContributedAction = vi.fn(async () => ({ supported: true as const, result: { ok: true as const, result: { refreshed: true } } }));
+        const controller = createBoundPluginSurfaceController({ facts, binding: { executeContributedAction } });
+        try {
+            const waiting = request('executeAction', { action: 'refresh-index', input: {} });
+            await expect(settlePluginSurfaceHostApiRequest(waiting, () => controller.hostApi.handleRequest(waiting)))
+                .resolves.toMatchObject({ kind: 'error', payload: { code: 'unavailable',
+                    diagnostics: expect.arrayContaining(['plugin_surface_connection_pending']) } });
+            pending = false;
+            for (const [method, payload] of [
+                ['executeAction', { action: 'refresh-index', input: {} }],
+                ['readResource', { resource: 'status' }],
+            ] as const) {
+                const invocation = request(method, payload);
+                const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+                expect(result).toMatchObject({ kind: 'error', payload: {
+                    code: 'timeout', diagnostics: expect.arrayContaining(['targeted_contributions_timeout']),
+                    message: t('pluginRuntime.transportUnavailable'),
+                } });
+            }
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            expect(controller.isCurrent()).toBe(true);
+            failed = false;
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' }, {}))
+                .resolves.toEqual({ refreshed: true });
+        } finally { controller.dispose(); }
+    });
+
     it('says once what to do when no Machine exists at all, instead of naming a Machine that is not there', async () => {
         const controller = createBoundPluginSurfaceController({ facts: {
             ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
@@ -399,6 +439,59 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
         expect(describe()).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }), managePluginId: FACTS.pluginId });
         await hook.unmount();
+    });
+
+    describe('a Machine that has the plugin but cannot run it', () => {
+        const refused = (executionOriginRefusal: NonNullable<BoundPluginSurfaceFacts['executionOriginRefusal']>) => {
+            const lend = vi.fn();
+            const mounted = renderHook(() => useBoundPluginSurfaceController({ facts: {
+                ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+                daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+                homeHasMachines: true, pluginDisplayName: 'PRs & Issues', executionOriginRefusal,
+            } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+            return { lend, mounted };
+        };
+        const noticeFor = async (executionOriginRefusal: NonNullable<BoundPluginSurfaceFacts['executionOriginRefusal']>) => {
+            const { lend, mounted } = refused(executionOriginRefusal);
+            const hook = await mounted;
+            const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+            await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+            const notice = (lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource)();
+            await hook.unmount();
+            return notice;
+        };
+
+        it.each([
+            [['activation_refused'], 'pluginCouldNotStart', undefined],
+            [['offline'], 'pluginMachineUnreachable', undefined],
+            [['untrusted'], 'pluginNotReady', FACTS.pluginId],
+            [['activation_refused', 'offline'], 'pluginNotReady', FACTS.pluginId],
+        ] as const)('words %j for the Machine it names, never as "install it"', async (reasons, key, managePluginId) => {
+            const notice = await noticeFor({ reasons, machineDisplayName: 'QA Machine' });
+            expect(notice).toEqual({
+                sentence: t(`settingsPlugins.surfaces.${key}`, { plugin: 'PRs & Issues', machine: 'QA Machine' }),
+                ...(managePluginId ? { managePluginId } : {}),
+            });
+            expect(notice?.sentence).not.toBe(t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }));
+        });
+
+        it('says the plugin could not start on the Machine, in words, with the way forward', async () => {
+            const notice = await noticeFor({ reasons: ['activation_refused'], machineDisplayName: 'QA Machine' });
+            expect(notice?.sentence).toBe('PRs & Issues couldn’t start on QA Machine. Restart Happier there, or choose another machine with Run on.');
+        });
+
+        it('does not name one Machine when several refused', async () => {
+            const notice = await noticeFor({ reasons: ['activation_refused', 'offline'] });
+            expect(notice).toEqual({
+                sentence: t('settingsPlugins.surfaces.pluginNotReadyAnywhere', { plugin: 'PRs & Issues' }),
+                managePluginId: FACTS.pluginId,
+            });
+        });
+
+        it('still leads to installing when no Machine has it', async () => {
+            const notice = await noticeFor({ reasons: ['no_materialization'] });
+            expect(notice).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }), managePluginId: FACTS.pluginId });
+        });
     });
 
     it.each(['selectionRequired', 'conflict'] as const)('asks for a target only when Administration reports %s', async executionOriginSelectionKind => {

@@ -1,4 +1,6 @@
 import { readOpenCodeNativeChildOutcome, type OpenCodeNativeChildStatus } from './nativeChildOutcome.js';
+import { isSessionModeSelectionUnavailable } from '@happier-dev/plugin-sdk/agents/runtime';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { randomUUID } from 'node:crypto';
 import { normalizeOpenCodePaidUsage } from '../../usage/paidUsage.js';
 import { isOpenCodeModelSelectable } from '../../models/eligibility.js';
@@ -2621,6 +2623,13 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       if (!providerSessionId) throw new Error('OpenCode session configuration requires an open provider session');
       const modeId = normalizeString(update.modeId);
       if (modeId) {
+        if (isSessionModeSelectionUnavailable(modeId, { availableModes: modeCatalog.modes, currentModeId: modeCatalog.currentModeId })) {
+          throw new PluginError({
+            code: 'native_agent_session_mode_unavailable',
+            message: 'The selected native Agent mode is not available in this Session.',
+            retryable: false,
+          });
+        }
         await client.sessionSetAgent({ sessionId: providerSessionId, agent: modeId });
         promptAgent = modeId;
         if (params.dialect === 'v2') {

@@ -28,6 +28,10 @@ import { logger } from '@/ui/logger';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveQualifiedConnectedAccountAtomicV4Negotiation } from '@/api/client/qualifiedConnectedAccountApi';
+import { activateRequesterPendingSession } from '@/daemon/sessions/pendingSessionActivationRecovery';
+import { releaseUnretainedRequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import type { startDaemonControlServer } from '@/daemon/controlServer';
 import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
 
@@ -162,8 +166,14 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   await h.replaceRequesterRuntime();
   delete h.tracked.requesterSessionRuntimeContext;
   const homeFetch = globalThis.fetch;
-  vi.stubGlobal('fetch', ((input, init) => new URL(input instanceof Request ? input.url : String(input)).hostname === '127.0.0.1'
-    ? nativeFetch(input, init) : homeFetch(input, init)) satisfies typeof fetch);
+  vi.stubGlobal('fetch', ((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === 'session-home.test' && url.pathname === '/v1/features') {
+      return Promise.resolve(Response.json(FeaturesResponseSchema.parse({ features: {},
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_requester_home' } } })));
+    }
+    return url.hostname === '127.0.0.1' ? nativeFetch(input, init) : homeFetch(input, init);
+  }) satisfies typeof fetch);
   const tls = await createEphemeralTlsServerFixture();
   onTestFinished(() => tls.cleanup());
   let toolCalls = 0;
@@ -200,9 +210,29 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   let nextRequesterProfileDelayMs = 0;
   let revokeRequesterWhenStaged = false;
   const accountHeaders: unknown[] = [];
+  const pendingTarget = { homeId: 'srv_requester_home', accountId: h.f.bootstrap.attribution.accountId,
+    machineId: 'machine', installationId: h.f.installation.installationId, sessionId: h.sessionId };
+  const runtimeDescriptor = { v: 1, agentId: 'codex', agent: {
+    backendMode: 'appServer', providerSessionId: 'native-requester-thread',
+  } };
   const get = vi.mocked(axios.get).getMockImplementation()!;
   vi.mocked(axios.get).mockImplementation(async (url, options) => {
     const path = new URL(String(url)).pathname;
+    if (path === MCP_SERVER_CATALOG_ROWS_ROUTE_V1 || path.startsWith('/v4/connect/qualified/')
+      || path.startsWith(`/v2/sessions/${h.sessionId}`)) {
+      accountHeaders.push(options?.headers?.Authorization);
+    }
+    if (path === `/v2/sessions/${h.sessionId}/pending`) return { status: 200, data: { pending: [{
+      localId: 'wake-input', messageRole: 'user', status: 'queued', deliveryState: null,
+      requestedAction: { v: 1, kind: 'send_now' },
+    }] } };
+    if (path === `/v2/sessions/${h.sessionId}`) return { status: 200, data: { session: createSessionRecordFixture({
+      id: h.sessionId, encryptionMode: 'plain', dataEncryptionKey: null, share: null,
+      metadata: JSON.stringify({ machineId: 'machine', path: h.cwd, flavor: 'codex',
+        codexSessionId: 'native-requester-thread', runtimeDescriptorV1: runtimeDescriptor }),
+      pendingCount: 1, pendingVersion: 1, pendingActivationAuthorization: { status: 'waiting',
+        requestId: 'wake-input', requestedAt: 12, admittedTarget: pendingTarget },
+    }) } };
     if (path === '/v1/account/profile') {
       // Home latency is the system boundary. The native bridge below must
       // tolerate a valid proof beyond the former subordinate cutoff.
@@ -211,7 +241,6 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
     if (path === MCP_SERVER_CATALOG_ROWS_ROUTE_V1) {
-      accountHeaders.push(options?.headers?.Authorization);
       return { status: catalogReadable ? 200 : 403, data: catalogReadable ? { status: 'present', revision: 1,
         content: sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog }) } : { error: 'forbidden' } };
     }
@@ -264,8 +293,34 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   expect(await createCliMcpServerStoreForOperation({ operationContext: runnerOperation }).readCatalogForOperation())
     .toMatchObject({ status: 'ready' });
   expect(requester.readAccountSettingsSnapshot().mcpServerCatalog).toBeUndefined();
-  await requester.qualifiedConnectedAccountEstablishedRuntimeOwner.readMaterialSnapshot({ account: ref });
   const runnerSnapshot = runnerOperation.readSnapshot()!;
+  // A resumed runner on a freshly booted daemon must not rely on an earlier
+  // credential read or retained requester runtime from the initial launch.
+  await requester.dispose();
+  delete h.tracked.requesterSessionRuntimeContext;
+  let wakeSpawned = false;
+  await activateRequesterPendingSession({ machineId: 'machine',
+    binding: { sessionId: h.sessionId, attribution: h.tracked.requesterWorkAttributionV1! },
+    hint: { sessionId: h.sessionId, requestId: 'wake-input', requestedAt: 12, pendingVersion: 1, source: 'live' },
+    resolveRequesterSessionRuntimeContext: h.resolveRequesterRuntime,
+    releaseRequesterSessionRuntimeContext: context => releaseUnretainedRequesterSessionRuntimeContext(context,
+      [...h.pidToTrackedSession.values()].map(tracked => tracked.requesterSessionRuntimeContext)),
+    resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+      serverUrl: 'https://session-home.test', resolveCurrentMachineId: () => 'machine',
+    }),
+    // Process launch is the native boundary. The wake, custody recovery,
+    // requester construction and subsequent MCP resolution stay real.
+    spawnSessionForInternalResume: async options => {
+      expect(options).toMatchObject({ existingSessionId: h.sessionId, runtimeDescriptorV1: runtimeDescriptor,
+        requesterWorkAttributionV1: h.tracked.requesterWorkAttributionV1,
+        executionAuthorization: { provenance: 'user_request', requestId: 'wake-input', requestedAt: 12 } });
+      expect(options.requesterSessionRuntimeContext).toBe(h.tracked.requesterSessionRuntimeContext);
+      expect(options.requesterSessionBootstrap?.credentials.token).toBe(requester.bootstrap.credentials.token);
+      wakeSpawned = true;
+      return { type: 'success', sessionId: h.sessionId };
+    },
+  });
+  expect(wakeSpawned).toBe(true);
   vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
   const resolved = await runWithServerHttpBaseUrl('https://session-home.test', () => resolveRunnerMcpServers({
     session: { sessionId: h.sessionId, getServerBinding: () => ({ serverId: 'session-home', serverUrl: 'https://session-home.test' }),
@@ -278,6 +333,8 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   }));
   try {
     expect(issuanceFailure).toBeUndefined();
+    expect(h.readRequesterRecoveryStage()).toBe('ready');
+    expect(h.tracked.requesterSessionRuntimeContext).not.toBe(requester);
     expect(Object.keys(resolved.mcpServers)).toEqual(['oauth_fixture']);
     const nextCapability = await port.open({ serverId: ref.accountId, resource, materializationId: 'next-preparation' });
     expect(nextCapability.resource).toBe(resource);
@@ -421,6 +478,10 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   const refusedAtCommit = await h.dispatch({ kind: 'mcp.request_auth.open', requestId: 'revoked-before-commit',
     serverId: ref.accountId, resource, materializationId: 'revoked-before-commit' });
   expect(revokeRequesterWhenStaged, 'Home revocation must occur during the staged grant proof').toBe(false);
-  expect(refusedAtCommit).toMatchObject({ ok: false, error: { code: 'mcp_request_auth_not_active' } });
+  // A recovered requester can observe retirement in a nested Home proof before
+  // the issuer's local lifetime check. Both paths must withhold the capability.
+  expect(refusedAtCommit).toMatchObject({ ok: false });
+  if (!refusedAtCommit.ok) expect(['mcp_request_auth_not_active', 'mcp_request_auth_unavailable'])
+    .toContain(refusedAtCommit.error.code);
   expect((await readdir(requester.connectedServicesMaterializationBaseDir)).filter(name => name.startsWith('mcp-'))).toEqual([]);
 }, 120_000);

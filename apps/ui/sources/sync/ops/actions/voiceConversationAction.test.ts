@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', async () => {
     const { getVitestNodeBuiltin } = await import('@/dev/vitestNodeBuiltins');
@@ -53,11 +53,16 @@ import { assertNoUnsealedSettingsSecretValues, sealSecretsDeep } from '@/sync/en
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+
+// Supply only the human confirmation outcome; keep alert presentation real.
+beforeEach(async () => { const { Modal } = await import('@/modal'); vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 
 const runtimeCleanup: Array<() => Promise<void>> = [];
 let homeFixtureOrdinal = 0;
@@ -214,6 +219,74 @@ async function createHarness(start = true, featureEnabled = true) {
 }
 
 describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it('retains the Agent Start approval default and an explicit person Ask-first preference', async () => {
+        const { lifecycle, serverId, artifacts } = await createHarness(false);
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const confirmation = vi.fn(async () => false);
+        const executor = createDefaultActionExecutor({ presentUserActionConfirmation: confirmation });
+        const input = { target: { kind: 'global' }, expectedAttempt: null };
+        const person = { surface: 'ui' as const, authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const }, serverId };
+        const cancellation = new AbortController();
+        const pending = executor.execute('ui.voice_global.start', input, { surface: 'agent', serverId,
+            defaultSessionId: 'session-original', defaultSessionMachineId: 'unreachable-origin-machine',
+            actionRequestId: 'voice-start-request', signal: cancellation.signal,
+            actionCaller: { kind: 'session', sessionId: 'session-original', starterDepth: 0, turnDepth: 0 } });
+        let settled: Awaited<typeof pending> | undefined;
+        void pending.then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => {
+                expect(settled).toBeUndefined();
+                expect(artifacts.list()).toHaveLength(1);
+            });
+            expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            const artifactId = artifacts.list()[0]!.id;
+            expect(await executor.execute('approval.request.decide', { artifactId, decision: 'cancel' }, person))
+                .toMatchObject({ ok: true });
+            expect(await pending).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(confirmation).not.toHaveBeenCalled();
+            storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.start': { approvalRequiredSurfaces: ['ui'] },
+                } }) } }));
+            const asked = await executor.execute('ui.voice_global.start', input, person);
+            const request = ActionApprovalRequestCreatedResultSchema.parse(asked.ok ? asked.result : null);
+            expect(artifacts.list()).toHaveLength(2);
+            expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            expect(await executor.execute('approval.request.decide', { artifactId: request.artifactId, decision: 'cancel' }, person))
+                .toMatchObject({ ok: true });
+            expect(confirmation).not.toHaveBeenCalled();
+        } finally { cancellation.abort(); await pending; await lifecycle.dispose(); }
+    });
+    it('admits a composer hold through Action policy and cancels an early gesture without committing', async () => {
+        const { lifecycle, sent } = await createHarness();
+        const { useVoiceAttemptControl } = await import('@/components/voice/attempt/useVoiceAttemptControl');
+        const { renderHook } = await import('@/dev/testkit');
+        storage.setState(state => ({ localSettings: { ...state.localSettings, voiceHoldToTalkEnabled: true }, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: { ...state.settings.actionsSettingsV1?.actions,
+                'ui.voice_global.hold_begin': { disabledSurfaces: ['ui'] } } }) } }));
+        const hook = await renderHook(() => useVoiceAttemptControl({ kind: 'global' }));
+        try {
+            const denied = hook.getCurrent().beginHoldToTalk();
+            expect(denied).not.toBeNull();
+            expect(await denied!.ready).toBe(false);
+            await denied!.cancel();
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({}) } })));
+            const before = sent().length;
+            const early = hook.getCurrent().beginHoldToTalk();
+            expect(early).not.toBeNull();
+            await early!.cancel();
+            expect(await early!.ready).toBe(false);
+            expect(sent().slice(before).filter(value => value.type === 'input_audio_buffer.commit')).toEqual([]);
+            const allowed = hook.getCurrent().beginHoldToTalk();
+            expect(allowed).not.toBeNull();
+            expect(await allowed!.ready).toBe(true);
+            await allowed!.release();
+            await allowed!.release();
+            expect(sent().slice(before).filter(value => value.type === 'input_audio_buffer.commit')).toHaveLength(1);
+        } finally { await hook.unmount(); await lifecycle.dispose(); }
+    });
     it('replays one tapped unmute Ask in the approving client while model decisions and End leave custody intact', async () => {
         const { lifecycle, expectedAttempt, serverId, artifacts, homeRequests, micTrack } = await createHarness();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
@@ -280,16 +353,16 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
             speaking();
             await vi.waitFor(() => expect(lifecycle.getSnapshot().mode).toBe('speaking'));
             const sentBeforeInterrupt = sent().length;
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: null }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: null }).onBargeIn();
             expect(lifecycle.getSnapshot().mode).toBe('speaking');
             expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
             setVoiceSessionLifecycleController(null);
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
             await Promise.resolve();
             expect(lifecycle.getSnapshot().mode).toBe('speaking');
             expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
             setVoiceSessionLifecycleController(lifecycle);
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
             await vi.waitFor(() => expect(sent().slice(sentBeforeInterrupt)).toEqual([
                 { type: 'response.cancel' }, { type: 'output_audio_buffer.clear' },
             ]));

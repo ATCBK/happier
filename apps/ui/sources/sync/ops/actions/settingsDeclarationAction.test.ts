@@ -96,6 +96,23 @@ import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystem
 import { publishLocalDaemonStatus, readLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
 
+describe('Track device-local Settings declaration', () => {
+    it('lets an agent read and write Track through settings.set without changing Account settings', async () => {
+        const owner = createOwner();
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.get', { anchor: 'files.trackAgentEdits' }, context))
+            .toMatchObject({ ok: true, result: { value: false } });
+        expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: true }, context))
+            .toMatchObject({ ok: true, result: { value: true } });
+        expect(owner.local().filesTrackAgentEdits).toBe(true);
+        expect(owner.account()).toEqual(settingsDefaults);
+        expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: 'true' }, context))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.local().filesTrackAgentEdits).toBe(true);
+    });
+});
+
 describe('desktop login-start service-backed Settings declaration', () => {
     const anchor = 'desktop.startOnLogin';
     const status = (mode: 'at-login' | 'on-demand' | null): LocalDaemonStatusData => ({
@@ -1302,6 +1319,18 @@ describe('declared settings owner', () => {
         const preview = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.preview'));
         const stop = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.stopPreview'));
         if (!preview || !stop) throw new Error('Missing declared catalog operations');
+        const list = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.listCatalog'));
+        const retry = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.retryCatalog'));
+        expect(list, 'Agent catalog inspection must be declared').toBeDefined();
+        expect(retry, 'Agent catalog retry must be declared').toBeDefined();
+        for (const operation of [list!, retry!]) {
+            expect(operation.operation).toMatchObject({ requiresHumanInteraction: false, requiresApproval: false });
+            const result = await executor.execute('settings.invoke', { anchor: operation.anchor }, { surface: 'agent', authority: 'account_automation' });
+            expect(result).toEqual({ ok: true, result: { anchor: operation.anchor, status: 'completed', value: { rows: [
+                { id: 'voice_a', name: 'Voice A', previewAvailable: true },
+            ] } } });
+            expect(catalogAudio.play).not.toHaveBeenCalled();
+        }
         const ctx = { surface: 'ui' as const, authority: 'present_user' as const };
         expect(await executor.execute('settings.invoke', { anchor: preview.anchor, input: { kind: 'voice_preview', voiceId: 'voice_a' } }, ctx))
             .toEqual({ ok: true, result: { anchor: preview.anchor, status: 'completed', value: { voiceId: 'voice_a', started: true } } });
@@ -1318,6 +1347,35 @@ describe('declared settings owner', () => {
         const { readRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
         expect(readRealtimeCatalogPreview()).toBeNull();
         expect(owner.openedInteractions).toEqual([]);
+    });
+    it('lists and retries a speech-engine voice catalog through its selected daemon without playback', async () => {
+        const before = storage.getState();
+        onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); });
+        const providerId = 'happier.voice.google/google-cloud-tts';
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...settingsDefaults.voice,
+            providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'voice-catalog-machine' },
+            providers: { local_conversation: { schemaVersion: 1, config: { tts: { provider: providerId } } } },
+        } }, settingsDefaults));
+        storage.setState({ settings: account, machines: { 'voice-catalog-machine': createMachineFixture({ id: 'voice-catalog-machine', activeAt: Date.now() }) } });
+        await installVoiceMachineFixture(storage.getState().machines);
+        // The machine fixture activates the profile lifetime; the Settings owner also
+        // requires the matching loaded Account settings scope, as the mounted app does.
+        storage.setState({ settings: account, settingsScope: storage.getState().profileScope });
+        const owner = createOwner(undefined, true, true, account);
+        const executor = throughActionExecutor(owner.action);
+        const discovered = await owner.action({ actionId: 'settings.list', input: { pageId: 'voiceConversations' } });
+        if (!('items' in discovered) || !discovered.items) throw new Error('Missing settings discovery');
+        const operations = ['listCatalog', 'retryCatalog'].map(operation => discovered.items!.find(item =>
+            item.anchor.includes(providerId) && item.anchor.endsWith(`.${operation}`)));
+        expect(operations.every(Boolean), 'Speech catalog operations must use the declared voices field').toBe(true);
+        settingsMachineRpc.mockResolvedValue({ ok: true, items: [{ id: 'en-US-Studio-O', name: 'Studio O' }] });
+        for (const operation of operations) {
+            const result = await executor.execute('settings.invoke', { anchor: operation!.anchor }, { surface: 'agent', authority: 'account_automation' });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed', value: {
+                rows: [{ id: 'en-US-Studio-O', name: 'Studio O' }],
+            } } });
+        }
+        expect(settingsMachineRpc.mock.calls.every(([request]) => request.method === 'daemon.voice.speech.catalog')).toBe(true);
     });
     it('executes model installation from the real Action front door through the selected daemon owner', async () => {
         const before = storage.getState();
@@ -2035,7 +2093,11 @@ describe('declared settings owner', () => {
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.themes', value: 'dark' } }))
             .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'language.appLanguage', value: 'fr' } }))
-            .toMatchObject({ ok: false, errorCode: 'setting_read_only' });
+            .toEqual({ anchor: 'language.appLanguage', value: 'fr' });
+        expect(owner.account().preferredLanguage).toBe('fr');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'language.appLanguage', value: 'unsupported-language' } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.account().preferredLanguage).toBe('fr');
         expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'accountSecurity.recoveryKey' } }))
             .toMatchObject({ ok: false, errorCode: 'setting_sensitive' });
         expect(await owner.action({ actionId: 'settings.list', input: { pageId: 'accountSecurity' } }))

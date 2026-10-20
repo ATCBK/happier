@@ -102,6 +102,7 @@ async function setup(options: Readonly<{
   /** The Machine that owns the service binding observation fails to answer. */
   actualFails?: boolean;
   withRow?: boolean;
+  collapsedRow?: boolean;
   liveFeeds?: boolean;
   disablePlacementRead?: boolean;
   /** A committed candidate cannot answer, while SOURCE still owns the native instance. */
@@ -122,6 +123,7 @@ async function setup(options: Readonly<{
   const poolReads: unknown[] = [];
   let placementReadsFail = false;
   let running = options.running;
+  let rowMachineId = 'devbox';
   let actualFails = options.actualFails;
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
@@ -304,7 +306,8 @@ async function setup(options: Readonly<{
     runMove = (name, execute) => (name === 'server' ? observation : other).executeMove(
       { kind: 'workers', destination: { kind: 'machine', machineId: 'hz-build-1' } }, execute);
     attach = operation => observation.attach({ operationId: operation.operationId,
-      destination: { kind: 'workers', destination: { kind: 'machine', machineId: 'hz-build-1' } } });
+      destination: operation.domainRef?.kind === 'projectService' && operation.domainRef.destinationWorkspace?.machineId === source.machineId
+        ? { kind: 'primary' } : { kind: 'workers', destination: { kind: 'machine', machineId: 'hz-build-1' } } });
     return null;
   }
   let model: ReturnType<typeof useProjectServicePlacement> | null = null;
@@ -363,12 +366,16 @@ async function setup(options: Readonly<{
     );
     if (!observationOwner) return control;
     const Provider = observationOwner.ProjectServicePlacementObservationProvider;
-    const row = buildLocalServiceRows({ inventoryRows: [], launchTargets: [running ? target : {
-      ...target, serviceState: 'stopped', endpointUrl: undefined, actions: ['start'],
+    const rowRefId = rowMachineId === source.machineId ? source.id : worker.id;
+    const rowTarget = { ...target, machineId: rowMachineId,
+      workspace: { ...target.workspace, machineId: rowMachineId, workspaceId: rowRefId },
+      declaration: { ...target.declaration, workspaceRefId: rowRefId } };
+    const row = buildLocalServiceRows({ inventoryRows: [], launchTargets: [running ? rowTarget : {
+      ...rowTarget, serviceState: 'stopped', endpointUrl: undefined, actions: ['start'],
     }], sessionId: null, scope: 'workspace' })[0]!;
     return <Provider source={{ serverId, refId, machineId: source.machineId }} runtimeActionExecute={options.serviceRuntime}><ObservationProbe /><StartProbe />{controlVisible ? options.liveFeeds
       ? <LiveRow placement={control} /> : options.withRow
-      ? <ServiceRowView row={row} testID="service-row" presentation="detail" placement={control}
+      ? <ServiceRowView row={row} testID="service-row" presentation={options.collapsedRow ? 'row' : 'detail'} placement={control}
           onStartLauncherTarget={async () => start!()} machineName="Source workstation" /> : control : null}
       {detail ? <ProjectServicePlacementControls testID="detail.placement" serviceName="server"
         source={{ serverId, refId, machineId: source.machineId }} declaration={{ portable: options.portable !== false, currentnessKey: declarationBasis }} lifecycleKey={lifecycleKey} /> : null}
@@ -406,6 +413,7 @@ async function setup(options: Readonly<{
   const runsOn = () => screen.findAllByTestId('placement.runsOn')[0]!;
   return { screen, writes, poolReads, choose, choosePool, runsOn, model: () => model!, serverId,
     setRunning: (value: boolean) => { running = value; refreshRow?.(); },
+    setRowMachine: (machineId: string) => { rowMachineId = machineId; refreshRow?.(); },
     setActualFails: (failed: boolean) => { actualFails = failed; },
     start: () => start!(),
     setDeclarationBasis: (basis: string) => setDeclarationBasis!(basis), setControlVisible: (visible: boolean) => setControlVisible!(visible),
@@ -416,6 +424,44 @@ async function setup(options: Readonly<{
 }
 
 describe('Service Runs on through the placement and relocation Actions', () => {
+  it.each(['outbound', 'return'] as const)('settles a collapsed %s Move row from native facts and stays stopped after Stop', async direction => {
+    const h = await setup({ running: true, sharedObservation: true, withRow: true, collapsedRow: true, waitEnabled: false });
+    const machineId = direction === 'outbound' ? 'hz-build-1' : 'devbox';
+    const workspaceId = direction === 'outbound' ? 'worker-checkout' : 'checkout';
+    const destinationWorkspace = { serverId: h.serverId, machineId, workspaceId, rootPath: direction === 'outbound' ? '/copy' : '/src/happier' };
+    let operation = ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: `${direction}-move`, revision: 1,
+      actionId: 'projects.service.relocate', state: 'running', scope: { accountId: 'artifact-account', machineId: 'devbox' },
+      title: 'Move server', createdAt: 1, startedAt: 2, cancellation: 'supported',
+      domainRef: { kind: 'projectService', purpose: 'relocation', sourceWorkspace: { serverId: h.serverId, refId: 'checkout' },
+        destinationWorkspace, workspace: direction === 'return'
+          ? { serverId: h.serverId, machineId: 'hz-build-1', workspaceId: 'worker-checkout', rootPath: '/copy' } : destinationWorkspace,
+        declaration: { workspaceRefId: direction === 'return' ? 'worker-checkout' : workspaceId, selection: { kind: 'manifest', name: 'server' } } },
+      progress: { kind: 'phase', phase: 'starting', label: 'Starting service' } });
+    await act(async () => {
+      if (direction === 'return') h.setRowMachine('hz-build-1');
+      publishActionOperationObservation({ serverId: h.serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] });
+      h.attach(operation);
+    });
+    await vi.waitFor(() => expect(h.screen.getTextContent()).toContain('localServices.row.startingOn'));
+    expect(h.screen.findByTestId('service-row-status-running')).toBeNull();
+    // The collapsed row never mounts placement controls: settlement must not depend on their effects.
+    expect(h.screen.findByTestId('placement')).toBeNull();
+    await act(async () => {
+      h.setRowMachine(machineId);
+      operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: 2, state: 'succeeded', settledAt: 3,
+        domainRef: { ...operation.domainRef, workspace: destinationWorkspace,
+          declaration: { workspaceRefId: workspaceId, selection: { kind: 'manifest', name: 'server' } } },
+        result: { status: 'moved', currentTarget: { kind: 'managed_service', managedServiceId: 'moved-instance', machineId, workspaceId } } });
+      publishActionOperationObservation({ serverId: h.serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] });
+    });
+    await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), h.screen.getTextContent()).toBeTruthy());
+    expect(h.screen.getTextContent()).not.toContain('localServices.row.startingOn');
+    await act(async () => h.setRunning(false));
+    expect(h.screen.findByTestId('service-row-status-running')).toBeNull();
+    expect(h.screen.findByTestId('service-row-start')).toBeTruthy();
+    expect(h.screen.getTextContent()).not.toContain('localServices.row.startingOn');
+    await h.screen.unmount();
+  });
   it.each(['before-stop', 'new-native-lifetime'] as const)('preserves the running row after a received Move failure (%s)', async state => {
     const h = await setup({ running: true, sharedObservation: true, withRow: true,
       ...(state === 'new-native-lifetime' ? { startedAtMs: 100 } : {}) });
@@ -653,6 +699,8 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     expect(runsOn().props.disabled).toBe(false);
     expect(screen.findByTestId('placement.move.retry')).toBeTruthy();
     expect(screen.findByTestId('service-row-start')).toBeTruthy();
+    await screen.pressByTestIdAsync('placement.move.operation.details');
+    expect(screen.getTextContent()).toContain('RPC_FORBIDDEN');
     await screen.pressByTestIdAsync('placement.move.retry');
     expect(screen.findByTestId('placement.move.inspect')).toBeTruthy();
     expect(screen.getTextContent()).toContain('projectServices.moveFailedStopped');
@@ -868,7 +916,11 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     await vi.waitFor(() => expect(screen.findByTestId('placement.move.inspect')).toBeTruthy());
     expect(screen.findByTestId('detail.placement.move.inspect')).toBeTruthy();
     expect(observers - discoveryObservers).toBe(1);
-    expect(screen.getTextContent()).toContain('Copying current files');
+    // The Move names itself and its current phase in the app's words; the producer's English phase
+    // label is not shown beside them.
+    expect(screen.getTextContent()).toContain('projectServices.moving');
+    expect(screen.getTextContent()).toContain('projectWorkers.copying');
+    expect(screen.getTextContent()).not.toContain('Copying current files');
     await screen.pressByTestIdAsync('placement.move.stop');
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('projectServices.cancelPending'));
     expect(actionOperationStore.getSnapshot().operationsByKey.values().next().value?.snapshot.state).toBe('running');

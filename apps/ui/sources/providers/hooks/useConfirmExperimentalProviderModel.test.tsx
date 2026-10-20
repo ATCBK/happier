@@ -56,6 +56,28 @@ function installRow(reply?: Parameters<typeof installProviderConnectionsCatalogH
 await loadSyncSingletonForTests();
 
 describe('useConfirmExperimentalProviderModel', () => {
+    it('persists a source-scoped confirmation through the existing Account Action and commits the selection', async () => {
+        const emptyCatalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+        serverId = (await account.restore({ catalog: emptyCatalog,
+            waivedActions: ['providers.models.experimental.confirm'] })).serverId;
+        row = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog: emptyCatalog });
+        const connectedAccountTarget = { kind: 'group' as const,
+            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+        const sourceConfirmation = { ...confirmation, connectionId: ProviderConnectionIdSchema.parse('connected-source:catalog-a'),
+            expectedConnectionRevision: 0, connectedAccountTarget };
+        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
+        const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: null,
+            serverId, agentTargetKey: confirmation.agentTargetKey, refresh: async () => {} }));
+        let result = false;
+        await act(async () => { result = await hook.getCurrent().confirm(sourceConfirmation, commitSelectionSpy); });
+        expect(result).toBe(true);
+        expect(row.catalog.connections).toEqual([]);
+        expect(row.catalog.experimentalBindingConfirmations).toEqual([expect.objectContaining({
+            connectionId: sourceConfirmation.connectionId, connectedAccountTarget,
+            agentTargetKey: confirmation.agentTargetKey, compatibilityFingerprint: confirmation.compatibilityFingerprint,
+        })]);
+        expect(commitSelectionSpy).toHaveBeenCalledOnce();
+    });
     it('honors an experimental-confirm Action waiver without a second unwaivable modal', async () => {
         confirmSpy.mockResolvedValue(false);
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');

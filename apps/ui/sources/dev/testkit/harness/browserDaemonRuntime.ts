@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import type { RuntimeActionExecute } from '@happier-dev/protocol/actions/executor/types';
-import type { FeaturesResponseSchema } from '@happier-dev/protocol/features';
+import type { FeaturesResponseSchema } from '@happier-dev/protocol';
 
 type View = Readonly<{ browserSessionId: string; viewId: string }>;
 type ReverseClient = Readonly<{

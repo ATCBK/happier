@@ -98,6 +98,15 @@ observable failures rather than automatic retry loops.
 children finish on their tool results; asynchronous children finish on settled
 native evidence. Every tool block is folded and an implicit group closes when
 its children settle. Failed results retain failure, including tagged tool errors.
+Claude 2.1.302 reports an Agent `completed` each time it stops, including when it
+stops to wait on backgrounded work it still owns (SDK `task_started` rows carrying
+`parent_task_id`). That completed terminal leaves the Agent awaiting its children
+(a child Agent that is itself awaiting still counts): it no longer counts as
+active, but its SDK query keeps observing, and only the Agent's own typed
+`task_progress` after it wakes reactivates it until its next terminal. `SubagentStop`
+cannot reactivate it; a later failure or stop settles an awaiting Agent, and a
+stopped provider releases any awaiting Agent. A completed TaskOutput preserves the
+pending wake; a confirmed TaskStop settles its target as stopped.
 
 Historical observations reconstruct correlation without fresh activity admission
 or foreground prompt acceptance. Ordered source import retains raw child facts

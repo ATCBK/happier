@@ -11,7 +11,7 @@ import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes'
 import { SessionDraftDocumentV1Schema, SessionDraftSessionMessagingValueV1Schema, isMeaningfulSessionDraftRecipientValueV1, type SessionDraftDocumentV1, type SessionDraftExpectedRevisionV1, type SessionDraftSessionMessagingValueV1, type StrictJsonValue } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { DiscussionSelectionSourceV1Schema, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
-import { DiscussionInitialParticipantsV1Schema, type DiscussionAccountParticipantRefV1 } from '@happier-dev/protocol/discussions/participants';
+import { DiscussionInitialParticipantsV1Schema, type DiscussionInitialParticipantV1 } from '@happier-dev/protocol/discussions/participants';
 import { SYNCED_SESSION_AUTHORING_FIELD_IDS_V2, SyncedSessionAuthoringValueV2Schema, type SyncedSessionAuthoringValueV2 } from '@happier-dev/protocol/sessions/authoring/index';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { ProjectOpenDraftDocumentV2Schema, type ProjectOpenDraftDocumentV2 } from '@happier-dev/protocol/projects/openProjectDraftV1';
@@ -65,7 +65,7 @@ export type SessionDiscussionDraftMutationAttempt = Readonly<
         creationLocalId: string;
         messageLocalId: string;
         anchor?: DiscussionAnchorV1;
-        participants?: readonly DiscussionAccountParticipantRefV1[];
+        participants?: readonly DiscussionInitialParticipantV1[];
         replyTarget?: DiscussionReplyTargetV1;
         currentness: SessionDraftCurrentness;
     }

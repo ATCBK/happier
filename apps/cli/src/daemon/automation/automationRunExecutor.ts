@@ -275,6 +275,7 @@ export async function executeClaimedRun(params: {
         const result = await params.coordinateWorkflowRun({
           runId: claimed.run.id,
           automationId: claimed.run.automationId,
+          automationName: claimed.automation.name,
           attempt: claimed.run.attempt,
           expectedRevision: claimed.run.revision,
           ...(claimed.run.workflowResumeRequestedRevision === undefined ? {} : {

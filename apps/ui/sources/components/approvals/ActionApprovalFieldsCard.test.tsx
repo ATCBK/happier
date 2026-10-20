@@ -75,6 +75,16 @@ it('reads a Browser view command by its target, keeping its ids and a failure co
     for (const exact of ['cmd-1', 'browser-session-1', 'view-1', 'target-1', 'openView', 'sandbox_unavailable']) expect(screen.getTextContent()).toContain(exact);
 });
 
+it('keeps the exact identity of a Home this device cannot name in Technical details, never in the readable rows', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'session.title.set', actionArgs: { sessionId: 'session-1', title: 'Release notes' } });
+    const identity = 'srv_elsewhere_9f3 · stack_qa_main__id_default';
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" presentation={presentation} homeIdentity={identity} />);
+    expect(screen.getTextContent()).not.toContain(identity);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain(identity);
+});
+
 it.each(['open', 'executed'] as const)('names the MCP catalog title in %s approvals and keeps the id in Technical details', async (status) => {
     const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://mcp-approval-title.test' });
     profiles.push(home.id);
@@ -231,8 +241,9 @@ afterEach(async () => {
     for (const id of profiles.splice(0)) await removeServerProfile(id);
 });
 
-it('renders the daemon-evaluated plugin install disclosure in the approval Inbox card', async () => {
-    const actionArgs = { path: '/plugins/acme.example', kind: 'path' as const };
+it('presents a plugin install approval through the install review facts, keeping raw values in Technical details', async () => {
+    const locator = '/plugins/acme.example';
+    const actionArgs = { path: locator, kind: 'path' as const, dev: true };
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
         createdBy: { surface: 'cli' }, actionId: 'plugins.install', actionArgs, summary: 'Install plugin',
         executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' },
@@ -241,10 +252,13 @@ it('renders the daemon-evaluated plugin install disclosure in the approval Inbox
             permissionsDisclosure: 'daemonEvaluated', pendingReview: {
                 kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-plugin-install',
                 reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-                review: createPluginInstallationReviewFixture({ requiredHostAccess: [{
+                review: createPluginInstallationReviewFixture({
+                    source: { kind: 'path', locator },
+                    updateChannel: { kind: 'path', locator, development: true },
+                    requiredHostAccess: [{
                     id: 'network', capability: 'network', reason: 'Call the service.',
                     authorizationClass: 'cooperativeDisclosure',
-                    normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+                    normalizedScope: { methods: ['POST'], targets: [{ kind: 'fixedOrigin', origin: 'http://127.0.0.1:5199' }] },
                 }] }),
             },
         },
@@ -254,9 +268,27 @@ it('renders the daemon-evaluated plugin install disclosure in the approval Inbox
     for (const anatomy of ['card', 'page'] as const) {
         const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
         const text = screen.getTextContent();
-        for (const value of ['Daemon-evaluated install and trust disclosure', 'acme.example', 'network', 'https://example.test']) {
+        // The same words as the Settings install review: its sections, its labels for declared enums.
+        for (const value of [t('settingsPlugins.installReviewSections.requiredAccess'),
+            t('settingsPlugins.installReviewSections.authorizationClass.cooperativeDisclosure'),
+            t('settingsPlugins.installReviewSections.uiArtifactStatus.none'),
+            t('settingsPlugins.installReviewSections.trustedCodeTitle'), 'network']) {
             expect(text).toContain(value);
         }
+        // The declared host scope reads as one sentence; its raw structure waits behind Technical details.
+        expect(text).toContain(t('settingsPlugins.installReviewSections.networkAccess', { methods: 'POST', targets: 'http://127.0.0.1:5199' }));
+        for (const raw of ['Fixed origin', 'Methods:', 'Targets:']) expect(text).not.toContain(raw);
+        // The local path is said once, in the Identity section, with its development flag; the install's
+        // own arguments for it wait behind Technical details.
+        expect(text.split(locator)).toHaveLength(2);
+        expect(text).toContain(`${locator} · development`);
+        // Raw enum values and key-derived labels never lead; they wait behind Technical details.
+        for (const raw of ['cooperativeDisclosure', 'notProvided', 'notApplicable', 'Ui artifacts', 'Runtime api version']) {
+            expect(text).not.toContain(raw);
+        }
+        const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+        await act(async () => { details?.props.onExpandedChange(true); });
+        expect(screen.getTextContent()).toContain('cooperativeDisclosure');
     }
 });
 

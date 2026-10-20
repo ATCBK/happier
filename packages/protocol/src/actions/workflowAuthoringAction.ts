@@ -106,8 +106,8 @@ export const WORKFLOW_AUTHORING_ACTION_SPECS = [{
   cli: { commands: [{ path: ['workflow', 'authoring', 'conversation', 'bind'], visibility: 'canonical' }] },
   description: 'Bind a current existing Session to a step (or the default with stepId null) in the answering mounted Workflow draft. This authors one change; it does not save, start the Workflow or submit text.',
   safety: 'safe', sideEffectClass: 'external', executionPlacement: 'client', placements: [],
-  surfaces: { ...mountedSurfaces, voice: false, cli: true },
-  bindings: { mcpToolName: 'workflow_authoring_conversation_bind' },
+  surfaces: { ...mountedSurfaces, cli: true },
+  bindings: { mcpToolName: 'workflow_authoring_conversation_bind', voiceClientToolName: 'workflow_authoring_conversation_bind' },
   inputSchema: WorkflowConversationBindInputV1Schema, outputSchema: WorkflowConversationBindResultV1Schema,
   inputHints: { fields: [
     { path: 'scope', title: 'Home and Account', widget: 'json', required: true },

@@ -1292,9 +1292,11 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       if (stopped) return stopped;
       const resolved = resolvePiSource({ source: request.source, env: readEnv() });
       if (!resolved.ok) return resolved;
+      if (request.includeAccountingSource === false) return ok({ source: resolved.value.source });
       const inventory = await discoverAgentAccountingJsonlSource([resolved.value.sessionsRoot], request.signal);
       return ok({ source: resolved.value.source, accountingSource: {
         accountingSources: [PI_NATIVE_ACCOUNTING_SOURCE],
+        discoveredFileCount: inventory.files.length,
         rootPath: resolved.value.sessionsRoot, rootField: 'sessionsRoot',
         resourceKey: `pi:accounting:${createHash('sha256').update(resolved.value.sessionsRoot).digest('base64url')}`,
         changeObservation: 'watch_file_changes' as const,

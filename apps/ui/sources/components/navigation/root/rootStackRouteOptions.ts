@@ -250,6 +250,7 @@ export function createRootStackRouteOptions(newSessionPresentationMode: 'auto' |
         'projects/[workspaceRefId]/scripts': options.hiddenHeader,
         'projects/[workspaceRefId]/services': options.hiddenHeader,
         'projects/[workspaceRefId]/context': options.hiddenHeader,
+        'projects/[workspaceRefId]/memory': options.hiddenHeader,
         'session/recent': options.sessionRecent,
         'session/archived': options.sessionArchived,
         'teams/[teamId]/sessions': options.teamSessions,

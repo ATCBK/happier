@@ -118,6 +118,10 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
     fillContainer?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
+    /** Older native binaries do not yet include the actual rendered text. */
+    contextMenuItems?: readonly Readonly<{ text: string; onPress: (event: {
+        text: string; renderedText?: string; selection: { start: number; end: number };
+    }) => void }>[];
 }>;
 
 /**
@@ -274,6 +278,7 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             md4cFlags={md4cFlags}
             onLinkPress={handleLinkPress}
             selectable={selectable}
+            {...(props.contextMenuItems ? { contextMenuItems: props.contextMenuItems.map((item) => ({ text: item.text, onPress: item.onPress })) } : {})}
             allowTrailingMargin={false}
             flavor={flavor}
         />

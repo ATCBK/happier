@@ -50,6 +50,7 @@ export const surfaceFamilyLabels = {
 
 
 
+// Friends already owns a localized title; the family-title key owner reuses it.
 export const english = {
     actionFamilies: {
         plugin_execution_origin: "Plugin execution",
@@ -164,7 +165,7 @@ export const english = {
         teams: 'Teams',
         saved_secret_sharing: 'Shared secrets',
     },
-} satisfies { actionFamilies: Record<ActionIdFamilyV1, string> };
+} satisfies { actionFamilies: Record<Exclude<ActionIdFamilyV1, 'friends'>, string> };
 
 
 export const actionFamilyTranslationsEnglish = { en: english } as const;

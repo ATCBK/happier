@@ -18,9 +18,6 @@ import {
 
 import type { PluginNetworkAddressResolver } from '@/plugins/runtime/fetch/originLocality';
 import { createPluginInvocationPresentation } from '@/plugins/runtime/invocation/services/interactions';
-import {
-    withPluginInvocationServiceBindingAvailability,
-} from '@/plugins/runtime/invocation/services/unavailable';
 import type {
     PluginInvocationServicesSeed,
     PluginInvocationServiceBinding,
@@ -285,15 +282,6 @@ function resolveHostAccessEntries(
     })));
 }
 
-function removeUnqualifiedProducerNetworkAuthority(
-    binding: PluginInvocationServiceBinding,
-): PluginInvocationServiceBinding {
-    return withPluginInvocationServiceBindingAvailability(
-        binding,
-        { serviceId: 'http', availability: 'unavailable' },
-    );
-}
-
 function authenticationUnavailable(code: string): Readonly<{
     status: 'unavailable';
     diagnostic: Readonly<{ code: string; severity: 'error' }>;
@@ -442,9 +430,9 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 lease.ref,
                 plugin.hostAccessRequests,
             );
-            let serviceBinding = hasQualifiedProducerNetworkAuthority
-                ? policy.serviceBinding
-                : removeUnqualifiedProducerNetworkAuthority(policy.serviceBinding);
+            // Literal origins already belong to the canonical HostAccess binding.
+            // Only configured origins need additional account-scoped resolution.
+            let serviceBinding = policy.serviceBinding;
             if (hasQualifiedProducerNetworkAuthority) {
                 const configurationRevocationSignal = input.configurationRevocationSignal?.(
                     input.context.configuration,
@@ -634,9 +622,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 lease.ref,
                 plugin.hostAccessRequests,
             );
-            let serviceBinding = hasQualifiedProducerNetworkAuthority
-                ? policy.serviceBinding
-                : removeUnqualifiedProducerNetworkAuthority(policy.serviceBinding);
+            let serviceBinding = policy.serviceBinding;
             if (hasQualifiedProducerNetworkAuthority) {
                 const configurationRevocationSignal = input.configurationRevocationSignal?.(
                     input.context.configuration,

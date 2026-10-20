@@ -6,6 +6,7 @@ import {
   foldFoundRows,
   foundAddAllItems,
   foundRowKind,
+  groupFoundRowsByName,
   pickFoundHomeRows,
   orderFoundRows,
   partitionFoundMachines,
@@ -38,6 +39,26 @@ describe('Found rows', () => {
     expect(orderFoundRows(result.items).map((item) => item.name)).toEqual(['same-name', 'held', 'plug', 'plain', 'plain-2']);
     const added = result.items.map((item) => (item.name === 'plain' ? { ...item, inLibrary: 'plain' } : item));
     expect(orderFoundRows(added).map((item) => item.name)).toEqual(['same-name', 'held', 'plug', 'plain', 'plain-2']);
+  });
+
+  it('draws one row per skill name: the copies in other agents\' folders fold into it, with their folders and readers', () => {
+    const copy = (path: string, agents: string[], extra: Record<string, unknown> = {}) => SkillFoundListResultV1Schema.parse({
+      scannedAt: 1,
+      roots: [],
+      items: [{ name: 'frontend-design', description: null, path, digest: path, agents, scope: 'user', inLibrary: null, masksLibrary: false, happierInstalled: false, pluginOwned: null, ...extra }],
+    }).items[0]!;
+    const groups = groupFoundRowsByName([
+      copy('/h/.claude/skills/frontend-design', ['claude', 'codex']),
+      byName('plain'),
+      copy('/h/.cursor/skills/frontend-design', ['cursor', 'claude'], { masksLibrary: true }),
+      copy('/h/.claude/skills/frontend-design', ['claude']),
+    ]);
+    expect(groups.map((group) => group.item.name)).toEqual(['frontend-design', 'plain']);
+    expect(groups[0]).toMatchObject({
+      agents: ['claude', 'codex', 'cursor'],
+      folders: ['/h/.claude/skills', '/h/.cursor/skills'],
+    });
+    expect(groups[0]!.item.path).toBe('/h/.claude/skills/frontend-design');
   });
 
   it('adds all only the rows that offer Add to library', () => {

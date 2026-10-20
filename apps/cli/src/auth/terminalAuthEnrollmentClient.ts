@@ -33,8 +33,12 @@ export type TerminalAuthEnrollmentVerificationErrorCode =
   | 'HOME_RUNTIME_ORIGIN_INVALID';
 
 export class TerminalAuthEnrollmentVerificationError extends Error {
-  constructor(readonly code: TerminalAuthEnrollmentVerificationErrorCode, message: string) {
-    super(message);
+  readonly status?: number;
+
+  constructor(readonly code: TerminalAuthEnrollmentVerificationErrorCode, message: string,
+    options?: ErrorOptions & Readonly<{ status?: number }>) {
+    super(message, options);
+    this.status = options?.status;
     this.name = 'TerminalAuthEnrollmentVerificationError';
   }
 }
@@ -58,16 +62,19 @@ export function readTerminalAuthHomeIdentity(snapshot: CliServerFeaturesSnapshot
     if (snapshot.reason === 'network') {
       throw new TerminalAuthEnrollmentVerificationError(
         'HOME_FEATURES_NETWORK', 'The selected Home features could not be reached. Check connectivity and retry.',
+        { cause: { code: 'ERR_NETWORK' } },
       );
     }
     if (snapshot.reason === 'timeout') {
       throw new TerminalAuthEnrollmentVerificationError(
         'HOME_FEATURES_TIMEOUT', 'The selected Home features request timed out. Check server availability and retry.',
+        { cause: { code: 'ETIMEDOUT' } },
       );
     }
     throw new TerminalAuthEnrollmentVerificationError(
       'HOME_FEATURES_HTTP_ERROR',
       `The selected Home features request failed${snapshot.httpStatus === undefined ? '' : ` (HTTP ${snapshot.httpStatus})`}. Check the server response and retry.`,
+      { status: snapshot.httpStatus },
     );
   }
   return normalizeServerIdentityIdCapability(snapshot.features.capabilities.serverIdentity?.serverIdentityId) ?? null;

@@ -60,7 +60,7 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
   // One qualifier, said once: when every fact is partial the band says so once, not under each figure (R9).
   const partialOnce = facts.length > 1 && facts.every((fact) => !fact.complete);
   if (!props.slice.accounting)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   // The prices behind API-equivalent money live with the money they make (U10); unpriced models
   // are exactly the case where there are no money facts yet.
   const prices = <UsageModelPricesLine slice={props.slice} serverId={props.serverId} testID={`${props.testID}.prices`} />;

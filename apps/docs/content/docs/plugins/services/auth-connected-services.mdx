@@ -62,6 +62,18 @@ An already-bound, currently authorized purpose can still use `getBinding()` and
 requested kind is authorized. The selection flow never returns the host-private
 account inventory to the plugin.
 
+In 0.3 development source, Settings pages can open the same host purpose setup
+without a current Session using
+`hostApi.openConnectedAccounts({ service, purpose: { consumer, purpose } })`.
+The consumer is the qualified Action or Resource whose installed declaration
+owns the purpose. The host validates that declaration on the invoking machine,
+offers compatible accounts and pools, and saves the choice through the existing
+approval-controlled `connectedServices.purposes.default.set` Action. Agents use
+that Action directly with `machineId`, the qualified `purpose`, and an account
+or group `target`. Creating a connection alone does not select a purpose.
+Triage source authors supply `connectedAccountPurpose` to the shared source
+settings factory; discovery needs only `use`, because setup owns selection.
+
 ## List the accounts authorized for a purpose
 
 `listAccounts({ purpose, limit? }, options?)` returns non-secret metadata for

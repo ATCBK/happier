@@ -16,6 +16,7 @@ import { SessionEnvOverlayV1Schema } from '@happier-dev/protocol/spawn/envOverla
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { AgentProbeModelSchema } from '@happier-dev/protocol/capabilities';
 import { PortableRuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtimeDescriptorV1';
+import { SecretReferenceOverlayV1Schema } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
 
 const StrictBackendTargetRefV2Schema = zMini.pipe(
   zMini.strictObject(BackendTargetRefV2Schema.shape),
@@ -41,7 +42,9 @@ export const RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS = [
   z.strictObject({ kind: z.literal('execution_run.snapshot.release_v1'), snapshotId: z.uuid() }),
   z.strictObject({ kind: z.literal('execution_run.native_offered_model.read_v1'),
     backendTarget: asHostProtocolZod(StrictBackendTargetRefV2Schema), modelId: z.string().check(z.minLength(1)),
-    cwd: z.string().check(z.minLength(1)), runtimeDescriptorV1: z.optional(asHostProtocolZod(PortableRuntimeDescriptorV1Schema)) }),
+    cwd: z.string().check(z.minLength(1)), runtimeDescriptorV1: z.optional(asHostProtocolZod(PortableRuntimeDescriptorV1Schema)),
+    connectedServices: z.optional(z.nullable(asHostProtocolZod(ConnectedServiceBindingsV2Schema))),
+    secretReferenceOverlay: z.optional(asHostProtocolZod(SecretReferenceOverlayV1Schema)) }),
   z.strictObject({ kind: z.literal('execution_run.review_scm_scope.resolve_v1'),
     cwd: z.string().check(z.minLength(1)), intentInput: z.optional(z.unknown()) }),
   z.strictObject({ kind: z.literal('execution_run.commit_message_context.resolve_v1'),

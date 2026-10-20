@@ -50,7 +50,7 @@ async function renderList(extra: Record<string, unknown> = {}, ref?: React.Ref<a
     );
 }
 
-describe('VirtualizedList backend selection', () => {
+describe('VirtualizedList backend', () => {
     beforeEach(() => {
         platformState.os = 'web';
     });
@@ -72,17 +72,10 @@ describe('VirtualizedList backend selection', () => {
         expect(mocks.legend?.state.props?.contentContainerStyle).toBe(nativeContentStyle);
     });
 
-    it('renders the Legend backend when explicitly preferred, on any platform', async () => {
-        platformState.os = 'web';
-        const screen = await renderList({ backendPreference: 'legend' });
-        expect(screen.findAllByType('LegendList' as any)).toHaveLength(1);
-        expect(screen.findAllByType('FlatList' as any)).toHaveLength(0);
-    });
-
     it('forwards the stable ref onto the resolved backend handle', async () => {
         platformState.os = 'web';
         const ref = React.createRef<any>();
-        await renderList({ backendPreference: 'legend' }, ref);
+        await renderList({}, ref);
         ref.current.scrollToOffset({ offset: 120 });
         ref.current.scrollToIndex({ index: 3 });
         ref.current.clearMeasurementCache({ mode: 'sizes' });

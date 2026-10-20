@@ -124,6 +124,10 @@ export function createOidcIdentityProvider(
         return {
             ...(verifiedMailbox ? { verifiedMailbox } : {}),
             connectInTx: async (tx) => {
+                await preparedGroups?.acquireAdmissionInTx(tx, {
+                    additionalAccountIds: params.transferFromAccountId ? [params.transferFromAccountId] : [],
+                    intent: "exclusive",
+                });
                 await preparedIdentity.connectInTx(tx);
                 await preparedGroups?.applyInTx(tx);
             },

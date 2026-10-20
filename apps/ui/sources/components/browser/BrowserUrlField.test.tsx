@@ -93,6 +93,33 @@ describe('BrowserUrlField — toolbar address density', () => {
         expect(field?.props.selection).toEqual({ start: 0, end: 'https://www.example.com/docs'.length });
     });
 
+    it('names a relay preview by the service it exposes while blurred, and keeps the real URL for focus and Copy', async () => {
+        clipboardSpies.setClipboardStringSafe.mockClear();
+        const realUrl = 'https://preview-abc123.example.test/docs/start';
+        const screen = await renderScreen(
+            <BrowserUrlField
+                testID={TEST_ID}
+                density="toolbar"
+                trailingAction="copy"
+                formatWhileBlurred
+                displayHost="localhost:42511"
+                value={realUrl}
+                onSubmitUrl={vi.fn()}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(screen.findByTestId(TEST_ID)?.props.value).toBe('localhost:42511/docs/start');
+
+        await screen.pressByTestIdAsync(`${TEST_ID}-copy`);
+        expect(clipboardSpies.setClipboardStringSafe).toHaveBeenCalledExactlyOnceWith(realUrl);
+
+        await act(async () => {
+            screen.findByTestId(TEST_ID)?.props.onFocus?.({});
+            await Promise.resolve();
+        });
+        expect(screen.findByTestId(TEST_ID)?.props.value).toBe(realUrl);
+    });
+
     it('does not add normal-mode focus chrome around the shared TextInput', async () => {
         const screen = await renderScreen(
             <BrowserUrlField

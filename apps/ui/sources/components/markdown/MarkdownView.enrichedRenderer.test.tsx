@@ -261,6 +261,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            sourceStart: 0,
+            sourceLength: '# Title'.length,
         });
         expect(flattenStyle(trigger.props.style)).toMatchObject({
             width: '100%',
@@ -315,6 +317,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            sourceStart: 0,
+            sourceLength: '# Title'.length,
         });
     });
 
@@ -349,6 +353,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 3, endLine: 3 },
             markdown: 'Second paragraph.',
+            sourceStart: markdown.indexOf('Second paragraph.'),
+            sourceLength: 'Second paragraph.'.length,
         });
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(2);
     });

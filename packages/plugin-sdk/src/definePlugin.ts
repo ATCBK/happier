@@ -1340,7 +1340,23 @@ function projectActionContracts(
 }
 
 function projectAgent(localId: string, definition: PluginAgentDefinition) {
-    return Object.freeze({ ...definition.declaration, id: localId });
+    const sharing = definition.connectedAccountLaunch?.stateSharingDescriptor;
+    return Object.freeze({ ...definition.declaration, id: localId,
+        capabilities: {
+            ...definition.declaration.capabilities,
+            // The executable descriptor is the owner. Publish only its public
+            // support and consent facts, never its native-home paths or entries.
+            ...(sharing ? { providerStateSharing: {
+                config: { supported: sharing.config.supported, modes: [...sharing.config.modes],
+                    ...(sharing.config.unavailableReason ? { unavailableReason: sharing.config.unavailableReason } : {}) },
+                state: { supported: sharing.state.supported, modes: [...sharing.state.modes],
+                    ...(sharing.state.sharedStatePrivacyRiskAcknowledgementRequired === undefined ? {} : {
+                        sharedStatePrivacyRiskAcknowledgementRequired: sharing.state.sharedStatePrivacyRiskAcknowledgementRequired,
+                    }),
+                    ...(sharing.state.unavailableReason ? { unavailableReason: sharing.state.unavailableReason } : {}) },
+            } } : {}),
+        },
+    });
 }
 
 function projectPromptAsset(

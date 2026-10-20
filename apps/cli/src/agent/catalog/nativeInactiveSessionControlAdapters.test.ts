@@ -220,6 +220,29 @@ function claudeResumeGoalHarness() {
 }
 
 describe('native inactive Agent session controls', () => {
+  it.each([
+    { status: 'unavailable' as const, facet: { phase: 'native_effect' as const }, expected: { phase: 'native_effect' } },
+    { status: 'rejected' as const, facet: { phase: 'host_publication_rejected' as const }, expected: { phase: 'host_publication_rejected' } },
+    { status: 'unsupported' as const, facet: { phase: 'missing_matching_publication' as const }, expected: { phase: 'missing_matching_publication' } },
+    { status: 'unavailable' as const, facet: { phase: 'native_effect' as const, privateText: 'must not disclose' }, expected: undefined },
+  ])('preserves only closed external Goal evidence for $status / $facet', async ({ status, facet, expected }) => {
+    // This is an external plugin contribution, not a replacement for host logic.
+    const fail = async (): Promise<AgentSessionGoalMutationResult> => ({ status,
+      diagnostic: { code: 'external_goal_refused' }, retryable: false, goalControlFailure: facet });
+    const fixture = runtimeRegistryFixture({ agent: { pluginId: 'test.external-goals', localId: 'goal-agent' },
+      sessions: { goals: { get: fail, set: fail, clear: fail }, async open() { throw new Error('not used'); } } });
+    const adapter = createNativeInactiveGoalAdapter({ agentId: fixture.agentId,
+      native: { get: true, set: true, clear: true }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+    for (const operation of ['get', 'set', 'clear'] as const) {
+      const result = await routeSessionGoalControl({ ...commonRouteParams('external-goal-failure'), operation,
+        ...(operation === 'set' ? { request: { objective: 'Keep original refusal' } } : {}),
+        resolveAdapter: async () => adapter });
+      expect(result).toMatchObject({ ok: false, status, errorCode: 'external_goal_refused',
+        ...(expected ? { goalControlFailure: expected } : {}) });
+      if (!expected) expect(result).not.toHaveProperty('goalControlFailure');
+    }
+  });
+
   it('resumes real Claude and applies its native Goal before receipt, readback and the next person turn', async () => {
     const harness = claudeResumeGoalHarness();
     expect(harness.objective()).toBe('Native A');

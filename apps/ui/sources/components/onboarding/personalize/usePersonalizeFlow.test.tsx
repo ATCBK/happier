@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { registerNativeThemePreferenceTransitionController } from '@/components/settings/appearance/themePreferenceTransition';
@@ -14,6 +14,9 @@ import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccount
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { Modal } from '@/modal';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { readPersonalizeChoices, type PersonalizeChoices, type PersonalizeStepId } from './personalizeFlowModel';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -65,6 +68,69 @@ afterEach(async () => {
 });
 
 describe('Personalize mounted visit', () => {
+    it.each([
+        ['look', { glass: 'solid' }],
+        ['conversation', { transcriptLayout: 'linear', thinking: 'hidden' }],
+        ['tools', { toolChrome: 'cards', toolDetail: 'full', toolTap: 'open' }],
+        ['work', { listLayout: 'recent_activity', listDensity: 'cozy' }],
+        ['attention', { attention: 'global' }],
+        ['notifications', { notifyNeedsYou: false, notifyFinished: false, notifyPreview: false }],
+    ] satisfies readonly (readonly [PersonalizeStepId, Partial<PersonalizeChoices>])[])
+    ('admits the %s choices before advancing or marking the step saved', async (step, patch) => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) });
+        try {
+            const hook = await renderHook(() => usePersonalizeFlow({ initialPage: step, onExit: vi.fn() }));
+            const before = readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings);
+            await act(async () => { hook.getCurrent().update(patch); });
+            await act(async () => { expect(await hook.getCurrent().next()).toBe(false); });
+            expect(hook.getCurrent().page).toBe(step);
+            expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual([]);
+            expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings)).toEqual(before);
+
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } } })); });
+            await act(async () => { expect(await hook.getCurrent().next()).toBe(true); });
+            expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings)).toMatchObject(patch);
+            expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual([step]);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+
+    it('keeps a compound step pending until approval and keeps its draft after rejection', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } } }) });
+        try {
+            const hook = await renderHook(() => usePersonalizeFlow({ initialPage: 'work', onExit: vi.fn() }));
+            await act(async () => { hook.getCurrent().update({ listLayout: 'recent_activity' }); });
+            let pending!: Promise<boolean>;
+            await act(async () => { pending = hook.getCurrent().next(); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            expect(hook.getCurrent()).toMatchObject({ page: 'work', status: 'saving' });
+            expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual([]);
+            expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings).listLayout).toBe('projects');
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+            await act(async () => { expect(await pending).toBe(false); });
+            expect(hook.getCurrent()).toMatchObject({ page: 'work', status: 'idle', draft: { listLayout: 'recent_activity' } });
+
+            await act(async () => { pending = hook.getCurrent().next(); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(2));
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[1]!.id, 'approve');
+            await act(async () => { expect(await pending).toBe(true); });
+            expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings).listLayout).toBe('recent_activity');
+            expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual(['work']);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+
+    it('remembers a skipped page without changing preferences when Settings writes are Off', async () => {
+        storage.setState({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) });
+        const hook = await renderHook(() => usePersonalizeFlow({ initialPage: 'look', onExit: vi.fn() }));
+        await act(async () => { hook.getCurrent().skip(); });
+        expect(hook.getCurrent().page).toBe('style');
+        expect(storage.getState().localSettings.personalizeProgressV1.resumeAt).toBe('style');
+        expect(storage.getState().localSettings.themePreference).toBe('light');
+    });
+
     it('keeps the live visit usable after Strict Mode replays mount effects', async () => {
         const hook = await renderHook(() => usePersonalizeFlow({ initialPage: 'look', onExit: vi.fn() }), {
             wrapper: React.StrictMode,

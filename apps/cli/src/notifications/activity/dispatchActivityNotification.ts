@@ -313,14 +313,18 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   channels?: readonly string[];
   pluginNotifications?: Pick<StablePluginNotificationsOwner, 'availableHostChannels' | 'sendHostNotification'> | null;
   usageNoticeArtifactStore?: Readonly<{ accountId: string; store: Pick<ReturnType<typeof createAccountArtifactStore>, 'create'> }>;
-}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number }>> {
+  /** Existing personal Follow CAS before outward delivery; Runs first retain their Inbox notice. */
+  acceptSourceFollowDelivery?: () => Promise<boolean>;
+}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number; inboxRepresented?: true }>> {
   const admission = await resolveSessionActivityNotificationAdmission(params);
   if (!admission.eligible) {
     return { attemptedChannels: 0, deliveredChannels: 0 };
   }
   const sourceSessionId = params.event.topic === 'ready' || params.event.topic === 'permission_request'
-    || params.event.topic === 'user_action_request' || params.event.topic === 'follow_update' ? params.event.sessionId : null;
-  if (sourceSessionId) {
+    || params.event.topic === 'user_action_request' || params.event.topic === 'follow_update' && 'sessionId' in params.event ? params.event.sessionId : null;
+  const sourceFollow = params.event.topic === 'follow_update' && 'original' in params.event.follow ? params.event.follow : null;
+  const discussionFollow = sourceFollow !== null && 'kind' in sourceFollow.original;
+  if (sourceSessionId || sourceFollow) {
     const operation = params.operationContext;
     const scopes = params.readAccountSessionDeliveryMutedScopes
       ? await params.readAccountSessionDeliveryMutedScopes()
@@ -328,9 +332,13 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
           serverHttpBaseUrl: operation.serverHttpBaseUrl, token: operation.credentials.token,
           accountId: readAccountIdFromToken(operation.credentials.token) ?? '',
         }) : null;
-    if (scopes === null || isFollowDeliveryMutedV1(scopes, {
-      senderSessionId: sourceSessionId, source: { kind: 'session', sessionId: sourceSessionId },
-    })) return { attemptedChannels: 0, deliveredChannels: 0 };
+    const original = sourceFollow?.original;
+    const source = original ? 'kind' in original ? { kind: 'discussion' as const, discussionId: original.discussion.discussionId }
+      : original.source : null;
+    if (scopes === null || isFollowDeliveryMutedV1(scopes, source ? { source,
+      ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) }
+      : { senderSessionId: sourceSessionId!, source: { kind: 'session', sessionId: sourceSessionId! } }))
+      return { attemptedChannels: 0, deliveredChannels: 0 };
   }
   if (params.event.topic === 'connected_service_usage'
     && !isUsageQuotaNotificationEnabled(accountSettingsParse(params.operationContext?.readSnapshot()?.settings
@@ -354,6 +362,7 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   });
   let attemptedChannels = 0;
   let deliveredChannels = 0;
+  let inboxRepresented: true | undefined;
   const selectedChannelIds = params.channels ? new Set(params.channels) : null;
   const selects = (id: string) => !selectedChannelIds || selectedChannelIds.has(id);
   const pluginNotifications = params.pluginNotifications === undefined
@@ -371,11 +380,12 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   }
   await assertCurrent();
 
-  // Inbox is an existing private Account Artifact projection. Its badge policy is
-  // noninterruptive; push/webhook preview policy remains independent below.
-  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit') && params.usageNoticeArtifactStore && !selectedChannelIds) {
+  // Runs use the existing private Account notice. Discussion Inbox reads its
+  // original C3 messages and private read cursor; never copy that lifecycle here.
+  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit'
+    || params.event.topic === 'follow_update' && 'original' in params.event.follow && !discussionFollow) && params.usageNoticeArtifactStore && !selectedChannelIds) {
     const decision = channelDecision('badge');
-    if (decision.delivery !== 'suppress') {
+    if (sourceFollow || decision.delivery !== 'suppress') {
       const notice = params.event;
       const content = buildActivityNotificationContent(notice, {
         readyIncludeMessageText: true, requestIncludeMessageText: true, previewBehavior: 'include_preview',
@@ -387,19 +397,25 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
           noticeAccountId: params.usageNoticeArtifactStore.accountId,
           beforeWrite: assertCurrent,
           header: AccountNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1,
-            title: content.body, status: 'open', resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice }),
+            title: content.body || content.title, status: 'open', resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice }),
           body: JSON.stringify(AccountNoticeArtifactBodyV1Schema.parse({ v: 1, resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice })),
         });
         deliveredChannels += 1;
+        if (sourceFollow) inboxRepresented = true;
       } catch (error) {
         // The Artifact id is this Account's witnessed occurrence. Never overwrite
         // its read/dismiss state or deliver the same occurrence again.
         if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'conflict') {
-          return { attemptedChannels, deliveredChannels };
+          if (!sourceFollow) return { attemptedChannels, deliveredChannels };
+          inboxRepresented = true;
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
+  }
+  if (sourceFollow && ((!discussionFollow && !inboxRepresented) || !await params.acceptSourceFollowDelivery?.())) {
+    return { attemptedChannels, deliveredChannels, ...(inboxRepresented ? { inboxRepresented } : {}) };
   }
 
   const expoDecision = channelDecision('expo_push');
@@ -513,5 +529,6 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   return {
     attemptedChannels,
     deliveredChannels,
+    ...(inboxRepresented ? { inboxRepresented } : {}),
   };
 }

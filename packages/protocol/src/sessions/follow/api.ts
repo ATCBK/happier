@@ -4,6 +4,8 @@ import { z } from 'zod/mini';
 import {
   AccountSessionFollowCapabilitiesV1Schema,
   AccountSessionFollowV1Schema,
+  AccountFollowRelationV1Schema,
+  OtherAccountFollowV1Schema,
   SessionAutoFollowPreferencesV1Schema,
   SessionFollowNotificationLevelSchema,
   PersonalFollowOnceV1Schema,
@@ -11,6 +13,7 @@ import {
   type SessionFollowNotificationLevel,
 } from './accountFollow.js';
 import { FollowPolicyV1Schema, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
+import { FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
 
 /**
  * The closed Follow failure vocabulary. Domain failures are mapped once in the
@@ -21,6 +24,8 @@ export const SESSION_FOLLOW_ERROR_CODES_V1 = Object.freeze([
   'invalid_parameters',
   'feature_unavailable',
   'session_not_found',
+  'source_not_found',
+  'source_unavailable',
   'account_inactive',
   'session_archived',
 ] as const);
@@ -51,7 +56,9 @@ export const GetSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject
     voiceInitialSnapshotPending: z.boolean(),
   }));
 export type GetSessionFollowResponse = z.infer<typeof GetSessionFollowResponseSchema>;
-export const ListAccountSessionFollowsResponseV1Schema = lazyZodSchema(() => z.strictObject({ follows: z.array(AccountSessionFollowV1Schema) }));
+export const ListAccountSessionFollowsResponseV1Schema = lazyZodSchema(() => z.strictObject({ follows: z.array(AccountFollowRelationV1Schema), ...FollowListPageResultFieldsV1 }));
+export const GetOtherAccountFollowResponseV1Schema = lazyZodSchema(() => z.strictObject({ follow: z.nullable(OtherAccountFollowV1Schema) }));
+export const SetOtherAccountFollowResponseV1Schema = lazyZodSchema(() => z.strictObject({ changed: z.boolean(), follow: OtherAccountFollowV1Schema }));
 export type ListAccountSessionFollowsResponseV1 = z.infer<typeof ListAccountSessionFollowsResponseV1Schema>;
 
 /**
@@ -129,6 +136,7 @@ export type SessionAutoFollowPreferencesResponse = z.infer<
 
 export const SESSION_FOLLOW_HTTP_PATHS_V1 = Object.freeze({
   follow: '/v2/sessions/:sessionId/follow',
+  otherSource: '/v2/account/follows/sources/:sourceRef',
   preferences: '/v2/account/session-follow-preferences',
   voiceInclusions: '/v2/account/session-follow-voice-inclusions',
 });

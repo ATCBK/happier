@@ -34,6 +34,7 @@ import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { QRCode } from '@/components/qr/QRCode';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
 import { resolveInlineDiffVirtualization } from '@/components/ui/code/diff/resolveInlineDiffVirtualization';
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
@@ -75,10 +76,12 @@ import type { HappierPageChrome, HappierStateSize, HappierLiveStreamProps } from
 import type { DetailsPaneSlotBinding } from '@/components/appShell/panes/details/DetailsPaneSlot';
 import type { usePaneHeaderSlotBinding } from '@/components/appShell/panes/paneHeaderSlot';
 import { readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
+import { ExecutableParticipantPickerPresentation } from '@/components/sessions/authoring/ExecutableParticipantPickerPresentation';
+import type { ExecutableParticipantPickerProps } from '@happier-dev/plugin-ui/components';
 import type { PluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import {
     useInstalledPluginBrandPresentation,
@@ -296,7 +299,7 @@ function PluginUiPrivateTargetBrandMark(props: PluginUiPrivateTargetBrandMarkInp
  * owns no parser, cache, or review state: current user settings and the existing
  * inline virtualization policy remain the only decisions.
  */
-function PluginUiPrivateDiffViewer(props: HappierDiffViewerRequest): React.ReactElement {
+function PluginUiPrivateDiffViewer(props: Extract<HappierDiffViewerRequest, { unifiedDiff: string }>): React.ReactElement {
     const configuredWrapLines = useSetting('wrapLinesInDiffs');
     const configuredLineNumbers = useSetting('showLineNumbers');
     const thresholds = useInlineDiffVirtualizationThresholds();
@@ -349,6 +352,9 @@ function PluginUiPrivateQRCode(props: Readonly<{ data: string; size: number; tes
 
 function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDirection) {
     return Object.freeze({
+    renderExecutableParticipantPicker(input: ExecutableParticipantPickerProps) {
+        return <ExecutableParticipantPickerPresentation {...input} />;
+    },
     renderVoiceMarkArt(input: Omit<VoiceMarkArtProps, 'fallback'>) {
         // Only explicit art props: no live energy acquisition or attempt data.
         return <VoiceMarkArt {...input} still={input.still ?? true} presentationOnly />;
@@ -393,7 +399,12 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         );
     },
     renderDiffViewer(input: HappierDiffViewerRequest) {
-        return <PluginUiPrivateDiffViewer {...resolveHappierDiffViewerRequest(input)} />;
+        const request = resolveHappierDiffViewerRequest(input);
+        // A prose passage is the same viewer's prose face, as core's own proposal card draws it.
+        return 'before' in request
+            ? <ProseDiffViewer mode="text" testID={request.testID} oldText={request.before} newText={request.after} contextLines={0}
+                prose={{ oldLabel: request.beforeLabel, newLabel: request.afterLabel }} />
+            : <PluginUiPrivateDiffViewer {...request} />;
     },
     renderPopover(input: Readonly<{
         open: boolean;

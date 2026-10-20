@@ -56,7 +56,7 @@ import {
   createSessionProviderInputConsumer,
   PendingQueueMaterializationAuthError,
 } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
-import type { SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
+import type { RegisterProviderAcceptedEffect, SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
 import type {
   DrainPendingResult,
   MessageBatch,
@@ -618,7 +618,7 @@ export async function runPermissionModePromptLoop(opts: {
   runtime: PermissionModePromptLoopTurnOperations;
   /** Host composition must not clone the Agent's receiver-sensitive operations. */
   prepareHostContext?: PermissionModePromptLoopTurnOperations['prepareHostContext'];
-  createOverrideSynchronizer: (isStarted: () => boolean) => PromptLoopOverrideSynchronizer;
+  createOverrideSynchronizer: (isStarted: () => boolean, isInputSettled: () => boolean) => PromptLoopOverrideSynchronizer;
   messageBuffer: MessageBuffer;
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal;
@@ -707,10 +707,7 @@ export async function runPermissionModePromptLoop(opts: {
    * Registers replay/Follow effects against the exact localId settled by the host's canonical
    * provider-input outcome normalizer. Transport send completion is never provider acceptance.
    */
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: (() => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   /** Host lifecycle freezes protected cause facts immediately before runtime begin. */
   onBeforeTurnBegin?: (
     input: PermissionModeQueuedPrompt,
@@ -860,7 +857,9 @@ export async function runPermissionModePromptLoop(opts: {
     snapshotFreshForNextPromptBoundary = opts.session.getMetadataSnapshot() !== null;
   }
 
-  const overrideSync = opts.createOverrideSynchronizer(() => wasStarted);
+  // Native turn facts start only after prompt preparation succeeds. Capability
+  // replacement must also wait for this loop's already-collected input.
+  const overrideSync = opts.createOverrideSynchronizer(() => wasStarted, () => !turnInFlight);
 
   const permissionModeStateSync = await initializePermissionModeStateSync({
     explicitPermissionMode: opts.explicitPermissionMode,
@@ -1061,6 +1060,7 @@ export async function runPermissionModePromptLoop(opts: {
       message = { message: next.message, mode: next.mode, hash: next.hash };
     }
     if (!message) continue;
+    turnInFlight = true;
     // Optional quiet inputs keep queue custody until their exact original
     // occurrence reaches the provider. A local command, blocked user input or
     // omitted context must leave them available to the next real turn.
@@ -1164,6 +1164,7 @@ export async function runPermissionModePromptLoop(opts: {
       ? { type: null } as const
       : parseSpecialCommand(message.message.text);
     if (special.type === 'clear') {
+      opts.session.markPendingProviderInputDispatched(normalizePermissionModeQueuedPromptLocalIds(message.message));
       opts.messageBuffer.addMessage(`Resetting ${opts.providerName} session…`, 'status');
       await opts.onBeforeReset?.({ reason: 'clear' });
       resetAssistantTextSnapshotTurnScope(opts.session, 'clear');
@@ -1237,7 +1238,6 @@ export async function runPermissionModePromptLoop(opts: {
       await settlement;
     };
     try {
-      turnInFlight = true;
       const promptDeliveryIdentity = readQueuedPromptDeliveryIdentity(message.message);
       const localIds = [...promptDeliveryIdentity.localIds];
       const userMessageSeqs = [...promptDeliveryIdentity.userMessageSeqs];
@@ -1329,6 +1329,7 @@ export async function runPermissionModePromptLoop(opts: {
         const dispatchCompactContext = async (): Promise<void> => {
           try {
             if (typeof opts.runtime.compactContext === 'function') {
+              opts.session.markPendingProviderInputDispatched(localIds);
               await opts.runtime.compactContext(special.originalMessage ?? message.message.text.trim());
             } else {
               throw new Error('/compact is not supported by this runtime');
@@ -1679,22 +1680,25 @@ export async function runPermissionModePromptLoop(opts: {
         }
         const representedFollowDeliveries = message.message.followDeliveries?.filter(follow =>
           preparedHostContext?.representedFollowLocalInputIds?.includes(follow.localInputId)) ?? [];
-        for (const follow of representedFollowDeliveries) {
-          if (!localIds.includes(follow.localInputId)) localIds.push(follow.localInputId);
-          if (follow.userMessageSeq !== null && !userMessageSeqs.includes(follow.userMessageSeq)) userMessageSeqs.push(follow.userMessageSeq);
-        }
-        if (userMessageSeqs.length) userMessageSeq = Math.max(...userMessageSeqs);
+        const representedPendingInputs = [
+          ...representedFollowDeliveries.map(follow => ({ localId: follow.localInputId, userMessageSeq: follow.userMessageSeq })),
+          ...(message.message.returnedAnswerContext ?? []).flatMap(answer => answer.localId
+            ? [{ localId: answer.localId, userMessageSeq: answer.userMessageSeq }] : []),
+        ].filter(input => input.localId !== localId);
         // Native grammar stays first; the canonical resolved context follows as arguments.
         const dispatchPrompt = preparedDispatch.renderPrompt({
           ...(preparedHostContext && !providerNativeCommand
             ? { sessionFollowUpdates: preparedHostContext.updates, workerUpdates: preparedHostContext.workerUpdates }
             : {}),
           ...(contextOnlyWorkerUpdate && !providerNativeCommand ? { workerUpdates: [contextOnlyWorkerUpdate, ...(preparedHostContext?.workerUpdates ?? [])] } : {}),
+          // Only exact originals re-admitted by the Follow owner earn native
+          // representation, including quiet originals joining a real input.
+          runFollowDeliveries: representedFollowDeliveries,
         });
 
         if (localIds.length > 0 && opts.readActiveModelSelection && opts.onProviderPromptDispatchPrepared) {
           opts.onProviderPromptDispatchPrepared({
-            localIds,
+            localIds: [...new Set([...localIds, ...representedPendingInputs.map(input => input.localId)])],
             selection: opts.readActiveModelSelection(),
           });
         }
@@ -1729,20 +1733,20 @@ export async function runPermissionModePromptLoop(opts: {
         // Awaited context and checkpoint preparation can withdraw the resolved plan.
         if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         recordPreparationPhase('host_context');
-        await preparedDispatch.assertAdmission();
         if (!hostContextOnly) await preparedHostContext?.commitWorkerUpdateEvents?.();
+        await preparedDispatch.assertAdmission();
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         const readyTurnContext = opts.onBeforeTurnBegin?.(message.message, assistantTextSnapshotScope);
         if (typeof readyTurnContext === 'function') readReadyTurnContext = readyTurnContext;
         opts.runtime.beginTurnLifecycle();
         beganTurn = true;
         startActiveTurnPendingPump();
-        const acknowledgeHostContextAccepted = (): void => {
+        const acknowledgeHostContextAccepted = (pendingSettlement?: Promise<void>): void => {
           if (!localId) return;
           if (hostContextOnly && hostContextOnly.kind !== 'session_follow') hostContextOnly.acknowledgeAccepted();
           preparedHostContext?.acknowledgeAccepted(message.message.hostContextOnly
             ? { kind: 'context_only_wake', eventLocalId: localId }
-            : { kind: 'admitted_input', localInputId: localId, userMessageSeq });
+            : { kind: 'admitted_input', localInputId: localId, userMessageSeq }, pendingSettlement);
         };
         if (localId) {
           const sessionSystemPromptDelivery = shouldApplyFreshSessionSystemPrompt || preparedNativePlan
@@ -1752,9 +1756,9 @@ export async function runPermissionModePromptLoop(opts: {
           opts.registerProviderAcceptedEffect(
             localId,
             pendingReplaySeedSettlement || preparedHostContext || hostContextOnly || sessionSystemPromptDelivery
-              ? () => {
+              ? (pendingSettlement) => {
                   if (pendingReplaySeedSettlement) confirmProviderAccepted();
-                  acknowledgeHostContextAccepted();
+                  acknowledgeHostContextAccepted(pendingSettlement);
                   if (sessionSystemPromptDelivery && pendingSessionSystemPromptDelivery === sessionSystemPromptDelivery) {
                     lastDeliveredSessionSystemPrompt = sessionSystemPromptDelivery;
                     pendingSessionSystemPromptDelivery = null;
@@ -1762,21 +1766,30 @@ export async function runPermissionModePromptLoop(opts: {
                   }
                 }
               : null,
+            representedPendingInputs,
           );
         }
         for (const follow of representedFollowDeliveries) {
           if (follow.localInputId === localId) continue;
-          opts.registerProviderAcceptedEffect(follow.localInputId, () => {
+          opts.registerProviderAcceptedEffect(follow.localInputId, (pendingSettlement) => {
             preparedHostContext?.acknowledgeAccepted({ kind: 'admitted_input',
-              localInputId: follow.localInputId, userMessageSeq: follow.userMessageSeq });
+              localInputId: follow.localInputId, userMessageSeq: follow.userMessageSeq }, pendingSettlement);
           });
         }
         // Invoking the runtime is the effect boundary. From here onward a thrown transport or
         // AbortError is ambiguous, so the durable association must remain for reconciliation.
+        opts.session.markPendingProviderInputDispatched([
+          ...localIds, ...representedPendingInputs.map(input => input.localId),
+        ]);
         releaseUndispatchedReplaySeed = null;
         for (const follow of representedFollowDeliveries) {
           opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
             && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
+        }
+        for (const answer of message.message.returnedAnswerContext ?? []) {
+          if (!answer.localId) continue;
+          opts.messageQueue.discardMatching(prompt => prompt.localId === answer.localId
+            && prompt.returnedAnswer?.delivery === 'next_turn');
         }
         recordPreparationPhase('native_send_entered');
         const providerSend = Object.keys(promptDeliveryMeta).length === 0
@@ -1977,6 +1990,7 @@ export async function runPermissionModePromptLoop(opts: {
       }
     }
       } finally {
+        turnInFlight = false;
         inputConsumer.releaseInputBatch();
       }
   }

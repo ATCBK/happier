@@ -16,6 +16,7 @@ import {
 } from '@/persistence';
 import type { OpenTerminalProvisioningResponseResult } from '@/auth/terminalProvisioningResponse';
 import { ensureMachineIdForCredentials } from '@/ui/auth';
+import { retryHomeOperation, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export async function persistTerminalEnrollmentCredential(params: Readonly<{
   token: string;
@@ -65,6 +66,7 @@ export async function registerAndPersistManagedTerminalEnrollmentCredential(para
   opened: OpenTerminalProvisioningResponseResult;
   runtimeOrigin: string;
   managedEnrollment: ManagedEnrollmentCorrelationV1;
+  homeRetry: HomeOperationRetry;
   assertCurrent(): void;
 }>): Promise<Readonly<{ machineId: string; encryptionType: 'dataKey' | 'tokenOnly' }>> {
   params.assertCurrent();
@@ -77,7 +79,7 @@ export async function registerAndPersistManagedTerminalEnrollmentCredential(para
     ? await prepareCredentialsTokenOnlyForServerId(configuration.activeServerId, { token: params.token }, { previousAccountId })
     : prepared.credentials;
   params.assertCurrent();
-  const machineId = await registerTerminalEnrollmentMachine(credentials, params.runtimeOrigin, params.managedEnrollment);
+  const machineId = await registerTerminalEnrollmentMachine(credentials, params.runtimeOrigin, params.managedEnrollment, params.homeRetry);
   params.assertCurrent();
   await persistTerminalEnrollmentCredential({ ...params, previousAccountId });
   return { machineId, encryptionType: prepared.encryptionType };
@@ -87,8 +89,9 @@ export async function registerTerminalEnrollmentMachine(
   credentials: StoredCredentials,
   runtimeOrigin: string,
   managedEnrollment?: ManagedEnrollmentCorrelationV1,
+  homeRetry?: HomeOperationRetry,
 ): Promise<string> {
-  return await runWithServerHttpBaseUrl(runtimeOrigin, async () => {
+  const register = async () => await runWithServerHttpBaseUrl(runtimeOrigin, async () => {
     const { machineId } = await ensureMachineIdForCredentials(credentials);
     const api = await ApiClient.create(credentials);
     const registered = await ensureMachineRegistered({
@@ -100,4 +103,5 @@ export async function registerTerminalEnrollmentMachine(
     });
     return registered.machineId;
   });
+  return await (homeRetry ? retryHomeOperation(homeRetry, register) : register());
 }

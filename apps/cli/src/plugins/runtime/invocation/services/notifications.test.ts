@@ -62,6 +62,29 @@ const seed = Object.freeze({
 });
 
 describe('stable plugin notifications service', () => {
+    it.each([
+        { reference: 'review-ready-event', eventId: 'review-ready-event' },
+        { reference: { pluginId: 'acme.events', localId: 'review-ready-event' }, eventId: 'acme.events/review-ready-event' },
+    ])('applies attention policy to declared event $eventId', async ({ reference, eventId }) => {
+        const delivered: PluginNotificationSendRequest[] = [];
+        const service = createStablePluginNotificationsService(seed, {
+            categories: [{ ...category, definition: { ...category.definition, eventIds: [reference] } }],
+            channels,
+            readAttentionPolicy: () => ({ events: { [eventId]: { enabled: false } } }),
+            activateChannel: async () => undefined,
+            readChannel: () => ({ occurrenceId: '7', isCurrent: () => true, send: async (request) => {
+                delivered.push(request);
+                return { deliveryId: request.deliveryId, channelId: request.channelId, status: 'accepted', evidence: 'provider' };
+            } }),
+        });
+
+        await expect(service.send({ clientRequestId: 'attention-event', categoryId: 'review-ready', title: 'Ready',
+            channelIds: ['configured'] })).resolves.toMatchObject({ deliveries: [{
+                status: 'suppressed', code: 'plugin_notification_attention_suppressed',
+            }] });
+        expect(delivered).toEqual([]);
+    });
+
     it('discovers current host channels and delivers without claiming a plugin category or caller', async () => {
         const requests: PluginNotificationSendRequest[] = [];
         const activated: string[] = [];

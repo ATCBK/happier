@@ -61,8 +61,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('r
         vi.stubEnv('HAPPIER_SERVER_IDENTITY_ID', 'srv_01234567890123456789012345678901');
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         // Observe the real adapter's timing output; all domain and SQL logic runs.
-        const original = logger.info.bind(logger);
-        const spy = vi.spyOn(logger, 'info').mockImplementation((value: unknown, ...args: unknown[]) => {
+        const original = logger.warn.bind(logger);
+        const spy = vi.spyOn(logger, 'warn').mockImplementation((value: unknown, ...args: unknown[]) => {
             if (typeof value === 'object' && value !== null && 'module' in value && value.module === 'web-latency') {
                 if (collecting && 'phase' in value && typeof value.phase === 'string'
                     && 'elapsedMs' in value && typeof value.elapsedMs === 'number') phases.push({ phase: value.phase, elapsedMs: value.elapsedMs });

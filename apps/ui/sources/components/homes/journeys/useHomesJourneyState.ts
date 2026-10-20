@@ -9,7 +9,8 @@ import {
     resolveServerProfileScopeId,
     type ServerProfile,
 } from '@/sync/domains/server/serverProfiles';
-import { useLocalSettingMutable } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 import {
     resolveAlreadyUseHappierOffer,
@@ -56,14 +57,14 @@ export type HomesReconcileState = Readonly<{
 /** The reconcile offer (J2) and the one way to settle it. */
 export function useHomesReconcileState(): HomesReconcileState {
     const { homes, profiles } = useJourneyHomes();
-    const [acknowledged, setAcknowledged] = useLocalSettingMutable('homesReconcileAcknowledgedHomeIds');
+    const acknowledged = useLocalSetting('homesReconcileAcknowledgedHomeIds');
     const offer = React.useMemo(
         () => resolveHomesReconcileOffer({ homes, acknowledgedHomeIds: acknowledged }),
         [acknowledged, homes],
     );
     const settle = React.useCallback(() => {
         if (!offer) return;
-        setAcknowledged([...new Set([...acknowledged, ...offer.foundHomeIds])]);
-    }, [acknowledged, offer, setAcknowledged]);
+        getStorage().getState().applyLocalSettings({ homesReconcileAcknowledgedHomeIds: [...new Set([...acknowledged, ...offer.foundHomeIds])] }, { source: 'ui' });
+    }, [acknowledged, offer]);
     return { offer, profiles, settle };
 }

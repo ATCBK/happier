@@ -112,6 +112,8 @@ export type TriageSourceSettingsSurfaceIdentityV1 = Readonly<{
   listInstancesLocalActionId: string;
   /** That plugin's Connected Account service contribution local id. */
   connectedAccountServiceLocalId: string;
+  /** The HostAccess purpose consumed by this source's discovery Action. */
+  connectedAccountPurpose: string;
   /** The source's display name, exactly as its own descriptor spells it. */
   sourceDisplayName: string;
   /** Source-owned localized presentation of an offered machine-native login. */
@@ -205,6 +207,10 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
       setNavigationError(false);
       void hostApi.openConnectedAccounts({
         service: connectedAccountService,
+        ...(accountId === undefined ? { purpose: {
+          consumer: listInstances,
+          purpose: identity.connectedAccountPurpose,
+        } } : {}),
         ...(accountId === undefined ? {} : { accountId }),
       }).catch(() => {
         setNavigationError(true);

@@ -165,6 +165,10 @@ function resolvedClient<TValue extends PluginAccountCollectionValue<PluginAccoun
     throw unavailableError(outcome.reason);
 }
 
+type ResolvedCollection<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>> = Extract<
+    ActivePluginCollectionClientForContractRefOutcomeV1<TValue>, Readonly<{ status: 'ready' }>
+>;
+
 /**
  * The RN/RNW direct Data adapter for one mounted surface. Availability admits
  * only an immutable current-release ref, the existing Data client reads that
@@ -180,7 +184,8 @@ export function createPluginUiDataClient(input: Readonly<{
     const resolve = async <TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
         requested: PluginCollectionContractRefV1,
         signal?: AbortSignal,
-    ) => {
+        pending?: Map<AbortSignal | undefined, Promise<ResolvedCollection<TValue>>>,
+    ): Promise<ResolvedCollection<TValue>> => {
         assertCurrent(input.accountLifetime, signal);
         const admission = input.readAvailability().readCurrentCollectionContract({
             pluginId: requested.pluginId,
@@ -208,13 +213,23 @@ export function createPluginUiDataClient(input: Readonly<{
         ) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not admitted by the current release');
         }
-        const outcome = await createActivePluginCollectionClientForContractRef<TValue>({
-            ref: admission.ref,
-            ...(signal ? { options: { signal } } : {}),
-            accountLifetime: input.accountLifetime,
-        });
-        assertCurrent(input.accountLifetime, signal);
-        return resolvedClient(outcome);
+        const incumbent = pending?.get(signal);
+        if (incumbent) return await incumbent;
+        const result = (async () => {
+            const outcome = await createActivePluginCollectionClientForContractRef<TValue>({
+                ref: admission.ref,
+                ...(signal ? { options: { signal } } : {}),
+                accountLifetime: input.accountLifetime,
+            });
+            assertCurrent(input.accountLifetime, signal);
+            return resolvedClient(outcome);
+        })();
+        pending?.set(signal, result);
+        try {
+            return await result;
+        } finally {
+            if (pending?.get(signal) === result) pending.delete(signal);
+        }
     };
 
     const collection = <TDefinition extends PluginAccountCollectionDefinition>(
@@ -224,9 +239,13 @@ export function createPluginUiDataClient(input: Readonly<{
         if (!requested) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not declared');
         }
+        // Bulk relation reads share only overlapping acquisition for this exact
+        // facade and cancellation lifetime. Later operations re-read the server;
+        // the direct client still admits Account currentness for each operation.
+        const pending = new Map<AbortSignal | undefined, Promise<ResolvedCollection<PluginAccountCollectionValue<TDefinition>>>>();
         return Object.freeze({
             async identityTag(request, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.identityTag(request, options);
                 assertCurrent(input.accountLifetime, options?.signal);
                 if (outcome.status === 'ready') return outcome.tag;
@@ -234,7 +253,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 throw unavailableError(outcome.reason);
             },
             async get(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.get(rowId, options);
                 assertCurrent(input.accountLifetime, options?.signal);
                 if (outcome.status === 'ready') {
@@ -246,7 +265,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 throw unavailableError(outcome.reason);
             },
             async put(value, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
                 const outcome = await active.client.mutate([{
                     kind: 'put',
                     value,
@@ -274,7 +293,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 });
             },
             async delete(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
                 const outcome = await active.client.mutate([{
                     kind: 'delete',
                     rowId,
@@ -301,7 +320,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 });
             },
             async forget(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
                 const outcome = await active.client.forget(rowId, options.expectedRevision, options);
                 if (outcome.status === 'forgotten') return Object.freeze({ rowId, forgotten: true as const });
                 if (outcome.status === 'conflict') {
@@ -311,7 +330,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 throw unavailableError(outcome.reason);
             },
             async query(request, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.query({
                     indexId: request.index,
                     ...(request.prefix ? { prefix: request.prefix } : {}),
@@ -338,7 +357,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 throw unavailableError(outcome.reason);
             },
             async batch(operations, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.mutate(operations, options);
                 if (outcome.status === 'updated' || outcome.status === 'conflict') return outcome;
                 if (outcome.status === 'rejected') {
@@ -347,14 +366,14 @@ export function createPluginUiDataClient(input: Readonly<{
                 throw unavailableError(outcome.reason);
             },
             async limits(options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.limits(options);
                 assertCurrent(input.accountLifetime, options?.signal);
                 if (outcome.status === 'ready') return outcome.limits;
                 throw unavailableError(outcome.reason);
             },
             async measureBatch(operations, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.measureBatch(operations, options);
                 assertCurrent(input.accountLifetime, options?.signal);
                 if (outcome.status === 'ready') return outcome.measurement;

@@ -1,5 +1,26 @@
 # Pending delivery architecture
 
+## Host retirement before dispatch (0.3 development)
+
+Claiming an input transfers custody to the host; it does not prove native
+dispatch. The Session client records the foreground prompt and steer effect
+boundaries, including every original represented by a composed prompt. The
+moment a runner begins retirement (termination signal or explicit stop, before
+its runtime disposal starts), the client fences that boundary and settles only
+claimed inputs that never crossed it as `host_retired_before_dispatch`; a
+prompt still being prepared cannot dispatch while the runtime disposes, and
+close repeats neither the fence nor the settlement. Native input still waiting
+for host admission uses the same exact-input settlement when disposed.
+
+A successor publisher returns only that proven pre-dispatch disposition to the
+existing Pending queue, preserving its local id, content and requested action.
+Inherited delivering claims remain `delivery_outcome_uncertain`; a late
+pre-dispatch settlement cannot overwrite that uncertainty. Historical
+`runtime_disposed_before_delivery` rows retain their existing behavior. A failed
+close-time write supplies no replay proof, so replacement keeps the uncertainty
+guard. This development correction requires the composed CLI/daemon replay on
+the loaded runtime; source tests alone do not certify it.
+
 ## First-input admission and storage failures (development)
 
 Pending position allocation runs through `inPendingQueuePositionTx`. Its shared
@@ -62,6 +83,25 @@ passes name the original input; an unrelated later final or publication cannot
 fulfill it. A committed explicit publication wins over automatic final fallback.
 Failed, cancelled, passed, and terminal-without-result outcomes remain distinct.
 
+Protected Workflow V2 invocation inputs use that same reply intent and original
+custody, retaining their derived Workflow input localId through Pending retirement.
+The Workflow producer requests `wait` and its observer reads the typed original
+outcome; a pass does not depend on response text. The existing Workflow progress
+retains that typed outcome across restart, independently of selected result text.
+A reference-only answer with no readable text needs attention rather than becoming
+fabricated text. Historical inputs with authoritative reply status `none` retain
+exact-input transcript observation. Unavailable reply custody holds. When an
+unfulfilled original names its accepted Workflow turn, the same result reader can
+observe that terminal turn only if its Workflow invocation also matches the
+protected input identity. A completed turn whose final-message anchor is missing
+can supply text only from committed, foreground assistant rows tagged with that
+exact runtime turn; stale range anchors do not substitute for that identity.
+Explicit original outcomes still take precedence, and an active or unmatched
+turn, provisional text, or a later foreign reply cannot complete the input.
+V2 input remains host-authored:
+a return destination requires admitted source-Session correlation, and it cannot
+claim a person's composer origin or downgrade to V1 to acquire reply support.
+
 The existing `waitForSessionInputResult` observes this custody and resolves an
 answer's exact committed message, not the latest assistant text. A strict
 `SessionMessageRefV1` contains the captured Home, Session, and actual committed
@@ -85,9 +125,11 @@ reply mutation. It cannot author an outcome or choose another return destination
 Native Run Stop settles the exact admitted turn as cancelled using the host's
 existing terminal fact, even after its native transcript writer retires. A crash
 between a native terminal transcript commit and the reply-custody callback can
-still leave the ask pending. Current Machine recovery reads only fulfilled
+still leave the ask pending. Current Machine return recovery reads only fulfilled
 original custody and cannot author outcomes; re-asking remains the recovery for
-that window. No terminal sidecar or separate recovery store is used.
+that window. Workflow `wait` observation has the exact accepted-turn recovery
+above; it does not author an original reply outcome or a return delivery. No
+terminal sidecar or separate recovery store is used.
 
 `deliverSessionMessageReply` is the host-only delivery entry point shared with
 question answers. It reuses ordinary Pending admission and receiver policy:
@@ -219,6 +261,15 @@ root read; Discussion source observation no longer holds an otherwise authorized
 original solely because its author belongs to another Account. Pending still
 enforces the receiver's check-in before the effect. This changes autonomous
 start accounting, not the separate cross-Account late-return contract above.
+
+Run-caused Session wakes use the receiving side's exchange: the most recent
+protected person-written input in that Session is their root, not an inherited
+root on a later agent input or a fabricated parent input of the Run. With no
+person-written input, the exact Run occurrence supplies the root through its
+existing deterministic Follow input identity. Only an actual new native turn
+spends allowance; quiet Run context and personal Inbox delivery do not. A new
+person-written input resets the receiving exchange. Existing Stop and check-in
+controls still apply; missing parent lineage never creates a separate hold.
 
 Exact Execution Run targets are excluded from this Session check-in count. They
 remain bounded by their own lifecycle; their parent Session's own autonomous
@@ -368,6 +419,14 @@ Pending provider acceptance carries the exact `localId` through `SessionClient`
 to server settlement. The server transaction
 commits or updates the transcript message and removes that Pending row.
 Transcript and Pending state are then published through separate events.
+
+Retained next-turn Follow originals and returned answers are informational
+context, not additional native Turn or permission witnesses. The current host
+binds only the exact originals represented in its final dispatched prompt to
+the primary input's actual native outcome. Their existing Pending settlements
+precede the primary's settlement; an omitted original is not thereby accepted.
+Exact claim, publisher and target checks still precede settlement. The operation-scoped retained-context
+proof is described in [compatibility](compatibility.md#retained-quiet-input-03-development).
 
 For ACP in 0.3 development source, provider effect correlated to the exact
 dispatched prompt witnesses consumption even before `session/prompt` responds.
@@ -561,7 +620,24 @@ unsubscribes the retirement listener.
 Idle and active consumers share the same wake handling. The existing backoff for
 unavailable adapters does not periodically materialize the queue. Reconnect does
 not bypass settings convergence, admission, or the Pending row's blocked state;
-an explicitly blocked message still requires its existing Retry action.
+an explicitly blocked message still requires person recovery. A confirmed
+`provider_rejected_before_acceptance` ends that delivery attempt, not custody of
+the original input. Its Pending row remains visible with the rejection reason:
+the person can remove it, or deliberately send it again through the existing
+Send now/Steer now controls. The shared `session.pending.action.set` Action can
+also rearm that same original; it clears the previous provider action and block.
+Resuming the Session alone does none of these things.
+
+`delivery_outcome_uncertain` means an effect may already exist. Its visible
+recovery is Dismiss, Mark handled after confirming it was handled, or an explicit
+duplicate-risk Send as new through the Actions described above. It cannot be
+blindly retried, edited, or removed as though nothing was sent. These ordinary
+blocked predecessors retain FIFO for later `enqueue` input, including addressed
+Discussion asks; addressing grants neither a queue-priority override nor proof
+of native acceptance. Later rows remain Queued, with the predecessor defer
+reason, while the earlier blocked row owns its explanation and repair controls.
+The per-row Retry Send control is for a failed local outbox operation, not a
+second recovery owner for uncertain server custody.
 
 ## Current Queue V2 activation ownership
 
@@ -573,16 +649,17 @@ This section describes development behavior that is not yet a released contract.
 - The banner action **Process when online** re-arms the exact Session authorization. **Retry** uses the existing manual resume action when the machine is reachable. **Keep queued** clears that authorization while preserving FIFO delivery. These actions do not change the account preference or create a second activation path.
 - The server transaction that mutates Pending rows is the only writer of the current activation authorization. The current main-conversation Pending wire accepts `resumeWhenAvailable` as a mutation command, applies it atomically to the existing Session authorization, and never persists it as a second row-level desired state. Execution-run-targeted input cannot author this Session activation command.
 - UI recovery and Agent/MCP/CLI callers share `session.pending.action.set` (`session pending action set` in the CLI). It updates the exact `sessionId`/`localId` through that existing PATCH owner, preserving `requestedAction` when explicitly rearming with `resumeWhenAvailable: true`. The Action uses the ordinary approval policy; managed wake still requires current Manage and its fire-time policy Ask. Reset holds retain their separate witnessed reset-start Action.
-- `Session.lastActiveAt` is the lifecycle fence. An authorization at or before that value is stale and is not projected, so newer session activity invalidates an old start request without a second client-owned clock.
+- Activation stays bound to its exact `requestId` and `requestedAt`. Publisher registration and keepalive prove process presence before Agent admission; they preserve the authorization so a later definite startup refusal can still settle it.
 - The Pending activation hint is lossy notification only. The durable server-owned session authorization is authoritative, and the daemon consults it both after a live hint and during one finite reconnect scan.
-- The daemon on the session's exact owning machine is the sole unattended starter for modern activation. It re-reads the session and exact Pending row, applies the existing external-session safeguards, and then uses the existing inactive-session resume path. This mechanism does not take over an external or Direct session.
+- The daemon on the session's exact owning machine is the sole unattended starter for modern activation. It re-reads the session and exact Pending row, applies the existing external-session safeguards, and then uses the existing internal automatic-resume port. Retained `user_request` execution authorization identifies the original input; it is not fresh person Resume intent and cannot clear a person-Stop hold. Only the current Pending invocation, after those reads, can restore a Guard-stopped runner; a cached tuple in background spawn options is not current input demand. Both owning-Account and requester recovery retain that distinction, as does automatic Follow intake. The existing person/manager Resume path remains separate. A temporarily unavailable automatic launch leaves activation waiting rather than reporting a terminal startup failure. This mechanism does not take over an external or Direct session.
 - Machine or daemon unreachability leaves the authorization waiting. A genuine terminal start failure is recorded as failed and is not retried merely because a daemon reconnects. When the machine is reachable, explicit **Retry** uses the canonical manual resume action; while it is offline, **Process when online** re-arms the exact authorization. There is no periodic polling, unbounded retry loop, or exactly-once delivery guarantee.
 - For an admitted managed wake, the failure writer ignores `runtime_start_failed` while compute is stopped, unknown, lost, or still reconciling a submitted native effect. The authorization and original input remain waiting for the managed policy owner. Its signed reports settle definite Ask or native failures with the managed-start failure codes; ordinary Agent-start failure can settle after compute is observed running.
+- Once compute is observed present and running with no submitted native effect, the controller does not create another Start or Ask for the retained input. An incumbent native reconciliation keeps its existing lifetime until it settles.
 - A failed managed-policy census read leaves an existing held invocation waiting. The next successful census can retire a withdrawn or replaced origin; runtime shutdown and explicit operation cancellation still retire it. Approval and native-effect admission revalidate current authority before any power effect.
-- Becoming active, resolving the exact Pending row, or choosing **Keep queued** clears that exact authorization. **Auto-resume options** leads to the account preference for future sends.
+- Claiming or resolving the exact Pending row, withdrawing it, or choosing **Keep queued** clears that exact authorization. **Auto-resume options** leads to the account preference for future sends.
 - Modern delegation requires server Pending Input V2 support and activation capability from the session's exact target machine. Older or mixed components retain the existing direct-wake fallback rather than treating unattended daemon activation as available.
 
-The durable banner derives the user-facing state from this ownership: waiting while the machine is offline, waiting while the daemon is reachable, queued without activation, or terminal start failure. Pending owns the payload; the server owns activation authorization; session activity fences staleness; and the daemon owns unattended process start.
+The durable banner derives the user-facing state from this ownership: waiting while the machine is offline, waiting while the daemon is reachable, queued without activation, or terminal start failure. Pending owns the payload and exact authorization settlement; the daemon owns unattended process start. A stale failure report cannot replace a later rearmed authorization.
 
 In current development source, a terminal activation refusal also retains
 `pendingActivationFailureDetails` on the Session read projection. Its closed
@@ -594,6 +671,32 @@ facts once the CAS succeeds. A stale report cannot replace newer activation
 state, and the original Pending input remains in custody. Native error prose,
 paths, credentials and input content are excluded. This is source behavior,
 not evidence that an already-running daemon or server has loaded it.
+
+The existing runner supervisor also settles a definite construction dependency
+failure after the startup webhook. It accepts only a failure from that runner's
+occurrence, the launch's exact activation stamp, and the current admitted Home,
+Account, Session, Machine and installation. Cross-Account reporting uses the
+Session requester's recovered credentials. `preparation_pending` and unavailable
+plugin catalogs keep their existing recovery path; an optional MCP omission or
+the broad `mcp_request_auth_unavailable` diagnostic alone is not a definite
+startup refusal. A host continuation refusal (runner exit 78) reaches this same
+failure reader before requester custody is released, even though it suppresses
+automatic respawn. Only the same occurrence's failed primary Session issue and
+exact activation stamp can settle the input. An unavailable Home observation or
+stale target leaves it waiting. A generic Agent error without that terminal
+runner evidence does not establish a continuation refusal. Runner failure logs
+record the exit phase and shared code-only error projection.
+
+Cold requester preparation records a failed phase's allowlisted error class,
+code, HTTP status and source frames through the shared code-only diagnostic;
+exception messages, response bodies and schema issue text remain private.
+A known definite Session-read refusal can reach that same failure CAS only
+after fresh requester recovery proves the exact Home, Account, Session,
+Machine and installation, and the current authorization and Pending row still
+match. The failed read itself grants no authority. Unavailable or cancelled
+reads, persistently unreadable authority, changed admission and stale hints
+leave activation waiting. The managed compute guard above still applies.
+This is development source behavior and requires a daemon reload.
 
 ## Execution-run targets
 
@@ -646,6 +749,16 @@ The host queue consumes that original receipt, not reconstructed display facts.
 Required Follow originals use the [runtime preparation recovery](runtime-core.md)
 path for transient Home source reads, retaining their exact Pending identity;
 definitive refusals keep the existing terminal settlement.
+
+Configured Execution Run and Workflow Run Follow inputs retain their exact
+terminal occurrence id or Workflow revision in that receipt. The existing
+destination observation returns an `admitted_run_input`, rather than inventing
+a parent Session frontier. The host rechecks that custody before rendering a
+Run-result reference at provider dispatch. Wake originals start a turn; quiet
+originals join the next real input. Neither executes the stored notice text as
+a command. The same provider-acceptance owner settles the exact Run cursor;
+the Follow ACK names that original and cannot advance it before native input
+acceptance. Replays reuse the admitted input identity, not a new Pending path.
 
 These are development contracts. Target support must be negotiated independently of the existing Queue V2 support; older main-conversation clients continue using the null-target path.
 

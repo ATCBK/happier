@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -7,9 +7,12 @@ import {
     applyConfiguredDatabaseConnectionLimit,
     db,
     getDbProviderFromEnv,
+    getPrismaConnectionLimit,
+    initDbPostgres,
     requireDbProviderFromEnv,
     isPrismaErrorCode,
     isPrismaUniqueConstraintError,
+    shutdownDbClient,
 } from "./prisma";
 
 function parseEnumValues(schemaText: string, enumName: string): string[] {
@@ -262,5 +265,29 @@ describe("storage/prisma", () => {
     it("leaves the database url unchanged when no explicit connection limit is configured", () => {
         const original = "postgresql://user:pass@db.example.com:5432/happier?sslmode=require";
         expect(applyConfiguredDatabaseConnectionLimit(original, {})).toBe(original);
+    });
+
+    it.each([
+        { query: "", override: "", expected: null },
+        { query: "?connection_limit=invalid", override: "", expected: null },
+        { query: "?connection_limit=1", override: "", expected: 1 },
+        { query: "?connection_limit=3", override: "", expected: 3 },
+        { query: "?connection_limit=3", override: "4", expected: 4 },
+    ])("captures the initialized pool budget ($query, override $override)", async ({ query, override, expected }) => {
+        vi.stubEnv("DATABASE_URL", `postgresql://fixture:fixture@localhost/fixture${query}`);
+        vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "");
+        vi.stubEnv("HAPPY_DB_CONNECTION_LIMIT", override);
+        try {
+            // Construct the real Prisma owner without opening a connection.
+            initDbPostgres();
+            expect(getPrismaConnectionLimit()).toBe(expected);
+            vi.stubEnv("DATABASE_URL", "postgresql://fixture:fixture@localhost/fixture?connection_limit=9");
+            expect(getPrismaConnectionLimit()).toBe(expected);
+            await shutdownDbClient();
+            expect(getPrismaConnectionLimit()).toBeNull();
+        } finally {
+            await shutdownDbClient();
+            vi.unstubAllEnvs();
+        }
     });
 });

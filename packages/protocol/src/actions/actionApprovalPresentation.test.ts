@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeApprovalActionFields, projectApprovalExecutionForObservation, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
-import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { describeApprovalActionFields, projectApprovalExecutionForObservation, projectApprovalRequestForPublicRead, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
+import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { ActionOperationCredentialUseV1Schema } from './actionExecutionResult.js';
 import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
 import { MACHINE_PRESET_ACTION_IDS_V1 } from '../machines/managed/machinePresetActionIdsV1.js';
@@ -20,6 +21,50 @@ import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV
 import { computeWorkspaceSyncPolicyDigest } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 describe('approval field presentation', () => {
+  it.each(['open', 'executed'] as const)('withholds private replay authority from %s built-in and target Ask observations', status => {
+    const actionId = 'machines.managed.delete';
+    const target = { kind: 'machine' as const, machineId: 'controller' };
+    const executionOriginV1 = {
+      v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+      serverId: 'home', serverIdentityId: 'srv_home', accountId: 'owner', machineId: 'controller',
+      actionId, requestId: 'delete-request', target,
+      externalActionInputSignature: 'a'.repeat(86),
+      externalActionExecutionAuthorization: { v: 1, token: 'synthetic-scoped-authorization', binding: {
+        serverIdentityId: 'srv_home', accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 1 },
+        machineId: 'controller', custodianAccountId: 'owner', installationId: 'installation',
+        actionId, requestId: 'delete-request', requestEnvelopeDigest: 'a'.repeat(43), target,
+      } },
+    };
+    const base = {
+      status, createdAtMs: 1, updatedAtMs: status === 'open' ? 1 : 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', summary: 'Delete machine', executionOriginV1,
+      ...(status === 'executed' ? { decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 3, ok: true, effectAttempted: true, result: { kind: 'accepted' } } } : {}),
+    };
+    const builtIn = ApprovalRequestV2Schema.parse({ ...base, v: 2, actionId,
+      actionArgs: { homeId: 'home', managedId: 'managed', when: 'now', expectedRevision: 2,
+        intent: 'delete', reviewedDependencies: true } });
+    const plugin = TargetActionApprovalRequestV1Schema.parse({ ...base, v: 1, kind: 'plugin_target_action',
+      qualifiedActionId: 'example.machine/actions/delete',
+      executionOriginV1: { ...executionOriginV1, actionId: 'action.invoke',
+        externalActionExecutionAuthorization: { ...executionOriginV1.externalActionExecutionAuthorization,
+          binding: { ...executionOriginV1.externalActionExecutionAuthorization.binding, actionId: 'action.invoke' } } },
+      sourceCustody: { kind: 'development', registeredRootId: 'machine-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64),
+      input: { managedId: 'managed' }, secretInputPaths: [],
+    });
+    for (const request of [builtIn, plugin]) {
+      const publicRead = projectApprovalRequestForPublicRead(request);
+      expect(publicRead).toMatchObject({ status, summary: 'Delete machine',
+        executionOriginV1: { requestId: 'delete-request', target } });
+      const serialized = JSON.stringify(publicRead);
+      expect(serialized).not.toContain('externalActionExecutionAuthorization');
+      expect(serialized).not.toContain('externalActionInputSignature');
+      expect(serialized).not.toContain('synthetic-scoped-authorization');
+      expect(request.executionOriginV1).toHaveProperty('externalActionExecutionAuthorization');
+      expect(request.executionOriginV1).toHaveProperty('externalActionInputSignature');
+    }
+  });
   it.each([
     ['machines.managed.power.set', 'now', 'stop', 'Stop'],
     ['machines.managed.delete', 'after-idle', 'delete', 'Delete'],
@@ -84,6 +129,42 @@ describe('approval field presentation', () => {
     expect(projectApprovalExecutionForObservation(request)).toMatchObject({ effectAttempted: false });
   });
 
+  it('preserves admitted current target receipt metadata without disclosing legacy V1 actor claims', () => {
+    const use = ActionOperationCredentialUseV1Schema.parse({
+      v: 1, kind: 'connected_account', label: 'Release GitHub', owner: { kind: 'account', accountId: 'alice' },
+      service: { pluginId: 'acme.github', localId: 'github' },
+      why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.alpha', localId: 'run' }, purpose: 'write' }, target: 'account' },
+      currentness: { kind: 'current_at_materialization' },
+    });
+    const execution = { executedAtMs: 3, ok: true, effectAttempted: true, result: { ok: true }, operationCredentialUses: [use] };
+    const target = TargetActionApprovalRequestV1Schema.parse({
+      v: 1, kind: 'plugin_target_action', status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', qualifiedActionId: 'acme.alpha/actions/run',
+      input: { value: 'x' }, secretInputPaths: [], sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
+      policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'a'.repeat(64), summary: 'Run',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution,
+    });
+    expect(projectApprovalRequestForPublicRead(target)).toMatchObject({ execution });
+    expect(projectApprovalExecutionForObservation({ ...target, execution: { ...execution, details: { message: 'private-plugin-detail' } } }))
+      .not.toHaveProperty('details');
+    const notAttempted = TargetActionApprovalRequestV1Schema.parse({ ...target, status: 'failed',
+      execution: { executedAtMs: 3, ok: false, effectAttempted: false, errorCode: 'approval_stale', error: 'approval_stale' },
+    });
+    expect(projectApprovalRequestForPublicRead(notAttempted)).toMatchObject({ execution: notAttempted.execution });
+
+    const legacy = ApprovalRequestV1Schema.parse({
+      v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3, createdBy: { surface: 'cli' },
+      actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution,
+      kind: 'plugin_target_action',
+    });
+    expect(projectApprovalExecutionForObservation(legacy)).toEqual({ executedAtMs: 3, ok: true, result: { ok: true } });
+    expect(projectApprovalRequestForPublicRead(legacy)).toMatchObject({
+      execution: { executedAtMs: 3, ok: true, result: { ok: true } },
+    });
+    expect(projectApprovalExecutionForObservation(legacy)).not.toHaveProperty('operationCredentialUses');
+  });
+
   it('projects document references for every Artifact operation with an artifactId', () => {
     const spec = getActionSpec('artifact.public_link.create');
     const actionArgs = spec.inputSchema.parse({ artifactId: 'release-notes' });
@@ -129,6 +210,28 @@ describe('approval field presentation', () => {
         presentation: 'destructive_target',
       },
     }));
+  });
+
+  it.each([
+    ['attach', 'new-manager', null],
+    ['replace', 'new-manager', 'previous-manager'],
+    ['detach', null, 'previous-manager'],
+  ] as const)('names every Session operand in a manager %s review without changing null or exact input', (_operation, managerSessionId, expectedManagerSessionId) => {
+    const spec = getActionSpec('session.manager.set');
+    const actionArgs = spec.inputSchema.parse({ sessionId: 'managed-session', managerSessionId, expectedManagerSessionId });
+    const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs });
+
+    expect(presentation.unrepresentable).toBeNull();
+    for (const [path, id] of Object.entries(actionArgs)) {
+      if (id === null) {
+        expect(presentation.rows.some(row => row.path === path)).toBe(false);
+      } else {
+        expect(presentation.rows).toContainEqual(expect.objectContaining({
+          kind: 'value', path, value: id, reference: { kind: 'session', id },
+        }));
+      }
+    }
+    expect(actionArgs).toEqual({ sessionId: 'managed-session', managerSessionId, expectedManagerSessionId });
   });
 
   it('discloses and admits the real Triage selected-PR credential identity', () => {
@@ -984,10 +1087,15 @@ describe('approval field presentation', () => {
   });
 
   it('does not interpret an arbitrary configuration object as a typed target', () => {
-    const value = { kind: 'session', sessionId: 'session-1', empty: '', absent: null };
+    const value = { kind: 'session', sessionId: 'session-1', unrelatedSessionId: 'session-2', empty: '', absent: null };
     const rows = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor: 'example', value } }).rows;
-    expect(rows.find(row => row.path === 'value')).toMatchObject({ value: JSON.stringify(value) });
-    expect(rows.find(row => row.path === 'value')).not.toHaveProperty('reference');
+    const row = rows.find(row => row.path === 'value');
+    expect(row).toMatchObject({ value: JSON.stringify(value) });
+    expect(row).not.toHaveProperty('reference');
+    if (row?.kind !== 'value') throw new Error('Missing configuration reading');
+    const unrelated = row.entries?.find(entry => entry.value === value.unrelatedSessionId);
+    expect(unrelated).toBeDefined();
+    expect(unrelated).not.toHaveProperty('reference');
   });
   it.each([
     ['ordered members', ['account-b', 'account-a']],
@@ -1077,6 +1185,20 @@ describe('approval field presentation', () => {
       actionArgs: { serverId: 'home', operationId: 'operation' } }).unrepresentable)
       .toMatchObject({ path: 'machineId', reason: 'missing_required_context' });
   });
+
+  it.each(['sessions.external.link.ensure', 'sessions.external.transcript.page', 'sessions.external.transcript.readAfter'] as const)(
+    'reviews the canonical Agent identity after external-session ingress normalization: %s', actionId => {
+      for (const identity of [{ agentId: 'codex' }, { providerId: 'codex' }]) {
+        const actionArgs = getActionSpec(actionId).inputSchema.parse({
+          ...identity, machineId: 'machine', remoteSessionId: 'native-session', source: { kind: 'codexHome', home: 'user' },
+          ...(actionId === 'sessions.external.transcript.page' ? { direction: 'older' } : {}),
+          ...(actionId === 'sessions.external.transcript.readAfter' ? { cursor: 'native-cursor' } : {}),
+        });
+        const presentation = describeApprovalActionFields({ actionId, actionArgs });
+        expect(presentation.unrepresentable).toBeNull();
+        expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'agentId', value: 'codex' }));
+      }
+    });
 
   it('reads an encoded file in a visual by its size, never by its bytes', () => {
     const contentBase64 = Buffer.from('<main>Build health</main>'.repeat(60)).toString('base64');

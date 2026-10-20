@@ -51,6 +51,7 @@ export function resolveRequesterSessionRuntimeDirectories(input: Readonly<{
 /** Reuses ordinary Account owners with invocation custody; never publishes Bob as the daemon Account. */
 export async function createRequesterSessionRuntimeContext(input: Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
+  signal?: AbortSignal;
   coordinatorInput: Omit<CoordinatorInput, 'api' | 'credentials' | 'accountSettingsSnapshot'
     | 'activeServerDir' | 'providerAccountUsageStore' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'qualifiedConnectedAccountEstablishedRuntimeOwner' | 'listScheduledQualifiedConnectedAccounts'
@@ -71,6 +72,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const savedSecrets = bootstrap.savedSecretOperationContext;
   let disposed = false;
   const lifetime = new AbortController();
+  // Background coordinators also supply cancellation signals. Surface their
+  // failed observation to the owning loop's backoff; only explicit preparation
+  // entrypoints may retain an accepted Action while Home recovers.
   const isCurrent = async (signal?: AbortSignal) => {
     if (disposed || signal?.aborted) return false;
     const readerSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
@@ -80,7 +84,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed;
     } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
   };
-  if (!await isCurrent()) return null;
+  if (!await isCurrent(input.signal)) return null;
   const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
     credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,
     signal: lifetime.signal, isCurrent, subscribeInvalidation: bootstrap.subscribeSessionFollowRules });
@@ -185,13 +189,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     configuration: persistence.configuration, configurationOwner });
   const token = bootstrap.credentials.token;
   const qualifiedConnectedAccountApi: RequesterSessionRuntimeContext['qualifiedConnectedAccountApi'] = {
-    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent()) throw requesterAccountContextUnavailable();
+    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => readQualifiedConnectedAccountGroupV4({ token, group: { service, groupId }, ...(signal ? { signal } : {}) })); },
-    listAccounts: async ({ service, signal }) => { if (!await isCurrent()) throw requesterAccountContextUnavailable();
+    listAccounts: async ({ service, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => listQualifiedConnectedAccountsV4({ token, service, ...(signal ? { signal } : {}) })); },
   };
   const directMaterial = createHttpTeamCredentialDirectMaterialClient({ token, serverUrl: bootstrap.serverHttpBaseUrl,
-    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent()) return { mode: 'e2ee_unavailable' };
+    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent(signal)) return { mode: 'e2ee_unavailable' };
       const mode = await withHome(() => api.getAccountEncryptionMode({ signal }));
       const encryption = bootstrap.credentials.encryption;
       return mode === 'plain' ? { mode: 'plain' } : mode === 'e2ee' && encryption
@@ -199,13 +203,14 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         : { mode: 'e2ee_unavailable' }; },
   });
   const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: established,
+    credentialOwnerAccountId: bootstrap.attribution.accountId,
     workerMachineId: bootstrap.attribution.machineId, store, reloadController: pluginReloadController,
     allowNativeAccountCredentials: bootstrap.allowNativeAccountCredentials === true, openTeamDirect: directMaterial.open,
     resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
     resolveConnectedAccountEndpoints: async request => await withHome(() => established.readConfiguredEndpoints(request)),
     qualifiedApi: { listAccounts: async (service, signal) => await qualifiedConnectedAccountApi.listAccounts({ service, signal }),
       listGroups: async (service, signal) => {
-        if (!await isCurrent()) throw requesterAccountContextUnavailable();
+        if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
         return await withHome(() => listQualifiedConnectedAccountGroupsV4({ token, service, signal }));
       },
       readGroup: async (group, signal) => await qualifiedConnectedAccountApi.readGroup({ ...group, signal }) },
@@ -266,13 +271,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     },
     listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: purposes.invalidate,
     }));
+    if (!await isCurrent(input.signal)) {
+      await dispose();
+      return null;
+    }
   } catch (error) {
     try { await dispose(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Requester Account runtime startup failed'); }
     throw error;
-  }
-  if (!await isCurrent()) {
-    await dispose();
-    return null;
   }
   return Object.freeze({ bootstrap, isCurrent, api, sessionFollowRuleCache,
     bindSessionFollowSourceReconciliation: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {

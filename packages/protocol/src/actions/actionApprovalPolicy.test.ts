@@ -34,6 +34,26 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('keeps publication claim approval on the awaiting plugin invocation', () => {
+    const actionId = 'reviews.comments.claimPublicationDispatch';
+    const spec = getActionSpec(actionId);
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
+      context: { surface: 'plugin', authority: 'account_automation' },
+    })).toEqual({ required: true, flow: 'blocking', result: 'required' });
+
+    // Public UI ingress still returns durable approval custody; only the
+    // awaiting plugin continuation needs the actual claimed correlations.
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
+      context: { surface: 'ui', authority: 'present_user' },
+    })).toEqual({ required: true, flow: 'deferred', result: 'required' });
+    const waived = normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { [actionId]: ['plugin'] },
+    });
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: waived,
+      context: { surface: 'plugin', authority: 'account_automation' },
+    }).required).toBe(false);
+  });
+
   it.each(['reviews.comments.transition', 'reviews.comments.bulkTransition', 'reviews.comments.edit', 'reviews.comments.reply'] as const)(
     'admits reversible %s directly on UI while honoring Settings confirmation', actionId => {
       const spec = getActionSpec(actionId);
@@ -58,6 +78,9 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'roles.create', 'roles.update', 'roles.override.set',
     'daemon.filesystem.createDirectory',
     'settings.set', 'settings.reset',
+    'ui.voice_global.start', 'ui.voice_global.recover', 'ui.voice_global.set_muted',
+    'ui.voice_global.hold_begin', 'ui.voice_global.brief.request', 'ui.voice_global.brief.retry',
+    'ui.voice_global.dictation.start',
     'connectedServices.subscription.price.set',
     'connectedServices.accounts.default.set', 'connectedServices.accounts.purposeDefault.set',
     'connectedServices.accounts.rename', 'connectedServices.purposes.default.set',
@@ -208,7 +231,12 @@ describe('isApprovalRequiredByActionsSettings', () => {
     [{ intent: { kind: 'remove_item', boardId: 'board-1', ref: { kind: 'session', qualifiedId: { serverId: 'home-1', id: 'session-1' } } } }, false],
     [{ intent: { kind: 'set_positions', boardId: 'board-1', positionsByItemRef: {} } }, false],
     [{ intent: { kind: 'delete', boardId: 'board-1' } }, true],
-    [{ intent: { kind: 'widget_remove', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, true],
+    // A person's own Board widget edits are as reversible as the same edit through widgets.item.*, which admits them directly.
+    [{ intent: { kind: 'widget_add', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, instance: { v: 1, id: 'widget-1', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } } }, false],
+    [{ intent: { kind: 'widget_remove', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, false],
+    [{ intent: { kind: 'widget_move', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, toIndex: 0 } }, false],
+    [{ intent: { kind: 'widget_size', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, size: 'wide' } }, false],
+    [{ intent: { kind: 'widget_inputs_reset', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, false],
     [{ intent: { kind: 'widget_network', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, network: { network: 'open' } } }, true],
     [{ intent: { kind: 'delete' } }, true],
     [undefined, true],

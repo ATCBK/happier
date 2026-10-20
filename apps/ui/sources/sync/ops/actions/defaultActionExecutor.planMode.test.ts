@@ -8,7 +8,9 @@ import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/
 import { DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV2Schema,
   DaemonSessionGoalClearRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { createSessionFixture, createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -27,6 +29,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { SessionStopResultSchema, isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -50,7 +53,7 @@ const outgoing: SocketRpcRequestPayload[] = [];
 // Native file APIs are an OS boundary, outside this HTTP/Action journey.
 vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 let daemonAnswer: (request: SocketRpcRequestPayload) => unknown = () => { throw new Error('Unexpected daemon request'); };
-installDisconnectedServerSocketBoundary((socket) => {
+const configureSessionSocket: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['configureSocket']> = (socket) => {
   vi.mocked(socket.connect).mockImplementation(() => {
     socket.connected = true;
     for (const listener of socket.listeners('connect')) listener();
@@ -66,7 +69,8 @@ installDisconnectedServerSocketBoundary((socket) => {
     outgoing.push(request);
     return { ok: true, result: await daemonAnswer(request) };
   });
-});
+};
+installDisconnectedServerSocketBoundary(configureSessionSocket);
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
@@ -818,6 +822,10 @@ describe('default Action executor mode and catalog contracts', () => {
     daemonAnswer = () => ({ status: 'stopped' });
     await expect(executeSessionLifecycleAction('session.stop', 'stop-session', { serverId }))
       .resolves.toEqual({ success: true });
+    const publicStop = await createDefaultActionExecutor().execute('session.stop', { sessionId: 'stop-session' }, context());
+    expect(publicStop).toMatchObject({ ok: true, result: { success: true } });
+    if (!publicStop.ok) throw new Error('Expected confirmed Stop');
+    expect(SessionStopResultSchema.parse(publicStop.result)).toMatchObject({ sessionId: 'stop-session', stopped: true });
     expect(outgoing).toContainEqual(expect.objectContaining({
       method: `machine-a:${RPC_METHODS.STOP_SESSION}`,
       params: { sessionId: 'stop-session' },
@@ -852,8 +860,15 @@ describe('default Action executor mode and catalog contracts', () => {
     };
     const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
     await expect(executeSessionLifecycleAction('session.stop', sessionId, { serverId })).resolves.toEqual({ success: true });
+    const publicStop = await createDefaultActionExecutor().execute('session.stop', { sessionId }, context());
+    expect(publicStop).toMatchObject({ ok: true, result: { success: true } });
+    if (!publicStop.ok) throw new Error('Expected already-stopped confirmation');
+    const parsed = SessionStopResultSchema.parse(publicStop.result);
+    expect(parsed).toMatchObject({ sessionId, stopped: false,
+      stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } });
+    expect(isSessionStopConfirmed(parsed)).toBe(true);
     expect(freshReads).toBeGreaterThan(0);
-    expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`]);
+    expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`, `machine-a:${RPC_METHODS.STOP_SESSION}`]);
   });
 
   it.each(['active', 'unknown', 'unavailable', 'ambiguous'] as const)('does not confirm an absent runtime from %s Home or transport evidence', async (evidence) => {
@@ -952,6 +967,97 @@ describe('default Action executor mode and catalog contracts', () => {
       params: expect.objectContaining({ id: 'q1', approved: true, answers: { Question: ['One', 'Two'] },
         answeringClientCategory: 'web' }) }));
   });
+  it.each(['ui', 'voice'] as const)('preserves question pass-up through the %s Action authority boundary', async surface => {
+    installSession('question-worker', { machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ sessions: { ...storage.getState().sessions, 'question-worker': createSessionFixture({
+      ...storage.getState().sessions['question-worker'], agentState: { requests: {
+        'question-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [{ question: 'Which revision?' }] } },
+      } },
+    }) } });
+    daemonAnswer = () => ({ ok: true });
+    const input = { sessionId: 'question-worker', requestId: 'question-1', disposition: 'pass_up', reason: 'Needs a person' };
+    const result = surface === 'ui'
+      ? await createDefaultActionExecutor().execute('session.user_action.answer', input, context())
+      : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: explicit => explicit ?? null })
+        .action_execute!({ actionId: 'session.user_action.answer', input }, { serverId }));
+    if (surface === 'voice') {
+      // Generic Voice is Account automation, not the authenticated manager exception.
+      expect(result).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(outgoing).toEqual([]);
+      return;
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(outgoing).toContainEqual({ method: `question-worker:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
+      params: { id: 'question-1', disposition: 'pass_up', reason: 'Needs a person' } });
+    daemonAnswer = () => ({ ok: false, errorCode: 'present_user_required' });
+    const refused = surface === 'ui'
+      ? await createDefaultActionExecutor().execute('session.user_action.answer', input, context())
+      : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: explicit => explicit ?? null })
+        .action_execute!({ actionId: 'session.user_action.answer', input }, { serverId }));
+    expect(refused).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+  });
+  it.each(['ui', 'voice'] as const)('publishes exact answer and pass through the %s Action and preserves publisher refusals', async surface => {
+    installSession('reply-receiver', { machineId: 'machine-a', flavor: 'claude' });
+    const invoke = async (reply: { kind: 'answer'; message: string } | { kind: 'pass' }) => {
+      const input = { sessionId: 'reply-receiver', requestLocalId: 'original-input', reply };
+      return surface === 'ui'
+        ? createDefaultActionExecutor().execute('session.message.reply', input, context())
+        : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: () => null })
+          .action_execute!({ actionId: 'session.message.reply', input }, { serverId }));
+    };
+    const progress = { v: 1, mode: 'wait', acceptedTurnId: 'accepted-turn', disposition: 'observing', outcome: { kind: 'pass' } };
+    daemonAnswer = () => ({ v: 1, ok: true, progress });
+    for (const reply of [{ kind: 'answer', message: 'Use revision 42.' }, { kind: 'pass' }] as const) {
+      const result = await invoke(reply);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { v: 1, ok: true, progress } });
+      expect(outgoing.at(-1)).toEqual({ method: 'reply-receiver:session.message.reply',
+        params: { sessionId: 'reply-receiver', requestLocalId: 'original-input', reply } });
+    }
+    daemonAnswer = () => ({ v: 1, ok: false, error: 'conflict' });
+    expect(await invoke({ kind: 'pass' })).toMatchObject({ ok: true, result: { v: 1, ok: false, error: 'conflict' } });
+  });
+  it.each((['generic', 'question'] as const).flatMap(entry => [
+    { entry, response: 'answer' as const }, { entry, response: 'reject' as const },
+  ]))('requires person approval before a $entry Voice question $response reaches the sole answer RPC', async ({ entry, response }) => {
+    installSession('question-worker', { machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ sessions: { ...storage.getState().sessions, 'question-worker': createSessionFixture({
+      ...storage.getState().sessions['question-worker'], agentState: { requests: {
+        'question-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [{ question: 'Which revision?' }] } },
+      } },
+    }) } });
+    const { ApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const tools = (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: () => 'question-worker' });
+    const input = { sessionId: 'question-worker', requestId: 'question-1', ...(response === 'answer'
+      ? { answers: [{ question: 'Which revision?', values: ['42'] }] } : { decision: 'reject' as const }) };
+    daemonAnswer = () => ({ ok: true });
+    const result = JSON.parse(await (entry === 'generic'
+      ? tools.action_execute!({ actionId: 'session.user_action.answer', input }, { serverId, effectId: `voice-answer-${entry}` })
+      : tools.answerUserActionRequest!(input, { serverId, effectId: `voice-answer-${entry}` })));
+    expect(result, JSON.stringify(result)).toMatchObject(entry === 'generic'
+      ? { ok: true, result: { kind: 'approval_request_created' } }
+      : { ok: true, kind: 'approval_request_created' });
+    expect(outgoing).toEqual([]);
+    const approval = homes.artifacts(serverId).list().find(row => {
+      const body = homes.artifacts(serverId).readPlainBody(row.id);
+      return body !== null && ApprovalRequestSchema.safeParse(JSON.parse(body)).success;
+    });
+    if (!approval) throw new Error('Voice answer did not create an approval');
+    expect(ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.id) ?? 'null')))
+      .toMatchObject({ status: 'open', actionId: 'session.user_action.answer', actionArgs: input,
+        executionOriginV1: { authority: 'account_automation', surface: 'voice', accountId: 'alice' } });
+    // Voice cannot decide its own proposal or gain authority from a settings waiver.
+    expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: approval.id, decision: 'approve' },
+      { surface: 'voice', serverId })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(outgoing).toEqual([]);
+    const approved = await createDefaultActionExecutor().execute('approval.request.decide',
+      { artifactId: approval.id, decision: 'approve' }, context());
+    expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(outgoing).toEqual([{ method: `question-worker:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
+      params: { id: 'question-1', approved: response === 'answer',
+        ...(response === 'answer' ? { answers: { 'Which revision?': ['42'] } } : {}), answeringClientCategory: 'web' } }]);
+    expect(ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.id) ?? 'null')))
+      .toMatchObject({ status: 'executed', decision: { kind: 'approve', authority: 'present_user' } });
+  });
   it('keeps permission feedback and title state unchanged while explicit UI approval is pending', async () => {
     const read = installSession('approval-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     storage.getState().updateSessionPermissionMode('approval-session', 'read-only');
@@ -1037,6 +1143,41 @@ describe('default Action executor mode and catalog contracts', () => {
       expect(read().metadataVersion).toBe(1);
     },
   );
+  it('composes the archive choice through the real HTTP list/archive owners and strict UI consumer', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const rows = ['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last', 'cascade-grandchild'].map(id =>
+      createPlainSessionCurrentProjectionRecordFixture({ id, active: false,
+        ...(id !== 'cascade-lead' ? { manager: { sessionId: id === 'cascade-grandchild' ? 'cascade-child' : 'cascade-lead' } } : {}),
+      }));
+    const archived: string[] = [];
+    for (const row of rows) {
+      homes.answer(serverId, `/v2/sessions/${row.id}`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}?accessProjectionVersion=1`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}/archive`, { select: () => {
+        archived.push(row.id);
+        return row.id === 'cascade-refused' ? { status: 403, body: { error: 'Forbidden' } }
+          : { body: { success: true, archivedAt: 10 } };
+      } });
+    }
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      const query = SessionListQueryV1Schema.parse(input);
+      expect(query).toMatchObject({ storage: 'active', underSessionId: 'cascade-lead' });
+      return { body: SessionListQueryResponseV1Schema.parse({ sessions: rows.slice(1).map(row => ({
+        ...row, viewer: createSessionViewerFixture(),
+      })), nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) };
+    } });
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const result = await executeSessionLifecycleAction('session.archive', 'cascade-lead', { serverId, alsoArchiveReports: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ success: true, sessionId: 'cascade-lead', reports: [
+      { sessionId: 'cascade-child', status: 'archived' },
+      { sessionId: 'cascade-refused', status: 'failed' },
+      { sessionId: 'cascade-last', status: 'archived' },
+    ] });
+    const archiveOutputSchema = getActionSpec('session.archive')?.outputSchema;
+    if (!archiveOutputSchema) throw new Error('Session archive output schema is unavailable');
+    expect(archiveOutputSchema.parse(result)).toEqual(result);
+    expect(archived).toEqual(['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last']);
+  });
   beforeEach(async () => {
     webLocks = installWebLockManagerMock();
     storage.setState(originalState, true);
@@ -1044,7 +1185,8 @@ describe('default Action executor mode and catalog contracts', () => {
     resetDynamicModelProbeCacheForTests();
     const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
     serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', serverIdentityId: 'srv_mode_home', accountId: 'alice', credentials });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials, request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials,
+      request: homes.request, configureSocket: configureSessionSocket });
     storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

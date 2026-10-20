@@ -15,6 +15,7 @@ import { WidgetInstanceV1Schema, WidgetSurfaceRefV1Schema, type WidgetSurfaceRef
 import { WidgetExpectedPresentationV1Schema, type WidgetActionSurfacePortV1, type WidgetSurfaceMutationV1, type WidgetMoveCaptureV1 } from './actionsV1.js';
 import { WidgetGridSizeV1Schema, WidgetProjectAreaV1Schema, normalizeWidgetSizeForSurfaceV1 } from './widgetPresentationV1.js';
 import { projectOverviewDefaultPlacementsV1 } from './builtinWidgetDescriptorV1.js';
+import { createUsageWidgetPresets, type UsageWidgetPresetId } from './usageWidgetPresetsV1.js';
 import { WidgetLayoutItemV1Schema, type WidgetLayoutItemV1, WidgetLayoutItemsV1Schema, WidgetLayoutItemIntentV1Schema, applyWidgetLayoutItemIntentV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, flattenWidgetLayoutWidgetsV1, getWidgetLayoutItemIdV1 } from './widgetLayoutItemV1.js';
 
 export const WIDGET_SURFACE_ARTIFACT_KIND_V1 = 'widget-area-layout.v1';
@@ -75,6 +76,12 @@ function storedSurface(raw: WidgetSurfaceRefV1): WidgetSurfaceRefV1 {
 export function projectOverviewPresetV1(): WidgetAreaPresetV1 {
     return { id: 'overview', name: 'Overview', items: projectOverviewDefaultPlacementsV1() };
 }
+/** Built-in area defaults are available without a mount; clients may localize their names. */
+export function resolveHostWidgetAreaPresetsV1(surface: WidgetSurfaceRefV1, usageNames?: Readonly<Record<UsageWidgetPresetId, string>>): readonly WidgetAreaPresetV1[] | undefined {
+    if (surface.owner.kind === 'project') return [projectOverviewPresetV1()];
+    if (surface.owner.kind === 'corePage' && surface.owner.pageId === 'usage' && surface.owner.area === 'main') return createUsageWidgetPresets(usageNames);
+    return undefined;
+}
 /** Page metadata is host-owned; this lookup never accepts a caller-supplied preset. */
 export function resolveWidgetAreaPresetV1<T extends WidgetAreaPresetV1>(surface: WidgetSurfaceRefV1, presets?: readonly T[]): T | undefined {
     const layoutId = surface.owner.kind === 'project' ? surface.owner.layoutId ?? 'overview'
@@ -84,7 +91,7 @@ export function resolveWidgetAreaPresetV1<T extends WidgetAreaPresetV1>(surface:
 /** Inventory and first personalization derive the same initial order from host metadata. */
 function hostLayouts(surface: WidgetSurfaceRefV1, raw?: readonly WidgetAreaPresetV1[]) {
     let sortKey: string | null = null;
-    const layouts = (raw ?? (surface.owner.kind === 'project' ? [projectOverviewPresetV1()] : [])).map(value => {
+    const layouts = (raw ?? resolveHostWidgetAreaPresetsV1(surface) ?? []).map(value => {
         const preset = WidgetAreaPresetV1Schema.parse(value);
         sortKey = generateKeyBetween(sortKey, null);
         return { ...preset, sortKey };

@@ -367,7 +367,7 @@ export async function admitPluginWebhookDeliveryV1(params: Readonly<{
                 return { kind: "duplicate", deliveryId: duplicate.id };
             }
 
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, endpoint.accountId);
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, endpoint.accountId, "content");
         if (
             fence.status !== "ready"
             || !accountEncryptionMatches({
@@ -530,7 +530,7 @@ export async function admitPluginWebhookDeliveryV1(params: Readonly<{
                 params.onCommittedWake?.({
                     accountId,
                     targetMachineId,
-                    accountChangeCursor,
+                    accountChangeCursor: accountChangeCursor.resolveCursor(),
                 });
             });
         }

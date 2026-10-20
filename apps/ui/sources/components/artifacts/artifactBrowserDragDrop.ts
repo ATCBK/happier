@@ -1,6 +1,7 @@
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragScopeV1,
     type EntityDropAdmissionV1 } from '@happier-dev/protocol/plugins/ui/entityDragDrop';
 import { movePromptFolderV1, placeArtifactInPromptFolderV1, type PromptFolderEntryV1, type PromptFoldersV1 } from '@happier-dev/protocol/prompts/library/promptFoldersV1';
+import { ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/promptFolderActionSchemasV1';
 import type { EntityDragSource, EntityDropTarget } from '@/components/ui/treeDragDrop/entityDragDropTypes';
 import { resolveTreeInstruction } from '@/components/ui/treeDragDrop/resolveTreeInstruction';
 import { buildExcludedDescendantIds } from '@/components/ui/treeDragDrop/rules/cyclePrevention';
@@ -47,6 +48,18 @@ export function createArtifactBrowserDropTarget(input: ArtifactBrowserDropTarget
     };
     return { id: input.id, scope: input.scope, acceptedKinds: ['artifact', 'artifact-folder'],
         getBounds: input.getBounds, measureBounds: input.measureBounds, autoscroll: input.autoscroll, isCurrent: input.isCurrent,
+        getDestinationKey: (_context, admission) => {
+            const { effect } = admission;
+            if (effect.actionId === 'artifact.folder.set') {
+                const input = ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1['artifact.folder.set'].parse(effect.input);
+                return JSON.stringify(['artifact-folder', input.folderId]);
+            }
+            if (effect.actionId === 'artifact.folders.move') {
+                const input = ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1['artifact.folders.move'].parse(effect.input);
+                return JSON.stringify(['artifact-folder', input.parentId]);
+            }
+            return null;
+        },
         listDestinations: () => [null, ...(input.getCatalog().folders?.folders ?? [])].map(folder => ({
             destination: { folderId: folder?.id ?? null }, label: input.describeFolder(folder),
         })),

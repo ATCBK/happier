@@ -6,7 +6,7 @@ import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRo
 import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
 import { SESSION_PROVIDER_LIMITS_SETTINGS } from '@/components/settings/session/sessionProviderLimitsSettings';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { isQuotaGaugeWindowMode, resolveQuotaGaugeWindowModes } from '@/sync/domains/connectedServices/quotaGaugeWindows';
 import { t } from '@/text';
@@ -16,10 +16,10 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
 }>) {
     const settings = props.settings ?? SESSION_PROVIDER_LIMITS_SETTINGS.settings;
     const enabled = useFeatureEnabled('connectedServices.quotas');
-    const [visibility, setVisibility] = useSettingMutable('sessionProviderUsageGaugeMode');
-    const [legacyWindow] = useSettingMutable('sessionProviderUsageGaugeWindowMode');
-    const [windows, setWindows] = useSettingMutable('sessionProviderUsageGaugeWindowModes');
-    const [labels, setLabels] = useSettingMutable('sessionUsageGaugeLabels');
+    const visibility = useSetting('sessionProviderUsageGaugeMode');
+    const legacyWindow = useSetting('sessionProviderUsageGaugeWindowMode');
+    const windows = useSetting('sessionProviderUsageGaugeWindowModes');
+    const labels = useSetting('sessionUsageGaugeLabels');
     const routingHints = useSetting('usageRoutingHintsEnabled');
     const { setSetting } = useSettingActionFeedback();
     const selectedIds = resolveQuotaGaugeWindowModes(windows, legacyWindow);
@@ -38,9 +38,9 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
             setting={settings.gaugeVisible}
             testID="settings-session-providerUsageGauge-visibility"
             subtitle={visible ? t('settingsSession.providerUsageGauge.visibilityEnabledSubtitle') : t('settingsSession.providerUsageGauge.visibilityHiddenSubtitle')}
-            rightElement={<Switch testID="settings-session-providerUsageGauge-visibility-toggle" value={visible} onValueChange={(next) => setVisibility(next ? 'auto' : 'hidden')} />}
+            rightElement={<Switch testID="settings-session-providerUsageGauge-visibility-toggle" value={visible} onValueChange={(next) => { void setSetting(settings.gaugeVisible, next ? 'auto' : 'hidden'); }} />}
             showChevron={false}
-            onPress={() => setVisibility(visible ? 'hidden' : 'auto')}
+            onPress={() => { void setSetting(settings.gaugeVisible, visible ? 'hidden' : 'auto'); }}
         />
         <SettingAnchor setting={settings.gaugeWindow}>
             <MultiSelectField
@@ -48,7 +48,7 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
                 title={t(settings.gaugeWindow.titleKey)}
                 candidates={candidates}
                 selectedIds={selectedIds}
-                onCommit={(ids) => setWindows(resolveQuotaGaugeWindowModes(ids.filter(isQuotaGaugeWindowMode)))}
+                onCommit={(ids) => { void setSetting(settings.gaugeWindow, resolveQuotaGaugeWindowModes(ids.filter(isQuotaGaugeWindowMode))); }}
                 subtitle={() => candidates.filter((candidate) => selectedIds.includes(candidate.id)).map((candidate) => candidate.title).join(' + ')}
                 emptySubtitle={t('common.unavailable')}
                 searchPlaceholder={t('settingsSession.providerUsageGauge.windowTitle')}
@@ -61,9 +61,9 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
             setting={settings.gaugeLabels}
             testID="settings-session-providerUsageGauge-labels"
             subtitle={t('settingsSession.providerUsageGauge.labelsSubtitle')}
-            rightElement={<Switch testID="settings-session-providerUsageGauge-labels-toggle" value={labels === true} onValueChange={setLabels} />}
+            rightElement={<Switch testID="settings-session-providerUsageGauge-labels-toggle" value={labels === true} onValueChange={(next) => { void setSetting(settings.gaugeLabels, next); }} />}
             showChevron={false}
-            onPress={() => setLabels(labels !== true)}
+            onPress={() => { void setSetting(settings.gaugeLabels, labels !== true); }}
         />
         <SettingRow
             setting={settings.routingHints}

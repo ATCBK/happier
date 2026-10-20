@@ -58,6 +58,8 @@ describe('workflow Run routes', () => {
     it('opens the exact managed Run an admission receipt declared', () => {
         expect(createAdmittedWorkflowRunRoute({ recipeKind: 'workflow-v2', workflowRunId: 'run/42 a' }))
             .toBe('/workflows/runs/run%2F42%20a');
+        expect(createAdmittedWorkflowRunRoute({ recipeKind: 'workflow-v2', workflowRunId: 'run/42 a' }, 'home/b'))
+            .toBe('/workflows/runs/run%2F42%20a?serverId=home%2Fb');
     });
 
     it('gives a legacy or malformed receipt no managed destination', () => {

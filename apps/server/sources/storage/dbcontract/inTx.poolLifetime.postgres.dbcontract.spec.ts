@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readDatabaseTransactionConfigFromEnv } from "@/config/databaseTransactions";
 import { db, initDbPostgres } from "@/storage/db";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionConflictExhaustedError, type Tx } from "@/storage/inTx";
 import { createDbMaintenanceClient, getDbProviderFromEnv, type PrismaClientType } from "@/storage/prisma";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("PostgreSQL transaction connection lifetime", () => {
@@ -133,6 +133,112 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         } finally {
             await db.account.delete({ where: { id: account.id } });
         }
+    });
+
+    describe("an expired transaction never keeps waiting for or holding a lock", () => {
+        const originalTimeout = process.env.HAPPIER_DB_TX_TIMEOUT_MS;
+        beforeAll(() => { process.env.HAPPIER_DB_TX_TIMEOUT_MS = "1500"; });
+        afterAll(() => {
+            if (originalTimeout === undefined) delete process.env.HAPPIER_DB_TX_TIMEOUT_MS;
+            else process.env.HAPPIER_DB_TX_TIMEOUT_MS = originalTimeout;
+        });
+
+        const readBackend = (pid: number) => observer.$queryRaw<Array<{ inTransaction: boolean }>>`
+            SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid = ${pid} AND xact_start IS NOT NULL) AS "inTransaction"
+        `;
+
+        it("ends a lock wait at the budget as a rolled-back conflict and frees the backend while the holder still holds", async () => {
+            const account = await db.account.create({ data: { publicKey: randomUUID() } });
+            let release!: () => void;
+            const released = new Promise<void>(resolve => { release = resolve; });
+            let holding!: () => void;
+            const holderReady = new Promise<void>(resolve => { holding = resolve; });
+            const holder = observer.$transaction(async tx => {
+                await tx.$queryRaw`SELECT 1 FROM "Account" WHERE id = ${account.id} FOR UPDATE`;
+                holding();
+                await released;
+            }, { timeout: 60_000 });
+            const holderOutcome = Promise.allSettled([holder]);
+            try {
+                await holderReady;
+                let waiterPid!: number;
+                const startedAtMs = Date.now();
+                const outcome = await Promise.allSettled([inTx(async tx => {
+                    [{ pid: waiterPid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                    await tx.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                }, { transactionClass: "test-lock-wait-budget" })]);
+                const elapsedMs = Date.now() - startedAtMs;
+                expect(outcome[0].status).toBe("rejected");
+                expect((outcome[0] as PromiseRejectedResult).reason).toBeInstanceOf(TransactionConflictExhaustedError);
+                expect(elapsedMs).toBeLessThan(1500 + 3_000);
+                expect(await readBackend(waiterPid)).toEqual([{ inTransaction: false }]);
+                expect(await db.$queryRaw<Array<{ value: number }>>`SELECT 1::int AS value`).toEqual([{ value: 1 }]);
+            } finally {
+                release();
+                await holderOutcome;
+                await db.account.delete({ where: { id: account.id } });
+            }
+        });
+
+        it("reports a statement cancelled by an earlier SQL budget as a rolled-back conflict", async () => {
+            const account = await db.account.create({ data: { publicKey: randomUUID() } });
+            const [{ setting: original }] = await db.$queryRaw<Array<{ setting: string }>>`SELECT current_setting('statement_timeout') AS setting`;
+            let release!: () => void;
+            const released = new Promise<void>(resolve => { release = resolve; });
+            let holding!: () => void;
+            const holderReady = new Promise<void>(resolve => { holding = resolve; });
+            const holder = observer.$transaction(async tx => {
+                await tx.$queryRaw`SELECT 1 FROM "Account" WHERE id = ${account.id} FOR UPDATE`;
+                holding();
+                await released;
+            }, { timeout: 60_000 });
+            const holderOutcome = Promise.allSettled([holder]);
+            try {
+                await holderReady;
+                // The pool has one connection, so this stricter database
+                // setting reaches the transaction: SQL ends before Prisma's timer.
+                await db.$executeRaw`SELECT set_config('statement_timeout', '500ms', false)`;
+                const startedAtMs = Date.now();
+                await expect(inTx(async tx => {
+                    await tx.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                }, { transactionClass: "test-statement-budget-cancel" })).rejects.toBeInstanceOf(TransactionConflictExhaustedError);
+                expect(Date.now() - startedAtMs).toBeLessThan(1_500);
+            } finally {
+                await db.$executeRaw`SELECT set_config('statement_timeout', ${original}, false)`;
+                release();
+                await holderOutcome;
+                await db.account.delete({ where: { id: account.id } });
+            }
+        });
+
+        it("releases a lock whose callback never finishes once the budget expires", async () => {
+            const account = await db.account.create({ data: { publicKey: randomUUID() } });
+            let holderPid!: number;
+            let locked!: () => void;
+            const holderLocked = new Promise<void>(resolve => { locked = resolve; });
+            const hung = Promise.allSettled([inTx(async tx => {
+                [{ pid: holderPid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                await tx.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                locked();
+                await new Promise<never>(() => {});
+            }, { transactionClass: "test-hung-lock-holder" })]);
+            try {
+                await holderLocked;
+                const startedAtMs = Date.now();
+                // Another connection waits for the row; it can proceed only
+                // after the hung transaction's database backend has ended.
+                const [{ seq }] = await observer.$transaction(async tx => {
+                    await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '20s'");
+                    return await tx.$queryRaw<Array<{ seq: number }>>`SELECT seq FROM "Account" WHERE id = ${account.id} FOR UPDATE`;
+                }, { timeout: 30_000 });
+                expect(seq).toBe(0);
+                expect(Date.now() - startedAtMs).toBeLessThan(1500 + 3_000);
+                expect(await readBackend(holderPid)).toEqual([{ inTransaction: false }]);
+            } finally {
+                await Promise.race([hung, new Promise(resolve => setTimeout(resolve, 5_000))]);
+                await db.account.delete({ where: { id: account.id } });
+            }
+        });
     });
 
     it("preserves lazy and fluent Prisma queries, delegate identity, raw methods and after-commit effects", async () => {

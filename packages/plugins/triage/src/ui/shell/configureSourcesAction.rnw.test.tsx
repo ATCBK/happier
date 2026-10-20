@@ -343,6 +343,28 @@ describe('the unconfigured PRs & Issues screen', () => {
         await expect(configured.getByRole('textbox', { name: 'Search PRs & Issues' })).resolves.toBeDefined();
     });
 
+    it('scrolls the first run with the page, so every source stays reachable on a short screen', async () => {
+        // R3-02: the first run once sat in the Collection's fixed header, so on a phone the lower sources and
+        // the "What happens next" steps were clipped with no way to reach them. It scrolls with the page now; a
+        // populated list keeps its one scroller under a fixed toolbar.
+        const scroller = (element: Element | null): Element | null => {
+            for (let node = element?.parentElement ?? null; node !== null; node = node.parentElement) {
+                const overflow = getComputedStyle(node).overflowY;
+                if (overflow === 'auto' || overflow === 'scroll') return node;
+            }
+            return null;
+        };
+        const shell = await mountShell({ settingsPageId: 'triage-sources', secondSource: true });
+        await expect(shell.getByText('Connect a source')).resolves.toBeDefined();
+        expect(scroller(document.querySelector('[data-testid="triage-first-run"]'))).not.toBeNull();
+        await shell.dispose();
+        mounted.splice(mounted.indexOf(shell), 1);
+
+        const configured = await mountShell({ settingsPageId: 'triage-sources', configured: true });
+        await expect(configured.getByRole('textbox', { name: 'Search PRs & Issues' })).resolves.toBeDefined();
+        expect(scroller(document.querySelector('[aria-label="Search PRs & Issues"]'))).toBeNull();
+    });
+
     it('renders no control for a source that named no page', async () => {
         // Rendering one anyway is the failure this replaced, not a smaller
         // version of it: the press would reach no destination at all.

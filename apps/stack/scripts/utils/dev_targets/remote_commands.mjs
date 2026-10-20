@@ -20,7 +20,7 @@ export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_press
 // while argv and path normalization remain thin transport adapters.
 export const REMOTE_COMMAND_CLASSIFICATION = Object.freeze({
   packageManagerCommands: Object.freeze(['npm', 'npx', 'pnpm', 'yarn']),
-  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog']),
+  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog', 'packages/plugins/claude']),
   sourceTestConfigs: Object.freeze(['vitest.config.ts']),
   sourceTestScripts: Object.freeze(['vitest', 'vitest:local']),
 });
@@ -1328,6 +1328,8 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   'HAPPIER_WEBAPP_URL',
   'HAPPIER_SQLITE_BUSY_TIMEOUT_MS',
   'HAPPIER_SQLITE_CONNECTION_LIMIT',
+  // A Stack's Postgres pool budget (overrides DATABASE_URL connection_limit) belongs to its server too.
+  'HAPPIER_DB_CONNECTION_LIMIT',
   // The Stack's chosen server log level (resolved by server_env.mjs) applies wherever its server runs.
   'HAPPIER_STACK_SERVER_LOG_LEVEL',
   'HAPPIER_SERVER_LOG_LEVEL',

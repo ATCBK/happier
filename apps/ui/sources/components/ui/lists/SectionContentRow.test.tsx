@@ -23,9 +23,13 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));
 
+// Collect the real component graph once; cases only vary rendered props.
+await import('./ItemGroup');
+await import('./SectionContentRow');
+await import('./listPresentation');
+
 afterEach(() => {
     standardCleanup();
-    vi.resetModules();
 });
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>;

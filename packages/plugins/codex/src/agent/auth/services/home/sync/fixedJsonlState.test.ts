@@ -3,6 +3,22 @@ import { describe, expect, it } from 'vitest';
 import { reconcileCodexSharedJsonlState } from './fixedJsonlState.js';
 
 describe('reconcileCodexSharedJsonlState', () => {
+  it('adopts only exact complete-line extensions of the same rollout', () => {
+    const entryPath = 'sessions/2026/10/19/rollout-2026-10-19T15-51-26-01a1546e-701a-7b41-8277-bdf4e72f2b28.jsonl';
+    const metadata = '{"type":"session_meta","payload":{"id":"01a1546e-701a-7b41-8277-bdf4e72f2b28"}}\n';
+    const answer = '{"type":"response_item","payload":{"role":"assistant"}}\n';
+    expect(reconcileCodexSharedJsonlState({ entryPath, currentContents: metadata, incomingContents: metadata + answer }))
+      .toEqual({ appendText: answer });
+    expect(reconcileCodexSharedJsonlState({ entryPath, currentContents: metadata + answer, incomingContents: metadata }))
+      .toEqual({ appendText: '' });
+    expect(reconcileCodexSharedJsonlState({ entryPath, currentContents: metadata + answer, incomingContents: metadata + answer }))
+      .toEqual({ appendText: '' });
+    expect(reconcileCodexSharedJsonlState({ entryPath, currentContents: metadata, incomingContents: metadata + '{"type":' }))
+      .toBeNull();
+    expect(reconcileCodexSharedJsonlState({ entryPath, currentContents: metadata + answer, incomingContents: metadata + '{"type":"other"}\n' }))
+      .toBeNull();
+  });
+
   it('appends missing history and only newer per-session index records', () => {
     const historyFirst = '{"session_id":"first","ts":1,"text":"first prompt"}\n';
     const historySecond = '{"session_id":"second","ts":2,"text":"second prompt"}\n';

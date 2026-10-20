@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
@@ -107,7 +107,7 @@ export function createCapabilitiesActionChip(
           />,
         )}
         {showLabel ? (
-          <AgentInputChipLabel
+          <ReservedChipLabel
             label={params.label}
             textStyle={[textStyle, { fontVariant: ['tabular-nums'] }]}
             countTextStyle={countTextStyle}
@@ -121,6 +121,32 @@ export function createCapabilitiesActionChip(
       </CapabilitiesChipPressable>
     ),
   };
+}
+
+/**
+ * The label holds the width of a counted label ("88 skills · 88 MCP", tabular digits), so the chip keeps its width
+ * while its counts load and as they change: the composer's chip row does not shift and the popover anchored to the
+ * chip does not drift. The reference is measured, never drawn.
+ */
+function ReservedChipLabel(props: Readonly<{ label: string; textStyle: React.ComponentProps<typeof AgentInputChipLabel>['textStyle']; countTextStyle: React.ComponentProps<typeof AgentInputChipLabel>['countTextStyle'] }>) {
+  const [reservedWidth, setReservedWidth] = React.useState(0);
+  const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+    setReservedWidth(Math.ceil(event.nativeEvent.layout.width));
+  }, []);
+  return (
+    <View style={reservedWidth > 0 ? { minWidth: reservedWidth } : undefined} testID="session-capabilities-chip:label">
+      <AgentInputChipLabel label={props.label} textStyle={props.textStyle} countTextStyle={props.countTextStyle} />
+      <View
+        aria-hidden
+        pointerEvents="none"
+        onLayout={onLayout}
+        testID="session-capabilities-chip:reserve"
+        style={{ position: 'absolute', opacity: 0 }}
+      >
+        <AgentInputChipLabel label={t('capabilities.session.counts', { skills: 88, mcp: 88 })} textStyle={props.textStyle} countTextStyle={props.countTextStyle} />
+      </View>
+    </View>
+  );
 }
 
 /** The chip's pressable; on mount with a route request it opens its own popover once and consumes the request. */

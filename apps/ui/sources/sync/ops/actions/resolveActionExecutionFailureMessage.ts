@@ -7,13 +7,30 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+/**
+ * Why the Home refused a widget's inputs, from the refusal's own field reasons: the first field that names a
+ * cause the person can act on decides, so a locked Session, a choice that is gone and choices that could not
+ * load each say so. A refusal with no such reason keeps the general sentence.
+ */
+function readWidgetInputsInvalidMessage(details: unknown): string {
+    const fields = asRecord(details)?.fields;
+    for (const field of Array.isArray(fields) ? fields : []) {
+        const record = asRecord(field);
+        if (!record) continue;
+        if (record.status === 'denied') return t('widgetAdd.refusals.inputsAccessDenied');
+        if (record.status === 'unavailable') return t('widgetAdd.refusals.inputsChoicesUnavailable');
+        if (record.reasonCode === 'input_type_option_invalid' || record.reasonCode === 'widget_input_option_unavailable') return t('widgetAdd.refusals.inputsChoiceGone');
+    }
+    return t('widgetAdd.refusals.inputsInvalid');
+}
+
 /** Widget write refusals whose reason and next step the person can act on; any other code keeps the caller's fallback. */
-function readWidgetRefusalMessage(code: unknown): string | null {
+function readWidgetRefusalMessage(code: unknown, details?: unknown): string | null {
     switch (code) {
         case 'widget_area_unavailable': return t('widgetAdd.refusals.areaUnavailable');
         case 'widget_area_scope_retired':
         case 'widget_scope_unavailable': return t('widgetAdd.areaScopeRecovery');
-        case 'widget_inputs_invalid': return t('widgetAdd.refusals.inputsInvalid');
+        case 'widget_inputs_invalid': return readWidgetInputsInvalidMessage(details);
         case 'widget_type_unavailable': return t('widgetAdd.refusals.typeUnavailable');
         case 'widget_size_unsupported': return t('widgetAdd.refusals.sizeUnsupported');
         case 'widget_edit_denied': return t('widgetAdd.refusals.editDenied');
@@ -32,7 +49,7 @@ function readFailureMessage(value: unknown): string | null {
     if (code === 'server_unreachable' || code === 'home_unreachable') return t('settingsPlugins.targetSelection.unreachableThisHome');
     if (isActionTurnedOffErrorCode(code)) return t('actionConfirmations.turnedOffMessage');
     if (code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown') return t('entityDragDrop.preview.unknownDetail');
-    const widgetRefusal = readWidgetRefusalMessage(code);
+    const widgetRefusal = readWidgetRefusalMessage(code, record.details);
     if (widgetRefusal) return widgetRefusal;
     const sessionInputLabel = getSessionInputFailureLabelKey({ code });
     if (sessionInputLabel) return t(sessionInputLabel);

@@ -20,7 +20,7 @@ import type {
   WindowBounds,
   WindowPointer,
 } from '@/components/ui/treeDragDrop/treeDragDropTypes';
-import { resolveWidgetLayoutEntityDrop } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+import { resolveWidgetLayoutEntityDrop, widgetLayoutEntityDropDestinationKey } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
 import { widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { t } from '@/text';
 
@@ -63,6 +63,7 @@ function layoutTarget(
   return {
     acceptedKinds: [...LAYOUT_ACCEPTED_KINDS],
     listDestinations: input.destinations,
+    getDestinationKey: (_context, admission) => widgetLayoutEntityDropDestinationKey(admission),
     resolve: ({ item, destination }) => {
       const admission = resolveWidgetLayoutEntityDrop({
         item,

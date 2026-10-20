@@ -82,6 +82,7 @@ async function renderControl(
     projectKey?: string | null;
     projection?: readonly Readonly<ReturnType<typeof projectionFor>[number] & { agentInventoryComplete?: boolean }>[];
     kind?: 'skill' | 'mcp_server';
+    presentation?: 'section' | 'pick';
   }>,
 ) {
   const changes: Replace[] = [];
@@ -103,7 +104,7 @@ async function renderControl(
         if (input.onChange) changes.push(change);
         return result;
       }}
-      presentation="section"
+      presentation={input.presentation ?? 'section'}
       {...(input.readOnlyReason
         ? { readOnlyReason: input.readOnlyReason }
         : {})}
@@ -157,6 +158,17 @@ const ruleKey = (target: ReachRuleV1['target'], agentId?: string) =>
   `where:rule:${reachRuleKeyV1({ target, ...(agentId ? { agentId } : {}) })}`;
 
 describe('WhereItsOnControl', () => {
+  it('is a titled section in the compact add-flow form too, and leaves the description to the detail', async () => {
+    const group = async (presentation: 'section' | 'pick') => {
+      const { screen } = await renderControl({ rules: [], presentation });
+      return screen.findAll((node) => node.props?.testID === 'where' && 'title' in node.props)[0]!.props;
+    };
+    expect((await group('section')).description).toBeTruthy();
+    const pick = await group('pick');
+    expect(pick.title).toBe('Where it’s on');
+    expect(pick.description).toBeUndefined();
+  });
+
   it.each(['skill', 'mcp_server'] as const)('keeps unknown %s inventory in the consequence slot without hiding confirmed availability', async kind => {
     const rules = [everywhere(true)];
     const incomplete = [{ machineId: 'mbp', agents: [], agentInventoryComplete: false }];

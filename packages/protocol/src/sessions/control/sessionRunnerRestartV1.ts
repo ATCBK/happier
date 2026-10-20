@@ -48,6 +48,7 @@ export const SESSION_RUNNER_RESTART_DISABLED_REASONS = [
   'runner_entrypoint_unknown',
   'runner_generation_unattested',
   'unsupported_daemon_version',
+  'restart_admission_unsupported',
 ] as const;
 export const SessionRunnerRestartDisabledReasonSchema = lazyZodSchema(() => z.enum(SESSION_RUNNER_RESTART_DISABLED_REASONS));
 export type SessionRunnerRestartDisabledReason =
@@ -77,6 +78,7 @@ export const SESSION_RUNNER_RESTART_STATUSES_V1 = [
   'missing_resume_snapshot',
   'missing_spawn_options',
   'unsupported_daemon',
+  'restart_admission_unsupported',
   'ineligible',
   'stop_failed',
   'spawn_failed',

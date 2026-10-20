@@ -15,6 +15,8 @@ type ModalCardHeaderProps = Readonly<{
     subtitle?: React.ReactNode;
     actions?: React.ReactNode;
     onClose?: () => void;
+    /** `wide`: the band stands on the content's 24 edge; a phone keeps the page gutter. */
+    inset?: 'wide';
     testID?: string;
     titleTestID?: string;
     subtitleTestID?: string;
@@ -62,7 +64,7 @@ export function ModalCardHeader(props: ModalCardHeaderProps) {
             titleTestID={props.titleTestID}
             subtitleTestID={props.subtitleTestID}
             // The app's own header style overrides (a card's `headerStyle`) are React Native view styles.
-            style={props.style as HappierStyleProp}
+            style={[props.inset === 'wide' && !compact ? { paddingHorizontal: theme.space.s24 } : null, props.style] as HappierStyleProp}
         />
     );
 }

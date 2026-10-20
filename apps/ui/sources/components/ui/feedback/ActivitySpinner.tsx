@@ -12,7 +12,7 @@ import {
 import { useUnistyles } from 'react-native-unistyles';
 
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { t } from '@/text';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 

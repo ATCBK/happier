@@ -35,6 +35,7 @@ import { openExternalActionRequestV2 } from '@happier-dev/protocol/actions/exter
 import { OpenProjectInputV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import { computeExternalActionSocketRpcRequestDigestV1, isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
+import { isSocketRpcMachineReadServerOriginAuthorizationContext, SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema,
     WorkspaceSyncSeedRoutingV1Schema } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, WorkspaceSyncPrepareBetweenRequestV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
@@ -56,6 +57,8 @@ type OwnedHandlerRegistrationContext = {
     previousMethods: ReadonlySet<string>;
     nextMethods: Set<string>;
 };
+
+type PausedRequestAdmission = Readonly<{ details?: unknown; revalidate?: (signal: AbortSignal) => Promise<void> }>;
 
 export type RpcHandlerRegistrationReadiness =
     | Readonly<{ status: 'ready' }>
@@ -86,6 +89,23 @@ type RequestDiagnostic = {
         causeCode?: string;
     }>;
 };
+
+// One family table owns both request decoding and response encoding. Dual-use
+// reads retain ordinary encrypted client admission; the other families are Home-only.
+const SERVER_ORIGIN_RPC_FAMILIES: readonly Readonly<{
+    methods: readonly string[];
+    isAuthorization: (value: unknown) => boolean;
+    serverOnly: boolean;
+    requiresMachineAdmission?: boolean;
+    bindsMachineRead?: boolean;
+}>[] = [
+    { methods: [AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1], isAuthorization: isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [SESSION_SERVER_START_DAEMON_RPC_METHOD_V1], isAuthorization: isSocketRpcSessionServerStartServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, MANAGED_FINITE_WAKE_RPC_METHOD], isAuthorization: isSocketRpcActionApiServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS], isAuthorization: isSocketRpcMachineAccessLossServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION], isAuthorization: isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext, serverOnly: true, requiresMachineAdmission: true },
+    { methods: SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS, isAuthorization: isSocketRpcMachineReadServerOriginAuthorizationContext, serverOnly: false, bindsMachineRead: true },
+];
 
 function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
@@ -123,7 +143,8 @@ export class RpcHandlerManager {
     private readonly permanentlyRejectedRegistrationMethods = new Set<string>();
     private acknowledgedRegistrationMethods = new Set<string>();
     private registrationReadinessWaiters = new Set<RegistrationReadinessWaiter>();
-    private inFlightRequestCount = 0;
+    private readonly inFlightRequestCounts = new Map<string, number>();
+    private readonly pausedRequestAdmission = new Map<string, PausedRequestAdmission>();
     private activeTransportRequestControllers = new Set<AbortController>();
     /**
      * The authenticated relay stamps this short-lived id immediately before it
@@ -535,12 +556,15 @@ export class RpcHandlerManager {
             if (!matchesRequest && parsedInputAuthorization.success && requestId) {
                 const binding = parsedInputAuthorization.data.binding;
                 try {
-                    matchesRequest = binding.actionId === 'session.message.send'
+                    matchesRequest = (binding.actionId === 'session.message.send'
+                            && targetMethod === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+                        || binding.actionId === 'session.user_action.answer'
+                            && targetMethod === RPC_METHODS.SESSION_USER_ACTION_ANSWER)
                         && binding.requestId === requestId
                         && binding.machineId === this.localMachineId
                         && binding.target.kind === 'session'
                         && binding.target.sessionId === this.scopePrefix
-                        && request.method === `${this.scopePrefix}:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`
+                        && request.method === `${this.scopePrefix}:${targetMethod}`
                         && binding.requestEnvelopeDigest === computeExternalActionSocketRpcRequestDigestV1({
                             method: request.method, requestId, params: request.params, target: binding.target,
                         });
@@ -560,7 +584,7 @@ export class RpcHandlerManager {
                 errorCode: RPC_ERROR_CODES.FORBIDDEN,
             });
         }
-        this.beginInFlightRequest();
+        this.beginInFlightRequest(this.readUnprefixedMethod(request.method));
         const controller = new AbortController();
         this.activeTransportRequestControllers.add(controller);
         if (requestId) {
@@ -594,6 +618,25 @@ export class RpcHandlerManager {
             phaseStartedAtMs = now;
         };
         try {
+            const pausedAtArrival = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method));
+            const admissionRevalidation = this.revalidatePausedRequestAdmission(this.readUnprefixedMethod(request.method), controller.signal);
+            if (admissionRevalidation) await admissionRevalidation;
+            const pausedAdmission = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method))
+                ?? (controller.signal.aborted ? pausedAtArrival : undefined);
+            if (pausedAdmission) {
+                // Bind an encrypted refusal to the actual request before encoding it.
+                // An unbound transport error cannot carry definite no-effect evidence.
+                try {
+                    const decoded = await socketRpcCodec.decodeRequestParams(rpcContent, request.params, request.method);
+                    callId = decoded.callId;
+                } catch (error) {
+                    return await respond(request, { error: 'Unable to open RPC content',
+                        errorCode: readRpcErrorCode(error) ?? RPC_ERROR_CODES.UPDATE_REQUIRED });
+                }
+                return await deny('handler_admission', { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                    ...(pausedAdmission.details === undefined ? {} : { details: pausedAdmission.details }) });
+            }
+            controller.signal.throwIfAborted();
             const sessionDecisionAuthorization = parseSocketRpcAuthorizationContext(request.authorization);
             const isRequesterDecisionMethod = request.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`);
             const isSessionDecisionRoute = isRequesterDecisionMethod
@@ -616,33 +659,10 @@ export class RpcHandlerManager {
                     } };
                 if (!await requesterApprovalDecision.isCurrent()) return await deny('session_decision_currentness');
             }
-            const isReservedAutomationReplyHandoff = this.isReservedAutomationReplyHandoffRequest(request);
-            const isReservedSessionServerStart = this.isReservedSessionServerStartRequest(request);
-            const isReservedActionApi = this.isReservedActionApiRequest(request);
-            const isReservedMachineAccessLoss = this.isReservedMachineAccessLossRequest(request);
-            const isReservedLocalServicesPreviewAdmission = this.isReservedLocalServicesPreviewAdmissionRequest(request);
-            const isReservedServerOriginRequest = isReservedAutomationReplyHandoff
-                || isReservedSessionServerStart
-                || isReservedActionApi
-                || isReservedMachineAccessLoss
-                || isReservedLocalServicesPreviewAdmission;
-            const isServerOriginAutomationReplyHandoff = isReservedAutomationReplyHandoff
-                && isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginSessionServerStart = isReservedSessionServerStart
-                && isSocketRpcSessionServerStartServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginActionApi = isReservedActionApi
-                && isSocketRpcActionApiServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginMachineAccessLoss = isReservedMachineAccessLoss
-                && isSocketRpcMachineAccessLossServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginLocalServicesPreviewAdmission = isReservedLocalServicesPreviewAdmission
-                && isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginReservedRequest = isServerOriginAutomationReplyHandoff
-                || isServerOriginSessionServerStart
-                || isServerOriginActionApi
-                || isServerOriginMachineAccessLoss
-                || isServerOriginLocalServicesPreviewAdmission;
-            if ((isReservedServerOriginRequest && !isServerOriginReservedRequest)
-                || (isReservedLocalServicesPreviewAdmission && (!machineAdmission?.success || !this.authorizeRequest))) {
+            const serverOriginFamily = this.readServerOriginRpcFamily(request);
+            const isServerOriginRequest = this.isServerOriginRequest(request);
+            if ((serverOriginFamily?.serverOnly && !isServerOriginRequest)
+                || (serverOriginFamily?.requiresMachineAdmission && (!machineAdmission?.success || !this.authorizeRequest))) {
                 return await deny('reserved_server_origin', {
                     error: RPC_ERROR_MESSAGES.FORBIDDEN,
                     errorCode: RPC_ERROR_CODES.FORBIDDEN,
@@ -653,7 +673,7 @@ export class RpcHandlerManager {
             let decryptedParams: unknown;
             try {
                 const decoded = await socketRpcCodec.decodeRequestParams(
-                    isServerOriginReservedRequest ? { mode: 'plain' } : rpcContent,
+                    isServerOriginRequest ? { mode: 'plain' } : rpcContent,
                     request.params,
                     request.method,
                 );
@@ -728,7 +748,7 @@ export class RpcHandlerManager {
             const sessionAuthorization = parseSocketRpcAuthorizationContext(request.authorization);
             diagnostic.callerClass = machineAdmission?.success
                 ? machineAdmission.data.actorAccountId === machineAdmission.data.custodianAccountId ? 'machine_custodian' : 'machine_guest'
-                : isServerOriginReservedRequest ? 'server_origin'
+                : isServerOriginRequest ? 'server_origin'
                     : sessionAuthorization?.sessionId === this.scopePrefix ? 'session' : 'unattributed';
 
             if (parsedInputAuthorization?.success && parsedInputAuthorization.data.binding.actionId === 'projects.open'
@@ -979,7 +999,7 @@ export class RpcHandlerManager {
             if (requestId && this.activeTransportRequestControllersByRequestId.get(requestId) === controller) {
                 this.activeTransportRequestControllersByRequestId.delete(requestId);
             }
-            this.finishInFlightRequest();
+            this.finishInFlightRequest(this.readUnprefixedMethod(request.method));
         }
     }
 
@@ -999,26 +1019,40 @@ export class RpcHandlerManager {
     }>): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
         const requestStartedAtMs = Date.now();
+        const callerInputConstraints = options?.rpcContext?.callerInputConstraints
+            ?? options?.localActionContext?.callerInputConstraints;
         return this.observeRequest(prefixedMethod, undefined, async diagnostic => {
             diagnostic.admissionPredicate = 'handler_admission';
             const handler = this.handlers.get(prefixedMethod);
             if (!handler) {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }
-            this.beginInFlightRequest();
-            const handlerExecutionId = this.beginHandlerExecution(method);
+            const signal = options?.signal ?? new AbortController().signal;
+            this.beginInFlightRequest(method);
+            let handlerExecutionId: number | null = null;
             try {
+                const pausedAtArrival = this.pausedRequestAdmission.get(method);
+                const admissionRevalidation = this.revalidatePausedRequestAdmission(method, signal);
+                if (admissionRevalidation) await admissionRevalidation;
+                const pausedAdmission = this.pausedRequestAdmission.get(method)
+                    ?? (signal.aborted ? pausedAtArrival : undefined);
+                if (pausedAdmission) {
+                    return { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                        ...(pausedAdmission.details === undefined ? {} : { details: pausedAdmission.details }) };
+                }
+                signal.throwIfAborted();
+                handlerExecutionId = this.beginHandlerExecution(method);
                 return await handler(params, Object.freeze({
                     ...(options?.rpcContext ? {
                         machineAdmission: options.rpcContext.machineAdmission,
                         verifyMachineAdmissionCurrent: options.rpcContext.verifyMachineAdmissionCurrent,
                         callerInputAuthorization: options.rpcContext.callerInputAuthorization,
-                        callerInputConstraints: options.rpcContext.callerInputConstraints,
                         sessionActionOrigin: options.rpcContext.sessionActionOrigin,
                         originalActionEnvelope: options.rpcContext.originalActionEnvelope,
                         requesterSessionBootstrap: options.rpcContext.requesterSessionBootstrap,
                     } : {}),
-                    signal: options?.signal ?? new AbortController().signal,
+                    ...(callerInputConstraints ? { callerInputConstraints } : {}),
+                    signal,
                     requestStartedAtMs,
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                     ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
@@ -1028,8 +1062,8 @@ export class RpcHandlerManager {
                         : {}),
                 }));
             } finally {
-                this.activeHandlerExecutions.delete(handlerExecutionId);
-                this.finishInFlightRequest();
+                if (handlerExecutionId !== null) this.activeHandlerExecutions.delete(handlerExecutionId);
+                this.finishInFlightRequest(method);
             }
         }, true);
     }
@@ -1198,7 +1232,7 @@ export class RpcHandlerManager {
     }
 
     getInFlightRequestCount(): number {
-        return this.inFlightRequestCount;
+        return Array.from(this.inFlightRequestCounts.values()).reduce((total, count) => total + count, 0);
     }
 
     getActiveHandlerExecutions(): readonly RpcHandlerActiveExecution[] {
@@ -1209,12 +1243,46 @@ export class RpcHandlerManager {
         }));
     }
 
-    async waitForIdle(): Promise<void> {
-        if (this.inFlightRequestCount === 0) {
+    /** The single planned-restart owner closes admission; existing requests retain their lifetimes. */
+    pauseRequestAdmission(methods: readonly string[], refusal: PausedRequestAdmission = {}): () => void {
+        const selected = new Set(methods);
+        for (const method of selected) this.pausedRequestAdmission.set(method, refusal);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            for (const method of selected) {
+                if (this.pausedRequestAdmission.get(method) === refusal) this.pausedRequestAdmission.delete(method);
+            }
+        };
+    }
+
+    private revalidatePausedRequestAdmission(method: string, signal: AbortSignal): Promise<void> | undefined {
+        // An unreadable owner cannot reopen admission. The callback releases only
+        // its own pause after observing definitive retirement at that owner.
+        return this.pausedRequestAdmission.get(method)?.revalidate?.(signal).catch(() => undefined);
+    }
+
+    /** Includes receiving authorization and cleanup, before/after handler execution. */
+    async waitForIdle(signal?: AbortSignal, methods?: readonly string[]): Promise<void> {
+        signal?.throwIfAborted();
+        const selected = methods ? new Set(methods) : null;
+        const busy = () => selected
+            ? Array.from(selected).some(method => this.inFlightRequestCounts.has(method))
+            : this.inFlightRequestCounts.size > 0;
+        if (!busy()) {
             return;
         }
-        await new Promise<void>((resolve) => {
-            this.idleResolvers.add(resolve);
+        await new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+                this.idleResolvers.delete(onIdle);
+                signal?.removeEventListener('abort', onAbort);
+            };
+            const onIdle = () => { if (!busy()) { cleanup(); resolve(); } };
+            const onAbort = () => { cleanup(); reject(signal?.reason); };
+            this.idleResolvers.add(onIdle);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            if (signal?.aborted) onAbort();
         });
     }
 
@@ -1320,7 +1388,7 @@ export class RpcHandlerManager {
 
     private encodeResponse(request: RpcRequest, response: unknown, callId: string | null, rpcContent: SocketRpcContent): Promise<unknown> {
         return socketRpcCodec.encodeResponse(
-            this.isServerOriginReservedRequest(request) ? { mode: 'plain' } : rpcContent,
+            this.isServerOriginRequest(request) ? { mode: 'plain' } : rpcContent,
             response,
             callId,
         );
@@ -1398,58 +1466,18 @@ export class RpcHandlerManager {
         return id;
     }
 
-    private isReservedAutomationReplyHandoffRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1);
+    private readServerOriginRpcFamily(request: RpcRequest) {
+        return SERVER_ORIGIN_RPC_FAMILIES.find(family => family.methods.some(method => request.method === this.getPrefixedMethod(method)));
     }
 
-    private isServerOriginAutomationReplyHandoffRequest(request: RpcRequest): boolean {
-        return this.isReservedAutomationReplyHandoffRequest(request)
-            && isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedSessionServerStartRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(SESSION_SERVER_START_DAEMON_RPC_METHOD_V1);
-    }
-
-    private isServerOriginSessionServerStartRequest(request: RpcRequest): boolean {
-        return this.isReservedSessionServerStartRequest(request)
-            && isSocketRpcSessionServerStartServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedActionApiRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)
-            || request.method === this.getPrefixedMethod(MANAGED_FINITE_WAKE_RPC_METHOD);
-    }
-
-    private isServerOriginActionApiRequest(request: RpcRequest): boolean {
-        return this.isReservedActionApiRequest(request)
-            && isSocketRpcActionApiServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedMachineAccessLossRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS);
-    }
-
-    private isServerOriginMachineAccessLossRequest(request: RpcRequest): boolean {
-        return this.isReservedMachineAccessLossRequest(request)
-            && isSocketRpcMachineAccessLossServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedLocalServicesPreviewAdmissionRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION);
-    }
-
-    private isServerOriginLocalServicesPreviewAdmissionRequest(request: RpcRequest): boolean {
-        return this.isReservedLocalServicesPreviewAdmissionRequest(request)
-            && isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isServerOriginReservedRequest(request: RpcRequest): boolean {
-        return this.isServerOriginAutomationReplyHandoffRequest(request)
-            || this.isServerOriginSessionServerStartRequest(request)
-            || this.isServerOriginActionApiRequest(request)
-            || this.isServerOriginMachineAccessLossRequest(request)
-            || this.isServerOriginLocalServicesPreviewAdmissionRequest(request);
+    private isServerOriginRequest(request: RpcRequest): boolean {
+        const family = this.readServerOriginRpcFamily(request);
+        if (!family?.isAuthorization(request.authorization)) return false;
+        if (!family.bindsMachineRead) return true;
+        return isSocketRpcMachineReadServerOriginAuthorizationContext(request.authorization)
+            && request.authorization.machineId === this.scopePrefix
+            && this.localMachineId === this.scopePrefix
+            && this.authorizeRequest !== undefined;
     }
 
     private areRegistrationMethodsAcknowledged(methods: ReadonlySet<string>): boolean {
@@ -1489,15 +1517,16 @@ export class RpcHandlerManager {
         }
     }
 
-    private beginInFlightRequest(): void {
-        this.inFlightRequestCount += 1;
+    private beginInFlightRequest(method: string): void {
+        this.inFlightRequestCounts.set(method, (this.inFlightRequestCounts.get(method) ?? 0) + 1);
     }
 
-    private finishInFlightRequest(): void {
-        this.inFlightRequestCount = Math.max(0, this.inFlightRequestCount - 1);
-        if (this.inFlightRequestCount === 0 && this.idleResolvers.size > 0) {
+    private finishInFlightRequest(method: string): void {
+        const count = this.inFlightRequestCounts.get(method) ?? 0;
+        if (count <= 1) this.inFlightRequestCounts.delete(method);
+        else this.inFlightRequestCounts.set(method, count - 1);
+        if (this.idleResolvers.size > 0) {
             const resolvers = Array.from(this.idleResolvers);
-            this.idleResolvers.clear();
             for (const resolve of resolvers) {
                 resolve();
             }

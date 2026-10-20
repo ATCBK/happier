@@ -64,24 +64,45 @@ export function applyPromptLibraryCatalogAcknowledgedRecord(scope: ServerAccount
     if (!current) return;
     const scopeKey = serverAccountScopeKeySuffix(scope);
     const previous = snapshots.get(scopeKey);
-    const old = previous?.values.get(record.key);
     const catalog = previous?.projection.catalog;
     if (!receiptOrdering.admit(scope, record.key, revision)) return;
     const values = new Map(previous?.values);
-    values.set(record.key, { status: old?.status ?? 'loading', value: record.value,
-        revision, sourceSettingsVersion: null, stale: true, reason: 'loading' });
+    values.set(record.key, { status: 'ready', value: record.value,
+        revision, sourceSettingsVersion: null, stale: false });
     const nextCatalog: PromptLibraryCatalogSnapshotV1 = catalog?.status === 'ready' || catalog?.status === 'partial'
         ? { ...catalog, rows: [...catalog.rows.filter(row => row.record.key !== record.key), { record, revision }],
             tombstones: catalog.tombstones.filter(row => row.key !== record.key),
             diagnostics: catalog.diagnostics.filter(row => row.key !== record.key) }
-        : catalog ?? { status: 'loading' };
+        : { status: 'partial', rows: [{ record, revision }], tombstones: [], diagnostics: [] };
     snapshots.set(scopeKey, withSkillRuleDrafts({ scope, values, skillRuleDrafts: previous?.skillRuleDrafts,
         skillRulesView: previous?.skillRulesView, projection: { catalog: nextCatalog,
         rawSettings: previous?.projection.rawSettings ?? {}, sourceSettingsVersion: previous?.projection.sourceSettingsVersion ?? 0 } }));
     for (const listener of [...listeners]) listener();
 }
-export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, projection: PromptLibraryCatalogProjection, current: boolean): void {
+export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, projection: PromptLibraryCatalogProjection, current: boolean,
+    changedKeys?: readonly PromptLibraryCatalogKeyV1[]): void {
     if (!current) return;
+    const scopeKey = serverAccountScopeKeySuffix(scope);
+    const previous = snapshots.get(scopeKey);
+    const before = previous?.projection.catalog;
+    const incoming = projection.catalog;
+    if ((before?.status === 'ready' || before?.status === 'partial') && (incoming.status === 'ready' || incoming.status === 'partial')) {
+        // A read started before a received CAS can enrich siblings, but cannot roll that row back.
+        const newerRows = before.rows.filter(row => {
+            const key = row.record.key;
+            const readRevision = incoming.rows.find(next => next.record.key === key)?.revision
+                ?? incoming.tombstones.find(next => next.key === key)?.revision
+                ?? incoming.diagnostics.find(next => next.key === key)?.revision;
+            return typeof readRevision === 'number' && row.revision > readRevision;
+        });
+        if (newerRows.length) {
+            const keys = new Set(newerRows.map(row => row.record.key));
+            projection = { ...projection, catalog: { ...incoming,
+                rows: [...incoming.rows.filter(row => !keys.has(row.record.key)), ...newerRows],
+                tombstones: incoming.tombstones.filter(row => !keys.has(row.key)),
+                diagnostics: incoming.diagnostics.filter(row => !keys.has(row.key)) } };
+        }
+    }
     if (projection.catalog.status === 'unavailable' && projection.catalog.reason === 'scope-retired') {
         receiptOrdering.clearScope(scope);
         return;
@@ -96,15 +117,18 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
             if (typeof row.revision === 'number') receiptOrdering.retain(scope, row.key, row.revision);
         }
     }
-    const scopeKey = serverAccountScopeKeySuffix(scope);
-    const previous = snapshots.get(scopeKey);
     const values = new Map<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>>();
     let changed = !previous;
     for (const key of PromptLibraryCatalogKeyV1Schema.options) {
         const read = readPromptLibraryCatalogRecordV1({ catalog: projection.catalog, key, rawSettings: projection.rawSettings });
         const old = previous?.values.get(key);
+        if (changedKeys && !changedKeys.includes(key) && old) { values.set(key, old); continue; }
         let next: PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>;
         if (read.status === 'ready') {
+            if (typeof old?.revision === 'number' && typeof read.revision === 'number' && old.revision > read.revision) {
+                values.set(key, old);
+                continue;
+            }
             const value = old?.value && JSON.stringify(old.value) === JSON.stringify(read.record.value) ? old.value : read.record.value;
             next = { status: 'ready', value, revision: read.revision,
                 sourceSettingsVersion: read.authority === 'inactive' ? projection.sourceSettingsVersion : null, stale: false };
@@ -123,6 +147,35 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
         skillRulesView: previous?.skillRulesView }));
     if (!changed) return;
     for (const listener of [...listeners]) listener();
+}
+/** Targeted refreshes retain sibling authority and never start catalog maintenance. */
+export function beginPromptLibraryCatalogRowsLoad(scope: ServerAccountScope, keys: readonly PromptLibraryCatalogKeyV1[]): void {
+    const scopeKey = serverAccountScopeKeySuffix(scope);
+    const previous = snapshots.get(scopeKey);
+    if (!previous) return;
+    const values = new Map(previous.values);
+    for (const key of keys) {
+        const old = values.get(key);
+        if (old) values.set(key, { ...old, status: 'loading', stale: true, reason: 'loading' });
+    }
+    snapshots.set(scopeKey, withSkillRuleDrafts({ ...previous, values }));
+    for (const listener of [...listeners]) listener();
+}
+export function applyPromptLibraryCatalogRowsSnapshot(scope: ServerAccountScope, keys: readonly PromptLibraryCatalogKeyV1[],
+    projection: PromptLibraryCatalogProjection, current: boolean): void {
+    const previous = getPromptLibraryCatalogSnapshot(scope);
+    const base = previous?.catalog;
+    const incoming = projection.catalog;
+    if ((base?.status !== 'ready' && base?.status !== 'partial') || (incoming.status !== 'ready' && incoming.status !== 'partial')) {
+        // Admission loss withdraws the complete Account projection, even on a single-row read.
+        applyPromptLibraryCatalogSnapshot(scope, projection, current);
+        return;
+    }
+    const rows = [...base.rows.filter(row => !keys.includes(row.record.key)), ...incoming.rows];
+    const tombstones = [...base.tombstones.filter(row => !keys.includes(row.key)), ...incoming.tombstones];
+    const diagnostics = [...base.diagnostics.filter(row => !keys.includes(row.key)), ...incoming.diagnostics];
+    applyPromptLibraryCatalogSnapshot(scope, { rawSettings: previous?.rawSettings ?? {}, sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0, catalog: { ...base,
+        status: diagnostics.length ? 'partial' : 'ready', rows, tombstones, diagnostics } }, current, keys);
 }
 export function beginPromptLibraryCatalogLoad(scope: ServerAccountScope): void {
     const previous = getPromptLibraryCatalogSnapshot(scope);

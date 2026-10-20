@@ -8,12 +8,12 @@ import {
     useDestinationFocusEffect,
     useDestinationGlobalParams,
     useDestinationInstanceKey,
-    useDestinationNavigation,
     useDestinationParams,
     useDestinationPathname,
     useDestinationRouter,
     useDestinationScreenOptions,
 } from './DestinationInstanceHost';
+export { useDestinationRouteNavigation as useNavigation } from './destinationInstanceContext';
 
 export type { Href } from 'expo-router';
 export { useDestinationParams as useLocalSearchParams, useDestinationGlobalParams as useGlobalSearchParams,
@@ -56,16 +56,6 @@ export function Redirect(props: RedirectProps) {
     React.useEffect(() => { if (hosted) redirect(props.href); },
         [hosted, props.href, redirect] satisfies readonly [boolean, RedirectProps['href'], typeof redirect]);
     return hosted ? null : <ExpoRouter.Redirect {...props} />;
-}
-
-/** Hosted destinations publish to retained chrome; native destinations keep their stack navigator. */
-export function useNavigation() {
-    const hosted = useDestinationInstanceKey() !== null;
-    const navigation = useDestinationNavigation();
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- ownership stays fixed for a mounted body.
-    if (!hosted) return ExpoRouter.useNavigation();
-    if (!navigation) throw new Error('A hosted destination requires navigation');
-    return navigation;
 }
 
 export function Link(props: LinkProps) {

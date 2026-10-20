@@ -249,6 +249,11 @@ export const TeamCredentialDirectMaterialMineResponseV1Schema = lazyZodSchema(()
     recipientMode: z.enum(['plain', 'e2ee']),
     stored: createStoredReadSchema(TeamCredentialDirectMaterialStoredV1Schema),
     expected: TeamCredentialDirectMaterialExpectedV1Schema,
+    /** Admission-owned presentation only; omission leaves the resource label unknown. */
+    admittedResource: z.optional(z.strictObject({
+      displayName: z.string().check(z.trim(), z.minLength(1), z.maxLength(120)),
+      teamId: BoundedIdentitySchema,
+    })),
   }),
   z.strictObject({
     status: z.literal('unavailable'),

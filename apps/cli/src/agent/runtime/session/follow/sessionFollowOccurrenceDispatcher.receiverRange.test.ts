@@ -33,6 +33,7 @@ it('opens the first original range for a fresh rule without an edge or encounter
   vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname;
+    if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
     if (path === '/v1/account/encryption/currentness') return { status: 200,
       data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };

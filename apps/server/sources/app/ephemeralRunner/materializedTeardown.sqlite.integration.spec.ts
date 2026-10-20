@@ -1,4 +1,6 @@
+import { inTx } from "@/storage/inTx";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { decodeBase64, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { deleteOwnedSession } from "@/app/session/delete/deleteOwnedSession";
@@ -45,18 +47,19 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
             data: {
                 id: "runner-machine",
                 accountId: account.id,
-                metadata: "{}",
+                metadata: encodePlainMachineStoredContent({ v: 1 }),
+                dataEncryptionKey: Uint8Array.from(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),
                 kind: "ephemeral_session_runner",
                 installationId: "runner-installation",
                 installationPublicKey: new Uint8Array(32).fill(7),
             },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "runner-access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
         const activation = await db.ephemeralRunnerActivation.create({
             data: {
@@ -111,16 +114,17 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
             data: {
                 id: "ordinary-machine",
                 accountId: account.id,
-                metadata: "{}",
+                metadata: encodePlainMachineStoredContent({ v: 1 }),
+                dataEncryptionKey: Uint8Array.from(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),
                 kind: "persistent",
             },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "ordinary-access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
 
         await expect(deleteOwnedSession({

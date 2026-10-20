@@ -1,4 +1,5 @@
-import type { SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import type { SessionRecipientCursor, SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { pendingPublicationResult, type PendingPublicationFields } from "./pendingPublicationResult";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 import {
@@ -13,6 +14,7 @@ import {
     isTransactionConflictExhaustedError,
     isTransactionDeadlineExceededError,
     type Tx,
+    type TransactionResult,
 } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { decideRuntimeIdleAdmission, readSessionRuntimeActivityProjectionForPendingDrain } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
@@ -35,6 +37,8 @@ import {
 import { reconcilePendingActivationAuthorizationForRemovedRequestInTx } from "@/app/session/pending/pendingActivationAuthorization";
 import { readStoredSessionInputAdmissionReceipt, isSessionInputTargetCurrentForPublisherInTx } from '@/app/session/messages/sessionInputAdmission';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { RetainedPendingContextV1Schema, type RetainedPendingContextV1 } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
+import { isRetainedPendingContextForPublisherInTx } from './retainedPendingContext';
 
 type RecipientCursor = SessionRecipientCursor;
 class PublisherAuthorityLostError extends Error {}
@@ -87,6 +91,8 @@ export type MaterializeNextPendingMessageResult = MaterializeNextPendingMessageO
     sessionPendingStateForPublication?: { pendingCount: number; pendingBlockedCount: number; pendingVersion: number };
 };
 
+type PendingMaterializationPublications = PendingPublicationFields<MaterializeNextPendingMessageResult>;
+
 function toSessionMessageContentFromPending(content: PrismaJson.SessionPendingMessageContent): PrismaJson.SessionMessageContent {
     return content;
 }
@@ -103,7 +109,7 @@ async function blockPendingExecutionRunTargetMismatchInTx(params: {
     targetExecutionRunId: string;
     deliveryState: null | "delivering";
     noopDeliveryState: PendingMaterializationDeliveryState;
-}): Promise<MaterializeNextPendingMessageResult> {
+}): Promise<PendingMaterializationPublications> {
     const blocked = pendingDeliveryStatusV1ToPersistedFields({
         status: "blocked",
         reason: "session_input_target_unavailable",
@@ -184,7 +190,8 @@ async function resolvePendingProviderRejoinInTx(params: {
     noopDeliveryState: PendingMaterializationDeliveryState;
     targetExecutionRunId: string | null;
     expectedSidechainId: string | null;
-}): Promise<MaterializeNextPendingMessageResult | null> {
+    retainedContextLocalIds: readonly string[];
+}): Promise<PendingMaterializationPublications | null> {
     if (!await hasExactCurrentPublisherAuthorityInTx(
         params.tx,
         params.authority,
@@ -207,7 +214,8 @@ async function resolvePendingProviderRejoinInTx(params: {
         },
     });
     const row = await params.tx.sessionPendingMessage.findFirst({
-        where: { sessionId: params.sessionId, targetExecutionRunId: params.targetExecutionRunId, status: "queued", deliveryState: "delivering" },
+        where: { sessionId: params.sessionId, targetExecutionRunId: params.targetExecutionRunId, status: "queued", deliveryState: "delivering",
+            ...(params.retainedContextLocalIds.length ? { localId: { notIn: [...params.retainedContextLocalIds] } } : {}) },
         orderBy: [{ position: "asc" }, { createdAt: "asc" }, { localId: "asc" }],
         select: {
             localId: true,
@@ -354,6 +362,7 @@ type MaterializeNextPendingMessageParams = Readonly<{
     deadlineAtMs?: number;
     targetExecutionRunId?: string | null;
     expectedSidechainId?: string | null;
+    retainedContext?: RetainedPendingContextV1;
 }>;
 
 export async function materializeNextPendingMessage(
@@ -380,7 +389,15 @@ export function mapPendingMaterializationError(error: unknown): MaterializeNextP
 
 export async function materializeNextPendingMessageInTx(
     params: MaterializeNextPendingMessageParams & Readonly<{ tx: Tx }>,
-): Promise<MaterializeNextPendingMessageResult> {
+): Promise<TransactionResult<MaterializeNextPendingMessageResult>> {
+    return pendingPublicationResult<MaterializeNextPendingMessageResult>(
+        () => materializeNextPendingMessagePublicationsInTx(params),
+    );
+}
+
+async function materializeNextPendingMessagePublicationsInTx(
+    params: MaterializeNextPendingMessageParams & Readonly<{ tx: Tx }>,
+): Promise<PendingMaterializationPublications> {
     const targetExecutionRunId = params.targetExecutionRunId ?? null;
     const expectedSidechainId = params.expectedSidechainId ?? null;
     if ((targetExecutionRunId === null) !== (expectedSidechainId === null)
@@ -416,7 +433,7 @@ export async function materializeNextPendingMessageInTx(
 
 async function materializePendingTargetInTx(
     params: MaterializeNextPendingMessageParams & { tx: Tx; targetExecutionRunId: string | null; expectedSidechainId: string | null },
-): Promise<MaterializeNextPendingMessageResult> {
+): Promise<PendingMaterializationPublications> {
     const tx = params.tx;
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
@@ -467,6 +484,27 @@ async function materializePendingTargetInTx(
     });
     if (!sessionRow) return { ok: false, error: "session-not-found" };
     if (sessionRow.accountId !== actorUserId) return { ok: false, error: "forbidden" };
+    const retainedContext = params.retainedContext === undefined ? undefined
+        : RetainedPendingContextV1Schema.safeParse(params.retainedContext);
+    if (retainedContext && (!retainedContext.success || params.targetExecutionRunId !== null)) {
+        return { ok: false, error: 'invalid-params' };
+    }
+    const retainedContextLocalIds = retainedContext?.success ? retainedContext.data.localIds : [];
+    if (retainedContextLocalIds.length) {
+        const retainedRows = await tx.sessionPendingMessage.findMany({
+            where: { sessionId, targetExecutionRunId: null, localId: { in: retainedContextLocalIds } },
+            select: { localId: true, status: true, targetExecutionRunId: true, deliveryState: true, deliveryBlockedReason: true,
+                inputAdmissionReceipt: true, autonomousExchangeCause: true },
+        });
+        if (retainedRows.length !== retainedContextLocalIds.length) return { ok: false, error: 'invalid-params' };
+        for (const row of retainedRows) {
+            // Local custody alone cannot skip arbitrary FIFO work. Home independently
+            // confirms this is an admitted informational input, already claimed.
+            if (!await isRetainedPendingContextForPublisherInTx(tx, row, params.publisherAuthority)) {
+                return { ok: false, error: 'invalid-params' };
+            }
+        }
+    }
     if (params.targetExecutionRunId === null && (sessionRow.pendingCount ?? 0) <= 0) {
         // pendingCount is a denormalized counter; treat it as a fast-path hint, not a source of truth.
         // If the counter is inconsistent (e.g. race/data corruption), fall back to checking the queue.
@@ -524,6 +562,7 @@ async function materializePendingTargetInTx(
                 noopDeliveryState,
                 targetExecutionRunId: params.targetExecutionRunId,
                 expectedSidechainId: params.expectedSidechainId,
+                retainedContextLocalIds,
             });
             if (rejoin) return rejoin;
 
@@ -537,6 +576,7 @@ async function materializePendingTargetInTx(
                 // custody. They stay visible there without blocking independent
                 // later questions; ordinary blocked FIFO items keep their contract.
                 rows: pendingCandidates.filter(row => {
+                    if (retainedContextLocalIds.includes(row.localId)) return false;
                     if (row.deliveryState !== 'blocked' || row.deliveryBlockedReason !== 'session_input_target_unavailable') return true;
                     const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
                     const address = receipt?.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;
@@ -785,7 +825,7 @@ async function materializePendingTargetInTx(
                         createdAt: nextPending.createdAt,
                         updatedAt: nextPending.updatedAt,
                     },
-                    recipientCursorsMessage: [] as RecipientCursor[],
+                    recipientCursorsMessage: [] as SessionRecipientPublication[],
                     recipientCursorsPending,
                     pendingCount: session.pendingCount,
                     pendingBlockedCount: session.pendingBlockedCount,

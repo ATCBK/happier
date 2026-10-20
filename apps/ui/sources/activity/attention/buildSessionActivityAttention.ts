@@ -4,9 +4,8 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import { isUnreadContentAttentionReason } from '@/sync/domains/session/readState/sessionViewer';
-import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionSubtitle, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { t } from '@/text';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import {
     presentSessionPersonalAttentionReason,
@@ -69,7 +68,7 @@ export function buildSessionActivityAttention(params: Readonly<{
         awareness,
         sessionId: params.session.id,
         ...(address ? { address, serverId: address.serverId } : null),
-        title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : t('sessionBoard.item.locked.title'),
+        title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : readLockedSessionName(),
         subtitle: includeDisplayDetails && mayShowPrivateContent ? getSessionSubtitle(params.session) : '',
         attentionState,
         personalAttention: {

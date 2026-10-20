@@ -3,7 +3,7 @@ import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/pl
 import { createCanonicalJsonSigningInput } from '@happier-dev/plugin-sdk';
 import { getUsageQueryBatchKey, getUsageQueryKey, normalizeUsageQueryBatchInput, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest, type UsageQuery, type UsageQueryBatchInput } from '@happier-dev/protocol/inputs/usageQuery';
 import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
-import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { ConnectedServicePoolSelectionGetRequestV1Schema, type ConnectedServicePoolSelectionGetRequestV1, type ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
@@ -468,6 +468,11 @@ function canReuseSessionMessageEvidence(retained: SessionInputEvidence | undefin
         && retained.callerDataKeyEnvelope === admitted.callerDataKeyEnvelope;
 }
 
+function sessionEvidenceReadError(error: unknown): unknown {
+    return error instanceof Error && 'httpStatus' in error && typeof error.httpStatus === 'number' && error.httpStatus >= 500
+        ? new RetryableServerResponseError(error.httpStatus, 'Session input evidence unavailable') : error;
+}
+
 async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries: readonly UsageQuery[],
     accounting: readonly UsageAccountingSourceSnapshot[], readSession: SessionInputReader,
     readAccountCurrentnessSource: () => Promise<SessionAccountCurrentnessSource>,
@@ -587,7 +592,11 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             return session && session.access?.capabilities.readTranscript !== false
                 && isSessionContentReadable(readSessionContentAvailability(session));
         });
-        return { query, asOfMs: Date.now(), sessions, detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
+        const sessionCoverage = { selected: (idsByQuery.get(getUsageQueryKey(query)) ?? []).length,
+            admitted: sessions.filter(session => session.access?.capabilities.readTranscript !== false
+                && isSessionContentReadable(readSessionContentAvailability(session))).length };
+        return { query, asOfMs: Date.now(), sessions, sessionCoverage,
+            detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
     });
     const publish = () => {
         if (signal?.aborted || !context.accountLifetime.isCurrent()) return;
@@ -638,14 +647,25 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                     try {
                         request.assertCurrent();
                         const result = snapshots.get(request.sessionId);
+                        if (result && !result.ok && request.retained && isTransientConnectivityError(sessionEvidenceReadError(result.error))) {
+                            request.reject(sessionEvidenceReadError(result.error));
+                            continue;
+                        }
                         request.resolve(result?.ok ? { ...result.snapshot, detail: projectSessionUsageWorkEvidence(result.snapshot.session),
                             completeMessageCoverage: false } : null);
                     } catch { request.resolve(null); }
                 }
             });
-        } catch {
+        } catch (error) {
             requireCurrent(context, ownerSignal);
-            for (const request of requests) request.resolve(null);
+            const failure = sessionEvidenceReadError(error);
+            for (const request of requests) {
+                // Failed replacement is not a new empty admission. Let the
+                // Resource retain its admitted snapshot and expose the failure;
+                // cold reads and actual refusals still withdraw unavailable facts.
+                if (request.retained && isTransientConnectivityError(failure)) request.reject(failure);
+                else request.resolve(null);
+            }
         }
     }, (id, value) => onValue(id, value, !readTranscript || !value));
     // Transcript demand adds one messages-only transport batch to the same
@@ -672,12 +692,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                         const result = await pages;
                         if (result.ok) return result.rows.get(request.sessionId)?.messages;
                         requireCurrent(context, ownerSignal);
-                        const error: unknown = result.error;
-                        // Keep the existing per-page transient-failure semantics.
-                        if (error && typeof error === 'object' && 'httpStatus' in error && typeof error.httpStatus === 'number' && error.httpStatus >= 500) {
-                            throw new RetryableServerResponseError(error.httpStatus, 'Session input evidence unavailable');
-                        }
-                        throw error;
+                        throw sessionEvidenceReadError(result.error);
                     });
                 request.resolve(value);
             }));
@@ -691,8 +706,12 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
 type HowYouWorkEvidenceSnapshot = Readonly<{
     query: UsageQuery; asOfMs: number;
     sessions: readonly SessionInputEvidence['session'][];
+    sessionCoverage: NonNullable<UsageHowYouWorkSourceSnapshot['sessionCoverage']>;
     detail: ReturnType<typeof projectUsageQueryWorkEvidence>;
+    errorCode?: string;
 }>;
+type HowYouWorkReadSnapshot = HowYouWorkEvidenceSnapshot
+    | Readonly<{ query: UsageQuery; errorCode: string; detail?: undefined; sessions?: undefined }>;
 
 type SessionWorkSourceResult = import('@happier-dev/protocol/usage/usageWorkSources').SessionWorkSourceResult;
 
@@ -781,8 +800,8 @@ export async function readUiUsageQueryBatch(
                 return source;
             });
     };
-    let howYouWork: Awaited<ReturnType<typeof readHowYouWorkEvidence>> | undefined;
-    const howYouWorkByQuery = new Map<string, Awaited<ReturnType<typeof readHowYouWorkEvidence>>[number]>();
+    let howYouWork: readonly HowYouWorkReadSnapshot[] | undefined;
+    const howYouWorkByQuery = new Map<string, HowYouWorkReadSnapshot>();
     const howYouWorkSourcesByQuery = new Map<string, readonly UsageQuerySourceState[]>();
     const settledHowYouWorkQueries = new Set<string>();
     let mcpCatalog: McpServerCatalogSnapshotV1 | undefined;
@@ -899,7 +918,11 @@ export async function readUiUsageQueryBatch(
             requireCurrent(context, signal);
             const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'usage_query_failed';
             if (['denied', 'permission_denied', 'stale_surface'].includes(errorCode)) throw error;
-            snapshot = { query, period: periods.get(getUsageQueryKey(query)), status: 'error', errorCode };
+            const retained = priorAccounting.get(getUsageQueryKey(query));
+            // Detail/Work membership must see the same retained accounting as
+            // aggregation, rather than shrinking to the currently hydrated Sessions.
+            snapshot = retainAccountingOnReadFailure({ query, period: periods.get(getUsageQueryKey(query)), status: 'error', errorCode },
+                retained?.value, retained?.asOfMs)!;
         }
         requireCurrent(context, signal);
         accounting.set(getUsageQueryKey(query), snapshot);
@@ -923,18 +946,35 @@ export async function readUiUsageQueryBatch(
             // comparison or sibling query must not delay this slice's detail.
             await accountingTasks.get(getUsageQueryKey(query));
             requireCurrent(context, signal);
-            const snapshots = await readHowYouWorkEvidence(context, [query], [...accounting.values()], sessionInputReader, readSessionCurrentness, signal,
-                (snapshots, sources) => {
-                    requireCurrent(context, signal);
-                    const key = getUsageQueryKey(query);
-                    if (!snapshots[0] && sameStrictJsonValue(howYouWorkSourcesByQuery.get(key), sources)) return;
-                    howYouWorkSourcesByQuery.set(key, sources);
-                    if (snapshots[0]) {
-                        howYouWorkByQuery.set(key, snapshots[0]);
-                        howYouWork = [...howYouWorkByQuery.values()];
-                    }
-                    publish();
-                });
+            let snapshots: Awaited<ReturnType<typeof readHowYouWorkEvidence>>;
+            try {
+                snapshots = await readHowYouWorkEvidence(context, [query], [...accounting.values()], sessionInputReader, readSessionCurrentness, signal,
+                    (snapshots, sources) => {
+                        requireCurrent(context, signal);
+                        const key = getUsageQueryKey(query);
+                        if (!snapshots[0] && sameStrictJsonValue(howYouWorkSourcesByQuery.get(key), sources)) return;
+                        howYouWorkSourcesByQuery.set(key, sources);
+                        if (snapshots[0]) {
+                            howYouWorkByQuery.set(key, snapshots[0]);
+                            howYouWork = [...howYouWorkByQuery.values()];
+                        }
+                        publish();
+                    });
+            } catch (error) {
+                requireCurrent(context, signal);
+                if (!isTransientConnectivityError(error)) throw error;
+                const key = getUsageQueryKey(query);
+                const errorCode = 'usage_session_evidence_read_failed';
+                // Keep any actual partial admission/refusal already published.
+                // Otherwise the shared aggregation owner retains the prior facts.
+                howYouWorkByQuery.set(key, { ...(howYouWorkByQuery.get(key) ?? { query }), errorCode });
+                howYouWork = [...howYouWorkByQuery.values()];
+                howYouWorkSourcesByQuery.set(key, (howYouWorkSourcesByQuery.get(key) ?? []).map(source =>
+                    source.status === 'pending' ? { ...source, status: 'error', errorCode } : source));
+                settledHowYouWorkQueries.add(key);
+                publish();
+                return;
+            }
             // Binding advice and its catalog admission are one private-evidence
             // result. Unrelated quota/history reads must not hold them back.
             if (snapshots[0]!.detail.coach?.detail?.mcpUsage?.length) {
@@ -960,7 +1000,7 @@ export async function readUiUsageQueryBatch(
         await sessionCurrentness?.then(source => source.dispose(), () => undefined);
     }
 
-    function applyCoachPreferences(batch: UsageQueryBatchResult, howYouWork: Awaited<ReturnType<typeof readHowYouWorkEvidence>>): UsageQueryBatchResult {
+    function applyCoachPreferences(batch: UsageQueryBatchResult, howYouWork: readonly HowYouWorkReadSnapshot[]): UsageQueryBatchResult {
         const openedByQuery = new Map(howYouWork.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot]));
         const settingsState = readRegisteredStorageState();
         const preferences = readAccountSettingsForScope({ scope: context.accountLifetime.scope,
@@ -969,12 +1009,12 @@ export async function readUiUsageQueryBatch(
         const results = batch.results.map(slice => {
             const opened = openedByQuery.get(slice.key);
             if (!slice.coach) return slice;
-            const proposals = !opened || opened.detail.status === 'unknown' ? [] : buildUsageCoachRemedies({ findings: slice.coach.findings.filter(finding => finding.remedy === null),
+            const proposals = !opened?.detail || opened.detail.status === 'unknown' ? [] : buildUsageCoachRemedies({ findings: slice.coach.findings.filter(finding => finding.remedy === null),
                 composition: opened.detail.coach?.composition ?? [], sessions: opened.sessions,
                 mcpUsage: opened.detail.coach?.detail?.mcpUsage ?? [], ...(mcpCatalog ? { mcpCatalog } : {}),
                 serverId: context.accountLifetime.scope.serverId, accountId: context.accountLifetime.scope.accountId });
             const coach = proposals.length === 0 ? slice.coach : admitUsageCoachRemedies(slice.coach,
-                [...(opened?.detail.coach?.admittedRemedies ?? []), ...proposals]);
+                [...(opened?.detail?.coach?.admittedRemedies ?? []), ...proposals]);
             const preferred = applyUsageCoachPreferences(coach, preferences, nowMs);
             return preferred === slice.coach ? slice : { ...slice, coach: preferred };
         });
@@ -1093,7 +1133,15 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     && sessionInputs.get(key) === entry) sessionInputs.delete(key);
                 return value;
             }).catch(error => {
-                if (sessionInputs.get(key) === entry) sessionInputs.delete(key);
+                if (sessionInputs.get(key) === entry) {
+                    if (retained?.value && isTransientConnectivityError(error)
+                        && sharedContext.accountLifetime.isCurrent() && readEvidenceBasis(sessionId) === basis) {
+                        // Keep admission custody across repeated failed replacements,
+                        // but require the next reader to try admission again.
+                        entry.value = retained.value;
+                        entry.needsAdmission = true;
+                    } else sessionInputs.delete(key);
+                }
                 if (error && typeof error === 'object' && 'code' in error && error.code === 'usage_session_evidence_changed') return null;
                 throw error;
             });

@@ -1,3 +1,5 @@
+import { coerceSingleLocationPath } from './toolEnvelope';
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -19,20 +21,6 @@ function coerceItemPath(item: UnknownRecord | null): string | null {
             ? item.path.trim()
             : (typeof item.filePath === 'string' && item.filePath.trim().length > 0)
                 ? item.filePath.trim()
-                : null;
-    return path;
-}
-
-function coerceSingleLocationPath(locations: unknown): string | null {
-    if (!Array.isArray(locations) || locations.length !== 1) return null;
-    const first = locations[0];
-    if (!first || typeof first !== 'object') return null;
-    const obj = first as UnknownRecord;
-    const path =
-        (typeof obj.path === 'string' && obj.path.trim().length > 0)
-            ? obj.path.trim()
-            : (typeof obj.filePath === 'string' && obj.filePath.trim().length > 0)
-                ? obj.filePath.trim()
                 : null;
     return path;
 }
@@ -286,17 +274,17 @@ export function normalizeEditResult(rawOutput: unknown): UnknownRecord {
 
     const out: UnknownRecord = { ...record };
     const applied =
-        typeof (record as any).applied === 'boolean'
-            ? Boolean((record as any).applied)
-            : typeof (record as any).success === 'boolean'
-                ? Boolean((record as any).success)
-                : typeof (record as any).ok === 'boolean'
-                    ? Boolean((record as any).ok)
+        typeof record.applied === 'boolean'
+            ? Boolean(record.applied)
+            : typeof record.success === 'boolean'
+                ? Boolean(record.success)
+                : typeof record.ok === 'boolean'
+                    ? Boolean(record.ok)
                     : undefined;
     if (typeof applied === 'boolean') out.applied = applied;
 
     if (typeof out.applied !== 'boolean') {
-        const hasError = typeof (record as any).error === 'string' && (record as any).error.trim().length > 0;
+        const hasError = typeof record.error === 'string' && record.error.trim().length > 0;
         if (hasError) out.applied = false;
     }
 

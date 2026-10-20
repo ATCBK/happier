@@ -81,6 +81,16 @@ same exact mounted-view registration and captured Home/Account lifetime. Continu
 remains on the existing sideband custody path, not a per-frame Action loop. A daemon command's
 unconfirmed response cannot be projected as an accepted takeover or overwrite current owner events.
 
+Whether a mounted view can perform `navigate`, `goBack`, `goForward`, `reload` or `stop` is
+answered by one owner, `resolveBrowserNavigationVerbAvailability` in the UI's
+`sync/domains/browser/adapters/capabilities.ts`, read from the view's published capabilities. The
+toolbar and the navigation Actions both ask it. A third-party page in the web `webIframe` engine
+keeps its history and loading opaque to the host, so it offers Reload only: the toolbar shows Back,
+Forward and Stop unavailable with a reason, and `browser.goBack`, `browser.goForward` and
+`browser.stop` return `runtime_action_disabled:browser:browser_page_history_uncontrollable`. The
+system-browser escape stays in the toolbar overflow. Relay and local previews (whose documents carry
+the navigation reporter), native WebViews and desktop WebViews that report history keep every verb.
+
 In 0.3 development, mounted console evaluation, property reads, object-group release and element
 picker Actions name both `browserSessionId` and `viewId`. UI controls enter the Action front door;
 the default runtime and authenticated reverse dispatcher resolve the same mounted diagnostics

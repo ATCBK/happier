@@ -61,6 +61,18 @@ export type ConversationConnectionPrepareInputV1 = ReturnType<
 export const ConversationConnectionPrepareInputV1JsonSchema: PluginJsonSchema =
     ConversationConnectionPrepareInputV1Schema.jsonSchema;
 
+/** Explicit remote repair of the currently selected provider's setup. */
+export const ConversationConnectionSetupRemediateInputV1Schema = defineProtocolObject({
+    providerSelection: targetedContributionSelectionV1,
+    providerRemediationInput: ConversationJsonValueV1ProtocolSchema,
+    credentialRef: ConversationQualifiedConnectedAccountRefV1ProtocolSchema.nullable(),
+}, { policy: 'closed' });
+export type ConversationConnectionSetupRemediateInputV1 = ReturnType<
+    typeof ConversationConnectionSetupRemediateInputV1Schema.parse
+>;
+export const ConversationConnectionSetupRemediateInputV1JsonSchema: PluginJsonSchema =
+    ConversationConnectionSetupRemediateInputV1Schema.jsonSchema;
+
 const conversationConnectionPrepareReadyV1 = defineProtocolObject({
     kind: defineProtocolLiteral('ready'),
     supportedTransports: conversationConnectionPrepareSelectableTransportsV1,

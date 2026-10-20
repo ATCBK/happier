@@ -8,13 +8,13 @@ import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionC
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
-import type {
-  DiscussionRepository,
-  DiscussionRepositorySnapshot,
-} from '@/sync/ops/discussions/discussionRepository';
+import type { DiscussionRepository } from '@/sync/ops/discussions/discussionRepository';
+import { useDiscussionDocSnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 
 export type DocPassageThreadsRead = Readonly<{
   status: 'loading' | 'ready' | 'unavailable';
+  membership: readonly DiscussionOpenedSummaryV1[] | null;
+  mountThread: (discussionId: string) => () => void;
   threads: readonly Readonly<{
     discussionId: string;
     summary: DiscussionOpenedSummaryV1;
@@ -24,10 +24,10 @@ export type DocPassageThreadsRead = Readonly<{
 
 const UNAVAILABLE: DocPassageThreadsRead = Object.freeze({
   status: 'unavailable',
+  membership: null,
+  mountThread: () => () => {},
   threads: Object.freeze([]),
 });
-const emptySubscribe = () => () => {};
-const emptySnapshot = () => null;
 
 /**
  * The passage threads of one Doc in its Home: C3's Doc-scoped list (`discussion.list` with
@@ -65,79 +65,42 @@ export function useDocPassageThreads(
         : null,
     [binding, client],
   );
-  const snapshot: DiscussionRepositorySnapshot | null =
-    React.useSyncExternalStore(
-      repository?.subscribe ?? emptySubscribe,
-      repository?.getSnapshot ?? emptySnapshot,
-      repository?.getSnapshot ?? emptySnapshot,
-    );
-  const [summaries, setSummaries] = React.useState<Readonly<{
-    key: string;
-    rows: readonly DiscussionOpenedSummaryV1[] | null;
-  }> | null>(null);
-  const key = `${input.serverId}:${input.artifactId}`;
-
+  const snapshot = useDiscussionDocSnapshot(repository, input.artifactId);
   React.useEffect(() => {
-    if (!client || !repository) return;
+    if (!repository) return;
     const controller = new AbortController();
-    void (async () => {
-      const rows: DiscussionOpenedSummaryV1[] = [];
-      let cursor: string | undefined;
-      for (;;) {
-        const page = await client.list(
-          {
-            state: 'active',
-            anchorDocArtifactId: input.artifactId,
-            ...(cursor ? { cursor } : {}),
-          },
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        if (page.kind !== 'succeeded') {
-          // Keep what was last read; an unreadable list is unavailable, never "no comments".
-          setSummaries((previous) =>
-            previous?.key === key ? previous : { key, rows: null },
-          );
-          return;
-        }
-        rows.push(
-          ...page.value.discussions.filter(
-            (row) =>
-              row.anchor?.kind === 'doc' &&
-              row.anchor.doc.ref.artifactId === input.artifactId,
-          ),
-        );
-        if (!page.value.nextCursor || page.value.nextCursor === cursor) break;
-        cursor = page.value.nextCursor;
-      }
-      setSummaries({ key, rows });
-      await Promise.all(
-        rows.map((row) =>
-          repository
-            .refreshMessages(row.id, controller.signal)
-            .catch(() => undefined),
-        ),
-      );
-    })();
-    return () => controller.abort();
-  }, [client, input.artifactId, input.refreshKey, key, repository]);
+    const release = repository.mount({ anchorDocArtifactId: input.artifactId });
+    void repository.refreshDocList(input.artifactId, controller.signal);
+    return () => { controller.abort(); release(); };
+  }, [input.artifactId, input.refreshKey, repository]);
+
+  const mountThread = React.useCallback((discussionId: string) => {
+    if (!repository) return () => {};
+    const release = repository.mount({ discussionId });
+    void repository.refreshDiscussion(discussionId);
+    return release;
+  }, [repository]);
 
   return React.useMemo(() => {
     if (!usable) return UNAVAILABLE;
-    if (!summaries || summaries.key !== key)
-      return { status: 'loading', threads: [] };
-    if (summaries.rows === null) return UNAVAILABLE;
+    const query = snapshot?.query;
+    if (!query || query.status === 'idle' || query.status === 'loading')
+      return { status: 'loading', threads: [], membership: null, mountThread };
+    if (query.status !== 'ready' || query.incomplete || query.nextCursor !== null) return UNAVAILABLE;
+    const threads: DocPassageThreadsRead['threads'][number][] = [];
+    for (const summary of query.items) {
+      const discussionId = summary.id;
+      const thread = snapshot?.threads[discussionId];
+      if (!thread?.summary || thread.revoked
+        || !thread.messages.find(message => message.seq === 1)?.content) return UNAVAILABLE;
+      if (thread.summary.archivedAt !== null) continue;
+      threads.push({ discussionId, summary: thread.summary, messages: thread.messages });
+    }
     return {
       status: 'ready',
-      threads: summaries.rows.map((summary) => {
-        const loaded = snapshot?.threads[summary.id]?.messages ?? [];
-        const root = summary.firstMessage;
-        const messages =
-          root && !loaded.some((message) => message.id === root.id)
-            ? [root, ...loaded]
-            : loaded;
-        return { discussionId: summary.id, summary, messages };
-      }),
+      threads,
+      membership: query.items,
+      mountThread,
     };
-  }, [key, snapshot?.threads, summaries, usable]);
+  }, [input.artifactId, mountThread, repository, snapshot, usable]);
 }

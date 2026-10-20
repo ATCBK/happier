@@ -53,7 +53,15 @@ export const DiscussionParticipantsListResponseV1Schema = lazyZodSchema(() => z.
 }));
 export type DiscussionParticipantsListResponseV1 = z.infer<typeof DiscussionParticipantsListResponseV1Schema>;
 
-export const DiscussionInitialParticipantsV1Schema = lazyZodSchema(() => z.array(DiscussionAccountParticipantRefV1Schema).check(
+export const DiscussionInitialParticipantsV1Schema = lazyZodSchema(() => z.array(DiscussionParticipantRefV1Schema).check(
+  z.refine(participants => new Set(participants.map(participant => participant.kind === 'account'
+    ? `account:${participant.accountId}` : `session:${participant.sessionId}`)).size === participants.length,
+    { message: 'Discussion invitations must be deduplicated' }),
+));
+export type DiscussionInitialParticipantV1 = z.infer<typeof DiscussionInitialParticipantsV1Schema>[number];
+
+/** Second-opinion reviewers have their separate executable selection; this audience list is people only. */
+export const DiscussionInitialAccountParticipantsV1Schema = lazyZodSchema(() => z.array(DiscussionAccountParticipantRefV1Schema).check(
   z.refine(participants => new Set(participants.map(participant => participant.accountId)).size === participants.length,
     { message: 'Discussion invitations must be deduplicated' }),
 ));

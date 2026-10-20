@@ -205,6 +205,43 @@ async function renderPage() {
 
 afterEach(() => standardCleanup());
 
+it('keeps Collection row owners quiet across unchanged Machine publications and updates the changed row', async () => {
+  const alpha = machine('a', 'Alpha', 'alpha.local');
+  alpha.keyBasis = { dataEncryptionKey: alpha.dataEncryptionKey ?? null,
+    metadataVersion: alpha.metadataVersion, daemonStateVersion: alpha.daemonStateVersion };
+  await setMachines([{ serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [
+    alpha, machine('b', 'Beta', 'beta.local'),
+  ] }]);
+  const tree = await renderPage();
+  const owners = tree.root.findAll(node => typeof node.type === 'function' && node.type.name === 'VirtualizedListRow');
+  expect(owners.length).toBeGreaterThanOrEqual(2);
+  const rowType = owners[0]!.type as React.ComponentClass<{ itemKey: string }>;
+  const renders: string[] = [];
+  const original = rowType.prototype.render;
+  // Call-through instrumentation at the real List row boundary; no domain logic is replaced.
+  const spy = vi.spyOn(rowType.prototype, 'render').mockImplementation(function (this: React.Component<{ itemKey: string }>) {
+    renders.push(this.props.itemKey);
+    return original.call(this);
+  });
+  try {
+    const serverId = getActiveServerSnapshot().serverId;
+    let current = storage.getState().machines.a!;
+    for (let tick = 1; tick <= 5; tick++) {
+      current = { ...current, seq: current.seq + 1, daemonStateVersion: current.daemonStateVersion + 1,
+        activeAt: Date.now(), updatedAt: Date.now(), keyBasis: { dataEncryptionKey: current.dataEncryptionKey ?? null,
+          metadataVersion: current.metadataVersion, daemonStateVersion: current.daemonStateVersion + 1 } };
+      await act(async () => storage.getState().applyMachines([current], false, { sourceServerId: serverId }));
+      await flushHookEffects();
+    }
+    expect(renders.filter(key => key.startsWith('machine:'))).toEqual([]);
+    await act(async () => storage.getState().applyMachines([{ ...current, metadataVersion: current.metadataVersion + 1,
+      metadata: { ...current.metadata!, displayName: 'Alpha renamed' } }], false, { sourceServerId: serverId }));
+    await flushHookEffects();
+    expect(renders).toContain('machine:srv_a:a');
+    expect(renders).not.toContain('machine:srv_a:b');
+  } finally { spy.mockRestore(); }
+});
+
 function addMenuItemIds(
   tree: Awaited<ReturnType<typeof renderPage>>,
 ): string[] {

@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
-
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { estimateTokensV1 } from '@happier-dev/protocol/capabilities/estimateTokensV1';
 import type { McpServerToolsSnapshotV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
-import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServerRuleV1, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
+import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 
 import type { McpServerConfig } from '@/agent';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -52,87 +51,29 @@ function nowMs(depsNowMs: (() => number) | undefined): number {
   return Date.now();
 }
 
-function implicitBindingForMachine(params: Readonly<{ serverId: string; machineId: string; nowMs: number }>): McpServerRuleV1 {
-  return {
-    id: `implicit_${randomUUID()}`,
-    serverId: params.serverId,
-    enabled: true,
-    target: { t: 'machine', machineId: params.machineId },
-    createdAt: params.nowMs,
-    updatedAt: params.nowMs,
-  };
-}
-
 function resolveServerForTestRequest(params: Readonly<{
   request: DaemonMcpServersTestRequest;
   accountMcpSettings?: McpServersSettingsV1;
 }>): { ok: true; serverName: string; resolved: McpServerMaterializationV1 } | { ok: false; errorCode: DaemonMcpServersTestErrorCode; error: string } {
   const req = params.request;
-
-  if (req.t === 'draft') {
-    const binding =
-      req.binding && req.binding.serverId === req.server.id
-        ? req.binding
-        : req.binding
-          ? null
-          : implicitBindingForMachine({ serverId: req.server.id, machineId: req.machineId, nowMs: Date.now() });
-
-    if (!binding) {
-      return { ok: false, errorCode: 'binding_not_found', error: 'Draft binding does not match the draft server.' };
-    }
-
-    const settings: McpServersSettingsV1 = {
-      v: 1,
-      strictMode: true,
-      servers: [req.server],
-      bindings: [binding],
-    };
-
-    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-      settings,
-      machineId: req.machineId,
-      directory: req.directory,
-    }), req.directory);
-
-    const item = resolved.serversByName[req.server.name];
-    if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
-    if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
-
-    return { ok: true, serverName: req.server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [req.server.name]: item } } };
-  }
-
-  const accountMcpSettings = params.accountMcpSettings;
-  if (!accountMcpSettings) return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable' };
-  const server = accountMcpSettings.servers.find((s) => s.id === req.serverId) ?? null;
+  const settings: McpServersSettingsV1 | undefined = req.t === 'draft'
+    ? { v: 1, strictMode: true, servers: [req.server], bindings: req.binding ? [req.binding] : [] }
+    : params.accountMcpSettings;
+  if (!settings) return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable' };
+  const server = req.t === 'draft' ? req.server : settings.servers.find((s) => s.id === req.serverId);
   if (!server) return { ok: false, errorCode: 'server_not_found', error: 'Server id not found.' };
-
-  if (req.bindingId) {
-    const binding = accountMcpSettings.bindings.find((b) => b.id === req.bindingId) ?? null;
-    if (!binding) return { ok: false, errorCode: 'binding_not_found', error: 'Binding id not found.' };
-    if (binding.serverId !== server.id) {
-      return { ok: false, errorCode: 'binding_not_found', error: 'Binding does not belong to the selected server.' };
-    }
-    const settings: McpServersSettingsV1 = {
-      v: 1,
-      strictMode: true,
-      servers: [server],
-      bindings: [binding],
-    };
-    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-      settings,
-      machineId: req.machineId,
-      directory: req.directory,
-    }), req.directory);
-    const item = resolved.serversByName[server.name];
-    if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
-    if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
-    return { ok: true, serverName: server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [server.name]: item } } };
+  const binding = req.t === 'draft' ? req.binding : req.bindingId ? settings.bindings.find((b) => b.id === req.bindingId) : undefined;
+  if ((req.t === 'byId' && req.bindingId && !binding) || (binding && binding.serverId !== server.id)) {
+    return { ok: false, errorCode: 'binding_not_found', error: 'Binding does not belong to the selected server.' };
   }
-
+  // Test is an explicit one-server operation. Reach rules decide Session defaults,
+  // not whether the person can check an Off server before adding it to a Session.
   const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-    settings: accountMcpSettings,
+    settings,
     machineId: req.machineId,
     directory: req.directory,
+    selection: { mcp: { v: 1, managedServersEnabled: false,
+      forceIncludeServerIds: [server.id], forceExcludeServerIds: [] } },
   }), req.directory);
   const item = resolved.serversByName[server.name];
   if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };

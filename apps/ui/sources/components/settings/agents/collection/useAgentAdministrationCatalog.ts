@@ -9,6 +9,8 @@ import {
     isMachineAdministrationCandidateExplicitlySelectable,
     machineAdministrationTargetsEqual,
     resolveMachineAdministrationTargetState,
+    readMachineAdministrationTargetRouteParams,
+    type MachineAdministrationTargetRouteParamsV1,
     type MachineAdministrationCandidateV1,
 } from '@/sync/domains/machines/administration/targetSelection';
 import {
@@ -23,9 +25,12 @@ import { presentMachineAdministrationTargetState } from '@/components/settings/m
  * The machine the Agents pages manage. Agents show a machine's last known state while it is away,
  * so an offline machine stays choosable; automatic selection still takes only a sole live one.
  */
-export function useAgentsAdministrationTargetSelection(): MachineAdministrationTargetSelectionV1 {
+export function useAgentsAdministrationTargetSelection(route?: MachineAdministrationTargetRouteParamsV1): MachineAdministrationTargetSelectionV1 {
+    const initialTarget = React.useMemo(() => route ? readMachineAdministrationTargetRouteParams(route) : null,
+        [route?.machineId, route?.serverIdentityId]);
     return useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents, {
         explicitSelection: 'lastKnown',
+        ...(route ? { initialTarget } : {}),
     });
 }
 

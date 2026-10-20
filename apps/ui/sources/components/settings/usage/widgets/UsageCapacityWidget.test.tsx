@@ -225,7 +225,7 @@ it.each([['loaded_data', true], ['not_loaded', false]] as const)('says only an a
   }
 });
 
-it.each([['medium', true], ['tall', true], ['full', false]] as const)('draws one pooled bar with labels under its segments beside other widgets (%s), and the per-account grid at full width', async (size, pooled) => {
+it.each([['medium', true, 520, false], ['tall', true, 520, false], ['full', false, 520, false], ['medium', true, 180, true]] as const)('draws one pooled bar with labels under its segments beside other widgets (%s), the per-account grid at full width, and one row per account under a bar too narrow for labels', async (size, pooled, width, listed) => {
   const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
   const query = normalizeUsageQuery({});
   const quota = [['work', 'loaded_data', 40], ['personal', 'loaded_data', 75], ['spare', 'not_loaded', null]].map(([accountId, state, usedPct]) => {
@@ -248,7 +248,7 @@ it.each([['medium', true], ['tall', true], ['full', false]] as const)('draws one
   const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
   const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
     <WidgetPresentationProvider value={{ size, footprint: { columns: 2, columnSpan: 1, rowSpan: 1, width: 'half', height: 'regular' },
-      geometry: { width: 520, height: 320 } }}>
+      geometry: { width, height: 320 } }}>
       <UsageCapacityWidget id="usage_capacity" model={model} slice={slice} query={query} serverId="home" testID="capacity" />
     </WidgetPresentationProvider>
   </InjectedAuthProvider>);
@@ -259,6 +259,8 @@ it.each([['medium', true], ['tall', true], ['full', false]] as const)('draws one
   expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityNotRead', { count: 1 }));
   expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityAccounts', { count: 2 }));
   expect(screen.findHostByTestId('capacity.pooled') !== null).toBe(pooled);
+  // A bar too narrow for a label under each segment stays one bar; its accounts are listed beneath it instead.
+  expect(screen.findHostByTestId('capacity.accounts') !== null).toBe(listed);
 });
 
 it.each(['pending', 'not_loaded'] as const)('shows an observed headline with first-read progress (%s) and replaces it when a tighter account answers', async status => {

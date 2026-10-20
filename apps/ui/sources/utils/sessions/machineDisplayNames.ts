@@ -116,18 +116,22 @@ export function getMachineDisplayName(machine: MachineNameInput | null | undefin
 
 /**
  * The machine a session runs on, as its Info page, header and offline-delete copy name it: the
- * inventory's display name when the machine is listed. A machine the inventory no longer lists keeps
- * the host its own session published (only when it is that session's machine), else it reads as
- * unlisted; it is never named by its raw id.
+ * inventory's display name when the machine is listed. A machine the inventory no longer lists, or
+ * lists with details that are still locked or loading, keeps the host its own session published (only
+ * when it is that session's machine), so the page never names one machine two ways; without that host
+ * it reads as its placeholder or as unlisted. It is never named by its raw id.
  */
 export function getSessionMachineLabel(input: Readonly<{
     machineId: string;
     machine: MachineNameInput | null | undefined;
     session: Readonly<{ machineId?: string | null; host?: string | null }>;
 }>): string {
+    const host = input.machineId === input.session.machineId ? input.session.host?.trim() : '';
+    const unreadable = Boolean(input.machine && !input.machine.absence
+        && (isMachineLocked(input.machine) || isMachineDisplayHydrating(input.machine)));
+    if (unreadable && host) return host;
     const listed = getMachineDisplayName(input.machine);
     if (listed) return listed;
-    const host = input.machineId === input.session.machineId ? input.session.host?.trim() : '';
     return host || getMachineDisplayName({ id: input.machineId, absence: 'unlisted' });
 }
 

@@ -141,7 +141,7 @@ export function ActionInputFields(props: Readonly<{
                         selection={selection}
                         options={options}
                         {...(optionState === undefined ? {} : { optionsStatus: optionState.status })}
-                        optionsNotice={optionState?.status === 'failed' ? <SurfaceStateCard kind="error" size="line" title={t('common.error')}
+                        optionsNotice={optionState?.status === 'failed' ? <SurfaceStateCard kind="error" size="line" title={t('workflows.start.choicesFailed')}
                             diagnosticCode={optionState.errorCode}
                             action={props.resolveFieldOptions.retry ? { label: t('common.retry'), onPress: props.resolveFieldOptions.retry } : undefined} /> : null}
                         disabled={!props.editable}

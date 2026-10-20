@@ -84,6 +84,23 @@ describe('ModalCardFrame', () => {
         } finally { Platform.OS = previousOS; }
     });
 
+    it('registers its own scrolling body as the scroll source of its content, and keeps the modal\'s otherwise', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ModalCardFrame } = await import('./ModalCardFrame');
+        const { PopoverScrollSourceProvider, usePopoverScrollSourceRef } = await import('@/components/ui/popover/PopoverScrollSource');
+        const bodyScroller = { bodyScroller: true };
+        const modalScroller = { current: { modalScroller: true } };
+        let seen: React.RefObject<unknown> | null = null;
+        function SourceProbe() { seen = usePopoverScrollSourceRef(); return null; }
+        const frame = (bodyScroll: 'auto' | 'none') => <PopoverScrollSourceProvider scrollSourceRef={modalScroller}>
+            <ModalCardFrame title="Sheet" bodyScroll={bodyScroll}><SourceProbe /></ModalCardFrame>
+        </PopoverScrollSourceProvider>;
+        const screen = await renderScreen(frame('auto'), { createNodeMock: (element) => (element.type === 'ScrollView' ? bodyScroller : null) });
+        expect(seen!.current).toBe(bodyScroller);
+        await screen.update(frame('none'));
+        expect(seen).toBe(modalScroller);
+    });
+
     it('fills the viewport for full-page chrome and keeps content mounted across presentation changes', async () => {
         windowState.width = 390;
         windowState.height = 844;

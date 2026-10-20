@@ -42,6 +42,8 @@ import { DiscussionAnchorV1Schema, DiscussionDocPassageReplyTargetV1Schema, Disc
 import { DiscussionDocEditProposalContentV1Schema } from './content.js';
 import { SESSION_DATA_KEY_ENVELOPE_BYTES_V1 } from '../sessions/encryption/sessionDataKeyEnvelopes.js';
 import { serializeDiscussionMutationEqualityIntentV1 } from './equality.js';
+import { TriageEntryRefV1Schema } from '../tasks/entryRefV1.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
   DISCUSSION_RECENT_AUTHOR_AVATAR_STACK_V1,
   DiscussionLatestMessageV1Schema,
@@ -56,6 +58,56 @@ const plainMessage = {
 };
 
 describe('session discussion content', () => {
+  it('retains only content-free host reply cause with tolerant stored producer reads, never authored attribution', () => {
+    const cause = { requestRef: 'original-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'worker' },
+      origin: { kind: 'discussion', discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question' } };
+    const producer = { v: 1, kind: 'agent', sessionId: 'worker', actionRequestAttributionV1: cause,
+      replyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn', outcome: 'answer' } };
+    expect(DiscussionProducerV1Schema.parse(producer)).toEqual(producer);
+    expect(DiscussionProducerV1Schema.safeParse({ ...producer, arbitrary: true }).success).toBe(false);
+    expect(DiscussionProducerV1Schema.safeParse({ ...producer, actionRequestAttributionV1: { ...cause, text: 'private request' } }).success).toBe(false);
+    expect(createStoredReadSchema(DiscussionProducerV1Schema).parse({ ...producer, futurePresentation: true })).toEqual(producer);
+    expect(DiscussionProducerV1Schema.parse({ v: 1, kind: 'agent', sessionId: 'worker' })).toEqual({ v: 1, kind: 'agent', sessionId: 'worker' });
+    expect(DiscussionPostRequestV1Schema.safeParse({ ...plainMessage, actionRequestAttributionV1: cause }).success).toBe(false);
+  });
+  it('accepts only the sanitized actor of the host-stamped requester, not an unrelated Account label', () => {
+    const cause = { requestRef: 'original-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'worker' }, origin: null };
+    const actor = { v: 1, accountId: 'bob', profile: { name: 'Bob Chen', firstName: null, lastName: null, username: null, avatarUrl: null } };
+    const message = { id: 'answer', discussionId: 'discussion', localId: null, seq: 2, authorAccountId: 'executor', accountActor: null,
+      producerV1: { v: 1, kind: 'agent', sessionId: 'worker', actionRequestAttributionV1: cause }, requesterAccountActor: actor,
+      content: plainMessage.content, mentionedAccountIds: [], createdAt: 1 };
+    expect(DiscussionMessageV1Schema.parse(message)).toMatchObject({ requesterAccountActor: actor });
+    expect(DiscussionOpenedMessageV1Schema.parse({ ...message, content: plainMessage.content.v,
+      messageRef: createDiscussionMessageRefV1({ serverId: 'home', discussionId: 'discussion' }, message) }))
+      .toMatchObject({ requesterAccountActor: actor, producerV1: { actionRequestAttributionV1: cause } });
+    expect(DiscussionMessageV1Schema.safeParse({ ...message, requesterAccountActor: { ...actor, accountId: 'executor' } }).success).toBe(false);
+    expect(DiscussionMessageV1Schema.safeParse({ ...message, producerV1: { ...message.producerV1,
+      actionRequestAttributionV1: { ...cause, requester: null } } }).success).toBe(false);
+    expect(DiscussionMessageV1Schema.safeParse({ ...message, requesterAccountActor: { ...actor,
+      profile: { ...actor.profile, email: 'private@example.test' } } }).success).toBe(false);
+  });
+  it('consumes the canonical Task producer as closed anchor and reply identity without source authority', () => {
+    const entry = TriageEntryRefV1Schema.parse({ source: { pluginId: 'acme.tasks', localId: 'issues' },
+      kindId: 'task', collisionScope: 'https://tracker.example\u001fproject', entryId: 'PAY-212' });
+    const target = { kind: 'task' as const, entry };
+    expect(DiscussionAnchorV1Schema.parse(target)).toEqual(target);
+    expect(DiscussionReplyTargetV1Schema.parse(target)).toEqual(target);
+    const request = buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: 'task-discussion',
+      anchor: target, titleContent: { t: 'plain', v: { v: 1, title: 'Discuss privately' } }, firstMessage: {
+        ...plainMessage, authoredContent: plainMessage.content.v, replyTarget: target,
+      } });
+    expect(DiscussionCreateRequestV1Schema.parse(JSON.parse(JSON.stringify(request))))
+      .toMatchObject({ anchor: target, firstMessage: { replyTarget: target } });
+    for (const invalid of [{ ...target, quote: 'private tracker text' }, { ...target, grants: [] },
+      { ...target, entry: { ...entry, sourceInstanceId: 'a-configured-instance' } },
+      { ...target, entry: { ...entry, source: { ...entry.source, accountId: 'forged' } } },
+      { ...target, entry: { ...entry, entryId: '' } }]) {
+      expect(DiscussionAnchorV1Schema.safeParse(invalid).success).toBe(false);
+      expect(DiscussionReplyTargetV1Schema.safeParse(invalid).success).toBe(false);
+    }
+  });
   it('projects a proposal reason for previews without copying its reviewed Doc text', () => {
     const before = 'Private original passage';
     const after = 'Private replacement passage';

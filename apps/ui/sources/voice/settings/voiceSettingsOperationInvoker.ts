@@ -180,6 +180,15 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         const cfg = adapterId === 'local_direct' ? readLocalDirectVoiceSettings(runtimeSettings.voice) : readLocalConversationVoiceSettings(runtimeSettings.voice);
         const stt = parseLocalVoiceSttSettings(cfg.stt);
         const tts = parseLocalVoiceTtsSettings(cfg.tts);
+        if (operation === 'tts_catalog' || operation === 'tts_catalog_retry') {
+            if (voice.providerId !== 'local_direct' && voice.providerId !== 'local_conversation') return unavailable('local_voice_service_not_selected');
+            if (tts.provider !== 'local_neural') return unavailable('local_neural_engine_not_selected');
+            const { readLocalNeuralVoiceCatalog } = await import('@/voice/kokoro/assets/readLocalNeuralVoiceCatalog');
+            const { projectVoiceSettingsCatalogList } = await import('./panels/realtime/voiceCatalog');
+            const catalog = await readLocalNeuralVoiceCatalog({ config: tts.localNeural,
+                originMachineId: machineId, signal: context.signal });
+            return await operationCurrent() ? completed({ rows: projectVoiceSettingsCatalogList(catalog.rows, true) }) : { status: 'cancelled' };
+        }
         if (operation === 'tts_test' || operation === 'tts_preview') {
             if (voice.providerId !== 'local_direct' && voice.providerId !== 'local_conversation') return unavailable('local_voice_service_not_selected');
             if (Platform.OS === 'web' && typeof navigator !== 'undefined' && !navigator.userActivation?.isActive) return unavailable('audio_user_gesture_required');

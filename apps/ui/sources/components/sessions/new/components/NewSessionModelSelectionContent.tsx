@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { useRouter } from 'expo-router';
 import { View, type View as RNView } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
 import type { ProviderErrorV1, SessionModelSelectionV1 } from '@happier-dev/protocol';
 import type {
     DaemonProviderCurrentSelectionRecoveryV1,
@@ -29,8 +28,6 @@ import {
     type SessionModelPickerValue,
 } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import { Item } from '@/components/ui/lists/Item';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
 import { buildFavoriteBackendIdentity } from '@/sync/domains/models/favoriteModelBackendIdentity';
 import {
@@ -46,7 +43,6 @@ import {
 } from '@/sync/domains/models/favoriteModelSelections';
 import type { ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { t } from '@/text';
-import { Icon } from '@/components/ui/icons/Icon';
 import { teamCredentialDetailPath } from '@/components/settings/teams/teamsRoutes';
 
 export type NewSessionModelOption = Readonly<{
@@ -103,7 +99,6 @@ function selectedModelRef(props: NewSessionModelSelectionContentProps): SessionM
 }
 
 export function NewSessionModelSelectionContent(props: NewSessionModelSelectionContentProps) {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const [popoverOpen, setPopoverOpen] = React.useState(false);
     const anchorRef = React.useRef<RNView>(null);
@@ -304,34 +299,30 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
 
     if (props.presentation !== 'compact') return picker({});
 
+    // A bare value row: the wizard's Model section owns the sheet around it.
     return (
-        <ItemGroup title="">
-            <View ref={anchorRef} collapsable={false}>
-                <Item
-                    testID="new-session-model-dropdown-trigger"
-                    title={modelFieldLabel}
-                    subtitle={selectedPresentation.subtitle}
-                    detail={selectedPresentation.detail}
-                    accessibilityLabel={selectedPresentation.accessibilityLabel}
-                    leftElement={normalizeNodeForView(
-                        <Icon name="sparkle" size={24} color={theme.colors.text.secondary} />,
-                    )}
-                    showChevron
-                    onPress={() => setPopoverOpen(true)}
-                />
-                <AgentInputContentPopover
-                    open={popoverOpen}
-                    anchorRef={anchorRef}
-                    boundaryRef={props.popoverBoundaryRef}
-                    scrollEnabled={false}
-                    onRequestClose={() => setPopoverOpen(false)}
-                    content={({ maxHeight, requestClose }) => picker({
-                        maxHeight,
-                        onRequestClose: requestClose,
-                        closeAfterSelect: true,
-                    })}
-                />
-            </View>
-        </ItemGroup>
+        <View ref={anchorRef} collapsable={false}>
+            <Item
+                testID="new-session-model-dropdown-trigger"
+                title={selectedPresentation.subtitle ?? modelFieldLabel}
+                detail={selectedPresentation.detail}
+                accessibilityLabel={selectedPresentation.accessibilityLabel}
+                showChevron
+                accessibilityExpanded={popoverOpen}
+                onPress={() => setPopoverOpen(true)}
+            />
+            <AgentInputContentPopover
+                open={popoverOpen}
+                anchorRef={anchorRef}
+                boundaryRef={props.popoverBoundaryRef}
+                scrollEnabled={false}
+                onRequestClose={() => setPopoverOpen(false)}
+                content={({ maxHeight, requestClose }) => picker({
+                    maxHeight,
+                    onRequestClose: requestClose,
+                    closeAfterSelect: true,
+                })}
+            />
+        </View>
     );
 }

@@ -406,6 +406,66 @@ describe('target Session input authoring through HTTP', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(['complete', 'cancel'] as const)('keeps protected Send lookup under its caller lifecycle: %s', async outcome => {
+    vi.useFakeTimers();
+    const cancellation = new AbortController();
+    let releaseDetail!: () => void;
+    const detailRequested = new Promise<void>(resolveRequested => {
+      http.get.mockImplementation(async (url: string, config?: { signal?: AbortSignal }) => {
+        if (url.endsWith('/currentness')) return { status: 200, data: {
+          mode: 'e2ee', version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        } };
+        if (!url.includes(`/v2/sessions/${sessionId}`)) throw new Error(`Unexpected read: ${url}`);
+        // Only the network boundary is held. Resolution, crypto and the
+        // protected Send producer/strict Machine consumer remain real.
+        return await new Promise((resolve, reject) => {
+          releaseDetail = () => resolve({ status: 200, data: { session: createSessionRecordFixture({
+            id: sessionId, active: true, encryptionMode: 'e2ee', share: null,
+            metadata: encryptSessionPayload({ ctx: { encryptionKey: credentials.encryption.secret,
+              encryptionVariant: 'legacy' }, payload: { machineId: 'machine-a' } }),
+          }) } });
+          config?.signal?.addEventListener('abort', () => reject(new Error('HTTP request cancelled')), { once: true });
+          resolveRequested();
+        });
+      });
+    });
+    const machineAdmissionTransport = vi.fn(async (raw: unknown) => {
+      const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+      expect(request).toMatchObject({ sessionId, targetMachineId: 'machine-a', localId: 'slow-protected-send' });
+      if (request.content.t !== 'encrypted') throw new Error('Expected encrypted input');
+      expect(decryptSessionPayload({ ctx: { encryptionKey: credentials.encryption.secret,
+        encryptionVariant: 'legacy' }, ciphertextBase64: request.content.c })).toMatchObject({
+        role: 'user', content: { type: 'text', text: 'Continue after the held read' },
+      });
+      return { status: 'accepted' as const, localId: request.localId };
+    });
+    try {
+      const pending = sendSessionMessage({ credentials, idOrPrefix: sessionId,
+        message: 'Continue after the held read', localId: 'slow-protected-send', wait: false,
+        timeoutMs: 120_000, signal: cancellation.signal,
+        serverFeaturesSnapshot: { status: 'unsupported', reason: 'endpoint_missing' },
+        inputAdmission: buildTrustedHostSessionInputAdmissionV1('cli'), machineAdmissionTransport });
+      await detailRequested;
+      if (outcome === 'complete') {
+        await vi.advanceTimersByTimeAsync(25_001);
+        releaseDetail();
+        await expect(pending).resolves.toMatchObject({ ok: true, admissionResult: { status: 'accepted', localId: 'slow-protected-send' } });
+        expect(machineAdmissionTransport).toHaveBeenCalledOnce();
+      } else {
+        let observed: Awaited<typeof pending> | undefined;
+        void pending.then(result => { observed = result; }, () => {});
+        cancellation.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observed).toMatchObject({ ok: false, code: 'cancelled',
+          admissionResult: { status: 'rejected', code: 'session_input_cancelled' } });
+        expect(machineAdmissionTransport).not.toHaveBeenCalled();
+      }
+    } finally {
+      releaseDetail?.();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { kind: 'agent_team_member' as const, teamId: 'team-a', memberId: 'member-a' },
     { kind: 'agent_team_broadcast' as const, teamId: 'team-a' },

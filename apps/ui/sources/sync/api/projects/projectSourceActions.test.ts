@@ -72,6 +72,18 @@ describe('authenticated Source Action transport', () => {
         expect(await deps.projectSourcesList({ serverId: scope.serverId })).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
     });
 
+    it.each([
+        [503, 'database_transaction_conflict_exhausted', { ok: false, error: 'source_backend_unavailable' }],
+        [500, 'database_transaction_conflict_exhausted', { ok: false, errorCode: 'outcome_unknown' }],
+        [503, 'unrecognized_failure', { ok: false, errorCode: 'outcome_unknown' }],
+    ] as const)('distinguishes the known transaction refusal from uncertain mutation failures (%s %s)', async (status, error, expected) => {
+        const deps = createProjectSourceActionDeps({ ...scope, assertCurrent() {}, workflowArtifacts: { read: async () => null },
+            request: async (_path, _init, options) => { options?.onIssued?.(); return Response.json({ error }, { status }); },
+        });
+        expect(await deps.projectSourcesUpdate({ serverId: scope.serverId, sourceId: 'source-a', expectedRevision: 1,
+            patch: { name: 'Repository' } })).toMatchObject(expected);
+    });
+
     it('does not disclose an authenticated read after its captured Account port retires', async () => {
         let current = true;
         const deps = createProjectSourceActionDeps({ ...scope,

@@ -72,6 +72,7 @@ describe('SessionWorkMapView', () => {
             backgroundRuns: [],
             agents: [],
             projectCommands: [],
+            archivedSessions: [],
             summary: { outstanding: 4, needsYou: 2, stalled: 1, sessions: 4, runs: 0 },
         };
         const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection });

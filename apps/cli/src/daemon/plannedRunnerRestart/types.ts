@@ -36,6 +36,7 @@ export type PlannedRunnerRestartNotSignaledReason =
   | 'superseded'
   | 'activity_in_progress'
   | 'activity_observation_unavailable'
+  | 'remainder_capture_unavailable'
   | 'source_cutover_requirement_missing'
   | 'runner_identity_changed'
   | 'shutting_down'

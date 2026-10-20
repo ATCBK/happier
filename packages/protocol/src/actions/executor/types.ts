@@ -1,4 +1,7 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { PetChooseInputV1 } from '../../pets/selection.js';
+import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
 import type { SessionMessageSendAuthoredInput } from '../actionSpecs.js';
 import type { ApprovalStaleReason } from '../../approvals/approvalExecutionFailure.js';
 import type { NpmRegistryProfileActionIdV1 } from '../npmRegistryProfileActionFamily.js';
@@ -455,6 +458,8 @@ export type InvokeContributedAction = (request: Readonly<{
   action: import('../../plugins/contributionIdentity.js').PluginContributionIdentityV1;
   input: unknown;
   context: ActionExecutorContext;
+  /** Opaque committed Message identity, never caller-authored disclosure text. */
+  messageActionReference?: import('../../sessions/messages/messageActionReferenceV1.js').MessageActionReferenceV1;
   approvalExecutionOrigin?: ApprovalExecutionOriginV1;
   /** Host-only source-read constraint, enforced against the leased manifest. */
   requiredDangerLevel?: 'safe';
@@ -546,6 +551,7 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.list';
       input: SessionPermissionRemoteGrantsListInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>
@@ -553,11 +559,14 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.revoke';
       input: SessionPermissionRemoteGrantRevokeInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Host-only, exact-invocation observer of actual credential admission. Never parsed from input. */
+  recordOperationCredentialUse?: (use: import('../actionExecutionResult.js').ActionOperationCredentialUseV1) => void;
   /** Host-prepared target snapshot, retained by the existing approval origin. Never caller input. */
   sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
   /** Host-only read admission for Coach mutations; ordinary usage.query remains progressive. Never wire input. */
@@ -642,6 +651,12 @@ export type ActionExecutorContext = Readonly<{
   onWaitSnapshot?: (snapshot: unknown) => void | Promise<void>;
   /** Host-only issuance witness for callers retaining uncertain mutation custody. */
   onTransportIssued?: () => void;
+  /** In-process observation for the caller's existing retry intent; never serialized or execution authority. */
+  onSessionTargetsResolved?: (resolution: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    targets: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
+  }>) => void;
 
   /** Host-stamped caller identity. Never accepted from plugin action input. */
   actionCaller?: ActionCaller;
@@ -1316,6 +1331,11 @@ export type ActionExecutorDeps = Readonly<{
     input: unknown;
     context: ActionExecutorContext;
   }>) => Promise<ActionExecuteResult>;
+  /** The answering client's pet catalog and Account/device selection owner. */
+  uiPetChooseAction?: (args: Readonly<{
+    input: PetChooseInputV1;
+    context: ActionExecutorContext;
+  }>) => Promise<ActionExecuteResult>;
   /** Answering client's ordinary draft owner; never starts or sends a Session. */
   sessionAuthoringOpen?: (args: Readonly<{
     input: SessionAuthoringOpenV1;
@@ -1643,6 +1663,11 @@ export type ActionExecutorDeps = Readonly<{
    * different words in front of a reader.
    */
   projectsList?: (args: Readonly<{ serverId?: string; machineId?: string; limit?: number; includeHidden?: boolean }>, context?: ActionExecutorContext) => Promise<unknown>;
+  /**
+   * The Account's opened checkouts as complete refs, for the typed Checkout input's choices. It reads the same
+   * private Project rows and admission as `projectsList`, and answers a failure envelope when they are not admitted.
+   */
+  projectWorkspaceRefs?: (args: Readonly<{ serverId?: string }>, context?: ActionExecutorContext) => Promise<unknown>;
   projectsContextUpdate?: (args: ProjectContextUpdateInputV1, context?: ActionExecutorContext) => Promise<ProjectContextUpdateOutputV1>;
   projectsVisibilitySet?: (args: import('../../projects/projectVisibilityV1.js').ProjectVisibilitySetInputV1, context?: ActionExecutorContext) => Promise<import('../../projects/projectVisibilityV1.js').ProjectVisibilitySetOutputV1>;
   projectsWorkspaceUpdate?: (args: import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceUpdateInputV1, context?: ActionExecutorContext) => Promise<import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceUpdateOutputV1>;
@@ -1894,6 +1919,13 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
+  /** Complete own-Account rule facts; selector matching remains at the shared preview owner. */
+  readSessionFollowRules?: (args: Readonly<{
+    context: ActionExecutorContext;
+    serverId: string;
+    signal?: AbortSignal;
+  }>) => Promise<Readonly<{ kind: 'complete'; rules: readonly import('../../sessions/follow/actions.js').OpenedSessionFollowRuleV1[] }>
+    | Readonly<{ kind: 'unavailable' }>>;
   /** Authorized fact-bearing corpus adapter at the existing Session listing owner. */
   sessionFollowPreview?: (args: Readonly<{
     context: ActionExecutorContext;
@@ -1922,7 +1954,7 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; readiness?: boolean; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
+  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; readiness?: boolean; operation?: 'conversation' | 'credential'; credentialPurpose?: QualifiedConnectedAccountPurposeV1; credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionHistoryGet?: (args: Readonly<{
     sessionId: string;
     limit?: number;
@@ -2070,6 +2102,13 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionModeSet: (args: Readonly<{ sessionId: string; modeId: string }>) => Promise<unknown>;
+  sessionControlSwitch?: (args: Readonly<{
+    sessionId: string;
+    to: 'remote' | 'local';
+    serverId?: string | null;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
   sessionConfigOptionSet?: (args: Readonly<{ sessionId: string; configId: string; valueId: string }>) => Promise<unknown>;
   sessionConnectedServicesAuthSet?: (args: SessionConnectedServiceAuthSwitchRpcParams & Readonly<{ machineId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionModesList: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;

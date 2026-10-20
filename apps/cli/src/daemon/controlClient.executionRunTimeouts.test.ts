@@ -90,7 +90,11 @@ describe('resolveExecutionRunConnectedServiceMaterializeTimeoutMs', () => {
     },
   });
 
-  it.each([false, true])('sanitizes all refusal diagnostics and logs (malformed: %s)', async (malformed) => {
+  it.each([
+    { malformed: false, errorCode: 'connected_service_run_materialization_blocked' },
+    { malformed: true, errorCode: 'connected_service_run_materialization_blocked' },
+    { malformed: false, errorCode: 'provider_session_state_unavailable_for_resume' },
+  ])('sanitizes refusal $errorCode diagnostics and logs (malformed: $malformed)', async ({ malformed, errorCode }) => {
     const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
     const detail = 'Purpose unavailable at /private/runner; accessToken=private-refusal-token';
     let activationId: unknown;
@@ -99,14 +103,14 @@ describe('resolveExecutionRunConnectedServiceMaterializeTimeoutMs', () => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (url.endsWith('/materialize')) {
         activationId = body.activationId;
-        return new Response(JSON.stringify({ ok: false, errorCode: 'connected_service_run_materialization_blocked',
+        return new Response(JSON.stringify({ ok: false, errorCode,
           errorMessage: detail, ...(malformed ? { message: detail } : {}) }), { status: 403 });
       }
       released = body;
       return new Response(JSON.stringify({ ok: true, released: false }), { status: 200 });
     });
     const result = await requestExecutionRunConnectedServicesMaterialization(materializeRequest);
-    expect(result).toMatchObject({ ok: false, errorCode: 'connected_service_run_materialization_blocked',
+    expect(result).toMatchObject({ ok: false, errorCode,
       errorMessage: malformed ? 'Execution-run connected-services materialization failed' : expect.stringContaining('Purpose unavailable') });
     expect(released).toEqual({ runId: materializeRequest.runId, runnerPid: materializeRequest.runnerPid, activationId });
     expect(diagnostics).toHaveBeenCalled();

@@ -408,7 +408,7 @@ async function resolveCandidatePreparationBindingInTx(input: Readonly<{
     accountId: string;
     binding: PluginCollectionCandidatePreparationBindingV1;
 }>): Promise<ResolvedCandidatePreparationBinding> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
     if (fence.status === "account_not_found") {
         throw new PluginCollectionCandidatePreparationOperationError(
             "collection_candidate_preparation_unavailable",
@@ -1123,7 +1123,7 @@ export async function promotePluginCollectionCandidatePreparationInTx(input: Rea
         // Collection, even when it currently has no live rows to promote.
         promotionNotReady();
     }
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
     if (fence.status !== "ready") promotionNotReady();
 
     const changesByCollection = new Map<string, {

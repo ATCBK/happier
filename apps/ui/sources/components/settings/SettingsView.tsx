@@ -4,7 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useFocusEffect } from '@/components/appShell/workspace/destinationRoute';
 import Constants from 'expo-constants';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useEntitlement, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useEntitlement, useLocalSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { trackPaywallButtonClicked } from '@/track';
 import { Modal } from '@/modal';
@@ -31,6 +31,8 @@ import { HubBuiltinWidgetSection } from '@/components/hub/HubBuiltinWidgetSectio
 import { OverviewMachinesSection } from '@/components/settings/overview/OverviewMachinesSection';
 import { useSettingsRailVisible } from '@/components/settings/shell/settingsRailVisibility';
 import { SettingsPageSearch } from '@/components/settings/shell/SettingsPageSearch';
+import { OVERVIEW_SETTINGS } from '@/components/settings/overview/overviewSettings';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 
 const DEFER_BELOW_FOLD_SETTINGS_SECTIONS_DELAY_MS = 0;
 const DEFER_BELOW_FOLD_SETTINGS_STAGE_DELAY_MS = 16;
@@ -39,7 +41,8 @@ export const SettingsView = React.memo(function SettingsView() {
     const router = useRouter();
     const appVersion = Constants.expoConfig?.version || '1.0.0';
     const railVisible = useSettingsRailVisible();
-    const [devModeEnabled, setDevModeEnabled] = useLocalSettingMutable('devModeEnabled');
+    const devModeEnabled = useLocalSetting('devModeEnabled');
+    const writeSetting = useSettingActionWriter();
     const voiceEntitlement = useEntitlement('voice');
     const isPro = __DEV__ || voiceEntitlement;
     const showChangelog = getFeatureBuildPolicyDecision('app.ui.changelog' as const satisfies FeatureId) !== 'deny';
@@ -158,10 +161,11 @@ export const SettingsView = React.memo(function SettingsView() {
     };
 
     // Use the multi-click hook for version clicks
-    const handleVersionClick = useMultiClick(() => {
+    const handleVersionClick = useMultiClick(async () => {
         // Toggle dev mode
         const newDevMode = !devModeEnabled;
-        setDevModeEnabled(newDevMode);
+        const result = await writeSetting(OVERVIEW_SETTINGS.settings.developerMode, newDevMode);
+        if (!result.ok) return;
         Modal.alert(
             t('modals.developerMode'),
             newDevMode ? t('modals.developerModeEnabled') : t('modals.developerModeDisabled')

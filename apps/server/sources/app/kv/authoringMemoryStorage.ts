@@ -11,10 +11,12 @@ import {
     listReservedAccountScopedKvRowsInTx,
     mutateReservedAccountScopedKvRowInTx,
     readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowFailure,
     type ReservedAccountScopedKvRowReadResult,
     type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
 } from "./reservedAccountScopedKvRow";
 
 const parseEnvelope = (value: unknown, schema: typeof AuthoringMemoryContentV1Schema): AuthoringMemoryContentV1 | null => {
@@ -53,7 +55,7 @@ function domainForKey(key: string): ReservedAccountScopedKvRowDomain<AuthoringMe
 export async function markAuthoringMemoryChangedInTx(
     tx: Tx,
     input: Readonly<{ accountId: string; key: string; revision: number }>,
-): Promise<number> {
+): ReturnType<typeof markAccountChanged> {
     const hint = AuthoringMemoryChangeHintV1Schema.parse({ authoringMemory: true, key: input.key, revision: input.revision });
     return await markAccountChanged(tx, {
         accountId: input.accountId, kind: "account",
@@ -95,7 +97,7 @@ export async function mutateAuthoringMemoryInTx(tx: Tx, input: Readonly<{
     key: string;
     expectedRevision: number | "absent";
     envelope: AuthoringMemoryContentV1 | null;
-}>): Promise<ReservedAccountScopedKvRowMutationResult> {
+}>): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     return await mutateReservedAccountScopedKvRowInTx(tx, {
         accountId: input.accountId, physicalKey: buildAuthoringMemoryPhysicalKey(input.key),
         expectedRevision: input.expectedRevision, envelope: input.envelope, domain: domainForKey(input.key),
@@ -110,5 +112,11 @@ export async function listAuthoringMemory(input: Readonly<{ accountId: string }>
     return await inTx(tx => listAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 export async function mutateAuthoringMemory(input: Parameters<typeof mutateAuthoringMemoryInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
-    return await inTx(tx => mutateAuthoringMemoryInTx(tx, input));
+    try {
+        return await inTx(tx => mutateAuthoringMemoryInTx(tx, input));
+    } catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

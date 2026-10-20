@@ -627,6 +627,9 @@ function projectIssuePresent(
     return observedIssue(unresolved(localRef, GITHUB_ROUTE_BODY_MISMATCH_FAILURE));
   }
   const record = isRecord(body) ? body : {};
+  const facts = readGithubIssueFacts(record);
+  const labels = readGithubNamedMembers(record.labels, 'name', 'exact');
+  const assignees = readGithubNamedMembers(record.assignees, 'login', 'exact');
   return Object.freeze({
     observation: Object.freeze({
       kind: 'present' as const,
@@ -634,8 +637,14 @@ function projectIssuePresent(
       locator: projection.locator,
       snapshot: projection.snapshot,
       viewer: Object.freeze({ involvement: Object.freeze([]) }),
+      taskFields: {
+        ...(facts.title === null ? {} : { title: facts.title }),
+        ...(facts.body === null ? {} : { body: facts.body }),
+        ...(labels === null ? {} : { labelIds: [...labels] }),
+        ...(assignees === null ? {} : { assigneeIds: [...assignees] }),
+      },
     }),
-    facts: readGithubIssueFacts(record),
+    facts,
     overview: projectGithubIssueOverview(record),
   });
 }

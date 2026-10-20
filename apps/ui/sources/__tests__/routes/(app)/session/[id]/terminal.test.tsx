@@ -63,13 +63,6 @@ const runtime = installSessionPaneRuntimeTestHarness({
     } }),
     request: async (url, init) => {
         const address = new URL(String(url));
-        if ((init?.method ?? 'GET') === 'GET' && address.pathname === "/v1/sessions/session-1/turns") {
-          const { buildSessionTurnsProjectionV1 } = await import('@happier-dev/protocol/sessions/turns/sessionTurnV1');
-          const session = createSessionFixture({ id: 'session-1', serverId: runtime.serverId });
-          return Response.json(buildSessionTurnsProjectionV1({
-            sessionId: session.id, updatedAt: session.updatedAt, turns: [],
-          }));
-        }
         if ((init?.method ?? 'GET') !== 'GET' || address.pathname !== '/v2/sessions/session-1') return null;
         sessionReads.push(address.origin);
         const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol');

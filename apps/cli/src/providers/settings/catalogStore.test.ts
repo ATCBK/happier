@@ -4,7 +4,7 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema,
   ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
@@ -92,9 +92,10 @@ it.each([false, true])('rechecks requester authority before Provider source acti
   }
 });
 
-it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal', false]] as const)('admits a newly observed daemon catalog before history cleanup (mode=%s, cancel=%s)', async (mode, cancelCleanup) => {
+it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal', false], ['joined-reobserve', false], ['repeated-reobserve', false], ['late-reobserve', false]] as const)('admits a newly observed daemon catalog before history cleanup (mode=%s, cancel=%s)', async (mode, cancelCleanup) => {
   const controller = new AbortController();
   const revision = mode === 'joined-equal' ? 6 : 7;
+  let observedRevision = revision;
   const credentials = { token: 'provider-cold-demand', encryption: null };
   const scopeKey = resolveAccountSettingsScopeKey(credentials);
   setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
@@ -110,13 +111,15 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
   const rowEntered = new Promise<void>(resolve => { enterRow = resolve; });
   const historyReleased = new Promise<void>(resolve => { releaseHistory = resolve; });
   const historyEntered = new Promise<void>(resolve => { enterHistory = resolve; });
+  let rowReads = 0;
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
       mode: 'plain', version: 1, settingsVersion: 4, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
     if (path === '/v1/account/entity-rows/provider-connections') {
+      rowReads++;
       enterRow(); await rowReleased;
-      return { status: 200, data: { status: 'present', revision,
+      return { status: 200, data: { status: 'present', revision: observedRevision,
         content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
     }
     if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
@@ -129,12 +132,20 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     throw new Error(`Unexpected cold Provider HTTP boundary: ${path}`);
   });
   let admitted: Awaited<ReturnType<typeof prepareProviderConnectionsCatalogForCli>> | undefined;
-  const firstRefresh = mode === 'joined-equal' ? refreshActiveProviderConnectionsCatalog({ credentials }) : undefined;
+  const firstRefresh = mode === 'joined-equal' || mode === 'joined-reobserve'
+    ? refreshActiveProviderConnectionsCatalog({ credentials }) : undefined;
   if (firstRefresh) await rowEntered;
-  const read = mode === 'reobserve' ? refreshProviderConnectionsCatalogForCli : prepareProviderConnectionsCatalogForCli;
+  const read = mode === 'reobserve' || mode === 'joined-reobserve' || mode === 'repeated-reobserve' || mode === 'late-reobserve'
+    ? refreshProviderConnectionsCatalogForCli : prepareProviderConnectionsCatalogForCli;
   const demand = read({ expectedScopeKey: scopeKey, signal: controller.signal })
     .then(catalog => { admitted = catalog; return catalog; });
   await rowEntered;
+  const publications: number[] = [];
+  const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
+    if (next?.providerConnectionsCatalog?.status === 'ready') publications.push(next.providerConnectionsCatalog.revision);
+  });
+  const readers = mode === 'repeated-reobserve' ? Array.from({ length: 12 }, () =>
+    refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })) : [];
   let completed = false;
   const maintenance = (firstRefresh ?? refreshActiveProviderConnectionsCatalog({ credentials })).then(() => { completed = true; });
   try {
@@ -142,9 +153,26 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     await historyEntered;
     await vi.waitFor(() => expect(admitted).toMatchObject({ status: 'ready', revision }));
     expect(completed).toBe(false);
+    if (mode === 'late-reobserve') {
+      observedRevision = 8;
+      readers.push(...Array.from({ length: 12 }, () => refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })));
+    }
+    if (mode === 'repeated-reobserve' || mode === 'late-reobserve') {
+      let settled = false;
+      const resolved = Promise.all(readers).then(catalogs => { settled = true; return catalogs; });
+      await vi.waitFor(() => expect(settled).toBe(true));
+      for (const catalog of await resolved) expect(catalog).toMatchObject({ status: 'ready', revision: observedRevision });
+      expect(publications.filter(value => value === revision)).toEqual([revision]);
+    }
     if (cancelCleanup) controller.abort();
-  } finally { releaseRow(); releaseHistory(); await demand; await maintenance; }
-  expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision });
+  } finally { releaseRow(); releaseHistory(); await demand; await maintenance; await Promise.all(readers); unsubscribe(); }
+  expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: observedRevision });
+  if (mode === 'joined-equal') {
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ cleanup: { status: 'complete' } });
+  }
+  // One catalog read plus the history owner's two destination-authority checks.
+  // Cancelled history stops before the last authority check.
+  expect(rowReads).toBe(mode === 'late-reobserve' ? 6 : cancelCleanup ? 2 : 3);
 });
 
 it('refuses a model list from a credential retired after declaration admission without refreshing projections', async () => {

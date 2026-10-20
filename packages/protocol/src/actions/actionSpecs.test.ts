@@ -129,12 +129,13 @@ describe('Profile entity operation parity', () => {
 });
 
 describe('Composer state mutation Actions', () => {
-  it('keeps the reversible config-option mutation UI-only', () => {
+  it('shares the reversible config-option mutation through its answering client', () => {
     expect(getActionSpec('session.config_option.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'safe',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
   it('uses one Session capability Action on the UI and automation surfaces', () => {
@@ -150,8 +151,9 @@ describe('Composer state mutation Actions', () => {
     expect(getActionSpec('session.connected_services_auth.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'danger',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
 });
@@ -386,6 +388,7 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
 ] as const);
 
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
+  'reviews.comments.claimPublicationDispatch',
   'plugin.webhook.delivery.movePending',
   ...ROLE_ACTION_IDS_V1,
   'artifact.public_link.create',
@@ -564,7 +567,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'session.usageLimit.waitResume.cancel',
   'transcript.unfollow',
   'ui.voice_global.reset',
-  'ui.pet.choose',
   'prompt_doc.update',
   'prompt_doc.create',
   'prompt_doc.favorite.set',
@@ -606,10 +608,10 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'reviews.comments.setDisposition',
   'reviews.comments.attachEvidence',
   'reviews.comments.bulkTransition',
-  'reviews.comments.claimPublicationDispatch',
 ] as const;
 
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
+  'ui.pet.choose',
   'prompt_registry.install',
   'plugins.permissions.grants.revoke',
   'session.manager.set',
@@ -1660,8 +1662,8 @@ describe('Action Spec Registry', () => {
       mcp: false,
       voice: false,
     });
-    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
-    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
+    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
+    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
 
     expect(respond.inputSchema.safeParse({
       sessionId: 'session-1',
@@ -3546,13 +3548,22 @@ describe('Action Spec Registry', () => {
     );
   });
 
-  it('registers pet chooser slash aliases as a UI-only action', () => {
+  it('admits typed pet selection from automation while retaining empty chooser navigation', () => {
     const spec = getActionSpec('ui.pet.choose');
     expect(spec.slash?.tokens).toEqual(['/pet', '/h.pet']);
     expect(spec.placements).toContain('slash_command');
     expect(spec.surfaces.ui).toBe(true);
-    expect(spec.surfaces.mcp).toBe(false);
+    expect(spec.surfaces.agent).toBe(true);
+    expect(spec.surfaces.mcp).toBe(true);
     expect(spec.surfaces.cli).toBe(false);
+    expect(spec.executionPlacement).toBe('client');
+    for (const input of [{}, { petRef: { kind: 'builtIn', petId: 'milo' } },
+      { petRef: { kind: 'accountPet', accountPetId: 'custom-cat' } },
+      { deviceOverride: { kind: 'inherit' } }, { deviceOverride: { kind: 'happierManagedLocal', sourceKey: 'managed:cat' } }]) {
+      expect(spec.inputSchema.parse(input)).toEqual(input);
+    }
+    expect(spec.inputSchema.safeParse({ petRef: { kind: 'builtIn', petId: 'milo', unknown: true } }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ deviceOverride: { kind: 'inherit' }, petRef: { kind: 'builtIn', petId: 'milo' } }).success).toBe(false);
   });
 
   it('projects SCM pull-request actions through RPC, SDK and automated request surfaces', () => {

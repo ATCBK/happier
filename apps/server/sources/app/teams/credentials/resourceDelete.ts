@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -17,6 +18,7 @@ export async function deleteTeamCredentialResourceInTx(
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) return { ok: false, error: "invalid_resource_input" };
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId } });
     if (!resource) return { ok: false, error: "not_found_or_not_visible" };
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resource.teamId, accountIds: [input.actorAccountId] });
     const isCustodian = resource.custodianAccountId === input.actorAccountId;
     const account = await tx.account.findUnique({ where: { id: input.actorAccountId }, select: { status: true } });
     if (account?.status !== AccountStatus.active) return { ok: false, error: "forbidden" };

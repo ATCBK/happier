@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 
 import { applyRuntimeServerDatabaseEnv } from './apply_runtime_server_database_env.mjs';
@@ -181,6 +182,33 @@ test('shared Postgres projects S3 and the at-rest secret without requiring sourc
   assert.equal(env.S3_SECRET_KEY, undefined);
   assert.equal(env.HAPPIER_FILES_BACKEND, 'local');
   assert.equal(env.HAPPIER_SERVER_LIGHT_FILES_DIR, '/unavailable/source-host/data/files');
+});
+
+test('shared database consumers follow source socket clustering and clear stale adapter settings', async (t) => {
+  const fixture = await createTempFixture(t);
+  await mkdir(fixture.path('dev'), { recursive: true });
+  const sourceEnvPath = fixture.path('dev', 'env');
+  const source = { HAPPIER_DB_PROVIDER: 'postgres', DATABASE_URL: 'postgresql://db.test/shared',
+    HANDY_MASTER_SECRET: randomUUID() };
+  const redisUrl = new URL('redis://source.test:6379');
+  redisUrl.password = randomUUID();
+  for (const [name, socketEnv, enabled] of [
+    ['Redis Streams source replaces consumer cluster', { HAPPIER_SOCKET_ADAPTER: 'redis-streams', REDIS_URL: redisUrl.href }, true],
+    ['source adapter aliases use canonical configuration parsing', { HAPPY_SOCKET_ADAPTER: ' REDIS_STREAMS ', REDIS_URL: ` ${redisUrl.href} ` }, true],
+    ['memory source clears consumer cluster even with a leftover source URL', { HAPPIER_SOCKET_ADAPTER: 'memory', REDIS_URL: redisUrl.href }, false],
+    ['source without a Redis URL clears consumer cluster', { HAPPIER_SOCKET_ADAPTER: 'redis-streams' }, false],
+    ['unconfigured source clears consumer cluster', {}, false],
+  ]) {
+    await t.test(name, async () => {
+      await writeFile(sourceEnvPath, Object.entries({ ...source, ...socketEnv }).map(([key, value]) => `${key}=${value}`).join('\n'));
+      const env = { HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev', HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: sourceEnvPath,
+        HAPPIER_SOCKET_ADAPTER: 'redis-streams', REDIS_URL: 'redis://stale-consumer.test:6379' };
+      applyRuntimeServerDatabaseEnv({ env, serverDir: '/server' });
+      assert.equal(env.HAPPIER_SOCKET_ADAPTER, enabled ? 'redis-streams' : undefined);
+      // Assert equality without putting connection credentials in failure diagnostics.
+      assert.equal(env.REDIS_URL === (enabled ? redisUrl.href : undefined), true);
+    });
+  }
 });
 
 test('operator-provided Postgres URL is validated without SQLite defaults', () => {

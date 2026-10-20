@@ -19,6 +19,25 @@ import { pathToFileURL } from 'node:url';
 import semver from 'semver';
 
 const PACKAGE_NAME_SEGMENT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/u;
+const PREPUBLICATION_AUTHOR_PACKAGE_VERSION = '0.0.0';
+
+/** Select declared packages supplied by the host's prepublication author closure. */
+export function collectBundledPrepublicationAuthorPackageNames(packageJson) {
+  if (!packageJson || typeof packageJson !== 'object' || Array.isArray(packageJson)) return [];
+  const requested = new Set();
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    const dependencies = packageJson[field];
+    if (!dependencies || typeof dependencies !== 'object' || Array.isArray(dependencies)) continue;
+    for (const [packageName, specifier] of Object.entries(dependencies)) {
+      if (packageName.startsWith('@happier-dev/')
+        && typeof specifier === 'string'
+        && semver.satisfies(PREPUBLICATION_AUTHOR_PACKAGE_VERSION, specifier.trim())) {
+        requested.add(packageName);
+      }
+    }
+  }
+  return [...requested].sort((left, right) => left.localeCompare(right));
+}
 
 // Bundled copies publish compiled runtime inputs. Authored workspace source
 // conditions belong to the source resolver, never to a partial installed tree.

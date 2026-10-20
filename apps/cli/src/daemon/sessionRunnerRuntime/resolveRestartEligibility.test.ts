@@ -26,6 +26,22 @@ function trackedRunner(overrides: Partial<TrackedSession> = {}): TrackedSession 
 }
 
 describe('resolveSessionRunnerRestartEligibility', () => {
+  it('exposes an observed unsupported restart handshake as a recovery refusal', () => {
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({ runnerRestartAdmissionUnsupportedPid: 4242 })))
+      .toEqual({ eligible: false, disabledReason: 'restart_admission_unsupported' });
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({
+      sessionRunnerPid: 4243, runnerRestartAdmissionUnsupportedPid: 4243,
+      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346,
+        processCommand: trackedRunner().processCommand },
+    }))).toEqual({ eligible: false, disabledReason: 'restart_admission_unsupported' });
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner({
+      sessionRunnerPid: 4243, runnerRestartAdmissionUnsupportedPid: 4242,
+      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346,
+        processCommand: trackedRunner().processCommand },
+    }))).toEqual({ eligible: true, disabledReason: null });
+    expect(resolveSessionRunnerRestartEligibility(trackedRunner()))
+      .toEqual({ eligible: true, disabledReason: null });
+  });
   it.each(['windows_terminal', 'console'] as const)('retains resume refusal precedence for a %s hosted runner', windowsRemoteSessionLaunchMode => {
     const spawnOptions = { directory: '/workspace', windowsRemoteSessionLaunchMode };
     expect(resolveSessionRunnerRestartEligibility(trackedRunner({ spawnOptions, vendorResumeId: undefined })))

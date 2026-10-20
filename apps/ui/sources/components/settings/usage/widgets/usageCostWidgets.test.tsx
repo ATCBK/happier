@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it } from 'vitest';
-import { HappierDataMetric, RankedRows, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataMetric, HappierDataRows, RankedRows, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { projectUsagePageCost, resolveUsageCostForSelection, repriceUsageAnalyticsResponse, type UsageAnalyticsContribution } from '@happier-dev/protocol';
@@ -11,6 +11,7 @@ import { renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
 import { UsagePeriodSummaryWidget } from './UsagePeriodSummaryWidget';
 import { UsageCostFactsWidget } from './UsageCostFactsWidget';
+import { UsageSourceCoverageWidget, UsageUnpricedWidget } from './UsageSourcePanels';
 import { UsageDailyWidget } from './UsageDailyWidget';
 import { UsageFlowWidget } from './UsageFlowWidget';
 import { UsageBreakdownsWidget } from './UsageBreakdownsWidget';
@@ -47,6 +48,72 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it('renders unpriced tokens from the canonical cost facts, never as money or a fabricated model estimate', async () => {
+    const props = mountedCosts(true);
+    const expected = props.slice.costFactTotals!.filter(fact => fact.kind === 'unpriced').reduce((sum, fact) => sum + fact.tokens.total, 0);
+    expect(expected).toBeGreaterThan(0);
+    const screen = await renderScreen(<UsageUnpricedWidget {...props} id="usage_unpriced" testID="unpriced" />);
+    const metric = screen.findAllByType(HappierDataMetric).find(row => row.props.testID === 'unpriced.tokens');
+    expect(metric?.props.value).toBe(expected);
+    expect(metric?.props.unit).toBe(t('usage.board.page.tokensUnit'));
+    expect(metric?.props.valueFormatter(expected)).not.toContain('$');
+    expect(screen.findByTestId('unpriced.prices.open')).not.toBeNull();
+  });
+  it('keeps pending and failed accounting distinct from zero unpriced tokens', async () => {
+    const props = mountedCosts();
+    for (const status of ['pending', 'error'] as const) {
+      const slice = resolveUsagePageAggregation({ queries: [props.query], accounting: [{ query: props.query, status }] }).results[0]!;
+      const screen = await renderScreen(<UsageUnpricedWidget {...props} slice={slice} id="usage_unpriced" testID="unpriced" />);
+      expect(screen.findAllByType(HappierDataMetric)).toHaveLength(0);
+      expect(screen.findByTestId(status === 'pending' ? 'unpriced.loading' : 'unpriced.unavailable')).not.toBeNull();
+    }
+  });
+  it('distinguishes an absent unpriced projection from a witnessed empty population', async () => {
+    const props = mountedCosts();
+    const screen = await renderScreen(<UsageUnpricedWidget {...props} slice={{ ...props.slice, costFactTotals: undefined }} id="usage_unpriced" testID="unpriced" />);
+    expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'unpriced.tokens')?.props.value).toBe('—');
+    await screen.update(<UsageUnpricedWidget {...props} slice={{ ...props.slice, costFactTotals: [] }} id="usage_unpriced" testID="unpriced" />);
+    expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'unpriced.tokens')?.props.value).toBe(0);
+  });
+  it('renders witnessed source coverage and the canonical incomplete-range reasons instead of claiming a complete inventory', async () => {
+    const props = mountedCosts();
+    const accounting = { ...props.slice.accounting!, coverage: { status: 'partial' as const, reasons: ['missing_baseline' as const],
+      missingDimensions: [], range: { startMs: 0, endMs: day, complete: false }, ranked: [],
+      sources: [{ source: 'codex-token-count', path: 'native' as const, status: 'partial' as const,
+        eventCount: 2, captureKind: 'from_logs' as const, historyComplete: false, asOfMs: 100 }] } };
+    const slice = resolveUsagePageAggregation({ queries: [props.query], accounting: [{ query: props.query, status: 'available', value: accounting }] }).results[0]!;
+    const screen = await renderScreen(<UsageSourceCoverageWidget {...props} slice={slice} id="usage_source_coverage" testID="coverage" />);
+    expect(screen.findByType(HappierDataRows).props.rows).toHaveLength(1);
+    expect(screen.getTextContent()).toContain(t('usage.board.page.coverageReason_missing_baseline'));
+    expect(screen.getTextContent()).toContain(t('usage.board.page.sourceKindFromLogs'));
+  });
+  it('lists source coverage as a short led list: identical captures across machines say so once with a count, distinct ones fold behind Show all', async () => {
+    const props = mountedCosts();
+    const source = { path: 'native' as const, status: 'unknown' as const, eventCount: 0, captureKind: 'measured' as const, asOfMs: 100 };
+    const coverageOf = (sources: readonly (typeof source & { source: string })[]) => resolveUsagePageAggregation({ queries: [props.query],
+      accounting: [{ query: props.query, status: 'available', value: { ...props.slice.accounting!, coverage: { status: 'partial' as const,
+        reasons: [], missingDimensions: [], range: { startMs: 0, endMs: day, complete: false }, ranked: [], sources: [...sources] } } }] }).results[0]!;
+    const twins = await renderScreen(<UsageSourceCoverageWidget {...props} id="usage_source_coverage" testID="coverage"
+      slice={coverageOf([...Array.from({ length: 30 }, () => ({ ...source, source: 'claude-assistant-usage' })), { ...source, source: 'codex-token-count' }])} />);
+    expect(twins.findByType(HappierDataRows).props.rows).toHaveLength(2);
+    expect(twins.getTextContent()).toContain('30');
+    const distinct = await renderScreen(<UsageSourceCoverageWidget {...props} id="usage_source_coverage" testID="coverage"
+      slice={coverageOf(Array.from({ length: 10 }, (_, index) => ({ ...source, source: `source-${index}` })))} />);
+    expect(distinct.findByType(HappierDataRows).props.rows.length).toBeLessThan(10);
+    await distinct.pressByTestIdAsync('coverage.showAll.toggle');
+    expect(distinct.findByType(HappierDataRows).props.rows).toHaveLength(10);
+  });
+  it('opens every source row with a capital, including the generic accounting source whose label is a lower-case fragment', async () => {
+    const props = mountedCosts();
+    const source = { path: 'native' as const, status: 'unknown' as const, eventCount: 0, captureKind: 'measured' as const, asOfMs: 100 };
+    const slice = resolveUsagePageAggregation({ queries: [props.query],
+      accounting: [{ query: props.query, status: 'available', value: { ...props.slice.accounting!, coverage: { status: 'partial' as const,
+        reasons: [], missingDimensions: [], range: { startMs: 0, endMs: day, complete: false }, ranked: [],
+        sources: [{ ...source, source: 'runtime' }, { ...source, source: 'runtime' }] } } }] }).results[0]!;
+    const screen = await renderScreen(<UsageSourceCoverageWidget {...props} id="usage_source_coverage" testID="coverage" slice={slice} />);
+    const title = String(screen.findByType(HappierDataRows).props.rows[0][0]);
+    expect(title).toBe(`${t('usage.board.page.sourceAccounting').charAt(0).toLocaleUpperCase()}${t('usage.board.page.sourceAccounting').slice(1)} ×2`);
+  });
   it.each([7, 30].flatMap(days => (['auto', 'reported', 'estimated', 'api_equivalent'] as const)
     .map(costBasis => ({ days, costBasis, olderUnpriced: false }))).concat([
       { days: 30, costBasis: 'auto', olderUnpriced: true },
@@ -106,6 +173,19 @@ describe('one selected money basis across Usage bodies', () => {
       expect(metrics.find(metric => metric.props.testID === 'whole-summary.hero')?.props.caption).toBe(unpriced);
       expect(metrics.find(metric => metric.props.testID === 'whole-efficiency.perMtok')?.props.caption).toBe(unpriced);
     }
+  });
+  it('draws a Breakdowns heading per dimension only while the card ranks several, since one dimension is the card\'s own title', async () => {
+    const mounted = mountedCosts();
+    const claude = mounted.slice.accounting!.breakdowns!.agent![0]!;
+    const accounting = { ...mounted.slice.accounting!, breakdowns: { agent: [claude], model: [{ ...claude, key: 'opus' }] } };
+    const headings = async (breakdown: readonly ('agent' | 'model')[]) => {
+      const q = normalizeUsageQuery({ ...mounted.query, breakdown: [...breakdown] });
+      const slice = resolveUsagePageAggregation({ queries: [q], accounting: [{ query: q, status: 'available', value: accounting }] }).results[0]!;
+      const screen = await renderScreen(<UsageBreakdownsWidget {...mounted} query={q} slice={slice} id="usage_breakdowns" testID="heads" />);
+      return screen.findAll(node => node.props.accessibilityRole === 'header').length;
+    };
+    expect(await headings(['model'])).toBe(0);
+    expect(await headings(['agent', 'model'])).toBeGreaterThan(0);
   });
   it.each([0, 100, 20_000])('compares Period totals honestly against a prior base of %s', async previousTokens => {
     const props = mountedCosts();
@@ -227,13 +307,14 @@ describe('one selected money basis across Usage bodies', () => {
       freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
     const screen = await renderScreen(<UsageBreakdownsWidget query={query} slice={slice} model={model} serverId="home" id="usage_breakdowns" testID="qa-machines" />);
     expect(screen.findByType(RankedRows).props.rows).toHaveLength(6);
-    // One footer says both remainders: the folded returned rows and the rows the query never returned.
+    // The folded list has one disclosure; the omitted-source count appears once its available rows are open.
     expect(screen.findByType(UsageShowAllRows).props).toMatchObject({ total: 20, hidden: 14, complete: false,
-      unlisted: t('usage.board.page.moreRows', { count: 3 }) });
+      unlisted: null });
     expect(screen.getTextContent()).toContain(`${t('usage.showAvailable')} · 20`);
-    expect(screen.getTextContent()).toContain(t('usage.board.page.moreRows', { count: 3 }));
+    expect(screen.getTextContent()).not.toContain(t('usage.board.page.moreRows', { count: 3 }));
     await screen.pressByTestIdAsync('qa-machines.machine.more.toggle');
     expect(screen.findByType(RankedRows).props.rows).toHaveLength(20);
+    expect(screen.getTextContent()).toContain(t('usage.board.page.moreRows', { count: 3 }));
     expect(slice.accounting!.coverage!.ranked.find(row => row.dimension === 'machine')).toMatchObject({ totalEntries: 23, returnedEntries: 20, complete: false });
   });
   it('uses selected page money rather than a legacy fallback for cost per million tokens', async () => {

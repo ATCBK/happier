@@ -62,7 +62,7 @@ export async function ensureLayout1SessionCreateInvariantsInTx(
     tx: Tx,
     prepared: PreparedLayout1SessionCreate,
 ): Promise<Layout1SessionCreateInvariants> {
-    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId);
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId, "content");
     const currentness = await readSessionCreatorCurrentness(tx, prepared.accountId);
     if (currentness?.status === "inactive") {
         return { ok: false, rejection: { reason: "account-disabled" } };

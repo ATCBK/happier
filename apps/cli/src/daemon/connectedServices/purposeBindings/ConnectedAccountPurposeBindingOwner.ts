@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import type { ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { PluginError, type Disposable } from '@happier-dev/plugin-sdk';
 import type { QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol';
 import type {
@@ -24,11 +25,10 @@ import type { PluginContributionIdentityV1, ConnectedServiceCredentialRevisionV1
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import { readActiveConnectedAccountCatalog, refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import {
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
-  readConnectedAccountCatalogFromSnapshot,
   subscribeActiveAccountSettingsSnapshotChanges,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type {
@@ -81,6 +81,13 @@ export type ConnectedAccountPurposeResolvedTarget = Readonly<{
   }>;
 }>;
 
+/** Authorized profile presentation, without falling back to the opaque row id. */
+export function readConnectedAccountPurposeProfileLabel(
+  profile: Pick<QualifiedConnectedAccountProfileV4, 'displayName' | 'providerIdentity'>,
+): string | null {
+  return profile.displayName ?? profile.providerIdentity?.email ?? profile.providerIdentity?.accountId ?? null;
+}
+
 /** Launch-only pointer to one exact recipient-scoped Team material row. */
 export type ConnectedAccountTeamDirectMaterialOrigin = Readonly<{
   purpose: QualifiedConnectedAccountPurposeV1;
@@ -96,6 +103,8 @@ type ActiveConnectedAccountTeamDirectMaterialOrigin =
   }>;
 
 export type ConnectedAccountPurposeBindingOwnerDependencies = Readonly<{
+  /** Authenticated Account whose credential materializer this owner uses. */
+  credentialOwnerAccountId?: string;
   store: ConnectedAccountPurposeBindingStore;
   /** Genuine UI/policy boundary: the owner validates this result before persistence. */
   selectTarget(input: Readonly<{
@@ -136,6 +145,7 @@ export type ConnectedAccountPurposeBindingOwnerDependencies = Readonly<{
     credentialRevisionBasis?: ConnectedAccountMaterializationCredentialRevisionBasis;
     request: ConnectedAccountMaterializationRequest;
     signal: AbortSignal;
+    captureAdmittedResource?(resource: Readonly<{ teamId: string; displayName: string | null; resourceRevision: number }>): void;
   }>): Promise<PluginConnectedAccountMaterialization>;
   /**
    * Credential-free projection from one exact binding target. The runtime owns
@@ -441,6 +451,8 @@ export type ConnectedAccountPurposeBindingOwner =
       purposes: readonly QualifiedConnectedAccountPurposeV1[];
       bindings: readonly QualifiedConnectedAccountPurposeBindingV1[];
       directMaterialOrigins?: readonly ConnectedAccountTeamDirectMaterialOrigin[];
+      /** Host-only observation port bound to this exact operation lifetime. */
+      recordOperationCredentialUse?: (use: ActionOperationCredentialUseV1) => void;
     }>): ConnectedAccountPurposeBindingLease;
     /**
      * Installs one immutable, launch-scoped compatibility projection. Every declared purpose is
@@ -749,6 +761,7 @@ export function createConnectedAccountPurposeBindingOwner(
     hostMcpRequestAuth?: Readonly<{ serverId: string; resource: string }>;
     credentialConfigurations?: readonly Readonly<{ account: QualifiedConnectedAccountRef; revision: string | null }>[];
     directMaterialOriginByPurposeKey: ReadonlyMap<string, ActiveConnectedAccountTeamDirectMaterialOrigin>;
+    recordOperationCredentialUse?: (use: ActionOperationCredentialUseV1) => void;
   }>;
   const purposeBindingsBySubjectKey = new Map<string, PurposeBindingState>();
   const purposeBindingsBySubjectId = new Map<string, PurposeBindingState>();
@@ -1081,6 +1094,7 @@ export function createConnectedAccountPurposeBindingOwner(
             revision: configuration.revision,
           }))) } : {}),
       directMaterialOriginByPurposeKey,
+      ...(input.recordOperationCredentialUse ? { recordOperationCredentialUse: input.recordOperationCredentialUse } : {}),
     });
     purposeBindingsBySubjectKey.set(normalized.subjectKey, state);
     purposeBindingsBySubjectId.set(normalized.subjectId, state);
@@ -1325,8 +1339,38 @@ export function createConnectedAccountPurposeBindingOwner(
     );
   };
 
+  const projectCredentialUse = (input: Readonly<{
+    purpose: QualifiedConnectedAccountPurposeV1;
+    target: 'account' | 'group' | 'listed_account';
+    account: QualifiedConnectedAccountRef;
+    resolved: ConnectedAccountPurposeResolvedTarget;
+    isTeamResource?: boolean;
+    teamResource?: Readonly<{ teamId: string; displayName: string | null; resourceRevision: number }> | null;
+  }>): ActionOperationCredentialUseV1 => {
+    const profile = input.resolved.observation?.profiles.find(candidate => sameQualifiedConnectedAccountRef(candidate.ref, input.account));
+    const label = input.isTeamResource
+      ? input.teamResource?.displayName ?? null
+      : profile ? readConnectedAccountPurposeProfileLabel(profile)
+        : !input.resolved.observation && input.target === 'account' ? input.resolved.displayName : null;
+    return {
+      v: 1,
+      kind: input.isTeamResource ? 'team_resource' : 'connected_account',
+      label: label?.trim() ? label : null,
+      owner: input.isTeamResource
+        ? input.teamResource ? { kind: 'team', teamId: input.teamResource.teamId } : null
+        : dependencies.credentialOwnerAccountId ? { kind: 'account', accountId: dependencies.credentialOwnerAccountId } : null,
+      service: { ...input.account.service },
+      why: { kind: 'purpose_binding', purpose: { consumer: { ...input.purpose.consumer }, purpose: input.purpose.purpose }, target: input.target },
+      currentness: { kind: 'current_at_materialization',
+        ...(input.teamResource ? { resourceRevision: input.teamResource.resourceRevision } : {}) },
+    };
+  };
+
   const materialize = async (
     input: Parameters<StablePluginConnectedAccountsOwner['materialize']>[0],
+    recordCredentialUse = input.recordOperationCredentialUse ?? (input.exactPurposeBindingSubjectId
+      ? purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.recordOperationCredentialUse
+      : undefined),
   ): Promise<PluginConnectedAccountMaterialization> => {
     if (input.serviceRefs.some(service => contributionKey(service) === contributionKey(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1))) {
       const basis = input.exactPurposeBindingSubjectId ? purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.hostMcpRequestAuth : null;
@@ -1396,6 +1440,7 @@ export function createConnectedAccountPurposeBindingOwner(
       throw resourceNotSelected(input.purpose);
     }
     let materializedCredentialRevision: ConnectedServiceCredentialRevisionV1 | null = null;
+    let admittedTeamResource: Readonly<{ teamId: string; displayName: string | null; resourceRevision: number }> | null = null;
     const credentialRevisionBasis = input.credentialRevisionBasis
       ? Object.freeze({
           expectedCredentialRevision:
@@ -1415,6 +1460,7 @@ export function createConnectedAccountPurposeBindingOwner(
             ...(credentialRevisionBasis ? { credentialRevisionBasis } : {}),
             request: input.request,
             signal: input.signal,
+            captureAdmittedResource(resource) { admittedTeamResource = resource; },
           });
         })()
       : await dependencies.materializeAccount({
@@ -1447,6 +1493,13 @@ export function createConnectedAccountPurposeBindingOwner(
       input.credentialRevisionBasis.captureCredentialRevision(
         materializedCredentialRevision,
       );
+    }
+    if (recordCredentialUse) {
+      recordCredentialUse(projectCredentialUse({
+        purpose: input.purpose, target: current.target.kind, account: current.resolved.account,
+        resolved: current.resolved, teamResource: admittedTeamResource,
+        isTeamResource: current.directMaterialOrigin !== null,
+      }));
     }
     return materialization;
   };
@@ -1515,6 +1568,10 @@ export function createConnectedAccountPurposeBindingOwner(
     if (!after || !sameResolvedTarget(before, after)) {
       throw bindingOutOfScope();
     }
+    const recordCredentialUse = input.recordOperationCredentialUse ?? (input.exactPurposeBindingSubjectId
+      ? purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.recordOperationCredentialUse
+      : undefined);
+    recordCredentialUse?.(projectCredentialUse({ purpose: input.purpose, target: 'listed_account', account: input.account, resolved: after.resolved }));
     return materialization;
   };
 
@@ -1660,6 +1717,7 @@ export function createConnectedAccountPurposeBindingOwner(
       throw bindingOutOfScope();
     }
     let materializedCredentialRevision: ConnectedServiceCredentialRevisionV1 | null = null;
+    let credentialUse: ActionOperationCredentialUseV1 | null = null;
     const materialization = await materialize({
       purpose: binding.purpose,
       serviceRefs: Object.freeze([
@@ -1675,7 +1733,7 @@ export function createConnectedAccountPurposeBindingOwner(
       }),
       request: input.materialization,
       signal: input.signal,
-    });
+    }, use => { credentialUse = use; });
     if (materializedCredentialRevision !== expectedCredentialRevision) {
       throw bindingOutOfScope();
     }
@@ -1693,10 +1751,12 @@ export function createConnectedAccountPurposeBindingOwner(
     ) {
       throw bindingOutOfScope();
     }
-    return parseHttpHeadersRequestAuthBearer(
+    const bearer = parseHttpHeadersRequestAuthBearer(
       input.materialization,
       materialization,
     );
+    if (credentialUse) purposeBindingsBySubjectId.get(subjectId)?.recordOperationCredentialUse?.(credentialUse);
+    return bearer;
   };
 
   const resolveBindingIntentSelection: ConnectedAccountPurposeBindingOwner['resolveBindingIntentSelection'] = async (input) => {
@@ -2011,27 +2071,29 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
         throw unavailable('scope-retired');
       }
     };
-    const verifyCurrent = async () => {
+    const verifyCurrent = async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
       assertCurrent();
-      if (input.operationContext && !await input.operationContext.isCurrent()) throw unavailable('scope-retired');
+      if (input.operationContext && !await input.operationContext.isCurrent(signal)) throw unavailable('scope-retired');
       assertCurrent();
     };
     assertCurrent();
     return { assertCurrent, verifyCurrent };
   };
-  const credentialsForOperation = async (operation: ReturnType<typeof captureOperation>) => {
+  const credentialsForOperation = async (operation: ReturnType<typeof captureOperation>, signal?: AbortSignal) => {
     const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
-    await operation.verifyCurrent();
+    await operation.verifyCurrent(signal);
     if (!credentials) throw unavailable('credentials-unavailable');
     return credentials;
   };
   const readCatalog = async (operation: ReturnType<typeof captureOperation>, signal?: AbortSignal) => {
     signal?.throwIfAborted();
-    await operation.verifyCurrent();
-    let catalog = readConnectedAccountCatalogFromSnapshot(readSnapshot(), 'purposes');
-    if (catalog.status === 'loading') catalog = await refreshActiveConnectedAccountCatalog({
-      credentials: await credentialsForOperation(operation), key: 'purposes', signal, operationContext: input.operationContext });
-    await operation.verifyCurrent();
+    await operation.verifyCurrent(signal);
+    // A UI/Action write can be acknowledged before its change hint arrives.
+    // Reuse the catalog's fresh-read owner before authorizing a purpose.
+    const catalog = await readActiveConnectedAccountCatalog({
+      credentials: await credentialsForOperation(operation, signal), key: 'purposes', signal, operationContext: input.operationContext });
+    await operation.verifyCurrent(signal);
     if (catalog.status !== 'ready') throw unavailable(catalog.status === 'unavailable' ? catalog.reason : 'loading');
     if (catalog.record.key !== 'purposes') throw unavailable('invalid-stored-content');
     signal?.throwIfAborted();
@@ -2047,10 +2109,10 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
     async update(mutate, signal) {
       const operation = captureOperation();
       const current = await readCatalog(operation, signal);
-      await operation.verifyCurrent();
+      await operation.verifyCurrent(signal);
       operation.assertCurrent();
       const value = ConnectedPurposeCatalogV1Schema.parse(mutate(current.record.value));
-      const credentials = await credentialsForOperation(operation);
+      const credentials = await credentialsForOperation(operation, signal);
       operation.assertCurrent();
       const transport = createCliConnectedAccountCatalogStore({ credentials, signal, operationContext: input.operationContext });
       const result = await transport.writeRecord({ record: { key: 'purposes', value }, expectedRevision: current.revision }).catch(async (error: unknown) => {

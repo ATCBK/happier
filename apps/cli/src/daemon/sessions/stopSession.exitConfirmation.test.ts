@@ -8,6 +8,7 @@ import { waitForTrackedRunnerProcessesExit } from './waitForTrackedRunnerProcess
 import type { TrackedSession } from '../types';
 import { createSessionProcessActionLifecycle } from './sessionProcessActionLifecycle';
 import { createSessionRunnerRespawnManager } from '../processSupervision/sessionRunnerRespawn';
+import { createSessionStopOperationBarrier } from './sessionStopOperationBarrier';
 
 const procfsGate = vi.hoisted(() => ({
   beforeRead: null as ((path: unknown) => Promise<void>) | null,
@@ -60,6 +61,7 @@ describe.skipIf(process.platform !== 'linux')('Stop exit confirmation', () => {
         logDebug: () => {}, logWarn: () => {} });
       const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
         markStopRequested: respawn.markStopRequested,
+        registerPhysicalStopEffect: createSessionStopOperationBarrier().registerPhysicalStopEffect,
         recordExplicitStopIntent: async () => { durableIntentRecorded = true; }, stopSession: stop });
       await expect(lifecycle.stopExactSession({ sessionId: tracked.happySessionId!, pid,
         start: { startTimeMs: identity.processStartTimeMs } })).resolves.toEqual({ status: 'stopped' });

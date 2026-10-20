@@ -3,7 +3,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionAwarenessPresentationStateV1Schema } from '../awareness/presentationV1.js';
 import { matchSessionListFilterV1, type SessionListFilterFactsV1 } from '../listFilter/sessionListFilterV1.js';
 import { FollowEventV1Schema, isMessageBackedFollowEventV1, resolveFollowDeliveryV1, type FollowDeliveryDecisionV1, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
-import { type FollowReceiverRefV1 } from './sessionDeliveryMuteV1.js';
+import type { FollowReceiverRefV1 } from './sessionDeliveryMuteV1.js';
 import { equalFollowRuleReceiverV1 } from './sessionFollowRuleV1.js';
 import type { OpenedSessionFollowRuleV1 } from './actions.js';
 export type { OpenedSessionFollowRuleV1 } from './actions.js';

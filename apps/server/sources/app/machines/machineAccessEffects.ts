@@ -22,11 +22,33 @@ export interface MachineAccessImpact {
     }>;
 }
 
+async function readMachineManageRecipientAccountIdsInTx(tx: Tx, machineId: string): Promise<readonly string[]> {
+    const recipientIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
+    const current = await resolveEffectiveMachineAccessForMachinesInTx(tx, { machineIds: [machineId], accountIds: recipientIds });
+    return recipientIds.filter(accountId => current.get(machineId)?.get(accountId) === "manage");
+}
+
+/** Pure complete publication/lifecycle census before an enclosing membership mutation. */
+export async function readMachineAccessImpactPublicationAudienceInTx(
+    tx: Tx, input: Readonly<{ machineIds: readonly string[]; accountIds: readonly string[] }>,
+): Promise<readonly string[]> {
+    const machineIds = [...new Set(input.machineIds)];
+    const machines = machineIds.length === 0 ? [] : await tx.machine.findMany({
+        where: { id: { in: machineIds } }, select: { accountId: true },
+    });
+    const accountIds = new Set([...input.accountIds, ...machines.map(machine => machine.accountId)]);
+    for (const machineId of machineIds) {
+        for (const accountId of await readMachineManageRecipientAccountIdsInTx(tx, machineId)) accountIds.add(accountId);
+    }
+    return [...accountIds].sort();
+}
+
 export async function captureMachineAccessImpactsInTx(
     tx: Tx,
     input: Readonly<{ machineIds: readonly string[]; accountIds: readonly string[] }>,
 ): Promise<ReadonlyMap<string, MachineAccessImpact>> {
     const accountIds = [...new Set(input.accountIds)];
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
     const machineIds = [...new Set(input.machineIds)];
     const access = accountIds.length === 0 || machineIds.length === 0
         ? new Map<string, Map<string, MachineAccessRoleV1 | null>>()
@@ -84,9 +106,7 @@ export async function applyMachineAccessImpactsInTx(
 
         // Current Manage holders consume the same changed-Machine projection to
         // refresh sharing and current recipient work; this creates no key queue.
-        const recipientIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
-        const current = await resolveEffectiveMachineAccessForMachinesInTx(tx, { machineIds: [machineId], accountIds: recipientIds });
-        for (const accountId of recipientIds) if (current.get(machineId)?.get(accountId) === "manage") changed.add(accountId);
+        for (const accountId of await readMachineManageRecipientAccountIdsInTx(tx, machineId)) changed.add(accountId);
         publications.push({ machineId, changed, revoked });
     }
 

@@ -82,7 +82,7 @@ async function publishNoRunBudgetConsumptionTx(params: Readonly<{
             entityId: automationId,
         });
         afterTx(params.tx, () => {
-            emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor });
+            emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor: cursor.resolveCursor() });
         });
     }
 }

@@ -4,13 +4,13 @@ import { inTx } from "@/storage/inTx";
 import { relationshipSet } from "./relationshipSet";
 import { relationshipGet } from "./relationshipGet";
 import { RelationshipStatus } from "@/storage/prisma";
-import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 
 export async function friendRemove(ctx: Context, uid: string): Promise<UserProfile | null> {
     // Removal shares the bilateral read-then-write invariant with friendAdd;
     // ordered cursor publication alone does not protect those earlier reads.
     return await inTx(async (tx) => {
-
+        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true });
         // Read current user objects
         const currentUser = await tx.account.findUnique({
             where: { id: ctx.uid },

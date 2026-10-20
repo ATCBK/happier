@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import * as React from 'react';
+import { resolveHref } from 'expo-router/build/link/href';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +17,7 @@ import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testH
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { tryWriteServerEnabledBitInPlace, createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
@@ -50,6 +52,8 @@ const sdk = vi.hoisted(() => ({
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
+// Human confirmation is an external UI boundary; Action policy and execution stay real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 const recoveryRuntime = {
     serverId: 'server-work',
@@ -155,14 +159,7 @@ function setVoiceAgentFeature(enabled: boolean): void {
         featureToggles: { ...state.settings.featureToggles, voice: true, 'execution.runs': true, 'voice.agent': enabled } } }));
 }
 
-beforeEach(async () => {
-    getStorage().setState(originalStorageState, true);
-    platformState.os = 'web';
-    platformState.openSettings.mockClear();
-    sdk.endSession.mockReset().mockResolvedValue(undefined);
-    sdk.startSession.mockReset().mockResolvedValue({ endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
-        sendUserMessage() {}, sendContextualUpdate() {}, getId: () => 'provider-conversation' });
-    webLocks = installWebLockManagerMock();
+async function restoreAttemptAccount() {
     const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
     await loadSyncSingletonForTests();
     const features = createRootLayoutFeaturesResponse();
@@ -201,6 +198,19 @@ beforeEach(async () => {
     providerAssembly = createBuiltinVoiceAdapterAssembly();
     projectionAdapters = providerAssembly.adapters;
     installConnectedAccountDescriptorProjection({ scopeKey: scope.serverId, status: 'ready', descriptors: [], conflicts: [], errorReason: null });
+}
+
+beforeEach(async () => {
+    getStorage().setState(originalStorageState, true);
+    const { resetVoiceSessionStoreForTests } = await import('@/voice/session/voiceSessionStore');
+    resetVoiceSessionStoreForTests();
+    platformState.os = 'web';
+    platformState.openSettings.mockClear();
+    sdk.endSession.mockReset().mockResolvedValue(undefined);
+    sdk.startSession.mockReset().mockResolvedValue({ endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
+        sendUserMessage() {}, sendContextualUpdate() {}, getId: () => 'provider-conversation' });
+    webLocks = installWebLockManagerMock();
+    await restoreAttemptAccount();
 });
 
 afterEach(async () => {
@@ -240,6 +250,13 @@ async function renderBothOwners() {
         model: useVoiceSurfaceModel({ variant: 'sidebar' }),
         control: useVoiceAttemptControl(GLOBAL_TARGET),
     }));
+}
+
+/** Action navigation publishes resolved href strings through the real router boundary. */
+function readLastPushedHref(): string {
+    const href = routerMock.instance?.spies.push.mock.calls.at(-1)?.[0];
+    if (typeof href !== 'string') throw new Error('Action navigation did not publish a resolved href');
+    return href;
 }
 
 /**
@@ -628,10 +645,10 @@ describe('useVoiceAttemptControl availability ladder', () => {
     it('routes that recovery to the canonical Voice provider-focus screen', async () => {
         const hook = await renderIncompleteSetup();
 
-        hook.getCurrent().control.onPrimaryAction();
+        await act(async () => { await hook.getCurrent().control.onPrimaryAction(); });
 
-        expect(routerMock.instance?.spies.push.mock.calls.map((call) => call[0]))
-            .toContainEqual(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
+        await vi.waitFor(() => expect(routerMock.instance?.spies.push.mock.calls.map((call) => call[0]))
+            .toContainEqual(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET));
 
         await hook.unmount();
     });
@@ -796,14 +813,14 @@ describe('useVoiceAttemptControl recovery routing', () => {
                 localId: 'openai-codex',
                 accountId: 'account-work',
             },
-        };
+        } satisfies Parameters<typeof resolveHref>[0];
 
-        hook.getCurrent().control.onRecover();
-        expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toEqual(expectedRoute);
+        await act(async () => { await hook.getCurrent().control.onRecover(); });
+        expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
 
         routerMock.instance?.spies.push.mock.calls.splice(0);
-        hook.getCurrent().model?.attemptControl.onRecover();
-        expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toEqual(expectedRoute);
+        await act(async () => { await hook.getCurrent().model?.attemptControl.onRecover(); });
+        expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
 
         await hook.unmount();
     });
@@ -830,7 +847,7 @@ describe('useVoiceAttemptControl recovery routing', () => {
                 captionLabel: t('settingsVoice.local.machineErrors.authentication_required'),
                 recoveryLabel: t('voiceSurface.connectAgent'),
             });
-            hook.getCurrent().control.onRecover();
+            await act(async () => { await hook.getCurrent().control.onRecover(); });
             expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe('/settings/agents');
         } finally {
             await hook.unmount();
@@ -848,14 +865,14 @@ describe('useVoiceAttemptControl recovery routing', () => {
                 serverIdentityId: 'srv_voice_attempt_work',
                 installIntent: 'update',
             },
-        };
+        } satisfies Parameters<typeof resolveHref>[0];
 
-        hook.getCurrent().control.onRecover();
-        expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toEqual(expectedRoute);
+        await act(async () => { await hook.getCurrent().control.onRecover(); });
+        expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
 
         routerMock.instance?.spies.push.mock.calls.splice(0);
-        hook.getCurrent().model?.attemptControl.onRecover();
-        expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toEqual(expectedRoute);
+        await act(async () => { await hook.getCurrent().model?.attemptControl.onRecover(); });
+        expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
 
         await hook.unmount();
     });
@@ -879,7 +896,7 @@ describe('useVoiceAttemptControl recovery routing', () => {
 
         // A separate incomplete Connected Services setup may still provide a recovery action,
         // but a device-local routing id must never become Agent Administration authority.
-        hook.getCurrent().control.onRecover();
+        await act(async () => { await hook.getCurrent().control.onRecover(); });
         expect(routerMock.instance?.spies.push.mock.calls.map((call) => call[0]))
             .not.toContainEqual(expect.objectContaining({ pathname: '/(app)/settings/agents/[agentId]' }));
 
@@ -887,15 +904,19 @@ describe('useVoiceAttemptControl recovery routing', () => {
     });
 
     it('opens native platform settings through the same recovery command', async () => {
+        await providerAssembly?.dispose();
+        providerAssembly = undefined;
+        await connection?.dispose();
+        connection = undefined;
+        // Storage backends and Account currentness are admitted under the native
+        // platform from the start, rather than replacing web credentials mid-flow.
         platformState.os = 'ios';
+        await restoreAttemptAccount();
         const hook = await renderBothRecoveryOwners('open_settings');
-
-        hook.getCurrent().control.onRecover();
-        await vi.waitFor(() => {
-            expect(platformState.openSettings).toHaveBeenCalledTimes(1);
-        });
-
-        await hook.unmount();
+        try {
+            await act(async () => { await hook.getCurrent().control.onRecover(); });
+            await vi.waitFor(() => { expect(platformState.openSettings).toHaveBeenCalledTimes(1); });
+        } finally { await hook.unmount(); }
     });
 });
 
@@ -1358,6 +1379,29 @@ describe('useVoiceAttemptControl idle targeting', () => {
         await hook.unmount();
     });
 
+    it('honors Action admission for the visible End control before touching audio', async () => {
+        const target = { serverId: recoveryRuntime.serverId, sessionId: 'attempt-session' };
+        const routing = await installRoutingLifecycle(target);
+        await routing.controller.toggle(target);
+        getStorage().setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ ...state.settings.actionsSettingsV1, actions: {
+                ...state.settings.actionsSettingsV1.actions, 'ui.voice_global.end': { disabledSurfaces: ['ui'] },
+            } }) } }));
+        const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const hook = await renderControl(GLOBAL_TARGET);
+        hook.getCurrent().onToggle();
+        // Wait for either the rejected Action's diagnostic or the incorrect audio effect.
+        await vi.waitFor(() => expect(Number(diagnostic.mock.calls.some(([message]) =>
+            message === '[fireAndForget] VoiceAttemptControl.stop')) + routing.stop.mock.calls.length).toBeGreaterThan(0));
+        expect(routing.controller.getSnapshot().status).toBe('connected');
+        expect(routing.stop).not.toHaveBeenCalled();
+        await act(async () => getStorage().setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: { ...state.settings.actionsSettingsV1, actions: {} } } })));
+        hook.getCurrent().onToggle();
+        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('disconnected'));
+        await hook.unmount();
+    });
+
     it('opens the exact conversation bound to the active attempt, not the idle target', async () => {
         const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
@@ -1428,12 +1472,12 @@ describe('useVoiceAttemptControl idle targeting', () => {
     ])('opens the captured ended destination after binding removal ($destination)', async ({ lifetime, target, destination }) => {
         const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
         const { setVoiceSessionSnapshot, dismissVoiceSessionEndedAttempt } = await import('@/voice/session/voiceSessionStore');
-        const accountScope = { serverId: 'ended-home', accountId: 'ended-account' };
-        getStorage().setState({ profileScope: accountScope });
+        const accountScope = initialStorageState.profileScope!;
+        const admittedTarget = target ? { ...target, serverId: accountScope.serverId } : null;
         const binding = {
             adapterId: 'local_conversation', controlSessionId: 'ended-control', conversationSessionId: 'saved-conversation',
-            conversationSessionAddress: { serverId: 'ended-home', sessionId: 'saved-conversation' },
-            lifetime, transcriptMode: 'synthetic' as const, targetSessionAddress: target, updatedAt: 44,
+            conversationSessionAddress: { serverId: accountScope.serverId, sessionId: 'saved-conversation' },
+            lifetime, transcriptMode: 'synthetic' as const, targetSessionAddress: admittedTarget, updatedAt: 44,
         };
         voiceSessionBindingStore.getState().bind(binding);
         setVoiceSessionSnapshot({ adapterId: binding.adapterId, sessionId: binding.controlSessionId,
@@ -1445,9 +1489,9 @@ describe('useVoiceAttemptControl idle targeting', () => {
                 voiceSessionBindingStore.getState().unbind(binding.conversationSessionId);
             });
             expect(hook.getCurrent().canOpenConversation).toBe(true);
-            expect(hook.getCurrent().targetSessionAddress).toEqual(target);
-            hook.getCurrent().onOpenConversation();
-            expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe(destination);
+            expect(hook.getCurrent().targetSessionAddress).toEqual(admittedTarget);
+            await act(async () => { await hook.getCurrent().onOpenConversation(); });
+            expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe(destination.replace('ended-home', accountScope.serverId));
             expect(voiceSessionBindingStore.getState().getByControlSessionId(binding.controlSessionId)).toBeNull();
             const capturedOpenConversation = hook.getCurrent().onOpenConversation;
             await act(async () => { getStorage().setState({ profileScope: { ...accountScope, accountId: 'other-account' } }); });
@@ -1455,7 +1499,7 @@ describe('useVoiceAttemptControl idle targeting', () => {
             expect(hook.getCurrent().targetSessionAddress).toBeNull();
             const previousRoute = routerMock.instance?.spies.push.mock.calls.at(-1);
             capturedOpenConversation();
-            hook.getCurrent().onOpenConversation();
+            await act(async () => { await hook.getCurrent().onOpenConversation(); });
             expect(routerMock.instance?.spies.push.mock.calls.at(-1)).toBe(previousRoute);
         } finally {
             await hook.unmount();
@@ -1513,7 +1557,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
             expect(controller.getSnapshot()).toMatchObject({ presentationState: 'reconnecting', reconnectRetryAvailable: true });
             expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
             expect(hook.getCurrent().recoveryIcon).toBe('arrow-clockwise');
-            await act(async () => { hook.getCurrent().onRecover(); });
+            await act(async () => { await hook.getCurrent().onRecover(); });
             await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('connected'));
             expect(sdk.startSession).toHaveBeenCalledTimes(2);
             expect(getVoiceSessionPresentedAttemptId()).toBe(admittedAttempt);
@@ -1589,7 +1633,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         await vi.waitFor(() => {
             expect(consoleInfo).toHaveBeenCalledWith(
                 '[fireAndForget] VoiceAttemptControl.toggle',
-                expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
+                expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
             );
         });
 
@@ -1608,11 +1652,11 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         // Its next Start rejects with a different code before the controller,
         // which must not be hidden merely because a Retry is already visible.
         await providerAssembly?.dispose();
-        await act(async () => { hook.getCurrent().onRecover(); });
+        await act(async () => { await hook.getCurrent().onRecover(); });
         await vi.waitFor(() => {
             expect(consoleInfo).toHaveBeenCalledWith(
                 '[fireAndForget] VoiceAttemptControl.recover',
-                expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
+                expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
             );
         });
         expect(hook.getCurrent().primaryAction).toBe('recover');

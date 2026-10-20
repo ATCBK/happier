@@ -249,7 +249,7 @@ describe('Discord Channels provider Actions', () => {
     expect(materialize).not.toHaveBeenCalled();
   });
 
-  it('rechecks the selected socket gateway prerequisite during connection test', async () => {
+  it.each([0, 86_400_000])('rechecks the selected socket gateway prerequisite with reset_after %i during connection test', async (resetAfterMs) => {
     const requests: string[] = [];
     const { context } = channelsCallerContext({
       async request(request) {
@@ -266,7 +266,7 @@ describe('Discord Channels provider Actions', () => {
             session_start_limit: {
               total: 1_000,
               remaining: 999,
-              reset_after: 86_400_000,
+              reset_after: resetAfterMs,
               max_concurrency: 1,
             },
           });
@@ -298,7 +298,7 @@ describe('Discord Channels provider Actions', () => {
     ]);
   });
 
-  it('materializes the exact selected bot account before verifying its immutable application and bot identities', async () => {
+  it.each([0, 86_400_000])('materializes the exact selected bot account before verifying its identities with reset_after %i', async (resetAfterMs) => {
     const requests: Array<Readonly<{ url: string; headers?: Readonly<Record<string, string>> }>> = [];
     const { context, materialize } = channelsCallerContext({
       async request(request) {
@@ -315,7 +315,7 @@ describe('Discord Channels provider Actions', () => {
             session_start_limit: {
               total: 1_000,
               remaining: 999,
-              reset_after: 86_400_000,
+              reset_after: resetAfterMs,
               max_concurrency: 1,
             },
           });

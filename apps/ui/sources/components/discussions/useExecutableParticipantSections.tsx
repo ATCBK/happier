@@ -9,7 +9,14 @@ import {
 import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import type { SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import { hasAgentIconMark } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import type { SelectionListOption, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import type { SessionReadinessRepairV1, SessionReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
+import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import type { ExecutableParticipantPickerOption } from '@/components/sessions/authoring/executableParticipantPicker';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
@@ -17,6 +24,29 @@ import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import { t } from '@/text';
+import { describeMachineReadinessCause, presentSessionReadiness } from '@/components/sessions/model/sessionReadinessPresentation';
+
+/**
+ * A not-ready choice stays listed and selectable with its one cause in place of the usual hint
+ * (C7): an offline Bot or Machine is never hidden, and unknown never reads as ready.
+ */
+function readinessSubtitle(readiness: ExecutableParticipantSectionOption['readiness'], fallback: string): string {
+  if (!readiness) return fallback;
+  if ('v' in readiness) {
+    const presented = presentSessionReadiness({ readiness, repair: null, demanded: true, loading: false, unavailableReason: null });
+    return presented.tone === 'attention' ? (presented.cause ?? presented.title) : fallback;
+  }
+  return describeMachineReadinessCause(readiness) ?? fallback;
+}
+
+export type ExecutableParticipantSectionOption = SelectionListOption & Readonly<{
+  /** A selected launch/Session has full facts; a not-yet-configured model target has Machine facts only. */
+  readiness?: SessionReadinessV1 | MachineSpawnReadiness | null;
+  repair?: SessionReadinessRepairV1 | null;
+}>;
+type ExecutableParticipantSection = Omit<Extract<SelectionListSectionDescriptor, { kind: 'static' }>, 'options'> & Readonly<{
+  options: readonly ExecutableParticipantSectionOption[];
+}>;
 
 /** The option id of a Session participant; the same id marks it chosen in a multi-choice list. */
 export function executableParticipantOptionId(
@@ -29,7 +59,7 @@ export function executableParticipantOptionId(
 
 /**
  * The one presenter of who can take part (lab T2-I): the viewer's existing sessions on this Home,
- * then a model started as a new session of theirs on a machine that is online. A session is chosen
+ * then a model started as a new session of theirs on a machine. A session is chosen
  * at once; a model first opens the ordinary session setup (agent, model, folder) for that machine.
  * Mount it only while a participant choice is open: it reads the session listing and machines.
  * Discussion invites and Workflow participant inputs both choose through it.
@@ -42,11 +72,14 @@ export function useExecutableParticipantSections(
     query?: string;
     roster?: DiscussionParticipantsListResponseV1 | null;
     busy?: boolean;
-    /** How an existing session takes part here, beneath its name. */
-    sessionSubtitle: string;
+    readinessSessionId?: string | null;
+    onReadinessSessionChange?: (sessionId: string | null) => void;
+    modelOptions?: readonly ExecutableParticipantPickerOption[];
+    /** How the viewer's sessions take part here; said once beside the section title, not on every row. */
+    sessionsContext: string;
     onChoose: (selection: ExecutableParticipantSelectionV1) => void;
   }>,
-): readonly SelectionListSectionDescriptor[] {
+): readonly ExecutableParticipantSection[] {
   const { theme } = useUnistyles();
   const serverId = input.accountLifetime.scope.serverId;
   const candidates = useDiscussionInviteCandidates({
@@ -54,20 +87,26 @@ export function useExecutableParticipantSections(
     availability: 'available',
     enabled: input.enabled,
     roster: input.roster ?? null,
+    readinessSessionId: input.readinessSessionId,
+    modelOptions: input.modelOptions,
   });
-  const machines = useMachineListForServer(serverId);
-  const { onChoose, sessionSubtitle } = input;
+  const machines = useMachineListForServer(serverId, input.enabled);
+  const { onChoose, sessionsContext, onReadinessSessionChange } = input;
   const busy = input.busy === true;
   const query = input.query ?? '';
   return React.useMemo(() => {
     if (!input.enabled) return [];
-    const sessionMark = (
-      <Icon
-        name="robot"
-        size={ICON_SIZE.md}
-        color={theme.colors.text.secondary}
-      />
-    );
+    // A session leads with its Agent's own mark (identity marks always stay); the catalog decides
+    // whether one exists, and a session without a recorded Agent keeps the neutral glyph.
+    const sessionMark = (agentId: string | null | undefined) => agentId && hasAgentIconMark(agentId, theme)
+      ? <AgentIcon agentId={agentId} size={ICON_SIZE.md} />
+      : (
+        <Icon
+          name="robot"
+          size={ICON_SIZE.md}
+          color={theme.colors.text.secondary}
+        />
+      );
     const modelMark = (
       <Icon
         name="sparkle"
@@ -78,7 +117,7 @@ export function useExecutableParticipantSections(
     const needle = query.trim().toLocaleLowerCase();
     const matches = (text: string) =>
       needle.length === 0 || text.toLocaleLowerCase().includes(needle);
-    const sessions = candidates.candidates.flatMap((candidate) =>
+    const sessions: ExecutableParticipantSectionOption[] = candidates.candidates.flatMap((candidate) =>
       candidate.kind === 'session' &&
       matches(
         [candidate.label ?? t('session.collaboration.discussion.participants.session'), candidate.contextLabel].filter(Boolean).join(' '),
@@ -90,10 +129,13 @@ export function useExecutableParticipantSections(
               label:
                 candidate.label ??
                 t('session.collaboration.discussion.participants.session'),
-              subtitle: [candidate.contextLabel ?? (candidate.lastActivityAt == null ? null : formatAsOfTime(candidate.lastActivityAt)),
-                sessionSubtitle].filter(Boolean).join(' · '),
-              icon: sessionMark,
+              subtitle: readinessSubtitle(candidate.readiness, candidate.contextLabel ?? (candidate.lastActivityAt == null ? '' : formatAsOfTime(candidate.lastActivityAt))),
+              icon: sessionMark(candidate.agentId),
               disabled: busy,
+              readiness: candidate.readiness,
+              repair: candidate.repair,
+              onHighlight: () => onReadinessSessionChange?.(candidate.selection.session.sessionId),
+              onPressIn: () => onReadinessSessionChange?.(candidate.selection.session.sessionId),
               onSelect: () => onChoose(candidate.selection),
             },
           ]
@@ -117,38 +159,43 @@ export function useExecutableParticipantSections(
           />
         ),
         disabled: false,
+        onHighlight: () => onReadinessSessionChange?.(null),
+        onPressIn: () => onReadinessSessionChange?.(null),
         onSelect: () => {
           void candidates.sessions.loadMore();
         },
       });
     }
-    // Only machines that can start a session now (the readiness the session setup itself checks),
-    // named by the Home inventory's resolver so same-named machines read apart.
+    // Setup remains selectable offline. Start re-admits through the ordinary authoring owner.
     const inventory = machines ?? [];
-    const online = inventory.filter(
+    const matchingMachines = inventory.filter(
       (machine) =>
-        resolveMachineSpawnReadiness({
-          machine,
-          selectedMachineId: machine.id,
-          scope: input.accountLifetime.scope,
-        }).status === 'ready' &&
         matches(
           `${getMachineDisplayName(machine, inventory) ?? ''} ${t('session.collaboration.discussion.manage.modelsGroup')}`,
         ),
     );
-    const models = online.map((machine) => {
+    const models: ExecutableParticipantSectionOption[] = candidates.candidates.flatMap(candidate => candidate.kind === 'model' && matches(candidate.label)
+      ? [{ id: candidate.key, label: candidate.label, subtitle: readinessSubtitle(candidate.readiness, ''), icon: modelMark, disabled: busy,
+          readiness: candidate.readiness, repair: candidate.repair, onHighlight: () => onReadinessSessionChange?.(null),
+          onPressIn: () => onReadinessSessionChange?.(null), onSelect: () => onChoose(candidate.selection) }] : []);
+    models.push(...matchingMachines.map((machine) => {
       const name =
         getMachineDisplayName(machine, inventory) ??
         t('session.collaboration.unnamed');
+      const readiness = resolveMachineSpawnReadiness({ machine, selectedMachineId: machine.id, scope: input.accountLifetime.scope });
       return {
         id: `model:${machine.id}`,
         testID: `discussion-invite-model-${machine.id}`,
         label: t('session.collaboration.discussion.manage.modelOn', {
           machine: name,
         }),
-        subtitle: t('session.collaboration.discussion.manage.modelCandidate'),
         icon: modelMark,
         disabled: busy,
+        readiness,
+        subtitle: readinessSubtitle(readiness, t('session.collaboration.discussion.manage.modelCandidate')),
+        repair: null,
+        onHighlight: () => onReadinessSessionChange?.(null),
+        onPressIn: () => onReadinessSessionChange?.(null),
         onSelect: () => {
           void (async () => {
             const { presentSessionServerStartDraftComposer } =
@@ -168,13 +215,18 @@ export function useExecutableParticipantSections(
           })();
         },
       };
-    });
-    const sections: SelectionListSectionDescriptor[] = [];
+    }));
+    const sections: ExecutableParticipantSection[] = [];
     if (sessions.length)
       sections.push({
         kind: 'static',
         id: 'agents-sessions',
         title: t('session.collaboration.discussion.manage.sessionsGroup'),
+        rightAccessory: (
+          <Text numberOfLines={1} style={{ ...Typography.variant('meta'), color: theme.colors.text.tertiary }}>
+            {sessionsContext}
+          </Text>
+        ),
         options: sessions,
       });
     if (models.length)
@@ -193,9 +245,10 @@ export function useExecutableParticipantSections(
     input.enabled,
     query,
     onChoose,
+    onReadinessSessionChange,
     machines,
     serverId,
-    sessionSubtitle,
+    sessionsContext,
     theme.colors.text.secondary,
     theme.colors.text.tertiary,
   ]);

@@ -19,7 +19,7 @@ import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { Modal } from '@/modal';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
@@ -38,6 +38,7 @@ import type { ThemeProfileMode, ThemeProfileV1 } from '@/theme/profiles/themePro
 import { ThemeColorTokenRow } from './ThemeColorTokenRow';
 import { ThemeProfilePresetDropdown } from './ThemeProfilePresetDropdown';
 import { ThemeProfilePreviewPane } from './ThemeProfilePreviewPane';
+import { THEMES_SETTINGS } from './themesSettings';
 import { buildThemeProfileTokenGroups, getThemeProfileRecentColors } from './themeProfileEditorModel';
 import {
     buildThemePresetSourceOptions,
@@ -108,8 +109,9 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
     const router = useRouter();
     const params = useLocalSearchParams();
     const reduceMotion = useReducedMotionPreference();
-    const [themePreference] = useLocalSettingMutable('themePreference');
-    const [themeProfiles, setThemeProfiles] = useLocalSettingMutable('themeProfiles');
+    const themePreference = useLocalSetting('themePreference');
+    const themeProfiles = useLocalSetting('themeProfiles');
+    const { setSetting } = useSettingActionFeedback();
     const profileId = getProfileIdParam(params.profileId);
     const isNewProfile = profileId === createNewProfileRouteId;
     const builtInDefinition = BUILT_IN_THEME_PROFILES.find((definition) => definition.profile.id === profileId);
@@ -204,7 +206,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         setDraft(replaceThemeProfileDraftFromPresetSource(draft, nextPreset, nowThemeProfileTimestamp()));
     }, [draft, presetOptions, readonly, selectedPreset]);
 
-    const cloneProfile = React.useCallback(() => {
+    const cloneProfile = React.useCallback(async () => {
         if (!draft || themeProfiles.profiles.length >= THEME_PROFILE_MAX_PROFILES) return;
         const id = createThemeProfileId();
         const now = nowThemeProfileTimestamp();
@@ -214,9 +216,10 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
             now,
             sourceProfile: draft,
         });
-        setThemeProfiles(upsertThemeProfile(themeProfiles, profile));
+        if (!await setSetting(THEMES_SETTINGS.settings.yourThemes,
+            SettingsDeclarationValueV1Schema.parse(upsertThemeProfile(themeProfiles, profile)))) return;
         router.push(profileEditorRoute(id));
-    }, [draft, profileDisplayName, router, setThemeProfiles, themeProfiles]);
+    }, [draft, profileDisplayName, router, setSetting, themeProfiles]);
 
     const exportProfile = React.useCallback(() => {
         if (!draft) return;
@@ -255,7 +258,6 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         } : current);
     }, [readonly]);
 
-    const { setSetting } = useSettingActionFeedback();
     const saveAndActivate = React.useCallback(async () => {
         if (!draft || readonly || saveDisabled) return;
         const applied = await setSetting({ anchor: 'appearance.themeMode' }, SettingsDeclarationValueV1Schema.parse({
@@ -299,11 +301,11 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
             // The canonical selection owner stores and applies the fallback (theme, status bar, transition).
             if (!await applyThemeSelection(current.themePreference, nextThemeProfiles)) return;
         } else {
-            setThemeProfiles(nextThemeProfiles);
+            if (!await setSetting(THEMES_SETTINGS.settings.yourThemes, SettingsDeclarationValueV1Schema.parse(nextThemeProfiles))) return;
         }
         committedRef.current = true;
         router.back();
-    }, [applyThemeSelection, draft, readonly, router, setThemeProfiles, themeProfiles]);
+    }, [applyThemeSelection, draft, readonly, router, setSetting, themeProfiles]);
 
     React.useEffect(() => {
         if (!draft || readonly || hasInvalidColor || hasInvalidProfileName || hasProfileLimitReached) return;

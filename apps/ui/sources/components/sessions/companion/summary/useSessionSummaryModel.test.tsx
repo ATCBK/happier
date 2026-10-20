@@ -127,6 +127,23 @@ function publishScm(serverId: string, branch: string) {
 }
 
 describe('useSessionSummaryModel', () => {
+    it('reads the live process-terminal fact for Stopped and returns to working after resume', async () => {
+        const shellSession = session(homeA);
+        const stopped = session(homeA, { active: false, presence: undefined,
+            metadata: { ...shellSession.metadata!, lifecycleState: 'stopped' } });
+        storage.setState({ sessions: { [shellSession.id]: stopped } });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: homeA }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'sessionWork.states.stopped' });
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: { ...stopped,
+            metadata: { ...stopped.metadata!, lifecycleState: 'running' } } } }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'status.offline' });
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: session(homeA, {
+            latestTurnStatus: 'in_progress', metadata: { ...stopped.metadata!, lifecycleState: 'running' },
+        }) } }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'thinking', statusText: 'status.working' });
+        await hook.unmount();
+    });
+
     it('reads waiting questions from its exact Home-bound transcript source', async () => {
         const row = session(homeA);
         const agentState = { requests: {

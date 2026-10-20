@@ -1153,6 +1153,29 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(context.subPath).toBe('');
     }));
 
+    it('keeps a mounted plugin page through execution availability revalidation', async () => {
+        const render = await createPageRenderer();
+        const model = pageModel();
+        const screen = await renderScreen(render(model));
+        try {
+            await vi.waitFor(() => expect(reactNativeSurfaceInstanceRefs).not.toHaveLength(0));
+            const instance = reactNativeSurfaceInstanceRefs.at(-1);
+            const context = readRenderContext();
+            const resolving: PluginUiProjectionModel = { ...model, surfacePlacementsById: Object.fromEntries(
+                Object.entries(model.surfacePlacementsById).map(([id, placement]) => [id, { ...placement,
+                    availability: { state: 'resolving', reason: 'plugin_execution_origin_pending', diagnostics: [] },
+                }]),
+            ) };
+            await screen.update(render(resolving));
+            expect(screen.findByTestId('plugin-react-native-surface-proxy')).not.toBeNull();
+            expect(context.signal.aborted).toBe(false);
+            expect(screen.findByTestId('plugin-surface-unavailable-diagnostic-plugin_execution_origin_pending')).not.toBeNull();
+            await screen.update(render(model));
+            expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(instance);
+            expect(readRenderContext().hostApi).toBe(context.hostApi);
+        } finally { await screen.unmount(); }
+    });
+
     it('retains execution context in the header when the admitted page is unavailable', async () => {
         const screen = await renderPage({ projection: daemonProjection({ availability: {
             state: 'disabled', reason: 'plugin_disabled', diagnostics: [],

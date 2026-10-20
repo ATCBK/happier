@@ -61,7 +61,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({ i
                 <ScrollView
                     testID="agent-content-placeholder-layer"
                     style={{
-                        bottom: 0,
+                        bottom: readingInset.centred.bottom,
                         left: readingInset.centred.left,
                         minWidth: 0,
                         position: 'absolute',

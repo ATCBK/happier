@@ -192,6 +192,43 @@ describe('apiProviderAccountUsage', () => {
             .rejects.toThrow('provider_account_usage_content_mode_mismatch');
     });
 
+    it('derives pace and unused capacity once per read: later facets of the same read share its instant', async () => {
+        await activateTestHome();
+        const { buildProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjection');
+        const { sealProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto');
+        const snapshot = makeSnapshot();
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const range = { startAtMs: 0, endAtMs: 5 };
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'HEAD') return new Response(null, { headers: { etag: '"one"', 'x-happier-usage-projection-complete': 'true' } });
+                const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, range,
+                    history: { entries: [{ id: 'accepted', observedAtMs: 1, snapshot }], nextCursor: null } });
+                return Response.json({ projection: { recordId: snapshot.recordId, demand: { range, resolution: 'accepted_observations' },
+                    observationCount: 1, frontier: { id: 'accepted', observedAtMs: 1 },
+                    content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode: 'plain',
+                        material: undefined, randomBytes: length => new Uint8Array(length).fill(9) }) }, complete: true }, { headers: { etag: '"one"' } });
+            }
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 }
+                : { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] });
+        };
+        // The wall clock advances between any two reads, as it does live.
+        let clock = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => clock += 1_000);
+        const progress: ConnectedServiceQuotaGetResultV1[] = [];
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const final = await getProviderAccountUsageQuota({ token: 'test-token' }, { source, projection: { range, resolution: 'accepted_observations' as const } }, {
+            accountMode: 'plain', request, projectionDocuments: new Map(), includePendingWork: false,
+            readPacingTargets: async () => [], readEnteredMonthlyPrice: async () => undefined,
+            readAllHistory: { onProgress: value => { progress.push(value); } },
+        });
+        const withFacts = progress.filter(value => value.pageFacts);
+        expect(withFacts.length).toBeGreaterThan(0);
+        expect(final.unusedCapacity).toBe(withFacts.at(-1)!.unusedCapacity);
+        expect(final.pace).toBe(withFacts.at(-1)!.pace);
+    });
+
     it.each(['plain', 'e2ee'] as const)('rereads a %s projection conflict and never republishes unchanged idle reads', async accountMode => {
         const { ProviderAccountUsagePageProjectionWriteV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
         const snapshot = makeSnapshot();

@@ -8,6 +8,7 @@ import { approvalArtifactBodyMatchesHeaderV1, buildExecutionRunHostActionApprova
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { ExecutionRunHostActionApprovalRequestV1Schema, type ExecutionRunHostActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/executionRunHostActionApprovalRequestV1';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import { ApprovalRequesterConfirmationV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncConflictResolutionV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 import { Text } from '@/components/ui/text/Text';
@@ -34,7 +35,9 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
-import { resolveApprovalHomeName } from './approvalRequesterLabels';
+import { ApprovalRequesterConfirmationSection, useApprovalRequesterViewer } from './ApprovalRequesterConfirmationSection';
+import { readApprovalOperationCredentialUses } from './approvalRequesterThreadState';
+import { readApprovalRequesterSurface, resolveApprovalHomeName } from './approvalRequesterLabels';
 import { BrowserOpenOperationStatusRow } from './BrowserOpenOperationStatus';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from './ActionApprovalFieldsCard';
 import {
@@ -68,7 +71,7 @@ import {
   alertApprovalFailure,
   ApprovalExecutionError,
   assertApprovalExecutionSucceeded,
-  presentApprovalFailure,
+  presentRecordedApprovalFailure,
   isApprovalDecisionStale,
   isApprovalReplayRouteUnavailable,
   useApprovalHome,
@@ -198,11 +201,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     ? JSON.stringify([parsed.request.actionId, parsed.request.actionArgs,
         parsed.request.v === 2 ? parsed.request.executionOriginV1 : null, parsed.request.createdBy])
     : null;
-  const requesterSurface = parsed?.kind === 'built_in'
-    ? parsed.request.v === 2
-      ? parsed.request.executionOriginV1.surface
-      : parsed.request.requestedSurface ?? ''
-    : parsed?.request.createdBy.surface ?? '';
+  const requesterSurface = readApprovalRequesterSurface(parsed?.request ?? null, parsed?.kind === 'built_in');
   const sessionId = parsed?.kind === 'built_in'
     ? parsed.request.v === 2
       ? parsed.request.executionOriginV1.sessionId ?? parsed.request.createdBy.sessionId ?? ''
@@ -279,6 +278,16 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     sessionId,
     approvalServerId,
   );
+  // C7: a shared Bot's outward request waits for the one person who asked; others read who can act.
+  const requesterConfirmation = React.useMemo(() => {
+    const subject = ApprovalRequesterConfirmationV1Schema.safeParse(parsed?.kind === 'target'
+      || parsed?.kind === 'built_in' && parsed.request.v === 2 ? parsed.request.requesterConfirmation : undefined);
+    return subject.success ? subject.data : null;
+  }, [parsed]);
+  const requesterMayDecide = useApprovalRequesterViewer(requesterConfirmation);
+  const requesterOperationCredentialUses = React.useMemo(() => readApprovalOperationCredentialUses(
+    parsed?.kind === 'target' ? parsed.request.execution
+      : parsed?.kind === 'built_in' && parsed.request.v === 2 ? parsed.request.execution : undefined), [parsed]);
   // An agent's cleanup or stop proposal reads as the same card body as in the transcript (AGW-6).
   const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId, props.artifactId);
   const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
@@ -562,8 +571,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     : { errorCode: parsed.request.execution.errorCode, error: parsed.request.execution.error });
   // The readable reason leads; its typed code waits in the technical disclosure.
   const executionFailure = executionFailureResult
-    ? presentApprovalFailure(executionFailureResult,
-        executionFailureResult.error || executionFailureResult.errorCode || t('approvals.decisionError'))
+    ? presentRecordedApprovalFailure(executionFailureResult)
     : null;
   // The same outcome headline the composer card reads, so one failed request names itself alike on both.
   const failureHeadline = parsed.kind === 'built_in' && builtInExecutionFailure
@@ -705,6 +713,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         </ItemGroup>
       ) : shownActionFields && !confidentialAction ? (
         <ActionApprovalFieldsCard presentation={shownActionFields} anatomy="page" serverId={approvalServerId}
+          homeIdentity={approvalHomeKnown ? undefined : approvalOriginHomeId || undefined}
           failureCode={failureCodeInDetails ? executionFailure?.code ?? undefined : undefined} />
       ) : null}
 
@@ -735,14 +744,26 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         context={sessionContext}
         contextFacts={sessionContextFacts}
         homeName={approvalHomeName}
-        // A Home this device knows but that has no name is "This Home", never its address; only a
-        // Home it does not know (or can no longer route to) shows its exact identity.
-        homeDisplayId={approvalHomeKnown ? t('settingsAccount.thisHomeTitle') : approvalOriginHomeId}
+        // A Home this device knows but that has no name is "This Home", never its address. A Home it does
+        // not know (or can no longer route to) cannot be named, so its exact identity waits in Technical details.
+        homeDisplayId={approvalHomeKnown ? t('settingsAccount.thisHomeTitle') : null}
         requesterSessionId={sessionId}
         requesterStatus={requesterStatus}
         requesterAgentId={parsed.request.createdBy.agentId ?? null}
         requesterSurface={requesterSurface}
       />
+
+      {requesterConfirmation ? (
+        <ApprovalRequesterConfirmationSection
+          subject={requesterConfirmation}
+          open={parsed.request.status === 'open' && !answeredWhileOpen}
+          operationCredentialUses={requesterOperationCredentialUses}
+          decision={parsed.request.decision
+            ? { kind: parsed.request.decision.kind, decidingAccountId: 'decidingAccountId' in parsed.request.decision
+              && typeof parsed.request.decision.decidingAccountId === 'string' ? parsed.request.decision.decidingAccountId : undefined }
+            : null}
+        />
+      ) : null}
 
       {parsed.kind === 'host_action' && parsed.request.proposalPreview.length > 0 ? (
         <ItemGroup
@@ -773,7 +794,8 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
             serverId={approvalServerId ?? null} disabled={isDeciding || approvalRouteUnavailable}
             onDismiss={() => { void decide('cancel'); }} />
         </ItemGroup>
-      ) : parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval ? (
+      ) : parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval
+        && (!requesterConfirmation || requesterMayDecide) ? (
         <ItemGroup surface="none">
           {/* Dismiss closes without an answer; Reject answers no. Consent remains with decide. */}
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}

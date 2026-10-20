@@ -7,6 +7,36 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./runtime/agentRuntimeDiagnosticV1": {
+      "happier-source": "./src/runtime/agentRuntimeDiagnosticV1.ts",
+      "types": "./dist/runtime/agentRuntimeDiagnosticV1.d.ts",
+      "default": "./dist/runtime/agentRuntimeDiagnosticV1.js"
+    },
+    "./sessions/creation/sessionSpawnNewSelectionV2": {
+      "happier-source": "./src/sessions/creation/sessionSpawnNewSelectionV2.ts",
+      "types": "./dist/sessions/creation/sessionSpawnNewSelectionV2.d.ts",
+      "default": "./dist/sessions/creation/sessionSpawnNewSelectionV2.js"
+    },
+    "./artifacts/artifactKindV1": {
+      "happier-source": "./src/artifacts/artifactKindV1.ts",
+      "types": "./dist/artifacts/artifactKindV1.d.ts",
+      "default": "./dist/artifacts/artifactKindV1.js"
+    },
+    "./sessions/personal/readState": {
+      "happier-source": "./src/sessions/personal/readState.ts",
+      "types": "./dist/sessions/personal/readState.d.ts",
+      "default": "./dist/sessions/personal/readState.js"
+    },
+    "./sessions/personal/relevance": {
+      "happier-source": "./src/sessions/personal/relevance.ts",
+      "types": "./dist/sessions/personal/relevance.d.ts",
+      "default": "./dist/sessions/personal/relevance.js"
+    },
+    "./sessions/follow/sessionFollowListV1": {
+      "happier-source": "./src/sessions/follow/sessionFollowListV1.ts",
+      "types": "./dist/sessions/follow/sessionFollowListV1.d.ts",
+      "default": "./dist/sessions/follow/sessionFollowListV1.js"
+    },
     "./tasks/entryRefV1": {
       "happier-source": "./src/tasks/entryRefV1.ts",
       "types": "./dist/tasks/entryRefV1.d.ts",
@@ -326,6 +356,7 @@
     "./prompts/library/skills/skillUsageV1": { "happier-source": "./src/prompts/library/skills/skillUsageV1.ts", "types": "./dist/prompts/library/skills/skillUsageV1.d.ts", "default": "./dist/prompts/library/skills/skillUsageV1.js" },
     "./prompts/library/skills/skillActionSchemasV1": { "happier-source": "./src/prompts/library/skills/skillActionSchemasV1.ts", "types": "./dist/prompts/library/skills/skillActionSchemasV1.d.ts", "default": "./dist/prompts/library/skills/skillActionSchemasV1.js" },
     "./prompts/library/skills/skillTrustV1": { "happier-source": "./src/prompts/library/skills/skillTrustV1.ts", "types": "./dist/prompts/library/skills/skillTrustV1.d.ts", "default": "./dist/prompts/library/skills/skillTrustV1.js" },
+    "./prompts/library/skills/skillReferencesV1": { "happier-source": "./src/prompts/library/skills/skillReferencesV1.ts", "types": "./dist/prompts/library/skills/skillReferencesV1.d.ts", "default": "./dist/prompts/library/skills/skillReferencesV1.js" },
     "./prompts/library/skills/skillCostV1": { "happier-source": "./src/prompts/library/skills/skillCostV1.ts", "types": "./dist/prompts/library/skills/skillCostV1.d.ts", "default": "./dist/prompts/library/skills/skillCostV1.js" },
     "./prompts/library/skills/skillStatusV1": { "happier-source": "./src/prompts/library/skills/skillStatusV1.ts", "types": "./dist/prompts/library/skills/skillStatusV1.d.ts", "default": "./dist/prompts/library/skills/skillStatusV1.js" },
     "./prompts/library/skills/skillZipV1": { "happier-source": "./src/prompts/library/skills/skillZipV1.ts", "types": "./dist/prompts/library/skills/skillZipV1.d.ts", "default": "./dist/prompts/library/skills/skillZipV1.js" },
@@ -1509,6 +1540,11 @@
       "types": "./dist/projects/projectContextV1.d.ts",
       "default": "./dist/projects/projectContextV1.js"
     },
+    "./projects/projectListProjectionV1": {
+      "happier-source": "./src/projects/projectListProjectionV1.ts",
+      "types": "./dist/projects/projectListProjectionV1.d.ts",
+      "default": "./dist/projects/projectListProjectionV1.js"
+    },
     "./actions/sessionTerminalActionFamily": {
       "happier-source": "./src/actions/sessionTerminalActionFamily.ts",
       "types": "./dist/actions/sessionTerminalActionFamily.d.ts",
@@ -2058,6 +2094,11 @@
       "happier-source": "./src/pets/source.ts",
       "types": "./dist/pets/source.d.ts",
       "default": "./dist/pets/source.js"
+    },
+    "./pets/selection": {
+      "happier-source": "./src/pets/selection.ts",
+      "types": "./dist/pets/selection.d.ts",
+      "default": "./dist/pets/selection.js"
     },
     "./plugins/contributions/agentUiGrammar": {
       "happier-source": "./src/plugins/contributions/agentUiGrammar.ts",
@@ -3348,6 +3389,11 @@
       "happier-source": "./src/sessions/follow/sessionFollowSourcesApi.ts",
       "types": "./dist/sessions/follow/sessionFollowSourcesApi.d.ts",
       "default": "./dist/sessions/follow/sessionFollowSourcesApi.js"
+    },
+    "./sessions/follow/followSourceRefPathV1": {
+      "happier-source": "./src/sessions/follow/followSourceRefPathV1.ts",
+      "types": "./dist/sessions/follow/followSourceRefPathV1.d.ts",
+      "default": "./dist/sessions/follow/followSourceRefPathV1.js"
     },
     "./sessions/follow/api": {
       "happier-source": "./src/sessions/follow/api.ts",
@@ -5324,6 +5370,11 @@
       "types": "./dist/machines/peer/mediation/stream/payloadV1.d.ts",
       "default": "./dist/machines/peer/mediation/stream/payloadV1.js"
     },
+    "./crypto/accountKvCipher": {
+      "happier-source": "./src/crypto/accountKvCipher.ts",
+      "types": "./dist/crypto/accountKvCipher.d.ts",
+      "default": "./dist/crypto/accountKvCipher.js"
+    },
     "./crypto/accountScopedCipher": {
       "happier-source": "./src/crypto/accountScopedCipher.ts",
       "types": "./dist/crypto/accountScopedCipher.d.ts",
@@ -7162,6 +7213,11 @@
       "happier-source": "./src/sessions/pending/pendingLocalId.ts",
       "types": "./dist/sessions/pending/pendingLocalId.d.ts",
       "default": "./dist/sessions/pending/pendingLocalId.js"
+    },
+    "./sessions/pending/retainedPendingContextV1": {
+      "happier-source": "./src/sessions/pending/retainedPendingContextV1.ts",
+      "types": "./dist/sessions/pending/retainedPendingContextV1.d.ts",
+      "default": "./dist/sessions/pending/retainedPendingContextV1.js"
     },
     "./ssh/hostTrust": {
       "happier-source": "./src/ssh/hostTrust.ts",

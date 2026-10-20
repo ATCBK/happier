@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SessionOrganizationMoveInput } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
+import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId';
 
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
 import {
@@ -14,6 +16,7 @@ import {
     buildAppRailPlacementItems,
     resolveAppRailEntryColumn,
     resolveAppShellLocation,
+    resolveAppRailBotDropDestinationKey,
 } from './appRailModel';
 
 vi.mock('@/text', async () => {
@@ -195,4 +198,22 @@ describe('app rail model', () => {
             plugins: 'plugins', 'plugin:acme.notes:notes': null, settings: 'settings',
         });
     });
+});
+
+
+it('keys rail moves by the resulting shared pin position, including list-only pins', () => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    const move = (target: string, instructionKind: 'reorder-before' | 'reorder-after'): SessionOrganizationMoveInput => ({
+        scope, projection: 'rail', sourceKind: 'leaf', sourceRowId: treeRowId.session('home', 'moving'),
+        targetRowId: treeRowId.session('home', target), instructionKind, containerId: 'pinned', parentRowId: null, depth: 0,
+        edge: instructionKind === 'reorder-before' ? 'top' : 'bottom',
+    });
+    const pins = ['a', 'b', 'c', 'moving'];
+    const gap = resolveAppRailBotDropDestinationKey?.(move('a', 'reorder-after'), pins);
+    expect(gap).toEqual(expect.any(String));
+    expect(resolveAppRailBotDropDestinationKey?.(move('b', 'reorder-before'), pins)).toBe(gap);
+    expect(resolveAppRailBotDropDestinationKey?.(move('c', 'reorder-after'), pins)).not.toBe(gap);
+    const sharedPins = ['a', 'list-only', 'b', 'moving'];
+    expect(resolveAppRailBotDropDestinationKey?.(move('a', 'reorder-after'), sharedPins))
+        .not.toBe(resolveAppRailBotDropDestinationKey?.(move('b', 'reorder-before'), sharedPins));
 });

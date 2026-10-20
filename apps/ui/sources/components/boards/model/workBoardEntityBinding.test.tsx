@@ -85,7 +85,9 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
         if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
         if (path.startsWith('/v1/artifacts') && init?.method !== 'POST' && init?.method !== 'DELETE' && blockArtifactReads) throw new Error('Read-back unavailable');
-        if (path === '/v1/artifacts' && init?.method !== 'POST') return json([...rows.values()]);
+        // The Artifact server selects by coarse kind and reports completeness; every row here is classified.
+        if (path === '/v1/artifacts' && init?.method !== 'POST') return json(new URL(String(url)).searchParams.has('kind')
+            ? { items: [...rows.values()], hasUnclassified: false } : [...rows.values()]);
         const id = path.split('/')[3];
         const row = rows.get(id!);
         if (path.endsWith('/access/grants') && row) return json({ artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access, grants: [] });
@@ -295,7 +297,9 @@ describe('mounted WorkBoard Action settlement', () => {
         await act(async () => { expect(await hook.getCurrent().dispatch({ kind: 'widget_add', boardId: 'new-board',
             ref: { surface: { serverId: b.home.id, accountId: 'board-account', owner: { kind: 'workBoard', boardId: 'new-board' } }, instanceId: 'invalid' },
             instance: { v: 1, id: 'invalid', definition: { kind: 'builtin', id: 'changes' }, bindings: { session: { kind: 'value', value: 'invalid-session-address' } } },
-        })).toMatchObject({ status: 'refused', code: 'widget_inputs_invalid' }); });
+        })).toMatchObject({ status: 'refused', code: 'widget_inputs_invalid',
+            // The Home's own reason rides along, so the Add can say what is wrong instead of a general sentence.
+            details: { fields: [expect.objectContaining({ path: 'session', status: 'invalid' })] } }); });
         expect(b.rows.get('new-board')).toBe(before);
         expect(hook.getCurrent().board?.widgets ?? []).toEqual([]);
         expect(hook.getCurrent().save.failure).toMatchObject({ reason: 'invalidValue', intent: { kind: 'widget_add' } });
@@ -389,7 +393,7 @@ describe('mounted WorkBoard Action settlement', () => {
                 declarationTransport: 'http-header-and-socket-auth-v1' } } });
             if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
-            if (path === '/v1/artifacts') return json([row]);
+            if (path === '/v1/artifacts') return json(new URL(String(url)).searchParams.has('kind') ? { items: [row], hasUnclassified: false } : [row]);
             if (path === `/v1/artifacts/${board.id}/access/grants`) return json({ artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access, grants: [] });
             if (path === `/v1/artifacts/${board.id}` && init?.method === 'POST') {
                 if (disposition === 'unknown') throw new Error('Connection lost after dispatch');

@@ -465,7 +465,7 @@ describe("plugin webhook durable delivery admission", () => {
         let markFenceEntered!: () => void;
         const fenceEntered = new Promise<void>((resolve) => { markFenceEntered = resolve; });
         const holder = inTx(async (tx) => {
-            await acquireAccountEncryptionTransitionFenceInTx(tx, "account-delivery");
+            await acquireAccountEncryptionTransitionFenceInTx(tx, "account-delivery", "exclusive");
             markFenceEntered();
             await fenceReleased;
         });

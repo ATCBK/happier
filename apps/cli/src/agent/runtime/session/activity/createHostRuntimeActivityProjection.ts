@@ -32,6 +32,7 @@ type ExecutionRunsBinding = Readonly<{
 }>;
 
 export type HostRuntimeActivityProjection = Readonly<{
+  readAgentRuntimeSnapshot(): HostRuntimeActivitySnapshot;
   bindAgentRuntime(options: Readonly<{ applicability: 'supported' }>): AgentRuntimeBinding;
   bindExecutionRuns(): ExecutionRunsBinding;
   reofferCurrentSnapshot(): Promise<void>;
@@ -125,8 +126,8 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
 }>): HostRuntimeActivityProjection {
   const initialAgentRuntimeApplicability = options.agentRuntimeApplicability;
   let agentRuntime: AgentRuntimeActivitySnapshot = initialAgentRuntimeApplicability === 'not_applicable'
-    ? { state: 'idle', activeCount: 0 }
-    : { state: 'unknown', activeCount: 0 };
+    ? IDLE
+    : UNKNOWN;
   let executionRuns: ExecutionRunsActivitySnapshot = { state: 'idle', activeCount: 0 };
   let acceptedSnapshot: HostRuntimeActivityPublication | null = null;
   let desiredPublication: Readonly<{
@@ -208,6 +209,7 @@ export function createHostRuntimeActivityProjection(options: Readonly<{
   };
 
   return Object.freeze({
+    readAgentRuntimeSnapshot: () => disposed ? UNKNOWN : agentRuntime,
     bindAgentRuntime(_bindingOptions) {
       const binding = ++runtimeBinding;
       agentRuntime = UNKNOWN;

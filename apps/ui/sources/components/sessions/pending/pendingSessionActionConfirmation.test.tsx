@@ -47,6 +47,7 @@ describe('pending Session Actions confirmation ownership', () => {
             : usePendingInputInterruptAndRunAction('session-1', serverId).interruptAndRun);
         await act(async () => { await hook.getCurrent()({ localId: 'pending-1', expectedStateAtMs: 42 }); });
         expect(rpc).toHaveBeenCalledWith({ sessionId: 'session-1', serverId,
+            signal: expect.any(AbortSignal),
             method: kind === 'clear' ? 'session.terminalComposer.clear' : 'session.pendingInput.interruptAndRun',
             payload: { sessionId: 'session-1', expectedStateAtMs: 42, ...(kind === 'interrupt' ? { localId: 'pending-1' } : {}) } });
         expect(confirm).toHaveBeenCalledTimes(1);

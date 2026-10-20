@@ -6,8 +6,7 @@ import {
     SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
 } from '@/sync/domains/session/attention/runtimePresentation';
 import { deriveLatestPendingRequestObservedAtFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
-import { t } from '@/text';
+import { getSessionName, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 import { isSessionAdmittedToPersonalActivity } from '@/activity/attention/isSessionAdmittedToPersonalActivity';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import {
@@ -239,7 +238,7 @@ function createTrayItem(
         accessibilityContext: context.accessibilityContext,
         status: candidate.status,
         priority: PET_COMPANION_ACTIVITY_PRIORITY[candidate.status],
-        title: mayShowPrivateContent ? getSessionName(candidate.session) : t('sessionBoard.item.locked.title'),
+        title: mayShowPrivateContent ? getSessionName(candidate.session) : readLockedSessionName(),
         // The shared context line is authorized structural context and survives a locked
         // envelope and Lane 09's status-only presentation: Home, audience, responsibility and
         // freshness are never private content (L07-R42, child 04 :255). Only the

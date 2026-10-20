@@ -29,6 +29,8 @@ import {
 } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
+import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
+
 import { APPEARANCE_SETTINGS } from './appearanceSettings';
 import { AtmosphereMoments } from './AtmosphereAppearanceRows';
 import {
@@ -114,6 +116,8 @@ export const MotionAppearanceScreen = React.memo(
       useSettingMutable('visualEffectsLevel');
     const [animatedNumbers, setAnimatedNumbers] =
       useSettingMutable('animatedNumbers');
+    const [hapticsEnabled, setHapticsEnabled] =
+      useLocalSettingMutable('hapticsEnabled');
     const [loadingIndicatorStyle, setLoadingIndicatorStyle] =
       useLocalSettingMutable('loadingIndicatorStyle');
     const [loadingIndicatorSpeed, setLoadingIndicatorSpeed] =
@@ -172,6 +176,7 @@ export const MotionAppearanceScreen = React.memo(
           }
         />
         <ItemGroup>
+          <SettingAnchor setting={settings.visualEffectsLevel}>
           <SegmentedChoiceItem
             title={t('settingsAppearance.visualEffects.level')}
             subtitle={t('settingsAppearance.visualEffects.levelDescription')}
@@ -182,6 +187,8 @@ export const MotionAppearanceScreen = React.memo(
             value={visualEffectsLevel}
             onChange={setVisualEffectsLevel}
           />
+          </SettingAnchor>
+          <SettingAnchor setting={settings.animatedNumbers}>
           <Item
             title={t('settingsAppearance.visualEffects.animatedNumbers')}
             subtitle={t(
@@ -197,7 +204,25 @@ export const MotionAppearanceScreen = React.memo(
             }
             showChevron={false}
           />
+          </SettingAnchor>
         </ItemGroup>
+
+        {settingRendersOnHost(settings.haptics) && (
+          <ItemGroup title={t('settingsAppearance.feedback')}>
+            <SettingRow
+              setting={settings.haptics}
+              subtitleLines={0}
+              rightElement={
+                <Switch
+                  testID="settings-appearance-haptics-switch"
+                  value={hapticsEnabled}
+                  onValueChange={setHapticsEnabled}
+                />
+              }
+              showChevron={false}
+            />
+          </ItemGroup>
+        )}
 
         <ItemGroup
           title={t('settingsAppearance.loadingIndicator')}

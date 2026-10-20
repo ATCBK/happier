@@ -83,6 +83,79 @@ afterAll(async () => {
 });
 
 describe('createCliActionDeps workflow boundary', () => {
+  it.each([
+    { surface: 'ui', authority: 'present_user' },
+    { surface: 'cli', authority: 'account_automation' },
+    { surface: 'voice', authority: 'account_automation' },
+  ] as const)('inherits the authorized origin Session selection for a $surface Panel without inventing an Agent caller', async ({ surface, authority }) => {
+    const lease = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
+    });
+    await lease.release();
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+    const sessionId = 'c123456789012345678901234';
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-account' },
+    } };
+    const baseGet = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (url.endsWith('/v2/account/settings/history')) return { status: 200, data: { snapshots: [] } };
+      if (url.includes('/v1/artifacts?')) return { status: 200, data: [] };
+      if (url.endsWith(PROMPT_LIBRARY_ROWS_ROUTE_V1)) return { status: 200, data: PromptLibraryRowsListResponseV1Schema.parse({
+        status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })),
+      }) };
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: sessionId, active: true, encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine-1', path: tmpdir(),
+          flavor: 'codex', modelOverrideV1: { v: 1, modelId: 'parent-model', updatedAt: 1 }, connectedServices }),
+      }) } };
+      return baseGet(url);
+    });
+    const deps = createCliActionDeps({ token, credentials, serverId: 'profile', serverHttpBaseUrl: 'https://panel-origin.test',
+      serverIdentityId: 'srv_panel_home', resolveServerFeaturesSnapshot: () => enabledFeatures as never,
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async method => {
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
+          protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { codex: {
+            id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+          } } },
+        };
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+          'cli.codex': { ok: true, data: { installed: true, version: '1', latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'signedOut', loginSupport: 'unsupported' },
+            platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
+          'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true }, backends: { codex: { available: true } } } },
+        } };
+        throw new Error(`Unexpected Panel Machine RPC ${method}`);
+      } },
+    });
+    const executor = createActionExecutor(deps);
+    signedRootAction.mockImplementation(async request => executor.execute(request.actionId, request.input, { surface: 'cli' }));
+    const result = await executor.execute('workflow.run.start', {
+      runId: '77777777-7777-4777-8777-777777777778', source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
+      inputs: { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, roleOverrides: [],
+    }, { surface, authority, serverId: 'profile', defaultSessionId: sessionId,
+      externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
+    const admission = http.post.mock.calls.find(([, body]) => body.operation === 'admit')?.[1];
+    expect(admission).toBeDefined();
+    const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: admission.runId },
+      envelope: parseWorkflowStoredContentEnvelopeV1(admission.acceptedEnvelope),
+    });
+    expect(accepted.kind).toBe('available');
+    if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
+    const synthesis = accepted.content.materializedLeaves.find(leaf => leaf.blockId === 'synthesis');
+    expect(synthesis?.kind).toBe('step');
+    if (synthesis?.kind !== 'step') throw new Error('synthesis_step_unavailable');
+    expect(synthesis.selection).toMatchObject({
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      modelSelection: { ref: { modelId: 'parent-model' } }, connectedServices,
+    });
+  });
   it.each([false, true])('keeps fresh Workflow materialization in the admitted Account holder (maintenance pending: %s)', async pendingMaintenance => {
     // Real daemon publication with no SCM plugin: a plain directory is valid.
     const lease = await pluginReloadController.acquireRuntimeRegistry({

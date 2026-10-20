@@ -41,7 +41,7 @@ export function buildGitWorktreeAddArgs(params: Readonly<{
         return ['worktree', 'add', ...(params.force ? ['--force'] : []), '--', params.worktreePath, params.branchName];
     }
 
-    const args = ['worktree', 'add', '-b', params.branchName, '--', params.worktreePath];
+    const args = ['worktree', 'add', ...(params.force ? ['--force'] : []), '-b', params.branchName, '--', params.worktreePath];
     if (params.baseRef) args.push(params.baseRef);
     return args;
 }

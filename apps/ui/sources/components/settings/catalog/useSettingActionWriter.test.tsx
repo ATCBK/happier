@@ -8,14 +8,14 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
-import { settingsParse } from '@/sync/domains/settings/settings';
+import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
 import { PROMPTS_CONTEXT_SETTINGS } from '@/components/settings/prompts/context/promptsContextSettings';
 import { useSettingActionWriter } from './useSettingActionWriter';
 import { useMachineSummarySetting } from '@/components/machines/summary/useMachineSummarySetting';
 import { useMachinesIndexView } from '@/components/settings/machines/machinesIndexSettings';
 import { useMachineStorageViewSetting } from '@/components/machines/storage/useMachineStorageViewSetting';
-import { createMachineFixture, pressTestInstanceAsync, renderHook } from '@/dev/testkit';
+import { createMachineFixture, flushHookEffects, pressTestInstanceAsync, renderHook } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
@@ -30,6 +30,7 @@ import { useSettingActionFeedback } from '@/components/settings/shell/useSetting
 import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { Modal } from '@/modal';
+import { readDirectConnectionsEnabled } from '@happier-dev/protocol/account/settings/peerMediationPreferencesV1';
 
 const routerPush = vi.hoisted(() => vi.fn());
 const routeParams = vi.hoisted(() => ({ current: {} as Record<string, string> }));
@@ -52,6 +53,9 @@ installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 // Load the real screen after transport installation, before a control interaction's deadline.
 const { AllMachinesIndex } = await import('@/components/machines/index/AllMachinesIndex');
+const { NewSessionWizardSettingsView } = await import('@/components/settings/session/NewSessionWizardSettingsView');
+const { AccountDirectConnectionsSection } = await import('@/components/settings/connections/DirectConnectionSettings');
+const { SessionComposerSettingsView } = await import('@/components/settings/session/SessionComposerSettingsView');
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const originalState = storage.getState();
@@ -60,6 +64,59 @@ beforeEach(() => { previousAuth = getCurrentAuth(); });
 afterEach(() => { standardCleanup(); setCurrentAuth(previousAuth); storage.setState(originalState, true); routeParams.current = {}; });
 
 describe('declared setting Action writer', () => {
+    it('admits the mounted compound terminal host choice under Off, Ask and Allowed', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const { SessionRuntimeSettingsView } = await import('@/components/settings/session/SessionRuntimeSettingsView');
+        try {
+            const screen = await renderScreen(<SessionRuntimeSettingsView />);
+            const choose = () => screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                && typeof node.props?.onChange === 'function')[0]!.props.onChange('tmux');
+            await act(async () => { choose(); });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+            })); });
+            await act(async () => { choose(); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve');
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'tmux', sessionUseTmux: true }));
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            await act(async () => {
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-tmux-name'
+                    && typeof node.props?.onChangeText === 'function')[0]!.props.onChangeText('work');
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                    && typeof node.props?.onChange === 'function')[0]!.props.onChange('herdr');
+            });
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'herdr', sessionUseTmux: false, sessionTmuxSessionName: 'work' }));
+            expect(account.artifacts.list()).toHaveLength(1);
+            expect(storage.getState().settings.sessionTerminalHost).toBe('herdr');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('refuses undeclared raw Account and local user deltas instead of bypassing Settings admission', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const before = storage.getState().localSettings.themeProfiles;
+        const probe = await renderHook(() => ({ account: useApplySettings(), local: useApplyLocalSettings() }));
+        try {
+            await act(async () => {
+                await probe.getCurrent().account({ sessionTerminalHost: 'tmux', sessionUseTmux: true });
+                await probe.getCurrent().local({ themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            expect(storage.getState().localSettings.themeProfiles).toBe(before);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('keeps exported Account-secret deletion admitted while raw acquisition stays outside Action operands', async () => {
         const account = await createSecretSettingsTestHarness({ serverIdentityId: 'srv_quiet_secret', settings: settingsParse({ actionsSettingsV1: { v: 1,
             actions: { 'plugins.settings.secret.delete': { approvalRequiredSurfaces: ['ui'] } },
@@ -688,4 +745,101 @@ describe('declared setting Action writer', () => {
             expect(account.settingsWrites).toEqual([]);
         } finally { standardCleanup(); await account.dispose(); }
     });
+});
+
+describe('compound and platform control Settings Action ingress', () => {
+    it.each(['wizard', 'direct-connections', 'enter-web'] as const)(
+        'admits the mounted %s control under Off, Ask rejected, Ask approved and Allowed', async control => {
+            const features = createRootLayoutFeaturesResponse();
+            for (const feature of ['machines.rpc.directPeer', 'machines.transfer.directPeer', 'machines.tunnel.directPeer', 'machines.liveStream.directPeer'] as const) {
+                expect(tryWriteServerEnabledBitInPlace(features, feature, true)).toBe(true);
+            }
+            const account = await createSecretSettingsTestHarness({ features, settings: settingsParse({
+                newSessionWizardSectionPresentationV1: { models: 'dropdown' },
+                peerMediationPreferencesV1: { v: 1, flows: { machine_rpc: { direct: 'disabled' } },
+                    byMachineId: { other: { flows: { machine_rpc: { direct: 'enabled' } } } } },
+                agentInputEnterToSend: false, agentInputEnterToSendNative: false,
+                actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+            }) });
+            const enterKey = 'agentInputEnterToSend';
+            const otherEnterKey = 'agentInputEnterToSendNative';
+            const readValue = (settings: Settings) => control === 'wizard'
+                ? settings.newSessionWizardSectionPresentationV1.machines === 'dropdown'
+                : control === 'direct-connections'
+                    ? readDirectConnectionsEnabled(settings.peerMediationPreferencesV1)
+                    : settings[enterKey];
+            try {
+                const screen = await renderScreen(control === 'wizard' ? <NewSessionWizardSettingsView />
+                    : control === 'direct-connections' ? <AccountDirectConnectionsSection /> : <SessionComposerSettingsView />);
+                const wizardRow = () => screen.tree.findAll(node => node.props?.testID === 'settings-new-session-wizard-machines'
+                    && typeof node.props?.onChange === 'function')[0]!;
+                const directSwitch = () => screen.tree.findAll(node => node.props?.testID === 'settings-account-direct-connections-switch'
+                    && typeof node.props?.onValueChange === 'function')[0]!;
+                const enterRow = () => screen.tree.findAll(node => node.props?.testID === 'settings-composer-enter-to-send'
+                    && typeof node.props?.onPress === 'function')[0]!;
+                const choose = async (enabled: boolean) => {
+                    await act(async () => {
+                        if (control === 'wizard') wizardRow().props.onChange(enabled ? 'dropdown' : 'auto');
+                        else if (control === 'direct-connections') directSwitch().props.onValueChange(enabled);
+                        else enterRow().props.onPress();
+                        await flushHookEffects({ cycles: 2, turns: 2 });
+                    });
+                };
+                const expectValue = (enabled: boolean) => {
+                    expect(readValue(account.persistedSettings)).toBe(enabled);
+                    expect(readValue(storage.getState().settings)).toBe(enabled);
+                    if (control === 'wizard') expect(wizardRow().props.value).toBe(enabled ? 'dropdown' : 'auto');
+                    else if (control === 'direct-connections') expect(directSwitch().props.value).toBe(enabled);
+                    else expect(enterRow().props.rightElement.props.value).toBe(enabled);
+                };
+                const setPolicy = async (policy: 'ask' | 'allowed') => {
+                    await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                        actionsSettingsV1: policy === 'ask'
+                            ? { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } }
+                            : { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+                    })); });
+                };
+                await choose(true);
+                expectValue(false);
+                expect(account.settingsWrites).toEqual([]);
+                await setPolicy('ask');
+                await choose(true);
+                await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+                expectValue(false);
+                expect(account.settingsWrites).toEqual([]);
+                await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+                await act(async () => { await flushHookEffects({ cycles: 2, turns: 2 }); });
+                expectValue(false);
+                expect(account.settingsWrites).toEqual([]);
+
+                await choose(true);
+                await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(2));
+                // A neighboring preference changes while approval waits. The owner must
+                // rebase the scalar intent, never replay a caller's stale whole record.
+                await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                    newSessionWizardSectionPresentationV1: { models: 'list' },
+                    peerMediationPreferencesV1: { ...account.persistedSettings.peerMediationPreferencesV1,
+                        byMachineId: { other: { flows: { machine_rpc: { direct: 'disabled' } } } } },
+                    [otherEnterKey]: true,
+                })); });
+                await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[1]!.id, 'approve');
+                await vi.waitFor(() => expectValue(true));
+                const expectNeighbor = () => {
+                    expect(account.persistedSettings.newSessionWizardSectionPresentationV1.models).toBe('list');
+                    expect(account.persistedSettings.peerMediationPreferencesV1.byMachineId.other?.flows.machine_rpc?.direct).toBe('disabled');
+                    expect(account.persistedSettings[otherEnterKey]).toBe(true);
+                };
+                expectNeighbor();
+                await setPolicy('allowed');
+                await choose(false);
+                await vi.waitFor(() => expectValue(false));
+                expectNeighbor();
+                expect(account.artifacts.list()).toHaveLength(2);
+                if (control === 'wizard') expect(account.persistedSettings.newSessionWizardSectionPresentationV1).not.toHaveProperty('machines');
+            } finally {
+                await standardCleanup();
+                await account.dispose();
+            }
+        },
+    );
 });

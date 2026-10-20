@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonAgentInstallStartResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { AccountSettingsV2UpdateRequestSchema, BUILT_IN_ROLES_V1, RoleActionOutputSchemasV1, readLegacyRolesV1 } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -432,6 +433,25 @@ describe('UI machine Agent inventory Action transport', () => {
         expect(readAgentInstallJob(target)?.jobId).toBe(job.jobId);
         expect(await waitForAgentInstallJob(target)).toEqual(job.outcome);
     });
+
+    it.each(['install_unavailable', 'request_failed', 'invalid_response'] as const)(
+        'preserves %s before an install job is acknowledged through the real UI Action transport', async (code) => {
+            const serverId = await addHome({ name: 'Unavailable Setup Home', serverUrl: 'https://unavailable-setup.test', accountId: 'alice' });
+            rpc.machine.mockImplementation(async ({ method }) => {
+                if (method !== RPC_METHODS.DAEMON_AGENTS_INSTALL_START) throw new Error('No job has been admitted');
+                if (code === 'request_failed') throw new Error('Machine transport unavailable');
+                return code === 'install_unavailable'
+                    ? DaemonAgentInstallStartResponseSchema.parse({ ok: false, errorCode: code, error: 'The daemon is draining.' })
+                    : { ok: true };
+            });
+            const result = await createDefaultActionExecutor().execute('machines.agents.install', {
+                machineId: 'machine-1', agentId: 'acme/helper', intent: 'install', consent: { vendorRecipe: true },
+            }, { surface: 'ui', authority: 'present_user', serverId });
+            expect(result).toMatchObject({ ok: false, errorCode: code });
+            const { readAgentInstallJob } = await import('@/agents/machineAgents/installJobs/installJobStore');
+            expect(readAgentInstallJob({ serverId, accountId: 'alice', machineId: 'machine-1', agentId: 'acme/helper' })).toBeNull();
+        },
+    );
 
     it('preserves current job progress at a consumed cursor and exposes cancellation failure', async () => {
         const serverId = await addHome({ name: 'Setup Home', serverUrl: 'https://setup.test', accountId: 'alice' });

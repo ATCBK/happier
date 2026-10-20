@@ -1,4 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { PluginProjectionV2Schema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -103,6 +107,33 @@ afterEach(async () => {
 afterAll(async () => { await network.dispose(); });
 
 describe('defaultActionExecutor canonical agent inventory corridor', () => {
+  it('lists connected services when its production callback is called without context', async () => {
+    const source = ts.createSourceFile('defaultActionExecutor.ts', readFileSync(
+      new URL('./defaultActionExecutor.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+    const initializers: ts.Expression[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'spawnConnectedServicesList') {
+        initializers.push(node.initializer);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(initializers).toHaveLength(1);
+    // Dispatch supplies context, so execute the exact private production callback
+    // with its real inventory owner rather than adding an export or mocking dispatch.
+    const { listSpawnConnectedServicesForActions } = await import('./agentInventoryActionDeps');
+    // The VM is an untyped source-evaluation boundary; the production port owns its signature.
+    const list = runInNewContext(`(${initializers[0]!.getText(source)})`, {
+      listSpawnConnectedServicesForActions,
+    }) as NonNullable<ActionExecutorDeps['spawnConnectedServicesList']>;
+    network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, describeAgent('acme-voice-agent'));
+
+    await expect(list({ agentId: 'acme-voice-agent', machineId: 'machine-1', serverId })).resolves.toMatchObject({
+      agentId: 'acme-voice-agent', supportedServiceIds: ['happier.agent.codex/openai-codex'],
+      items: [expect.objectContaining({ value: 'happier.agent.codex/openai-codex:profile:acct-work', label: 'Work account' })],
+    });
+  });
+
   it('consumes a slow native catalog after the probe budget without an earlier transport refusal', async () => {
     const agentId = 'acme-runtime-agent';
     const connectedServices = { v: 2, bindingsByServiceId: {

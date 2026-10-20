@@ -1,4 +1,6 @@
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx, readTeamMutationAdmissionAccountIdsInTx } from "./sessionAccessEffects";
+import { acquireAccountSessionOwnerMetadataFencesInTx, type AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
 import { readTeamIdentityConnectionInTx } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import { readOAuthAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
@@ -36,6 +38,7 @@ export async function finalizeTeamOAuthAdmissionInTx(
         source: TeamOAuthAdmissionSource | null | undefined;
     }>,
 ): Promise<TeamOAuthAdmissionResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     const [team, connection, membership] = await Promise.all([
         tx.team.findUnique({
             where: { id: input.teamId },
@@ -178,6 +181,55 @@ export class TeamOAuthAdmissionAbort extends Error {
     }
 }
 
+type TeamOAuthAdmissionScopeInput = Readonly<{
+    provider: ProviderReference | null | undefined;
+    connection: Readonly<{ id: string; revision: number }> | null | undefined;
+    admission?: TeamOAuthAdmissionSource | null;
+}>;
+
+function resolveTeamOAuthAdmissionScope(input: TeamOAuthAdmissionScopeInput) {
+    if (!input.provider) throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
+    const invitation = input.admission?.kind === "team_invitation" ? input.admission : null;
+    const teamId = input.provider.context.kind === "team" ? input.provider.context.teamId : invitation?.teamId;
+    if (!teamId
+        || (input.provider.context.kind === "team" && !input.connection)
+        || (input.provider.context.kind === "home" && (!invitation || invitation.providerOrigin !== "home"))) {
+        throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
+    }
+    return { teamId, provider: input.provider, teamConnection: input.provider.context.kind === "team" ? input.connection : null };
+}
+
+/** Pure full cohort for OAuth's identity-link/directory/JIT composition. The
+ * exact provider/connection Team is shared with final admission, never guessed
+ * from profile claims; prospective Accounts need not have been inserted yet. */
+export async function readTeamOAuthAdmissionAccountIdsInTx(
+    tx: Tx, input: TeamOAuthAdmissionScopeInput & Readonly<{ accountIds: readonly string[] }>,
+): Promise<readonly string[]> {
+    if (!input.provider || (input.provider.context.kind === "home" && input.admission?.kind !== "team_invitation")) {
+        return [...new Set(input.accountIds)].sort();
+    }
+    const { teamId } = resolveTeamOAuthAdmissionScope(input);
+    return await readTeamMutationAdmissionAccountIdsInTx(tx, {
+        teamId, accountIds: input.accountIds, affectedAccountIds: input.accountIds,
+        membershipChange: { kind: "teamMembership", teamId },
+    });
+}
+
+export async function acquireTeamOAuthAdmissionAccountsInTx(
+    tx: Tx, input: TeamOAuthAdmissionScopeInput & Readonly<{ accountIds: readonly string[]; intent: AccountAdmissionIntent }>,
+): Promise<() => Promise<void>> {
+    const accountIds = await readTeamOAuthAdmissionAccountIdsInTx(tx, input);
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, accountIds, input.intent);
+    const captured = new Set(accountIds);
+    const recheck = async () => {
+        if ((await readTeamOAuthAdmissionAccountIdsInTx(tx, input)).some(accountId => !captured.has(accountId))) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    };
+    await recheck();
+    return recheck;
+}
+
 /**
  * The single OAuth finalization seam: prove the exact linked identity and structural
  * admission in the caller's transaction, or throw so every earlier write rolls back.
@@ -199,27 +251,15 @@ export async function requireTeamOAuthAdmissionInTx(
     if (!await isTeamMembershipAdmissionEnabled({ tx, env: input.env })) {
         throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
     }
-    if (!input.provider) {
-        throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
-    }
-    const invitationSource = input.admission?.kind === "team_invitation" ? input.admission : null;
-    const teamId = input.provider.context.kind === "team"
-        ? input.provider.context.teamId
-        : invitationSource?.teamId;
-    if (!teamId
-        || (input.provider.context.kind === "team" && !input.connection)
-        || (input.provider.context.kind === "home" && (!invitationSource || invitationSource.providerOrigin !== "home"))) {
-        throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
-    }
+    const { teamId, provider, teamConnection } = resolveTeamOAuthAdmissionScope(input);
     // Resolve the credential evidence before structural admission. For JIT this
     // binds the Account to the exact provider runtime and Team connection carried
     // from the consumed server-owned OAuth attempt; a caller-supplied Account id
     // alone can never mint a membership.
-    const teamConnection = input.provider.context.kind === "team" ? input.connection : null;
     const evidence = await readOAuthAuthenticationEvidenceInTx(tx, {
         accountId: input.accountId,
-        providerId: input.provider.id,
-        runtimeFingerprint: input.provider.runtimeFingerprint,
+        providerId: provider.id,
+        runtimeFingerprint: provider.runtimeFingerprint,
         ...(teamConnection ? { teamConnectionId: teamConnection.id } : {}),
     });
     if (!evidence) throw new TeamOAuthAdmissionAbort("team_authentication_unavailable");
@@ -228,7 +268,7 @@ export async function requireTeamOAuthAdmissionInTx(
         teamId,
         connectionId: teamConnection?.id ?? null,
         connectionRevision: teamConnection?.revision ?? null,
-        providerInstanceId: input.provider.id,
+        providerInstanceId: provider.id,
         accountId: input.accountId,
         source: input.admission,
     });

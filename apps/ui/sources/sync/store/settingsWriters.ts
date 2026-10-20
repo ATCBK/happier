@@ -104,23 +104,15 @@ export function useApplySettings(): (change: SettingsWrite) => void {
     } else {
       delta = change;
     }
-    const incumbentDelta = { ...delta };
     const declaredWrites = (Object.keys(delta) as Array<keyof SettingsWriteDelta>).flatMap(key => {
       // Equivalent declaration aliases share this same whole-value intent.
       const declaration = directAccountSettingDeclarations.find(candidate => candidate.storage?.key === key);
       if (!declaration) return [];
-      delete incumbentDelta[key];
       const stored = delta[key];
       const value = declaration.storage?.invertBoolean && typeof stored === 'boolean' ? !stored : stored;
       const parsed = SettingsDeclarationValueV1Schema.safeParse(value);
       return parsed.success ? [{ declaration, value: parsed.data }] : [];
     });
-    if (Object.keys(incumbentDelta).length > 0) {
-      getSyncSingleton().applySettings(incumbentDelta, {
-        expectedSettingsScope,
-        source: 'ui' satisfies SettingsAnalyticsSource,
-      });
-    }
     for (const { declaration, value } of declaredWrites) await writeSetting(declaration, value);
   }, [expectedSettingsScope, writeSetting]);
   return React.useCallback((change: SettingsWrite) => {
@@ -305,17 +297,14 @@ export function useApplyRememberedEngineSelectionReplacementIntent(): (
 export function useApplyLocalSettings(): (delta: Partial<LocalSettings>) => void {
   const writeSetting = useSettingActionWriter();
   const apply = React.useCallback(async (delta: Partial<LocalSettings>) => {
-    const incumbentDelta = { ...delta };
     const declaredWrites = (Object.keys(delta) as Array<keyof LocalSettings>).flatMap(key => {
       const declaration = directLocalSettingDeclarations.find(candidate => candidate.storage?.key === key);
       if (!declaration) return [];
-      delete incumbentDelta[key];
       const stored = delta[key];
       const value = declaration.storage?.invertBoolean && typeof stored === 'boolean' ? !stored : stored;
       const parsed = SettingsDeclarationValueV1Schema.safeParse(value);
       return parsed.success ? [{ declaration, value: parsed.data }] : [];
     });
-    if (Object.keys(incumbentDelta).length > 0) applyLocalSettingsFromStore(incumbentDelta, 'ui');
     for (const { declaration, value } of declaredWrites) await writeSetting(declaration, value);
   }, [writeSetting]);
   return React.useCallback((delta: Partial<LocalSettings>) => {

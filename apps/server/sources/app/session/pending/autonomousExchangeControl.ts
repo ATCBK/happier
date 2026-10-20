@@ -7,8 +7,10 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 
 import { applyPendingSessionStateChange } from '@/app/session/pending/applyPendingSessionStateChange';
 import { emitPendingChanged } from '@/app/session/pending/publishPendingMutation';
+import { resolveSessionAccountChangePublications } from '@/app/session/changeTracking/markAccountChangesForSessionAccounts';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { db } from '@/storage/db';
-import { inTx } from '@/storage/inTx';
+import { inTx, transactionResult, TransactionReplayRequiredError } from '@/storage/inTx';
 
 type ExchangeResult =
     | Readonly<{ ok: true; state: AutonomousExchangeStateV1; observedRevision: string }>
@@ -70,14 +72,7 @@ export async function controlAutonomousExchange(params: Readonly<{
                 && readAutonomousExchangeAdmissionV1(state.data) !== 'check_in') {
             return { result: { ok: false, error: 'conflict' } as const, publications: [] };
         }
-        const next = applyAutonomousExchangeControlV1(state.data, { kind: params.request.control });
-        const updated = await tx.sessionMessage.updateMany({
-            where: { id: row.id, rowRevision: row.rowRevision },
-            data: { autonomousExchangeState: next, rowRevision: { increment: BigInt(1) } },
-        });
-        if (updated.count !== 1) return { result: { ok: false, error: 'conflict' } as const, publications: [] };
-
-        const unstarted = await tx.sessionPendingMessage.findMany({
+        const readUnstarted = () => tx.sessionPendingMessage.findMany({
             where: { autonomousExchangeRootSessionId: params.sessionId,
                 autonomousExchangeRootLocalId: params.originInputLocalId,
                 autonomousExchangeCause: 'agent_session',
@@ -87,6 +82,24 @@ export async function controlAutonomousExchange(params: Readonly<{
             select: { sessionId: true, localId: true, targetExecutionRunId: true,
                 deliveryState: true },
         });
+        const captured = await readUnstarted();
+        const sessionIds = [...new Set([params.sessionId, ...captured.map(pending => pending.sessionId)])];
+        // Root and dependent children share one resource-first admission, even
+        // when the dependent input has no current Follow edge to its root.
+        await acquireSessionAccountCursorLocksInTx(tx, sessionIds, [params.actorUserId]);
+        const unstarted = await readUnstarted();
+        const admittedSessions = new Set(sessionIds);
+        if (unstarted.some(pending => !admittedSessions.has(pending.sessionId))) {
+            throw new TransactionReplayRequiredError('session-account-audience-changed');
+        }
+
+        const next = applyAutonomousExchangeControlV1(state.data, { kind: params.request.control });
+        const updated = await tx.sessionMessage.updateMany({
+            where: { id: row.id, rowRevision: row.rowRevision },
+            data: { autonomousExchangeState: next, rowRevision: { increment: BigInt(1) } },
+        });
+        if (updated.count !== 1) return { result: { ok: false, error: 'conflict' } as const, publications: [] };
+
         const target = params.request.control === 'stop'
             ? pendingDeliveryStatusV1ToPersistedFields({ status: 'discarded', reason: 'autonomous_exchange_stopped' })
             : pendingDeliveryStatusV1ToPersistedFields({ status: 'queued' });
@@ -121,8 +134,14 @@ export async function controlAutonomousExchange(params: Readonly<{
             publications.push({ sessionId, ...pendingState,
                 recipient: { kind: 'execution_run' as const, runId } });
         }
-        return { result: { ok: true, state: next,
-            observedRevision: revision(row.rowRevision + BigInt(1)) } as const, publications };
+        return transactionResult(() => ({
+            result: { ok: true, state: next,
+                observedRevision: revision(row.rowRevision + BigInt(1)) } as const,
+            publications: publications.map(publication => ({
+                ...publication,
+                recipientCursors: resolveSessionAccountChangePublications(publication.recipientCursors),
+            })),
+        }));
     }, { isolationLevel: 'Serializable' });
     for (const publication of outcome.publications) {
         await emitPendingChanged({ sessionId: publication.sessionId, changedByAccountId: params.actorUserId,

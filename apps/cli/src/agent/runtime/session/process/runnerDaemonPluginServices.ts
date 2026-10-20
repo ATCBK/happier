@@ -2065,6 +2065,7 @@ export async function prepareRunnerDaemonPluginServices(
         Object.freeze({
             async send(request, options) {
                 assertAvailable('notifications');
+                const { channelIds, data, ...wireRequest } = request;
                 return await dispatch<Awaited<ReturnType<
                     PluginServices['notifications']['send']
                 >>>({
@@ -2073,7 +2074,7 @@ export async function prepareRunnerDaemonPluginServices(
                     request: {
                         // Preserve unknown JS input until the closed transport
                         // schema rejects it; never silently ignore routing intent.
-                        ...request,
+                        ...wireRequest,
                         clientRequestId:
                             request.clientRequestId,
                         categoryId: request.categoryId,
@@ -2085,18 +2086,18 @@ export async function prepareRunnerDaemonPluginServices(
                         ...(request.body
                             ? { body: request.body }
                             : {}),
-                        ...(request.channelIds
+                        ...(channelIds
                             ? {
                                 channelIds: [
-                                    ...request.channelIds,
+                                    ...channelIds,
                                 ],
                             }
-                            : {}),
-                        ...(request.data !== undefined
+                            : Object.hasOwn(request, 'channelIds') ? { channelIds } : {}),
+                        ...(data !== undefined
                             ? {
                                 data:
                                     encodeRunnerDaemonPluginServiceWireValueV1(
-                                        request.data,
+                                        data,
                                     ),
                         }
                         : {}),

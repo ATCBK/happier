@@ -137,6 +137,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   project_definitions: PROJECT_DEFINITION_ACTION_IDS,
   observation: ['wait'],
   account_profile: ['account.profile.get', 'account.name.set', 'account.username.set'],
+  friends: ['friends.add', 'friends.remove'],
   project_workers: PROJECT_WORKER_ACTION_IDS_V1,
   operation_output: ACTION_OPERATION_ACTION_IDS_V1,
   capture_viewing: ['capture.view'],
@@ -374,6 +375,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'execution.run.wait',
   ],
   session_targeting: [
+    'session.targets.resolve',
     'session.target.primary.set',
     'session.target.tracked.set',
     'session.list',
@@ -438,6 +440,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.permission.remote.grants.revoke',
     'session.user_action.answer',
     'session.needs_you.raise',
+    'session.control.switch',
     'session.mode.set',
   ],
   external_sessions: [

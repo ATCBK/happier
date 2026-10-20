@@ -239,6 +239,11 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settingsPlugins.discover.platform.web',
         'settingsPlugins.surfaces.listingSource',
         'settingsPlugins.surfaces.navigationTitle',
+        // "Signature" and "Provenance" are the French words too (install-review evidence labels);
+        // "Auto" is the French label for an automatically picked Machine.
+        'settingsPlugins.installReviewSections.evidenceLabel.signature',
+        'settingsPlugins.installReviewSections.evidenceLabel.provenance',
+        'settingsPlugins.surfaces.runOnAuto',
         // Source control and Keyboard: developer vocabulary and French cognates.
         'settingsKeyboard.groupSessions',
         'settingsSourceControl.page.commits.title',
@@ -1735,6 +1740,29 @@ describe('i18n integrity', () => {
     // module, so nothing but this assertion can notice a leaf that exists only in `en`. Shape
     // parity, not key presence: a leaf that becomes a formatter in `en` breaks `t(...)` at runtime
     // in every locale that still carries a plain string.
+    it('keeps a distinct consequence description for every offered permission mode in every supported locale', () => {
+        const locales = [
+            { code: 'en', root: en }, { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },
+            { code: 'fr', root: fr }, { code: 'it', root: itLocale }, { code: 'pt', root: pt },
+            { code: 'ca', root: ca }, { code: 'de', root: de }, { code: 'zh-Hans', root: zhHans },
+            { code: 'zh-Hant', root: zhHant }, { code: 'ja', root: ja },
+        ];
+        const prefixes = ['permissionMode', 'codexPermissionMode', 'geminiPermissionMode'] as const;
+        const segments = ['default', 'readOnly', 'safeYolo', 'yolo'] as const;
+        const problems = locales.flatMap(({ code, root }) => prefixes.flatMap((prefix) => segments.flatMap((segment) => {
+            const group = root.agentInput[prefix] as Record<string, unknown>;
+            const label = group[segment];
+            const description = group[`${segment}Description`];
+            if (typeof description !== 'string' || description.length === 0) return [`${code}: ${prefix}.${segment}Description missing`];
+            if (description === label) return [`${code}: ${prefix}.${segment}Description repeats its label`];
+            if (code !== 'en' && description === (en.agentInput[prefix] as Record<string, unknown>)[`${segment}Description`]) {
+                return [`${code}: ${prefix}.${segment}Description is untranslated`];
+            }
+            return [];
+        })));
+        expect(problems).toEqual([]);
+    });
+
     it('keeps the Saved Secret namespace complete in every supported locale', () => {
         const locales = [
             { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },

@@ -3,7 +3,7 @@ import { Context } from "@/context";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { afterTx, inTx } from "@/storage/inTx";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 
 export class UsernameTakenError extends Error {
     constructor() {
@@ -27,6 +27,7 @@ export async function usernameUpdate(ctx: Context, username: string): Promise<vo
     }
 
     await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true, intent: 'exclusive' });
         await tx.account.update({
             where: { id: userId },
             data: { username: username }
@@ -35,7 +36,7 @@ export async function usernameUpdate(ctx: Context, username: string): Promise<vo
         const cursor = await markAccountChanged(tx, { accountId: userId, kind: 'account', entityId: 'self', hint: { username } });
 
         afterTx(tx, () => {
-            const updatePayload = buildUpdateAccountUpdate(userId, { username: username }, cursor, randomKeyNaked(12));
+            const updatePayload = buildUpdateAccountUpdate(userId, { username: username }, cursor.resolveCursor(), randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId, payload: updatePayload,
                 recipientFilter: { type: 'user-scoped-only' }

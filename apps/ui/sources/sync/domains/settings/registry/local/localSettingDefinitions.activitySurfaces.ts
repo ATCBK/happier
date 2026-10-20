@@ -1,4 +1,6 @@
 import { z } from 'zod/mini';
+import { PetDeviceOverrideV1Schema } from '@happier-dev/protocol/pets/selection';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
     AttentionDeviceOverridesV1Schema,
@@ -16,17 +18,7 @@ import {
 import { serializeDesktopOverlayAutoHideDelayBucket } from './localSettingDefinitions.shared';
 
 const PetEnabledOverrideSchema = z.enum(['inherit', 'enabled', 'disabled']);
-const PetSelectedOverrideSchema = z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('inherit') }),
-    z.object({
-        kind: z.literal('detectedCodexHome'),
-        sourceKey: z.string().check(z.minLength(1)),
-    }),
-    z.object({
-        kind: z.literal('happierManagedLocal'),
-        sourceKey: z.string().check(z.minLength(1)),
-    }),
-]);
+const PetSelectedOverrideSchema = createStoredReadSchema(PetDeviceOverrideV1Schema);
 const DesktopPetOverlayVisibilityModeOverrideSchema = z.enum([
     'inherit',
     'attentionOrActive',

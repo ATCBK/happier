@@ -342,7 +342,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
         });
     const daemonModelTransitionAuthorizer:
         SessionModelTransitionProviderTargetAuthorizer =
-            async (params) => {
+            async (params, signal) => {
                 const authorizer =
                     requireClaimed().daemonModelTransitionAuthorizer;
                 if (!authorizer) {
@@ -350,7 +350,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
                         'Runner Agent model-transition authority is unavailable',
                     );
                 }
-                return await authorizer(params);
+                return await authorizer(params, signal);
             };
     const externalSessionHostOperations:
         ExternalSessionHostOperationPortFactory =
@@ -1335,8 +1335,9 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             });
     const daemonModelTransitionAuthorizer:
         SessionModelTransitionProviderTargetAuthorizer =
-            async (params) =>
+            async (params, signal) =>
                 await authorizeCurrentAgentRuntimeDaemonModelTransition({
+                    signal,
                     authority: expectedAuthority,
                     requestId: randomUUID(),
                     selection: params.selection,

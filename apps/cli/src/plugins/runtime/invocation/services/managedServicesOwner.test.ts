@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -80,7 +80,7 @@ import {
     createPluginInvocationServicesFactory,
 } from './factory';
 import { withPluginInvocationServiceBindingAvailability } from './unavailable';
-import { createSharedManagedProviderSessionAccess } from '@/daemon/startup/sharedManagedProviderSessionAccess';
+import { createSharedManagedProviderSessionAccess, createSharedManagedProviderSessionStart } from '@/daemon/startup/sharedManagedProviderSessionAccess';
 import { listHappierProcessRoots } from '@/daemon/processes/roots/listHappierProcessRoots';
 import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
 import { resolveProcessOwnerRequester } from '@/daemon/processes/ownership/resolveProcessOwnerRequester';
@@ -117,6 +117,73 @@ const MANAGED_SERVICE_CLEAN_EXIT: PluginProcessResult = Object.freeze({
 });
 
 describe('managed service requester process projection', () => {
+    it.each(['local', 'qualified', 'foreign', 'refused', 'arguments-refused'] as const)('honours the invocation-selected %s system tool for a detached Agent service', async identity => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-agent-service-tool-'));
+        const { owner } = createLifecycleHarness([], 'daemon');
+        const executable = { kind: 'systemTool' as const, id: identity === 'local'
+            ? 'native-agent' : { pluginId: identity === 'foreign' ? 'other.agent' : 'acme.agent', localId: 'native-agent' } };
+        // System-tool selection is an OS boundary. The process, managed-service
+        // owner, invocation factory and HTTP transport below are all real.
+        const owners = createProductionPluginInvocationServiceOwners({
+            loggerSink: { write() {} }, managedServices: owner,
+            exec: { resolveExecutable: async () => {
+                if (identity === 'foreign') return { command: process.execPath, args: ['-e',
+                    'require("node:http").createServer((req,res)=>res.end(JSON.stringify({cwd:process.cwd(),selection:"foreign-selected"}))).listen(Number(process.env.PORT),"127.0.0.1")'] };
+                if (identity === 'refused') return { command: process.execPath, args: ['-e',
+                    'require("node:http").createServer((req,res)=>res.end("ambient tool must not start")).listen(Number(process.env.PORT),"127.0.0.1")'] };
+                throw new PluginError({ code: 'plugin_system_tool_unavailable', message: 'No ambient installation' });
+            }, resolvePath: async () => directory },
+        });
+        const services = owners.createOperationServices({
+            plugin: { id: 'acme.agent', version: '1' },
+            contribution: { id: 'native-agent', qualifiedId: 'acme.agent/agents/native-agent' },
+            occurrenceId: 'detached-agent', correlationId: 'finite-judge', surface: 'agent',
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+            processOwner: { kind: 'run', runId: 'finite-judge' },
+        }, {
+            filesystemRoots: { pluginData: directory, workspace: directory, projects: new Map() },
+            hostAccessRequests: [],
+            systemTools: { resolve: async request => {
+                if (identity === 'refused') throw new PluginError({
+                    code: 'plugin_system_tool_unavailable', message: 'Invocation selection is unavailable',
+                });
+                return {
+                    grantId: 'selected-native-tool', toolId: request.toolId, displayName: 'Native Agent', source: 'managed',
+                    executablePath: process.execPath,
+                    launch: { kind: 'binary', executablePath: process.execPath, args: ['-e',
+                        'require("node:http").createServer((req,res)=>res.end(JSON.stringify({cwd:process.cwd(),selection:process.env.SELECTED_TOOL}))).listen(Number(process.env.PORT),"127.0.0.1")'],
+                        env: { SELECTED_TOOL: 'invocation-selected' } },
+                    ...(identity === 'arguments-refused' ? { allowedArguments: [] } : {}),
+                };
+            } },
+        });
+        let service: ManagedServiceHandle | undefined;
+        try {
+            const establishment = services.managedServices.supervise({ id: 'native-server',
+                mode: { kind: 'spawn', launch: { executable, cwd: { root: 'workspace', relativePath: '' },
+                    ...(identity === 'arguments-refused' ? { args: ['--', 'blocked'] } : {}) },
+                    endpoint: { kind: 'assignAndInject', port: { kind: 'allocated' }, inject: { portEnvironmentKey: 'PORT' } } },
+                healthCheck: { kind: 'http', target: { kind: 'servicePath', path: '/health' } },
+            });
+            if (identity === 'refused' || identity === 'arguments-refused') {
+                await expect(establishment).rejects.toMatchObject({ code: 'plugin_managed_service_establishment_failed' });
+                return;
+            }
+            service = await establishment;
+            await service.waitUntilHealthy();
+            const response = await service.request({ pathAndQuery: '/verdict' });
+            expect(response.status).toBe(200);
+            expect(await new Response(response.body).json()).toEqual({
+                cwd: await realpath(directory), selection: identity === 'foreign' ? 'foreign-selected' : 'invocation-selected',
+            });
+        } finally {
+            await service?.dispose();
+            await owner.dispose();
+            await owners.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it('retains sessionless admitted requester evidence through the real service custody and recipient projections', async () => {
         const target = { serverId: 'server', machineId: 'machine', installationId: 'installation' };
         const requester = { ...target, accountId: 'guest' };
@@ -674,6 +741,60 @@ describe('managed-services SVC09 owner', () => {
             await rm(directory, { recursive: true, force: true });
         }
     });
+    it.each(['process-death', 'failed-start', 'authority-refusal'] as const)('G1 re-enters local Session custody after %s', async failure => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-local-gateway-recovery-'));
+        const firstProcess = createLifecycleProcess(4_591);
+        const nextProcess = createLifecycleProcess(4_592);
+        const harness = createLifecycleHarness([firstProcess, nextProcess], 'daemon', {
+            sharedGatewayAccessDirectory: directory,
+            fetch: async url => new Response(null, { status: String(url).endsWith('/_happier/consumer-access/settle') ? 200 : 204 }),
+        });
+        const signal = new AbortController().signal;
+        let invocationCurrent = true;
+        let authorizationReadable = true;
+        const services = harness.owner.bindScope(lifecycleScope({ occurrenceId: 'local-recovery', sessionId: 'session', operationId: 'session' }), harness.exec, {
+            managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => invocationCurrent, isPhysicalOccurrenceCurrent: () => true,
+                sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId: 'session' } },
+            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, 'session.capability'), isCurrent: () => invocationCurrent,
+                ...gatewayRequestAuthUses() },
+        });
+        const spec: ManagedServiceSpec = { ...lifecycleSpec({ id: 'local-recovery', port: 4_359 }),
+            requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
+            clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' } };
+        let captured: Parameters<typeof harness.owner.materializeManagedProviderAgentBinding>[0] | null = null;
+        const start = createSharedManagedProviderSessionStart({ readProjection: () => captured,
+            start: async () => {
+                const service = await services.supervise(spec);
+                const projection = await harness.owner.projectManagedProviderEndpointAccess({ service,
+                    endpoints: [{ endpointTemplateId: 'responses', servicePath: '/v1' }], signal, isCurrent: () => true });
+                if (!projection) throw new Error('Expected admitted local consumer');
+                captured = { service, projection, endpointTemplateId: 'responses', materialize: async () => ({ v: 1, kind: 'spawnEnv', env: [] }) };
+            } });
+        const read = createSharedManagedProviderSessionAccess({ start, readProjection: () => captured,
+            materialize: harness.owner.materializeManagedProviderAgentBinding, endpointTemplateId: 'responses', revalidate: async () => authorizationReadable });
+        try {
+            if (failure === 'failed-start') {
+                harness.exec.spawn.mockRejectedValueOnce(new Error('OS spawn temporarily unavailable'));
+                await expect(read(signal)).rejects.toBeInstanceOf(Error);
+            } else {
+                const initial = await read(signal);
+                expect(initial.endpointUrl).toBe('http://127.0.0.1:4359/v1');
+                if (failure === 'authority-refusal') {
+                    authorizationReadable = false;
+                    await expect(read(signal)).rejects.toMatchObject({ code: 'plugin_services_managed_provider_authority_unavailable' });
+                    authorizationReadable = true;
+                } else await firstProcess.dispose();
+                await vi.waitFor(() => expect(captured?.projection.isCurrent()).toBe(false));
+            }
+            const restored = await Promise.all([read(signal), read(signal)]);
+            expect(restored.map(binding => binding.endpointUrl)).toEqual(['http://127.0.0.1:4359/v1', 'http://127.0.0.1:4359/v1']);
+            expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
+        } finally {
+            invocationCurrent = false;
+            await harness.owner.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
     it('releases only the withdrawn Session consumer after access materialization refuses, not on request cancellation', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-gateway-access-refusal-'));
         const process = createLifecycleProcess(4_601);
@@ -728,7 +849,6 @@ describe('managed-services SVC09 owner', () => {
                     if (withdraw) firstCurrent = false;
                     return true;
                 },
-                cleanup: async () => { await projection.cleanup(); },
             });
             await expect(read(cancelledRequest.signal)).rejects.toMatchObject({ name: 'AbortError' });
             expect(await readConsumerCount()).toBe(2);
@@ -801,6 +921,66 @@ describe('managed-services SVC09 owner', () => {
         } finally {
             cleanupAvailable = true;
             cleanupProceed.resolve();
+            await harness.owner.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+    it('G1 joins the current gateway census when idle stop overlaps replacement consumers', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-gateway-idle-rejoin-'));
+        const stopping = deferred<void>();
+        const stopped = deferred<void>();
+        const previous = createLifecycleProcess(4_521, async () => {
+            stopping.resolve();
+            await stopped.promise;
+        });
+        const replacement = createLifecycleProcess(4_522);
+        const harness = createLifecycleHarness([previous, replacement], 'daemon', {
+            sharedGatewayAccessDirectory: directory,
+            fetch: async () => new Response(null, { status: 200 }),
+        });
+        const spec: ManagedServiceSpec = { ...lifecycleSpec({ id: 'idle-rejoin-gateway', port: 4_354 }),
+            requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
+            clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' } };
+        const bind = (consumerId: string) => harness.owner.bindScope(
+            lifecycleScope({ occurrenceId: 'idle-rejoin-occurrence', operationId: consumerId }), harness.exec,
+            { managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true,
+                isPhysicalOccurrenceCurrent: () => true,
+                sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId } },
+            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, `${consumerId}.capability`),
+                isCurrent: () => true, ...gatewayRequestAuthUses() } },
+        );
+        let unsubscribe = () => {};
+        try {
+            const first = await bind('old-first').supervise(spec);
+            const second = await bind('old-second').supervise(spec);
+            await first.dispose();
+            const release = second.dispose();
+            await stopping.promise;
+            const waiting = Promise.allSettled([bind('new-first').supervise(spec)]);
+            const arriving = deferred<ManagedServiceHandle>();
+            // Schedule the other runner at the observable custody-removal
+            // boundary, before the admission waiting on Stop resumes.
+            unsubscribe = harness.owner.activity.subscribe(() => {
+                if (harness.owner.readRetainedSemanticCustodyCount() !== 0) return;
+                unsubscribe();
+                void bind('new-second').supervise(spec).then(arriving.resolve, arriving.reject);
+            });
+            stopped.resolve();
+            await release;
+            const joined = await arriving.promise;
+            const [result] = await waiting;
+            if (result.status === 'rejected') throw result.reason;
+            expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
+            await joined.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh second input') });
+            expect(result.value.snapshot().instanceId).toBe(joined.snapshot().instanceId);
+            await result.value.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh first input') });
+            await result.value.dispose();
+            expect(replacement.dispose).not.toHaveBeenCalled();
+            await joined.dispose();
+            expect(replacement.dispose).toHaveBeenCalledOnce();
+        } finally {
+            unsubscribe();
+            stopped.resolve();
             await harness.owner.dispose();
             await rm(directory, { recursive: true, force: true });
         }

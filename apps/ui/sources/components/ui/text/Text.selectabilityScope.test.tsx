@@ -26,7 +26,7 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
   };
 });
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
   useLocalSetting: () => 1,
 }));
 

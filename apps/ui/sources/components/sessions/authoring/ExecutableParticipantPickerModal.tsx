@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { ExecutableParticipantPicker as ControlledExecutableParticipantPicker } from '@happier-dev/plugin-ui/components';
 import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
@@ -8,11 +7,7 @@ import {
   executableParticipantOptionId,
   useExecutableParticipantSections,
 } from '@/components/discussions/useExecutableParticipantSections';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import {
-  SelectionList,
-  type SelectionListStep,
-} from '@/components/ui/selectionList';
+import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -48,6 +43,7 @@ function ExecutableParticipantPicker(
     }>,
 ) {
   const { onResolve, multiple } = props;
+  const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
   const [chosen, setChosen] = React.useState<
     readonly ExecutableParticipantSelectionV1[]
   >(() =>
@@ -74,17 +70,26 @@ function ExecutableParticipantPicker(
   const sections = useExecutableParticipantSections({
     accountLifetime: props.accountLifetime,
     enabled: true,
-    sessionSubtitle: t('workflows.start.participantSession'),
+    readinessSessionId,
+    onReadinessSessionChange: setReadinessSessionId,
+    sessionsContext: t('workflows.start.participantSession'),
     onChoose,
   });
-  const rootStep = React.useMemo<SelectionListStep>(
-    () => ({
-      id: 'executable-participant-picker',
-      inputPlaceholder: t('workflows.start.participantSearch'),
-      sections,
-    }),
-    [sections],
-  );
+  const presentedSections = React.useMemo(() => sections.map(section => ({
+    id: section.id,
+    title: section.title,
+    rightAccessory: section.rightAccessory,
+    options: section.options.map(option => ({
+      id: option.id, label: option.label, subtitle: option.subtitle,
+      icon: option.icon, rightAccessory: option.rightAccessory,
+      accessibilityLabel: option.accessibilityLabel, disabled: option.disabled, testID: option.testID,
+      onHighlight: option.onHighlight, onPressIn: option.onPressIn,
+    })),
+  })), [sections]);
+  const selectOption = React.useCallback((id: string) => {
+    const option = sections.flatMap(section => section.options).find(entry => entry.id === id);
+    option?.onSelect?.();
+  }, [sections]);
   const chosenIds = React.useMemo(
     () =>
       new Set(
@@ -96,11 +101,11 @@ function ExecutableParticipantPicker(
     [chosen],
   );
   return (
-    <View testID="executable-participant-picker" style={styles.body}>
-      <SelectionList
-        rootStep={rootStep}
-        fillAvailableSpace
-        autoFocusInputOnWeb
+    <CorePluginUiPresentationScope>
+      <ControlledExecutableParticipantPicker
+        testID="executable-participant-picker"
+        sections={presentedSections}
+        searchPlaceholder={t('workflows.start.participantSearch')}
         selection={
           multiple
             ? { kind: 'multiple', selectedIds: chosenIds }
@@ -109,21 +114,13 @@ function ExecutableParticipantPicker(
                 selectedId: chosenIds.values().next().value ?? null,
               }
         }
-        onSelect={() => undefined}
+        onSelect={selectOption}
         onRequestClose={() => onResolve(null)}
+        doneLabel={t('workflows.start.participantDone')}
+        canConfirm={chosen.length > 0}
+        onDone={() => onResolve(chosen)}
       />
-      {multiple ? (
-        <View style={styles.footer}>
-          <RoundButton
-            testID="executable-participant-picker-done"
-            size="normal"
-            title={t('workflows.start.participantDone')}
-            disabled={chosen.length === 0}
-            onPress={() => onResolve(chosen)}
-          />
-        </View>
-      ) : null}
-    </View>
+    </CorePluginUiPresentationScope>
   );
 }
 
@@ -177,8 +174,3 @@ export function presentExecutableParticipantPicker(
     if (!modalId) cancel();
   });
 }
-
-const styles = StyleSheet.create((theme) => ({
-  body: { gap: theme.space.s12, flex: 1, minHeight: 0 },
-  footer: { flexDirection: 'row', justifyContent: 'flex-end' },
-}));

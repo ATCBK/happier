@@ -54,7 +54,18 @@ function startActionPreview() {
     readSettings: async () => settings, mutateSettings: async () => { throw new Error('Preview must not change settings'); },
   });
 }
+async function ensurePreviewAccount() {
+  if (!account) {
+    const { createVoiceSettingsAccountTestHarness } = await import('../voiceSettingsAccountTestHarness');
+    const voice = voiceSettingsParse({ providerId: 'local_conversation' });
+    const local = readLocalConversationVoiceSettings(voice);
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: writeLocalConversationVoiceSettings(voice, {
+      ...local, tts: { ...local.tts, provider: 'local_neural', localNeural: previewConfig },
+    }), actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } }));
+  }
+}
 async function mountPreviewPicker() {
+  await ensurePreviewAccount();
   const screen = await renderScreen(<LocalNeuralTtsSettings cfgKokoro={previewConfig} setKokoro={vi.fn()} networkTimeoutMs={1000} />);
   const menu = () => screen.tree.root.findAllByType(DropdownMenu)
     .find(node => node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.title'))!;
@@ -88,6 +99,15 @@ describe('LocalNeuralTtsSettings (native)', () => {
     account = null;
   });
   afterAll(async () => { await boundary.disposeAudioSession(); setPreferredLanguageFromSettings(initialLanguage); });
+
+  it('honors disabled Settings Action admission for a native picker preview press', async () => {
+    const { menu, sampleButton } = await mountPreviewPicker();
+    account!.replaceSettings(settingsParse({ ...account!.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    await act(async () => { menu().props.onOpenChange(true); sampleButton().props.onPress(); });
+    expect(localNeuralTtsPreviewController.read()).toBeNull();
+    expect(sherpa.initialize).not.toHaveBeenCalled();
+  });
 
   it.each(['pending', 'active'] as const)('leaves another caller’s %s sample current with the menu closed and after unmount', async phase => {
     const { screen, menu } = await mountPreviewPicker();
@@ -177,6 +197,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
   });
 
   it('reflects and stops the shared preview attempt instead of keeping an independent mounted player', async () => {
+    await ensurePreviewAccount();
     const { isKokoroRuntimeSupported } = await import('@/voice/kokoro/runtime/kokoroSupport');
     expect(isKokoroRuntimeSupported()).toBe(true);
     const { localNeuralTtsPreviewController } = await import('./providers/localNeural/previewLocalNeuralTts');

@@ -265,7 +265,8 @@ it.each(['kilo', 'acp', 'acp-failure', 'external', 'foreign'] as const)('carries
   let coordinating: Promise<unknown> | undefined;
   const bootstrap = createDaemonMachineBootstrapRuntime({ api, credentials, controlPort: 43129, requesterServerId: 'session-home',
     runtimeId: 'workflow-project', publicReleaseChannel: 'dev', startupSource: 'manual', serviceLabel: undefined,
-    transferRuntimeStatePublisher: null, spawnSession: async () => { throw new Error('Unexpected Session'); }, stopSession: async () => true,
+    transferRuntimeStatePublisher: null, spawnSessionForInternalResume: async () => { throw new Error('Unexpected Session'); },
+    spawnSession: async () => { throw new Error('Unexpected Session'); }, stopSession: async () => true,
     awaitAgentSessionOpen: async () => { throw new Error('Unexpected Session'); }, isSessionAlreadyRunning: async () => false,
     loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown() {},
     directPeerServerLifecycle: null, directTransferRegistryHost: {} as never, daemonServerWorkScheduler: {} as never,

@@ -25,6 +25,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
+import { createTerminalRuntimeSwitchHandlerService } from '@/agent/runtime/session/terminal/switchHandler';
 
 import { createCliActionDeps, type SessionActionRpcTransport } from './createCliActionDeps';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
@@ -44,7 +45,7 @@ const resumeNetwork = vi.hoisted(() => ({ io: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: resumeNetwork.io }));
 
 function callerSessionFixture(callerDirectory = '/caller/repo', currentStarterDepth = 2, active = true,
-  rawOverrides: Parameters<typeof createSessionRecordFixture>[0] = {}, questionAnswersEnabled = false,
+  rawOverrides: Partial<Parameters<typeof createSessionRecordFixture>[0]> = {}, questionAnswersEnabled = false,
   otherSessions: readonly ReturnType<typeof createSessionRecordFixture>[] = []) {
     const sessionId = 'c111111111111111111111111';
     const metadata = { path: callerDirectory, machineId: 'caller-machine', flavor: 'codex',
@@ -91,6 +92,47 @@ function callerSessionFixture(callerDirectory = '/caller/repo', currentStarterDe
 }
 
 describe('daemon Account Action Session caller context', () => {
+  it('routes the Agent control-switch Action to the current Session terminal owner and retains unsupported results', async () => {
+    const fixture = callerSessionFixture();
+    const receiver = new RpcHandlerManager({ scopePrefix: fixture.sessionId, encryptionMode: 'plain', logger: () => {} });
+    const terminal = createTerminalRuntimeSwitchHandlerService({ registerHandler: (method, handler) => receiver.registerHandler(method, handler) });
+    let remote = false;
+    const subscription = terminal.register(async request => {
+      if (request.target !== 'remote') return false;
+      remote = true;
+      return true;
+    });
+    const answer = async (event: string, payload: unknown) => {
+      if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object') throw new Error('Unexpected control transport');
+      const method = Reflect.get(payload, 'method');
+      expect(method).toBe(`${fixture.sessionId}:switch`);
+      if (typeof method !== 'string') throw new Error('Missing method');
+      return { ok: true, result: await receiver.handleRequest({ method, params: Reflect.get(payload, 'params'),
+        callerAuthority: 'account_automation' }) };
+    };
+    resumeNetwork.io.mockImplementation((_url, options) => {
+      expect(options?.auth).toMatchObject({ authorityCeiling: 'account_automation' });
+      return createApiSessionSocketStub({ emitWithAck: answer, emit: (event, [payload, callback]) => {
+        if (typeof callback === 'function') void answer(event, payload).then(value => callback(value));
+      } });
+    });
+    const deps = createCliActionDeps(fixture.params);
+    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: fixture.sessionId,
+      actionRequestId: 'control-switch',
+      actionCaller: { kind: 'session', sessionId: fixture.sessionId, starterDepth: 0, turnDepth: 1 },
+      sessionInputSource: { sourceSessionId: fixture.sessionId, sourceTurnId: 'turn-one', via: 'action' },
+    } as const;
+    try {
+      const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+      const id = ActionIdSchema.parse('session.control.switch');
+      const executor = createActionExecutor(deps);
+      expect(await executor.execute(id, { to: 'remote' }, context)).toEqual({ ok: true, result: { switched: true } });
+      expect(remote).toBe(true);
+      subscription.unsubscribe();
+      expect(await executor.execute(id, { to: 'remote' }, context))
+        .toMatchObject({ ok: false, errorCode: 'session_control_unavailable' });
+    } finally { subscription.unsubscribe(); resumeNetwork.io.mockReset(); fixture.cleanup(); }
+  });
   it.each(['current', 'replaced', 'signed-read'] as const)('retains the admitted Action root and exact target on a remote inactive Resume (%s)', async outcome => {
     const fixture = callerSessionFixture('/repo', 0, false, { machineId: 'caller-machine', seq: 17,
       metadata: JSON.stringify({ path: '/repo', machineId: 'caller-machine', flavor: 'claude',
@@ -371,7 +413,7 @@ describe('daemon Account Action Session caller context', () => {
       actionCaller: caller, defaultSessionId: fixture.sessionId, actionRequestId: 'answer-action',
       sessionInputSource: { sourceSessionId: fixture.sessionId, sourceTurnId: 'turn-one', via: 'action' } };
     try {
-      for (const response of [{ answers: [{ question: 'Branch?', values: ['dev'] }] }, { disposition: 'pass_up' }]) {
+      for (const response of [{ answers: [{ question: 'Branch?', values: ['dev'] }] }, { disposition: 'pass_up' as const }]) {
         expect(await deps.sessionUserActionAnswer?.({
           sessionId: fixture.sessionId, requestId: 'question-one', answers: [], ...response, context,
         })).toMatchObject({ ok: true });

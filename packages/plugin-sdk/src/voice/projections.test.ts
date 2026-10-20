@@ -447,21 +447,22 @@ describe('Voice package-local publication projection', () => {
     }, 120_000);
 
     it('directly projects Protocol DTOs and publishes native Mini Voice composition', async () => {
-        const [source, publicIndexSource] = await Promise.all([
+        const [source, publicIndexSource, contracts] = await Promise.all([
             readFile(new URL('./projections.ts', import.meta.url), 'utf8'),
             readFile(new URL('./index.public.ts', import.meta.url), 'utf8'),
+            readFile(new URL('./contracts.ts', import.meta.url), 'utf8'),
         ]);
         expect(source).toContain("} from '@happier-dev/protocol/plugins/contributions/voice';");
         expect(source).toContain("} from '@happier-dev/protocol/voice/modelPacks/contributionV1';");
-        expect(source).toContain("} from '@happier-dev/protocol/voice/realtime';");
-        expect(source).toMatch(
-            /import\s+type\s*\{[^}]*ConnectedAccountMaterializationRequest[^}]*\}\s*from\s*['"]\.\.\/connectedAccounts\.js['"]/u,
+        expect(contracts).toContain("from '@happier-dev/protocol/voice/realtime';");
+        expect(contracts).toMatch(
+            /import\s+type\s*\{[^}]*ConnectedAccountMaterializationRequest[^}]*\}\s*from\s*['"]@happier-dev\/protocol\/connect\/connected-account-purposes['"]/u,
         );
         expect(source).toMatch(
             /export\s+type\s*\{[^}]*ConnectedAccountHttpHeadersRequest[^}]*\}\s*from\s*['"]\.\.\/connectedAccounts\.js['"]/u,
         );
         expect(source).toContain("import * as z from 'zod/mini';");
-        expect(source).toContain('export type VoiceSchema<TOutput> = z.ZodMiniType<TOutput>;');
+        expect(contracts).toContain('export type VoiceSchema<TOutput> = z.ZodMiniType<TOutput>;');
         expect(source).toContain('export function createVoiceRecordSchema');
         expect(source).toContain('export function withVoiceSchemaField');
         expect(publicIndexSource).toContain(
@@ -477,21 +478,26 @@ describe('Voice package-local publication projection', () => {
     });
 
     it('keeps Voice source companion declarations typed through native Mini', async () => {
-        const [projectionsDeclaration, clientDeclaration] = await Promise.all([
+        const [projectionsDeclaration, clientDeclaration, contractsDeclaration] = await Promise.all([
             readFile(new URL('../../dist/voice/projections.d.ts', import.meta.url), 'utf8'),
             readFile(new URL('../../dist/voice/client.d.ts', import.meta.url), 'utf8'),
+            readFile(new URL('../../dist/voice/contracts.d.ts', import.meta.url), 'utf8'),
         ]);
 
-        expect(projectionsDeclaration).toContain("from 'zod/mini';");
-        expect(projectionsDeclaration).not.toContain("from 'zod';");
+        expect(contractsDeclaration).toContain("from 'zod/mini';");
+        for (const declaration of [projectionsDeclaration, clientDeclaration, contractsDeclaration]) {
+            expect(declaration).not.toContain("from 'zod';");
+        }
+        expect(projectionsDeclaration).toContain("from './contracts.js';");
+        expect(clientDeclaration).toContain("from './contracts.js';");
         expect(clientDeclaration).not.toMatch(/\b_zod\b/u);
         expect(projectionsDeclaration).toContain(
             "from '@happier-dev/protocol/plugins/contributions/voice';",
         );
-        expect(projectionsDeclaration).toContain(
+        expect(contractsDeclaration).toContain(
             "from '@happier-dev/protocol/voice/realtime';",
         );
-        expect(projectionsDeclaration).toContain('VoiceSchema<TOutput> = z.ZodMiniType<TOutput>');
+        expect(contractsDeclaration).toContain('VoiceSchema<TOutput> = z.ZodMiniType<TOutput>');
         expect(clientDeclaration).toContain(
             'VoiceRealtimeJsonValueSchema: VoiceSchema<VoiceRealtimeJsonValue>',
         );

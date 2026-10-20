@@ -837,14 +837,87 @@ describe('ApiMachineClient connect ordering', () => {
     }
   }, 5_000);
 
-  it('reconnects through the existing supervisor when capability publication cannot establish readiness', async () => {
+  function createReadinessClient() {
+    const client = new ApiMachineClient('token', {
+      id: 'machine-1',
+      encryptionKey: new Uint8Array(32).fill(1),
+      encryptionVariant: 'legacy',
+      metadata: null,
+      metadataVersion: 0,
+      daemonState: null,
+      daemonStateVersion: 0,
+    });
+    client.setRPCHandlers({
+      spawnSession: async () => ({ type: 'success', sessionId: 'session-1' }),
+      sessionSpawnV1OutcomeRequired: true,
+      resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId: 'session-1' }),
+      stopSession: async () => true,
+      requestShutdown: () => {},
+    });
+    const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
+    registerRequiredMachineControlHandlers(rpcHandlerManager);
+    vi.spyOn(rpcHandlerManager, 'waitForRegisteredHandlers').mockResolvedValue({ status: 'ready' });
+    return client;
+  }
+
+  it('retries a timed-out capability publication on the live socket without tearing the transport down', async () => {
     vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    const capabilityAttempts: unknown[] = [];
+    const statePayloads: unknown[] = [];
+    // A slow Home (lock convoy) answers the first publication after the ack deadline.
+    const socket = createApiSessionSocketStub({
+      id: 'machine-socket-1',
+      disconnectReason: 'transport close',
+      emitWithAck: (event, payload) => {
+        if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
+          capabilityAttempts.push(payload);
+          if (capabilityAttempts.length === 1) {
+            throw new Error('Socket ACK timed out for machine-update-operation-protocol-capabilities');
+          }
+          return { v: 1, result: 'success', revision: capabilityAttempts.length };
+        }
+        if (event === 'machine-update-state') {
+          statePayloads.push(payload);
+          return {
+            result: 'success',
+            version: 1,
+            daemonState: (payload as { daemonState: string }).daemonState,
+          };
+        }
+        return { result: 'success', version: 1 };
+      },
+    });
+    const unusedSocket = createApiSessionSocketStub({ id: 'machine-socket-unused' });
+    bindApiSessionSocketSequenceMock(ioMock, [socket, unusedSocket]);
+    const client = createReadinessClient();
+
+    try {
+      client.connect();
+      await vi.waitFor(() => expect(capabilityAttempts).toHaveLength(1));
+      // Readiness is not advertised until a publication lands.
+      expect(statePayloads).toEqual([]);
+
+      await vi.waitFor(() => expect(statePayloads).toHaveLength(1), { timeout: 10_000 });
+      expect(capabilityAttempts).toHaveLength(2);
+      expect(capabilityAttempts[1]).toEqual(capabilityAttempts[0]);
+      expect(ioMock).toHaveBeenCalledTimes(1);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+      expect(socket.connected).toBe(true);
+    } finally {
+      await client.shutdown();
+    }
+  }, 20_000);
+
+  it('reconnects as before when the socket really disconnects while a publication is being retried', async () => {
+    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    const firstCapabilityAttempts: unknown[] = [];
     const firstSocket = createApiSessionSocketStub({
       id: 'machine-socket-1',
       disconnectReason: 'transport close',
       emitWithAck: (event) => {
         if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
-          return { v: 1, result: 'error', code: 'internal_error' };
+          firstCapabilityAttempts.push(event);
+          throw new Error('Socket ACK timed out for machine-update-operation-protocol-capabilities');
         }
         return { result: 'success', version: 1 };
       },
@@ -871,31 +944,22 @@ describe('ApiMachineClient connect ordering', () => {
       },
     });
     bindApiSessionSocketSequenceMock(ioMock, [firstSocket, secondSocket]);
-    const client = new ApiMachineClient('token', {
-      id: 'machine-1',
-      encryptionKey: new Uint8Array(32).fill(1),
-      encryptionVariant: 'legacy',
-      metadata: null,
-      metadataVersion: 0,
-      daemonState: null,
-      daemonStateVersion: 0,
-    });
-    client.setRPCHandlers({
-      spawnSession: async () => ({ type: 'success', sessionId: 'session-1' }),
-      sessionSpawnV1OutcomeRequired: true,
-      resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId: 'session-1' }),
-      stopSession: async () => true,
-      requestShutdown: () => {},
-    });
-    const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
-    registerRequiredMachineControlHandlers(rpcHandlerManager);
-    vi.spyOn(rpcHandlerManager, 'waitForRegisteredHandlers').mockResolvedValue({ status: 'ready' });
+    const client = createReadinessClient();
 
     try {
       client.connect();
+      await vi.waitFor(() => expect(firstCapabilityAttempts).toHaveLength(1));
+      expect(ioMock).toHaveBeenCalledTimes(1);
+
+      // The transport liveness owner (the socket's own disconnect) is what ends a connection.
+      firstSocket.connected = false;
+      firstSocket.trigger('disconnect', 'transport close');
+
       await vi.waitFor(() => expect(ioMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
       await vi.waitFor(() => expect(secondCapabilityPayloads).toHaveLength(1), { timeout: 10_000 });
       await vi.waitFor(() => expect(secondStatePayloads).toHaveLength(1), { timeout: 10_000 });
+      // The retry that belonged to the dead socket never publishes again.
+      expect(firstCapabilityAttempts).toHaveLength(1);
     } finally {
       await client.shutdown();
     }

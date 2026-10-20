@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { fatalSpy } = vi.hoisted(() => ({
+const { fatalSpy, infoFileSpy, flushSyncSpy } = vi.hoisted(() => ({
   fatalSpy: vi.fn(),
+  infoFileSpy: vi.fn(),
+  flushSyncSpy: vi.fn(),
 }));
 
 vi.mock('@/ui/logger', () => ({
-  logger: { fatal: fatalSpy },
+  logger: { fatal: fatalSpy, infoFile: infoFileSpy, flushSync: flushSyncSpy },
 }));
 
 import { registerRunnerTerminationHandlers } from './lifecycle/runnerTerminationHandlers';
@@ -22,6 +24,8 @@ function createFakeProcess() {
 describe('registerRunnerTerminationHandlers', () => {
   beforeEach(() => {
     fatalSpy.mockClear();
+    infoFileSpy.mockReset();
+    flushSyncSpy.mockReset();
   });
 
   it('forces process exit even if onTerminate hangs (bounded by env timeout)', async () => {
@@ -144,7 +148,7 @@ describe('registerRunnerTerminationHandlers', () => {
   // is the test that has to notice if it comes back.
   //
   // It is deliberately written to assert AFTER termination rather than inside the
-  // callback. Production wraps `onTerminate` in a `.catch(() => undefined)`, so an
+  // callback. Production catches rejected `onTerminate` cleanup, so an
   // assertion that throws in there is swallowed and the test passes no matter what
   // it claimed. That is exactly how this test previously asserted `archive === true`
   // — the opposite of the shipped contract — while staying green.
@@ -184,11 +188,19 @@ describe('registerRunnerTerminationHandlers', () => {
     }
   });
 
-  it('still exits when onTerminate throws synchronously', async () => {
+  it.each(['synchronous', 'asynchronous'] as const)('reports a %s cleanup failure while preserving the signal outcome', async (failureKind) => {
     const fakeProcess = createFakeProcess();
-    const exit = vi.fn();
+    // The file sink buffers until flushed; observe its persisted output at the exit boundary.
+    let persistedDiagnostic: unknown = null;
+    let diagnosticAtExit: unknown = null;
+    infoFileSpy.mockImplementation((...args: unknown[]) => {
+      flushSyncSpy.mockImplementationOnce(() => { persistedDiagnostic = args; });
+    });
+    const exit = vi.fn(() => { diagnosticAtExit = persistedDiagnostic; });
+    const cleanupError = new Error('cleanup failed');
     const onTerminate = vi.fn(() => {
-      throw new Error('cleanup failed');
+      if (failureKind === 'asynchronous') return Promise.reject(cleanupError);
+      throw cleanupError;
     });
 
     const handlers = registerRunnerTerminationHandlers({
@@ -203,7 +215,33 @@ describe('registerRunnerTerminationHandlers', () => {
       await handlers.whenTerminated;
 
       expect(onTerminate).toHaveBeenCalledTimes(1);
+      expect(diagnosticAtExit).toEqual([expect.any(String), {
+        phase: 'termination-cleanup',
+        terminationKind: 'signal',
+        cause: expect.stringContaining('cleanup failed'),
+      }]);
+      expect(exit).toHaveBeenCalledTimes(1);
       expect(exit).toHaveBeenCalledWith(0);
+    } finally {
+      handlers.dispose();
+    }
+  });
+
+  it('preserves the original failure exit when cleanup diagnostics fail', async () => {
+    const fakeProcess = createFakeProcess();
+    const exit = vi.fn();
+    infoFileSpy.mockImplementationOnce(() => { throw new Error('log unavailable'); });
+    const handlers = registerRunnerTerminationHandlers({
+      process: fakeProcess,
+      exit,
+      onTerminate: async () => { throw new Error('cleanup failed'); },
+    });
+    try {
+      fakeProcess.emit('uncaughtException', new Error('original failure'));
+      await handlers.whenTerminated;
+      expect(infoFileSpy).toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(1);
     } finally {
       handlers.dispose();
     }

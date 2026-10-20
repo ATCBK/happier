@@ -13,6 +13,8 @@ import type { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RuntimeSessionTurnMutationV1 } from '@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { TurnAssistantTextSnapshot } from '@/api/session/turns/assistantTextSnapshot';
+import type { RegisterProviderAcceptedEffect } from '@/agent/runtime/session/input/providerInputOutcome';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { isTerminalSessionTurnMutationAction } from '@/api/session/sessionTurnStatusSnapshot';
 import type { Metadata, PermissionMode } from '@/api/types';
@@ -223,10 +225,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
   capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: (() => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   terminalRemoteModeLoop?: HostSessionTerminalRemoteModeLoop | null;
   messageBuffer: MessageBuffer;
   permissionHandler: PromptLoopPermissionHandler;
@@ -407,7 +406,26 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const runtimeTranscriptStateByTurnId = new Map<string, {
     failure?: RuntimeTranscriptRequiredAdmissionError;
     userLocalIds: Set<string>;
+    hasAssistantText?: true;
+    terminalAssistantSnapshot?: TurnAssistantTextSnapshot | null;
   }>();
+  const pendingInputSettlementsByLocalId = new Map<string, Promise<void>>();
+  const retireTurnTranscriptState = (turnId: string): void => {
+    for (const localId of runtimeTranscriptStateByTurnId.get(turnId)?.userLocalIds ?? []) {
+      pendingInputSettlementsByLocalId.delete(localId);
+    }
+    runtimeTranscriptStateByTurnId.delete(turnId);
+    if (activeRuntimeTranscriptTurnId === turnId) activeRuntimeTranscriptTurnId = null;
+  };
+  const registerProviderAcceptedEffect: RegisterProviderAcceptedEffect = (localId, onAccepted, representedInputs) => {
+    // This prompt-loop registration also owns anchor ordering when the prompt
+    // has no optional accepted effect. Canonical rejection retires its entry.
+    if (!onAccepted) params.registerProviderAcceptedEffect(localId, null, representedInputs);
+    params.registerProviderAcceptedEffect(localId, pendingSettlement => {
+      if (pendingSettlement) pendingInputSettlementsByLocalId.set(localId, pendingSettlement);
+      onAccepted?.(pendingSettlement);
+    }, representedInputs);
+  };
   const readTurnTranscriptState = (turnId: string) => {
     let state = runtimeTranscriptStateByTurnId.get(turnId);
     if (!state) {
@@ -480,15 +498,17 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           },
         };
         await enqueueTerminalMutation(failureMutation);
-        runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-        if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-          activeRuntimeTranscriptTurnId = null;
-        }
+        retireTurnTranscriptState(mutation.turnId);
         return { terminalStatusOverride: 'failed' as const };
       }
       if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
 
       try {
+        const turnState = 'turnId' in mutation ? readTurnTranscriptState(mutation.turnId) : null;
+        // Join the existing Pending write before reading its acknowledged-row
+        // projection. A settled attempt is ordering, not invented commit evidence.
+        await Promise.all([...turnState?.userLocalIds ?? []]
+          .map(localId => pendingInputSettlementsByLocalId.get(localId)));
         // Resolve only acknowledged rows after prior transcript projections.
         // Native acceptance can precede both begin-marker admission and HTTP ACKs.
         const userMessageSeqs = 'turnId' in mutation
@@ -498,7 +518,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               .sort((left, right) => left - right)
           : [];
         const startUserMessageSeq = userMessageSeqs[0];
-        const snapshot = params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot();
+        const snapshot = turnState?.terminalAssistantSnapshot;
         const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
           && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
           ? snapshot.seq : null;
@@ -539,10 +559,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             : mutation;
         await enqueueTerminalMutation(settledMutation);
         if ('turnId' in mutation) {
-          runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-          if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-            activeRuntimeTranscriptTurnId = null;
-          }
+          retireTurnTranscriptState(mutation.turnId);
         }
       } catch (error) {
         logger.debug(`${params.config.uiLogPrefix} Runtime terminal turn mutation failed`, {
@@ -661,6 +678,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let terminalHandoffFailureRequiresManualAction = false;
   let runtimeTranscriptProjectionSerial = Promise.resolve();
   const projectRuntimeTranscript = createRuntimeTranscriptProjector();
+  // A native runtime ending can mean observer/protocol loss or a crash. It
+  // cannot establish a clean process end, even when host cleanup exits zero.
+  let runtimeEndedWithoutCleanExit = false;
   let requestRuntimeEndedTermination = (): void => undefined;
   const observeRuntimeLifecycleMessage = (message: unknown): void => {
     const parsedRuntimeEvent = AgentSessionRuntimeEventSchema.safeParse(message);
@@ -689,6 +709,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : typeof parsedProjectionTurnId === 'string'
         ? parsedProjectionTurnId
         : activeRuntimeTranscriptTurnId;
+    if (parsedRuntimeEvent.success && projectionTurnId
+      && isForegroundTurnRuntimeTranscriptEvent(parsedRuntimeEvent.data)
+      && ((parsedRuntimeEvent.data.kind === 'message-delta' && parsedRuntimeEvent.data.channel === 'assistant')
+        || (parsedRuntimeEvent.data.kind === 'transcript-message-committed' && parsedRuntimeEvent.data.role === 'assistant'))
+      && parsedRuntimeEvent.data.text.trim().length > 0) {
+      readTurnTranscriptState(projectionTurnId).hasAssistantText = true;
+    }
     if (parsedRuntimeEvent.success && params.config.publishHostRuntimeEvent) {
       try {
         params.config.publishHostRuntimeEvent(parsedRuntimeEvent.data);
@@ -731,6 +758,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         }
       } catch (error) {
         transcriptProjectionError ??= error;
+      }
+      if (
+        parsedRuntimeEvent.success && projectionTurnId
+        && (parsedRuntimeEvent.data.kind === 'turn-complete' || parsedRuntimeEvent.data.kind === 'turn-failed'
+          || parsedRuntimeEvent.data.kind === 'turn-cancelled')
+      ) {
+        const state = readTurnTranscriptState(projectionTurnId);
+        state.terminalAssistantSnapshot = transcriptProjectionError || !state.hasAssistantText ? null
+          : params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot() ?? null;
       }
       if (
         readyCapture && readyCapture.context === undefined && parsedRuntimeEvent.success
@@ -799,6 +835,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       terminalTurnStateMachine.observe(observation);
     }
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'runtime-ended') {
+      runtimeEndedWithoutCleanExit = true;
       requestRuntimeEndedTermination();
     }
   };
@@ -995,8 +1032,25 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   publishKeepAlive();
 
   let closeFailedSession = false;
+  const endSessionAfterProcessExit = async (cleanExit: boolean): Promise<void> => {
+    try {
+      if (cleanExit && params.session.hasOwnerMetadataAuthority()) {
+        const stoppedAt = Date.now();
+        await params.session.updateMetadataAsCurrentPublisher(metadata => ({
+          ...metadata,
+          lifecycleState: 'stopped',
+          lifecycleStateSince: stoppedAt,
+        }));
+      }
+    } finally {
+      // Metadata failure or a superseded publisher must not skip the existing
+      // semantic-end/transport cleanup; its own authority checks still apply.
+      await params.session.endSessionAndClose();
+    }
+  };
   const cleanupOnce = (): Promise<void> => {
     cleanupPromise ??= (async () => {
+      if (closeFailedSession) params.session.prepareForClose();
       unsubscribeRuntimeEventsOnce();
       await drainRuntimeTranscriptProjections();
       // Normal completion retains accepted marker custody until it drains.
@@ -1041,15 +1095,18 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : {}),
     sessionExitReport: { sessionId: params.session.sessionId },
     onTerminate: (event, outcome) => {
+      const cleanProcessExit = outcome.exitCode === 0 && !runtimeEndedWithoutCleanExit;
       const work = (async () => {
         runtimeDisposeReason = resolveRunnerRuntimeDisposalReason(event);
         shouldExit = true;
         try {
           await abortAndDisposeRunnerRuntime({
+            retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
             abortActiveTurn: handleAbort,
             disposeRuntime: disposeRuntimeOnce,
             reason: runtimeDisposeReason,
           });
+          params.session.prepareForClose();
           unsubscribeRuntimeEventsOnce();
           await drainRuntimeTranscriptProjections();
           sessionTurnLifecycle.retireAcceptedLifecyclePublication();
@@ -1061,7 +1118,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           // Termination ends the runtime, never the Happy session's lifecycle intent:
           // the session becomes inactive and stays resumable. Archiving is a separate
           // user-intent action owned by the session archive service.
-          await params.session.endSessionAndClose();
+          await endSessionAfterProcessExit(cleanProcessExit);
         } finally {
           await cleanupOnce();
         }
@@ -1081,6 +1138,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const requestRuntimeStop = async () => {
     logger.debug(`${params.config.uiLogPrefix} Kill session requested`);
     await requestExplicitRunnerStop({
+      retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
       abortActiveTurn: handleAbort,
       disposeRuntime: disposeRuntimeOnce,
       requestTermination: terminationHandlers.requestTermination,
@@ -1249,6 +1307,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   };
   let terminalRemoteModeLoopError: unknown = null;
   let terminalProcessExited = false;
+  let terminalProcessExitedCleanly = false;
   const terminalRemoteModeLoopPromise = !shouldExit && terminalRemoteModeLoop && resolvedStartingMode.kind === 'switching'
     ? runTerminalRemoteSessionModeLoopFn({
         ...terminalRemoteModeLoop,
@@ -1269,6 +1328,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           const result = await terminalRemoteModeLoop.runTerminal(loopParams);
           if (result.type === 'exit') {
             terminalProcessExited = true;
+            terminalProcessExitedCleanly = result.code === 0;
             terminalTurnStateMachine.observe({
               type: 'process_exited',
               agentId: params.policyAgentId,
@@ -1310,7 +1370,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       replaySeedRetirement: params.permissionModeState.replaySeedRetirement,
       permissionHandler: params.permissionHandler,
       runtime: runtimeForPromptLoop,
-      createOverrideSynchronizer: (isStarted): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => {
+      createOverrideSynchronizer: (isStarted, isInputSettled): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => {
         const sync = createRuntimeOverrideSynchronizersFn({
         agentTargetKey: buildBackendTargetKeyV2(params.opts.backendTarget
           ? params.opts.backendTarget
@@ -1322,7 +1382,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           ...params.capabilitySelection,
           session: params.session,
           isStarted,
-          isSettled: () => !sessionTurnLifecycle.hasActiveTurn() && !params.runtimeState.thinking,
+          isSettled: () => isInputSettled() && !sessionTurnLifecycle.hasActiveTurn() && !params.runtimeState.thinking,
         } } : {}),
         });
         capabilityOverrideSync = sync;
@@ -1337,7 +1397,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       currentPermissionModeUpdatedAt: params.permissionModeState.getCurrentPermissionModeUpdatedAt(),
       setCurrentPermissionMode: params.permissionModeState.setCurrentPermissionMode,
       setCurrentPermissionModeUpdatedAt: params.permissionModeState.setCurrentPermissionModeUpdatedAt,
-      registerProviderAcceptedEffect: params.registerProviderAcceptedEffect,
+      registerProviderAcceptedEffect,
       onBeforeTurnBegin: (input, snapshotScope) => {
         const capture: HostReadyCapture = { turnId: null, snapshotScope };
         hostReadyCapture = capture;
@@ -1528,7 +1588,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               session: params.session,
               runtime: hookRuntimeForCallbacks,
             });
-            await params.session.endSessionAndClose();
+            await endSessionAfterProcessExit(terminalProcessExitedCleanly);
           }
         }
       } finally {

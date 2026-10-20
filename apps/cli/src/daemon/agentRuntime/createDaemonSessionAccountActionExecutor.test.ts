@@ -10,7 +10,7 @@ import { mintExternalActionExecutionAuthorization, projectExternalActionRequeste
 import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionApprovalInputV1,
   verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, ExternalActionRequestEnvelopeV1Schema,
-  ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
+  ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema,
   externalActionExecutionAuthorizationRequestSchemaForActionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { AccountProfileResponseSchema, AccountSettingsSchema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -61,6 +61,7 @@ import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/tes
 import { createDaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { readProcessIdentityByPid } from '@/daemon/processIdentity';
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
+import { hashPrivateBearer } from '@/daemon/privateBearerFile';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY,
   createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
@@ -71,6 +72,8 @@ import { DiscussionAgentCreateRequestV1Schema, DiscussionAgentPostRequestV1Schem
   type DiscussionAgentPublisherRequestV1 } from '@happier-dev/protocol/discussions/api';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { fetchAccountProfile } from '@/api/accountProfile';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
 
 const processIdentityBoundary = vi.hoisted(() => vi.fn());
 // Process inspection is the OS boundary. Tests that do not configure the
@@ -634,16 +637,19 @@ describe('daemon Session Account authority', () => {
         details: { reason: 'external_authorization_binding_mismatch' } });
   });
 
-  it.each(['client', 'visual', 'relation', 'relation-server-error', 'unsigned-visual', 'unsigned-server-error', 'unsigned-retired', 'unsigned-revoked', 'unsigned-foreign-home', 'unsigned-unavailable'] as const)(
+  it.each(['find', 'settings', 'link', 'client', 'visual', 'relation', 'relation-server-error', 'unsigned-visual', 'unsigned-server-error', 'unsigned-retired', 'unsigned-revoked', 'unsigned-foreign-home', 'unsigned-unavailable'] as const)(
     'routes an installed Session %s Action through its canonical approval replay owner', async kind => {
     const unsigned = kind.startsWith('unsigned-');
     const relation = kind.startsWith('relation');
+    const runnerCarrier = kind === 'find' || kind === 'settings' || kind === 'link';
     const serverHttpBaseUrl = 'https://client-source.test';
     const homeId = 'srv_client-source';
     const source = { machineId: 'source-machine', installationId: 'source-installation' };
     const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(42));
     const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: 'source-account', tokenEpoch: 0,
-      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`, encryption: null };
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`, encryption: null,
+      ...(runnerCarrier ? { credentialProvenance: 'stored_session' as const } : {}),
+    };
     // Installation-file reads and Home HTTP are genuine boundaries; all signing,
     // Session custody, approval policy/currentness and reverse delivery stay real.
     vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({
@@ -657,16 +663,22 @@ describe('daemon Session Account authority', () => {
     } } });
     setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
       settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
-    const actionId = kind === 'client' ? 'relay.runtime.open_path' as const
+    const actionId = kind === 'find' ? 'ui.find' as const
+      : kind === 'settings' ? 'settings.set' as const
+      : kind === 'link' ? 'sessions.external.link.ensure' as const
+      : kind === 'client' ? 'relay.runtime.open_path' as const
       : relation ? 'session.manager.set' as const : 'session.board.item.upsert' as const;
-    const input = relation ? { sessionId: 'bob-session', managerSessionId: 'lead-session', expectedManagerSessionId: null }
+    const input = kind === 'find' ? { op: 'set', query: 'approval needle' }
+      : kind === 'settings' ? { anchor: 'transcript.pinEnabled', value: false }
+      : kind === 'link' ? { machineId: source.machineId, agentId: 'codex', remoteSessionId: 'native-link', source: { kind: 'codexHome', home: 'user' } }
+      : relation ? { sessionId: 'bob-session', managerSessionId: 'lead-session', expectedManagerSessionId: null }
       : kind === 'client' ? { path: '/home/user/.happier/logs/runtime.log' } : {
       itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item: {
         v: 1, title: 'Visual', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
         source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Approved visual' } } },
       },
     };
-    const target = kind === 'client' || relation ? { kind: 'machine' as const, machineId: source.machineId }
+    const target = runnerCarrier || kind === 'client' || relation ? { kind: 'machine' as const, machineId: source.machineId }
       : { kind: 'session' as const, sessionId: 'bob-session' };
     const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
     const mutations: unknown[] = [];
@@ -679,6 +691,8 @@ describe('daemon Session Account authority', () => {
     let currentHomeId = homeId;
     let sessionCurrent = true;
     let accountCurrent = true;
+    let accountContent: unknown = settings;
+    let invocationRequestId = operation.requestId;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({
       features: { sessions: { enabled: true, board: { enabled: true } } },
       capabilities: { serverIdentity: { serverIdentityId: currentHomeId } },
@@ -691,7 +705,12 @@ describe('daemon Session Account authority', () => {
         : { status: 403, data: { error: 'forbidden' } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
-      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: settings }, version: 1 } };
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: accountContent }, version: 1 } };
+      if (path === `/v1/machines/${source.machineId}`) return { status: 200, data: { machine: {
+        ...ExternalActionMachineBootstrapV1Schema.parse({ id: source.machineId, active: true, kind: 'persistent',
+          installationId: source.installationId, revokedAt: null, replacedByMachineId: null }),
+        installationPublicKey: Buffer.from(keys.publicKey).toString('base64'),
+      } } };
       if (path.startsWith('/v1/artifacts/')) return { status: rows.has(path.split('/').at(-1)!) ? 200 : 404,
         data: rows.get(path.split('/').at(-1)!) };
       if (path === '/v2/sessions/bob-session') return { status: 200, data: { session: rawSession } };
@@ -727,6 +746,13 @@ describe('daemon Session Account authority', () => {
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected HTTP object body');
       expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
       const path = new URL(String(url)).pathname;
+      if (path === '/v2/account/settings') {
+        const content = Reflect.get(body, 'content');
+        if (!content || typeof content !== 'object' || Reflect.get(content, 't') !== 'plain') throw new Error('Expected plain settings');
+        accountContent = Reflect.get(content, 'v');
+        mutations.push(accountContent);
+        return { status: 200, data: { success: true, version: 2 } };
+      }
       if (path === '/v1/sessions/bob-session/manager') {
         expect(relation).toBe(true);
         expect(body).toEqual({ managerSessionId: 'lead-session', expectedManagerSessionId: null });
@@ -751,14 +777,14 @@ describe('daemon Session Account authority', () => {
         const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
         return { status: 200, data: { v: 1, token: 'source-home-proof', binding: {
           accountId: 'source-account', custodianAccountId: 'source-account', authentication: { kind: 'account', tokenEpoch: 0 },
-          serverIdentityId: homeId, ...source, actionId, requestId: operation.requestId, target,
+          serverIdentityId: homeId, ...source, actionId, requestId: request.envelope.requestId, target,
           accountEncryptionMode: 'plain', sessionActionOrigin: request.sessionActionOrigin,
           sessionActionSource: request.sessionActionSource, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
         } } };
       }
       if (path.endsWith('/verify')) {
         expect(verifyExternalActionMachineRequestV1({ authorizationToken: 'source-home-proof', effectActionId: actionId,
-          target, installationId: source.installationId, requestId: operation.requestId, method: 'POST', path, body,
+          target, installationId: source.installationId, requestId: invocationRequestId, method: 'POST', path, body,
           signature: String(config?.headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]), publicKey: keys.publicKey })).toBe(true);
         return { status: 200, data: { ok: true } };
       }
@@ -791,7 +817,8 @@ describe('daemon Session Account authority', () => {
         deliveries.push(UiActionDispatchRequestV1Schema.parse(payload));
         options.onIssued();
         await clientCompleted;
-        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'completed' } } } };
+        return { ok: true, result: { v: 1, execution: { ok: true, result: kind === 'find'
+          ? { status: 'results', current: 1, total: 1, coverage: 'loaded' } : { status: 'completed' } } } };
       },
     }));
     let executor!: ReturnType<typeof createCliActionExecutorFromCredentials>;
@@ -805,13 +832,15 @@ describe('daemon Session Account authority', () => {
         serverId: configuration.activeServerId, serverApiUrl: serverHttpBaseUrl, serverIdentityId: homeId,
         externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: source.installationId,
         getCurrentTurnWorkDepth, isApprovalExecutionOriginCurrent: currentness,
+        ...(runnerCarrier ? { readCredentials: async () => credentials } : {}),
         clientActionExecute: reverse, pluginActionExecutionOwner: 'current_process' });
       return executor;
     };
     const execute = createDaemonSessionAccountActionExecutor({ serverId: configuration.activeServerId, serverHttpBaseUrl,
-      token: credentials.token,
+      token: credentials.token, machineId: source.machineId,
       prepareExternalActionAuthorization: async admission => {
-        const authorization = await prepareExternalActionRequesterAccountAuthorization({ actionId, input, requestId: operation.requestId,
+        invocationRequestId = admission.operation.requestId;
+        const authorization = await prepareExternalActionRequesterAccountAuthorization({ actionId, input, requestId: invocationRequestId,
           target, machineId: source.machineId, sourceMachineId: source.machineId, accountId: 'source-account',
           accountEncryptionMode: 'plain', tokenEpochHint: 0, token: credentials.token,
           serverId: configuration.activeServerId, serverIdentityId: homeId, serverHttpBaseUrl,
@@ -821,6 +850,60 @@ describe('daemon Session Account authority', () => {
       },
       createExecutor,
     });
+    const linkCalls: unknown[] = [];
+    if (kind === 'link') {
+      createExecutor(() => 2, async () => true);
+      // The link continuation leaves this process through exact-Machine RPC.
+      vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async request => {
+        linkCalls.push(request.request);
+        return { ok: true, sessionId: 'linked-session', created: true };
+      });
+    }
+    let runnerMcp: ReturnType<typeof createHappierMcpServer> | undefined;
+    let runnerClient: Client | undefined;
+    if (runnerCarrier) {
+      const command = 'node /runtime/.runner-snapshots/approval-origin/dist/index.mjs';
+      const runner = { pid: process.pid, processStartTimeMs: 23349, processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:approval-origin' };
+      processIdentityBoundary.mockResolvedValue({ pid: runner.pid, processStartTimeMs: runner.processStartTimeMs, command });
+      const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
+      const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path, sessionId: 'bob-session', runner, retainedAgent: createAgentSessionRunnerFactoryBinding({ v: 1,
+          pluginId: 'acme.plugin', pluginVersion: '1.2.3', agentId: 'acme-agent', localAgentId: 'acme-agent',
+          sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+          locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+          normalizedModulePath: '/immutable/runtime.mjs', loadMode: 'immutable-js' }) };
+      await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31004, capability: 'R'.repeat(43) });
+      vi.stubEnv(HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY, path);
+      const fetchFeatures = globalThis.fetch;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        if (new URL(String(url)).port !== '31004') return await fetchFeatures(url, init);
+        const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
+        if (request.operation.kind !== 'action.execute') throw new Error('Expected runner Action');
+        const outcome = await execute(request.operation, { sessionId: 'bob-session', isCurrent: async () => true });
+        return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });
+      });
+      const witness = { ...operation.witness, callerPermissionMode: 'default' as const,
+        actionRequestAttributionV1: deriveSessionInputActionRequestAttributionV1({
+          requestRef: operation.witness.inputId, persona: { serverId: configuration.activeServerId, sessionId: 'bob-session' },
+          origin: null, messageRole: 'user', inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+        }),
+      };
+      runnerMcp = createHappierMcpServer({ sessionId: 'bob-session', updateMetadata() {},
+        getServerBinding: () => ({ serverId: configuration.activeServerId, serverUrl: serverHttpBaseUrl }),
+        getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
+          features: {}, capabilities: { serverIdentity: { serverIdentityId: homeId } },
+        }) }),
+        rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'bob-session', encryptionMode: 'plain' }),
+        getStoredContentEncryptionContext: () => ({ mode: 'plain' }),
+        getActiveTurnAdmissionWitness: () => witness, getActiveTurnPermissionWitness: () => witness,
+        getWorkDepth: () => 2, getHostTurnWorkDepth: () => 2,
+      }, { authorityScope: kind === 'link' ? 'account' : 'session', accountSettings: settings, ...(kind === 'link' ? { credentials } : {}) });
+      runnerClient = new Client({ name: 'approval-origin', version: '1' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await runnerMcp.mcp.connect(serverTransport); await runnerClient.connect(clientTransport);
+      onTestFinished(async () => { await runnerClient?.close(); await runnerMcp?.mcp.close();
+        await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('R'.repeat(43)) }); });
+    }
     const mcp = unsigned ? createHappierMcpServer({
       sessionId: 'bob-session', getServerBinding: () => ({ serverId: configuration.activeServerId, serverUrl: serverHttpBaseUrl }),
       getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
@@ -854,9 +937,18 @@ describe('daemon Session Account authority', () => {
       return { ok: true as const, result: result.structuredContent };
     };
     let settled = false;
-    const pending = (mcp ? callMcp()
+    const pending = (runnerClient ? runnerClient.callTool({ name: 'action_execute', arguments: { actionId, input } }).then(raw => {
+      const response = CallToolResultSchema.parse(raw);
+      const block = response.content.find(item => item.type === 'text');
+      if (block?.type !== 'text') throw new Error('Missing runner result');
+      return response.isError ? { ok: false as const, result: JSON.parse(block.text) as unknown }
+        : { ok: true as const, result: JSON.parse(block.text) as unknown };
+    }) : mcp ? callMcp()
       : execute({ ...operation, actionId, input, surface: 'mcp', witness: { ...operation.witness, callerPermissionMode: 'default' } },
         { sessionId: 'bob-session', isCurrent: async () => true })).then(result => { settled = true; return result; });
+    // An assertion may fail while a blocking approval is still pending.
+    // Attach its teardown rejection handler before closing the MCP connection.
+    void pending.catch(() => undefined);
     if (kind === 'unsigned-unavailable') {
       expect(await pending).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
       expect(rows.size).toBe(0);
@@ -876,21 +968,45 @@ describe('daemon Session Account authority', () => {
     if (!open || open.v !== 2) throw new Error('Missing Session approval origin');
     expect(open.executionOriginV1).toMatchObject({ serverId: configuration.activeServerId, serverIdentityId: homeId,
       machineId: source.machineId, authority: 'account_automation', surface: 'agent' });
-    if (mcp) {
+    if (mcp || kind === 'link') {
       expect(open.executionOriginV1.externalActionExecutionAuthorization).toBeUndefined();
       expect(open.executionOriginV1.externalActionInputSignature).toBeUndefined();
       expect(requiresExactDaemonApprovalReplay(open)).toBe(true);
       expect(mintedRequests).toEqual([]);
     } else {
-      expect(requiresExactDaemonApprovalReplay(open)).toBe(!(kind === 'client' || relation));
+      if (runnerCarrier) {
+        expect(open.executionOriginV1.actionRequestAttributionV1?.requester).toBeNull();
+        expect(open).not.toHaveProperty('requesterConfirmation');
+      } else expect(requiresExactDaemonApprovalReplay(open)).toBe(!(kind === 'client' || relation));
       if (!open.executionOriginV1.externalActionInputSignature) throw new Error('Missing signed client approval origin');
-      expect(open.executionOriginV1).toMatchObject({ accountId: 'source-account', requestId: operation.requestId, target });
+      expect(open.executionOriginV1).toMatchObject({ accountId: 'source-account', requestId: invocationRequestId, target });
       expect(verifyExternalActionApprovalInputV1({ authorizationToken: 'source-home-proof', actionId, input: open.actionArgs, target,
         signature: open.executionOriginV1.externalActionInputSignature, publicKey: keys.publicKey })).toBe(true);
       expect(mintedRequests).toEqual([expect.objectContaining({ sessionActionSource: source, installationProof: expect.any(Object) })]);
     }
     expect(deliveries).toEqual([]);
     expect(mutations).toEqual([]);
+    if (runnerCarrier) {
+      expect(linkCalls).toEqual([]);
+      completeClient();
+      const approved = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+        surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: configuration.activeServerId,
+        serverIdentityId: homeId, runtimeAccountId: 'source-account',
+      });
+      // A blocking Action's live invocation owns completion after the decision;
+      // deferred link replay can complete in the decision invocation itself.
+      expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true });
+      expect(await pending).toMatchObject({ ok: true });
+      if (kind === 'find') expect(deliveries).toMatchObject([{ actionId: 'ui.find', input }]);
+      if (kind === 'settings') {
+        expect(mutations).toHaveLength(1);
+        expect(AccountSettingsSchema.parse(accountContent).transcriptMessagePinActionEnabled).toBe(false);
+      }
+      if (kind === 'link') expect(linkCalls).toEqual([input]);
+      expect(await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.approvalsGet({ artifactId, serverId: null })))
+        .toMatchObject({ status: 'executed', execution: { ok: true } });
+      return;
+    }
     if (kind === 'client') expect(settled).toBe(false);
     else expect(await pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId } });
     // The approving device writes the strict approved Artifact, then calls the

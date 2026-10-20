@@ -6,7 +6,7 @@ import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 
 import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';

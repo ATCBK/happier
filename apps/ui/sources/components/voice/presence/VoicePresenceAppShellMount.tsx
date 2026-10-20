@@ -29,6 +29,9 @@ import { VoiceIsland, VOICE_ISLAND_DESKTOP, VOICE_ISLAND_PHONE } from './VoiceIs
 import { VoiceOrb, VOICE_ORB_BODY_SIZE } from './VoiceOrb';
 import { VoicePresenceFloat } from './VoicePresenceFloat';
 import { registerVoiceGlancePresentation, revealVoiceCompanionSection } from './voiceCompanionSectionReveal';
+import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+
 import { useVoicePresenceContainer } from './useVoicePresenceContainer';
 import { resolveVoiceOrbInteractionPadding } from './voicePresenceAnatomy';
 import {
@@ -38,6 +41,7 @@ import {
 } from './voicePresenceGeometry';
 
 const WEB_FIXED = ('fixed' as unknown) as ViewStyle['position'];
+const executePresentationAction = createFrontDoorUiActionExecutor();
 /** The floating containers' gutter from the window edges (lab I: 16; lab O: 14). */
 const ISLAND_EDGE = 16;
 const ORB_EDGE = 14;
@@ -84,11 +88,8 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     // A container's caption shows the Voice section in the Companion when it is beside the work,
     // otherwise as a popover anchored to the container.
     const toggleSection = React.useCallback(() => {
-        if (open) {
-            setOpen(false);
-            return;
-        }
-        if (!revealVoiceCompanionSection()) setOpen(true);
+        fireAndForget(executePresentationAction(open ? 'ui.voice_global.glance.close' : 'ui.voice_global.glance.open', {}),
+            { tag: 'VoicePresence.glance' });
     }, [open]);
 
     const orb = props.container === 'orb';

@@ -52,7 +52,7 @@ function readThemeSelectionIntent(value: unknown) {
  * also applies the running theme and status bar and keeps the theme each mode uses — a raw
  * `themePreference` write would store a choice the screen does not show.
  */
-export const themeModeStorageBinding: SettingStorageBinding = {
+export const themeModeStorageBinding = {
     scope: 'local', kind: 'localOwner', access: 'read_write',
     allowedValues: THEME_MODE_CHOICES,
     read: local => isThemeMode(local.themePreference) ? local.themePreference : 'adaptive',
@@ -90,4 +90,4 @@ export const themeModeStorageBinding: SettingStorageBinding = {
             writeLocal: persist,
         });
     },
-};
+} satisfies SettingStorageBinding;

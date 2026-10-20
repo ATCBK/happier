@@ -5,6 +5,7 @@ import type { TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
 
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "./memberships/sessionAccessEffects";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 import {
@@ -19,6 +20,7 @@ import { projectForActorInTx } from "./lifecycle";
 import { TEAM_PROJECTION_SELECT } from "./projections";
 import { publishTeamChangedInTx } from "./teamChanges";
 import {
+    acquireTeamMutationLockInTx,
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
     type TeamOperationAuthenticationContext,
@@ -119,6 +121,11 @@ export function authorizeTeamPolicyPatch(
 }
 
 export async function setTeamPolicyInTx(tx: Tx, input: SetTeamPolicyInput): Promise<TeamPolicyResult> {
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId],
+        ...(input.authenticationPolicy !== undefined ? { intent: "exclusive" as const,
+            membershipChange: { kind: "teamMembership" as const, teamId: input.teamId } } : {}) });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) {
         return { ok: false, error: "teams_unavailable" };
     }

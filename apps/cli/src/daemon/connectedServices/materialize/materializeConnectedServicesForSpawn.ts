@@ -17,6 +17,8 @@ import {
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { logger } from '@/utils/logger';
+import { readRetainedExecutionRunRecord, readRetainedExecutionRunRecords } from '@/daemon/executionRunRegistry';
+import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { AgentSpawnQualifiedPurposeBindingSnapshot } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -300,14 +302,14 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
         if (capturedPurposes.has(purposeKey) || !snapshot?.bindings.some(binding =>
           qualifiedPurposeKey(binding.purpose) === purposeKey)) continue;
         if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
-        const binding = await observeConnectedServiceMaterializationPhase(params, 'binding_read', () => connectedAccountsOwner.getBinding({
+        const binding = await observeConnectedServiceMaterializationPhase(params, 'binding_read', () => readRequesterHomeWithinActionLifetime(() => connectedAccountsOwner.getBinding({
           purpose: scope.purpose,
           serviceRefs: scope.serviceRefs,
           ...(params.exactPurposeBindingSubjectId
             ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId } : {}),
           ...(params.purposeBindingSessionId ? { sessionId: params.purposeBindingSessionId } : {}),
           signal: signalController.signal,
-        }));
+        }), params.signal));
         signalController.signal.throwIfAborted();
         if (!binding) {
           const error = new Error('Connected Account native-home binding is unavailable');
@@ -440,24 +442,78 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
         const isolatedImportRoots: ConnectedServiceSessionFileImportRoot[] | null =
           durableNativeHome && effectiveStateMode !== 'shared' ? [] : null;
         if (isolatedImportRoots) {
+          const resumeIds = new Set(params.vendorResumeId ? [params.vendorResumeId] : []);
+          const borrowedEntries = await Promise.all(stateSharingDescriptor.state.entries.map(async entry => {
+            try { return (await lstat(join(nativeRoot, entry.path))).isSymbolicLink(); }
+            catch (error) { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false; throw error; }
+          }));
+          const retained = borrowedEntries.some(Boolean)
+            ? await readRetainedExecutionRunRecord(params.materializationKey) : null;
+          if (retained) {
+            let complete = true;
+            const records = await readRetainedExecutionRunRecords(() => { complete = false; });
+            // Unknown retained custody cannot authorize detaching its source.
+            if (!complete) throw new Error('retained_conversation_inventory_unavailable');
+            for (const record of records) {
+              if (record.state.retentionPolicy !== 'resumable' || record.state.backendId !== params.agentId
+                || record.state.resumeHandle?.kind !== 'provider_session.v1') continue;
+              const owner = retained.requesterWorkAttributionV1;
+              const candidateOwner = record.requesterWorkAttributionV1;
+              const sameAccount = Boolean(owner && candidateOwner
+                && owner.serverId === candidateOwner.serverId && owner.accountId === candidateOwner.accountId);
+              const sameSession = retained.state.sessionId !== null && record.state.sessionId === retained.state.sessionId;
+              if ((!sameSession && !sameAccount) || (owner && candidateOwner && !sameAccount)) continue;
+              const bindings = record.state.launch?.connectedServicesSelection;
+              if (bindings) {
+                const retainedSnapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
+                  agentId: params.agentId, bindings, contributions: lease.registry.contributes, catalogEntry,
+                });
+                if (resolveConnectedServiceNativeHomeTarget({
+                  agentId: params.agentId, activeServerDir: params.activeServerDir, nativeHome,
+                  snapshot: retainedSnapshot, expectedAccountsByPurposeKey,
+                }) !== nativeRoot) continue;
+              } else if (!sameSession) continue;
+              resumeIds.add(record.state.resumeHandle.providerSessionId);
+            }
+          }
+          const selectedFilesByRoot = new Map<string, Set<string>>();
           for (const sourceRoot of sourceRoots) {
-            if (resolve(sourceRoot) === resolve(nativeRoot)) continue;
             const accountHome = homesRootIsOwned && await isCanonicalConnectedServiceMaterializedRoot({
               baseDir: homesRoot, rootDir: sourceRoot,
             });
             if (accountHome) {
-              // Another account owns its conversations and memories. Only the requested
-              // conversation, identified by the incumbent catalog verifier, may cross homes.
-              if (!params.vendorResumeId) continue;
-              const resumed = await verifyResumeReachableThroughCatalog(params.agentId, {
-                targetMaterializedRoot: sourceRoot,
-                vendorResumeId: params.vendorResumeId,
-                candidatePersistedSessionFile: params.candidatePersistedSessionFile,
-                ...(params.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.runtimeDescriptorV1 } : {}),
-              });
-              if (!resumed?.ok) continue;
-              const resumedPath = relative(await realpath(sourceRoot), resumed.resolvedPath).split(sep).join('/');
-              isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: path => path === resumedPath });
+              // Preserve this home's retained conversations before detaching a
+              // borrowed store. An exact sealed identity never grants a whole-store import.
+              for (const vendorResumeId of resumeIds) {
+                const resumed = await verifyResumeReachableThroughCatalog(params.agentId, {
+                  targetMaterializedRoot: sourceRoot,
+                  vendorResumeId,
+                  ...(vendorResumeId === params.vendorResumeId
+                    ? { candidatePersistedSessionFile: params.candidatePersistedSessionFile } : {}),
+                  ...(params.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.runtimeDescriptorV1 } : {}),
+                });
+                if (!resumed?.ok) continue;
+                for (const entry of stateSharingDescriptor.state.entries) {
+                  const declaredRoot = await realpath(join(sourceRoot, entry.path)).catch(() => null);
+                  if (!declaredRoot) continue;
+                  const resumedPath = relative(declaredRoot, resumed.resolvedPath);
+                  if (!resumedPath || resumedPath.startsWith('..') || isAbsolute(resumedPath)) continue;
+                  const normalizedPath = resumedPath.split(sep).join('/');
+                  const rootKey = JSON.stringify([declaredRoot, entry.path]);
+                  const selectedFiles = selectedFilesByRoot.get(rootKey);
+                  if (selectedFiles) { selectedFiles.add(normalizedPath); break; }
+                  const files = new Set([normalizedPath]);
+                  selectedFilesByRoot.set(rootKey, files);
+                  isolatedImportRoots.push({
+                    sourceRoot: declaredRoot, destinationRoot: join(nativeRoot, entry.path),
+                    includeFile: path => files.has(path),
+                    ...(mergeSharedStateFile ? { mergeSharedStateFile: file => mergeSharedStateFile({
+                      ...file, entryPath: `${entry.path}/${file.entryPath}`,
+                    }) } : {}),
+                  });
+                  break;
+                }
+              }
             } else {
               // A legacy Run home belongs to this session, so retain its declared private state.
               isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: includePrivateStateFile,

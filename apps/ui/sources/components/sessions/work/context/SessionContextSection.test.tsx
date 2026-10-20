@@ -173,6 +173,22 @@ describe('Work › Memory', () => {
         }, expect.objectContaining({ surface: 'ui' }));
     });
 
+    it('shows the requested choice while the save is pending, so a slow Home never leaves the switch looking stuck', async () => {
+        let settle: (result: { ok: true; result: { ok: true } }) => void = () => {};
+        execute.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+        const screen = await renderScreen(<SessionMemorySection serverId={serverId} session={sessionWith({})} />);
+        await React.act(async () => { screen.findByTestId('session-work-memory.enabled.switch')?.props.onValueChange(true); });
+        const pending = screen.findByTestId('session-work-memory.enabled.switch');
+        expect(pending?.props.value).toBe(true);
+        // The row owns its switch, so a disabled switch would dim the title too: a save in flight is not
+        // "disabled", it just takes no second choice until it settles.
+        expect(pending?.props.disabled).toBeFalsy();
+        await React.act(async () => { pending?.props.onValueChange(false); });
+        expect(execute).toHaveBeenCalledTimes(1);
+        await React.act(async () => { settle({ ok: true, result: { ok: true } }); });
+        expect(screen.findByTestId('session-work-memory.enabled.switch')?.props.disabled).toBeFalsy();
+    });
+
     it('says a refused switch in the section, beside the switch it did not move, and opens no dialog', async () => {
         execute.mockResolvedValue({ ok: false, errorCode: 'forbidden', error: 'forbidden' });
         const { Modal } = await import('@/modal');

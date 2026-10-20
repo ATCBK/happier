@@ -5,7 +5,7 @@ import type {
     EnsureSessionVisibleForRouteResult,
     SessionRouteHydrationState,
 } from '@/sync/domains/session/sessionRouteHydrationState';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { sync } from '@/sync/sync';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { fireAndForget } from '@/utils/system/fireAndForget';

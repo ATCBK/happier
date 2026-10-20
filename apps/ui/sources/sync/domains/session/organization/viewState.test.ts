@@ -211,6 +211,26 @@ describe('buildSessionOrganizationListViewState', () => {
         })).toEqual([{ folderId: 'folder-leads', title: 'Leads', depth: 0 }]);
     });
 
+    it('reads a folder written with a bare plain name (an Action caller\'s shorthand) as that name, not as unavailable', () => {
+        const state = buildSessionOrganizationListViewState({
+            serverId: 'server-a',
+            projection: {
+                ...projectOrganizationPins('server-a'),
+                schemaVersion: 1,
+                version: 1,
+                foldersById: {
+                    'folder-bare': {
+                        folderId: 'folder-bare', folderKey: 'folder-bare', parentFolderId: null, parentFolderKey: null, sortKey: '0001',
+                        display: { t: 'plain', v: 'J15b folder' },
+                        displayState: { status: 'available', value: 'J15b folder' },
+                        archivedAt: null, createdAt: 1, updatedAt: 2,
+                    },
+                },
+            },
+        });
+        expect(state.sessionFoldersV1.folders.map((folder) => [folder.id, folder.name])).toEqual([['folder-bare', 'J15b folder']]);
+    });
+
     it('projects every valid group and workspace ordering entry beyond 100 items', () => {
         const groupEntries = Array.from({ length: 111 }, (_, index) => ({
             scopeKind: 'group' as const,

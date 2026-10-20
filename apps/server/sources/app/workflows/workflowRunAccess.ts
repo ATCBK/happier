@@ -16,6 +16,49 @@ import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT, type RecipientReadinessRow } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
+import type { WorkflowDiscussionOriginV1 } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
+import { resolveDiscussionContextInTx, discussionContextStorageAdapter } from '@/app/discussions/access';
+import { readDiscussionMessageInTx } from '@/app/discussions/queries';
+import { admitDiscussionSecondOpinionSourceInTx } from '@/app/discussions/secondOpinion';
+import { mayInjectResourceContextInTx } from '@/app/session/access/sessionContextInjection';
+import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+
+/** Workflow selection consumes C3's live grants, speaking policy, keys and disclosure owner. */
+export async function assertWorkflowDiscussionAdmissionInTx(tx: Tx, input: Readonly<{
+    accountId: string; origin: WorkflowDiscussionOriginV1; targetSessionIds: readonly string[];
+    authentication: SessionAccessAuthentication | undefined; publishes: boolean;
+}>): Promise<void> {
+    if (!input.authentication) throw new WorkflowRunAccessError('run_access_denied');
+    const discussionId = input.origin.discussion.discussionId;
+    const context = await resolveDiscussionContextInTx(tx, { discussionId, accountId: input.accountId,
+        authentication: input.authentication });
+    const row = await tx.discussion.findUnique({ where: { id: discussionId }, select: { archivedAt: true, anchorV1: true } });
+    if (!context || !row || row.archivedAt || input.publishes && context.access.level === 'view') {
+        throw new WorkflowRunAccessError('run_access_denied');
+    }
+    if (!context.keyReadiness) throw new WorkflowRunAccessError('content_unavailable');
+    const message = await readDiscussionMessageInTx(tx, { discussionId, messageId: input.origin.messageId,
+        actorAccountId: input.accountId, authentication: input.authentication });
+    if (!message.ok || message.value.seq !== input.origin.throughSeq) throw new WorkflowRunAccessError('invalid_input');
+    for (const sessionId of new Set(input.targetSessionIds)) {
+        const participant = await tx.discussionParticipant.findUnique({ where: { discussionId_sessionId: { discussionId, sessionId } },
+            select: { removedAt: true, answerPolicy: true, session: { select: { accountId: true, archivedAt: true } } } });
+        if (!participant?.session || participant.session.accountId !== input.accountId
+            || participant.removedAt || participant.session.archivedAt || participant.answerPolicy === 'reads_only') {
+            throw new WorkflowRunAccessError('run_access_denied');
+        }
+        const source = await admitDiscussionSecondOpinionSourceInTx(tx, { actorAccountId: input.accountId,
+            authentication: input.authentication, anchor: row.anchorV1, destination: { kind: 'session', sessionId } });
+        if (!source.ok) throw new WorkflowRunAccessError('run_access_denied');
+        const disclosure = await mayInjectResourceContextInTx(tx, { configuringAccountId: input.accountId,
+            authentication: input.authentication, source: { kind: 'resource', resourceId: discussionId, adapter: discussionContextStorageAdapter },
+            destination: { kind: 'session', sessionId } });
+        if (!disclosure.ok) throw new WorkflowRunAccessError('run_access_denied');
+        const runtime = await resolveDiscussionContextInTx(tx, { discussionId, accountId: participant.session.accountId,
+            authentication: backgroundDeliveryAuthentication() });
+        if (!runtime?.keyReadiness) throw new WorkflowRunAccessError('content_unavailable');
+    }
+}
 
 export type WorkflowRunAccessErrorCode = "run_not_found" | "run_access_denied" | "visible_team_not_granted"
     | "currentness_conflict" | "invalid_input" | "content_unavailable" | "data_key_not_required";
@@ -299,7 +342,7 @@ export async function commitWorkflowRunRecipientKeyEnvelopesInTx(tx: Tx, input: 
     const access = await resolveWorkflowRunAccessInTx(tx, input);
     if (!access) throw new WorkflowRunAccessError("run_not_found");
     await acquireWorkflowPublicationLocksInTx(tx, { accountId: access.ownerAccountId, runIds: [input.runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, access.ownerAccountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, access.ownerAccountId, "content");
     if (fence.status !== "ready") throw new WorkflowRunAccessError("content_unavailable");
     const census = await readWorkflowRunKeyProjectionInTx(tx, input);
     if (census.encryptionMode === "plain") throw new WorkflowRunAccessError("data_key_not_required");

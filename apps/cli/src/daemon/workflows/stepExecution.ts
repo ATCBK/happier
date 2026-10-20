@@ -7,11 +7,12 @@ import {
   sendSessionMessage,
   waitForSessionInputResult,
   type SessionInputResultObservationV1,
-  type SessionInputResultV1,
   type SessionInputUsageV1,
-  type WaitForSessionInputResult,
+  type WaitForSessionInputReplyResult,
 } from '@/session/services/sendSessionMessage';
 import type { SessionMessageModelSelectionInput } from '@/session/services/resolveSessionMessageModel';
+import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
 import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
   buildWorkflowSessionInputAdmissionV2,
@@ -21,33 +22,52 @@ import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/r
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import type { MentionRefV1, PortableComposerAttachmentV1, ExecutionRunResultContractV1, SessionInputAdmissionResultV1, SessionInputSourceAuthorityV1, SessionInputWorkflowV2 } from '@happier-dev/protocol';
 
-export type WorkflowSessionInputObservation =
+export type WorkflowSessionInputObservation = (
   | Readonly<{ kind: 'pending' }>
   | Readonly<{ kind: 'completed'; result: string; usage?: SessionInputUsageV1 }>
   | Readonly<{ kind: 'failed'; code: string; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>;
+  | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>
+  | Readonly<{ kind: 'needs_attention'; code: 'session_input_result_unavailable' }>
+) & Readonly<{ replyOutcome?: SessionMessageReplyOutcomeV1 }>;
 
 /** Classifies the exact Session outcome; cancellation custody stays with its caller. */
 export function classifyWorkflowSessionInputResult(
-  result: SessionInputResultV1,
+  result: Extract<WaitForSessionInputReplyResult, { ok: true }>['result'],
+  replyOutcome = result.kind === 'fulfilled' ? result.outcome : undefined,
 ): WorkflowSessionInputObservation {
+  const reply = replyOutcome ? { replyOutcome } : {};
   switch (result.kind) {
+    case 'fulfilled': {
+      const outcome = result.outcome;
+      switch (outcome.kind) {
+        case 'pass':
+        case 'terminal_no_result': return { kind: 'completed', result: '', ...reply };
+        case 'cancelled': return { kind: 'cancelled', ...reply };
+        case 'failed': return { kind: 'failed', code: 'session_input_failed', message: 'The requested session failed.', ...reply };
+        case 'declined': return { kind: 'failed', code: 'session_input_declined', message: 'The requested session declined.', ...reply };
+        case 'answer': return { kind: 'needs_attention', code: 'session_input_result_unavailable', ...reply };
+      }
+    }
     case 'pending': return { kind: 'pending' };
     case 'final_text': return {
       kind: 'completed', result: result.text,
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'terminal_no_result': return {
       kind: 'completed', result: '',
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'failed': return {
       kind: 'failed', code: 'session_input_failed', message: result.message,
+      ...reply,
       ...(result.runtimeIssueV1 ? { runtimeIssueV1: result.runtimeIssueV1 } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'cancelled': return {
       kind: 'cancelled',
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
   }
@@ -227,6 +247,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
   sourceAuthority?: SessionInputSourceAuthorityV1;
   /** Original accepted request cause, independent of the executing Session's owner. */
   actionRequestAttributionV1?: ActionRequestAttributionV1;
+  discussionAddressing?: DiscussionAddressingV1;
   /** Coordinator-resolved authoring selection; Session owns model normalization. */
   modelSelectionInput?: SessionMessageModelSelectionInput;
   modelSelectionUpdatedAt?: number;
@@ -255,6 +276,8 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
       ? { ...params.workflow, workDepth: params.workDepth }
       : params.workflow,
     {
+      replyIntent: { mode: 'wait' },
+      ...(params.discussionAddressing ? { discussionAddressing: params.discussionAddressing } : {}),
       ...(requestedPermissionCeiling ? { requestedPermissionCeiling } : {}),
       ...(params.sourceAuthority ? { sourceAuthority: params.sourceAuthority } : {}),
       ...(params.actionRequestAttributionV1 ? { actionRequestAttributionV1: params.actionRequestAttributionV1 } : {}),
@@ -314,7 +337,7 @@ export async function observeWorkflowSessionInputResult(params: Readonly<{
   beforeInputObservation?: () => Promise<void>;
   onInputMaterialized?: (acceptedAtMs: number) => Promise<void>;
   signal?: AbortSignal;
-}>): Promise<WaitForSessionInputResult> {
+}>): Promise<WaitForSessionInputReplyResult> {
   const observation: SessionInputResultObservationV1 = params.deadlineMs === undefined
     ? params.timeoutAfterInputMs === undefined ? { kind: 'no_deadline' }
       : { kind: 'after_input', timeoutMs: params.timeoutAfterInputMs }
@@ -323,6 +346,7 @@ export async function observeWorkflowSessionInputResult(params: Readonly<{
     credentials: params.credentials,
     idOrPrefix: params.sessionId,
     localId: params.localId,
+    observeReply: true,
     observation,
     ...(params.beforeInputObservation ? { beforeInputObservation: params.beforeInputObservation } : {}),
     ...(params.onInputMaterialized ? { onInputMaterialized: params.onInputMaterialized } : {}),

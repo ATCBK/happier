@@ -58,8 +58,8 @@ export function DiscussionComposerMount(props: Readonly<{
         const document = props.readDocument();
         if (input.expectedRevision !== document.revision) return { status: 'conflict', currentRevision: document.revision };
         const mentions = composerStructuredMentionsFromReferences({ references: input.mutation.references, existing: document.mentions });
-        // The generic Composer permits many reference kinds. Only the strict
-        // Discussion Account/Session binding can become a participant mention.
+        // The local draft admits only Discussion Account, Session and inert
+        // reserved-slot references. Send alone resolves slots to real Session mentions.
         const spans = parseDiscussionMentionSpans(discussionMentionSpansFromComposerMentions(mentions), input.mutation.text);
         if (spans.length !== input.mutation.references.length || input.mutation.attachments.length > 0) {
             return { status: 'invalidOperation', operationIndex: 0, reason: 'unsupportedField' };

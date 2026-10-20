@@ -59,6 +59,13 @@ For broader public composition patterns, use the maintained repository examples 
 
 ## Normal author loop
 
+A project folder uses `src/index.ts` or `index.ts` (not both). If neither exists,
+set `package.json.main` to an exact `.ts`, `.mts`, `.js`, or `.mjs` module
+exporting `manifest` and `activate`, for example `"main": "./src/index.mjs"`.
+Conventional TypeScript source takes precedence over a built package main;
+package `exports` do not select the development entry. Keep directory development
+for package dependencies and UI-artifact preparation.
+
 Work in a normal Happier Agent Session rooted at this source directory. Use the same public lifecycle as a human author:
 
 1. Start or continue live development with `happier plugins dev`. It prepares declared dependencies automatically; do not run `happier plugins dev install .` first. Explicit registration trusts this exact source root without a separate code-trust prompt. Automatic workspace discovery still requires its remembered project-trust decision. Optional host resources and secrets require their separate authority decisions.
@@ -78,6 +85,6 @@ Later iterations need nothing further: a trusted development source root short-c
 
 ## Reviews and reconnecting
 
-A retained development review is published as an ordinary `plugins.install` approval Artifact in the Happier Inbox. Rerun `happier plugins install <exact-source> --dev --json` to rejoin that source's daemon-retained candidate and the same Artifact. Review its daemon-evaluated manifest, permissions, and host access before deciding; an Artifact still awaiting daemon evaluation cannot be approved. Decide in the Inbox or through the public `approval.request.decide` Action, also available to agents and MCP callers under the user's approval policy. The CLI form is `happier actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json`; use `reject` to decline. Use the ordinary approval Artifact ID, not the daemon's pending change ID. Optional host resources and secrets always stay with their canonical authority owner.
+A retained development review is published as an ordinary `plugins.install` approval Artifact in the Happier Inbox. In current 0.3 development source, `happier plugins dev <exact-source> --json` hands a review-required registration to that same install owner and returns its approval Artifact ID. Decide it, then run `plugins dev` again to continue watching. The alternative `happier plugins install <exact-source> --dev --json` rejoins that source's daemon-retained candidate and the same Artifact. Review its daemon-evaluated manifest, permissions, and host access before deciding; an Artifact still awaiting daemon evaluation cannot be approved. Decide in the Inbox or through the public `approval.request.decide` Action, also available to agents and MCP callers under the user's approval policy. The CLI form is `happier actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json`; use `reject` to decline. Use the ordinary approval Artifact ID, not the daemon's pending change ID. Optional host resources and secrets always stay with their canonical authority owner.
 Preserve any daemon-issued pending change ID for read-only inspection with `happier plugins change status <pendingChangeId> --json`. This status command does not decide or publish an approval. Rejoin the exact source flow instead of preparing an unrelated request while its review or apply is pending.
 A pending ID can be rejoined only during the same daemon lifetime. If status reports `expired` after a daemon restart, rerun the original development or install request and review its newly prepared facts; do not reuse the old pending ID. `outcome_unknown` is different: inspect installed state before replaying a mutation.

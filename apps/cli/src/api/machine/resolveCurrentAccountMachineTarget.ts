@@ -148,17 +148,28 @@ export async function listCurrentAccountMachines(params: Readonly<{
   }
 }
 
-/** Background Account administration preserves explicit targets and otherwise selects a reachable daemon in the exact Home. */
-export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountMachines>[0]
-  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null }>): Promise<string | null> {
+/**
+ * Background Account administration preserves explicit targets and otherwise lists the reachable daemons in the
+ * exact Home, preferred Machine first. Presence is only the first filter: a Machine row whose daemon is connected
+ * to another server still looks present, so a caller that reads through one Machine tries the next on a
+ * target-unavailable verdict (`isMachineRequestReachabilityFailureV1`).
+ */
+export async function listCurrentAccountAdministrationMachines(params: Parameters<typeof listCurrentAccountMachines>[0]
+  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null }>): Promise<readonly string[]> {
   if (params.requestedMachineId !== undefined) {
     const resolution = await resolveCurrentAccountMachineTarget(params);
-    return resolution.kind === 'selected' ? resolution.target.machineId : null;
+    return resolution.kind === 'selected' ? [resolution.target.machineId] : [];
   }
   const machines = await listCurrentAccountMachines(params);
   const reachable = machines.filter(machine => machine.kind === 'persistent' && !machine.replacedByMachineId
-    && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }));
-  return reachable.find(machine => machine.id === params.preferredMachineId)?.id ?? reachable[0]?.id ?? null;
+    && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }))
+    .map(machine => machine.id);
+  return params.preferredMachineId && reachable.includes(params.preferredMachineId)
+    ? [params.preferredMachineId, ...reachable.filter(id => id !== params.preferredMachineId)] : reachable;
+}
+
+export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountAdministrationMachines>[0]): Promise<string | null> {
+  return (await listCurrentAccountAdministrationMachines(params))[0] ?? null;
 }
 
 /**

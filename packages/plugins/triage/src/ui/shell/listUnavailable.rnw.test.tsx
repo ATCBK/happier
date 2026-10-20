@@ -64,7 +64,9 @@ describe('a PRs & Issues page that could not read anything', () => {
         const shell = await mountUnreadableShell(new PluginError({ code: 'unavailable', retryable: true }));
 
         await expect(shell.getByText('The list could not be read')).resolves.toBeDefined();
-        // The page is still the page: its lens and its own Refresh stay.
+        // The page is still the page: its name leads the same one header (lab `merged-offline`), and its lens and
+        // its own Refresh stay.
+        await expect(shell.getByText('PRs & Issues')).resolves.toBeDefined();
         await expect(shell.getByRole('button', { name: 'Refresh' })).resolves.toBeDefined();
         await expect(shell.getByRole('button', { name: 'More' })).resolves.toBeDefined();
         // The host's code is a diagnostic, never the sentence.

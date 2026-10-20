@@ -2,7 +2,7 @@ import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { createCliActionDeps } from './createCliActionDeps';
-import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { createAccountScopedCryptoMaterialSnapshotV1, deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { encrypt, decryptResult, encodeBase64, decodeBase64 } from '@/api/encryption';
 
@@ -82,6 +82,8 @@ it('fails explicit on mode disagreement and refuses cross-Account mutations befo
 
 it('opens predecessor E2EE records and retains their encryption and bare Session links through a public edit', async () => {
   const secret = new Uint8Array(32).fill(7);
+  const machineKey = deriveAccountMachineKeyFromRecoverySecret(secret);
+  let version = 1;
   const fingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
     createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
   let encoded = encodeBase64(encrypt(secret, 'legacy', { id: 'old', title: 'Encrypted predecessor', done: false,
@@ -89,19 +91,21 @@ it('opens predecessor E2EE records and retains their encryption and bare Session
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(url).pathname;
     if (path.endsWith('/currentness')) return { status: 200, data: { mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing-current', contentKeyFingerprint: fingerprint, updatedAt: 1 } };
-    const row = { key: 'todo.old', value: encoded, version: 1 };
+    const row = { key: 'todo.old', value: encoded, version };
     if (path === '/v1/kv') return { status: 200, data: { items: [row] } };
     if (path === '/v1/kv/todo.old') return { status: 200, data: row };
     throw new Error('An edit must not depend on the unrelated ordering record');
   });
   vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
-    const mutations = (body as { mutations: { key: string; value: string }[] }).mutations;
+    const mutations = (body as { mutations: { key: string; value: string; version: number }[] }).mutations;
     expect(mutations.map(row => row.key)).toEqual(['todo.old']);
+    expect(mutations[0]!.version).toBe(version);
     encoded = mutations[0]!.value;
-    expect(decryptResult(secret, 'legacy', decodeBase64(encoded))).toMatchObject({ status: 'authenticated', value: {
-      title: 'Encrypted predecessor', notes: 'Private task note', linkedSessions: { 'bare-session': { title: 'Old Session', linkedAt: 1 } },
+    expect(decryptResult(machineKey, 'dataKey', decodeBase64(encoded))).toMatchObject({ status: 'authenticated', value: {
+      title: 'Encrypted predecessor', linkedSessions: { 'bare-session': { title: 'Old Session', linkedAt: 1 } },
     } });
-    return { status: 200, data: { success: true, results: [{ key: 'todo.old', version: 2 }] } };
+    version += 1;
+    return { status: 200, data: { success: true, results: [{ key: 'todo.old', version }] } };
   });
   const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: { type: 'legacy', secret } },
     sessionId: 'cli-global', mode: 'e2ee', ctx: { encryptionKey: secret, encryptionVariant: 'legacy' }, serverId: scope.serverId, serverHttpBaseUrl: 'https://task-home.test' }));
@@ -110,4 +114,8 @@ it('opens predecessor E2EE records and retains their encryption and bare Session
     todos: [{ id: 'old', title: 'Encrypted predecessor', state: 'unstarted' }] } });
   expect(await executor.execute('tasks.internal.edit', { scope, taskId: 'old', fields: { notes: 'Private task note' } }, context))
     .toMatchObject({ ok: true, result: { status: 'applied' } });
+  expect(version).toBe(3);
+  expect(decryptResult(machineKey, 'dataKey', decodeBase64(encoded))).toMatchObject({ status: 'authenticated', value: {
+    notes: 'Private task note', linkedSessions: { 'bare-session': { title: 'Old Session', linkedAt: 1 } },
+  } });
 });

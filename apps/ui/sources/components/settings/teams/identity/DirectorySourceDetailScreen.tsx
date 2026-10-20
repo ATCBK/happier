@@ -286,7 +286,6 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         renderItem={renderRow}
         ListHeaderComponent={props.header}
         style={{ flex: 1 }}
-        backendPreference="auto"
         initialNumToRender={8}
         maxToRenderPerBatch={6}
         windowSize={7}

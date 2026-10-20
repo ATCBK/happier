@@ -1,5 +1,3 @@
-import type { BrowserContextItemV1 } from '@happier-dev/protocol';
-
 import type {
     AttachBrowserContextToComposerInput,
     BrowserContextAttachResult,
@@ -25,28 +23,6 @@ export function createBrowserContextState(): BrowserContextState {
         navigationGenerationByViewId: {},
         activeAnnotationByViewId: {},
         annotationDraftByViewId: {},
-    };
-}
-
-export function putBrowserContextItem(
-    state: BrowserContextState,
-    item: BrowserContextItemV1,
-): BrowserContextState {
-    const exists = state.itemsById[item.contextId] !== undefined;
-    return {
-        ...state,
-        itemsById: {
-            ...state.itemsById,
-            [item.contextId]: item,
-        },
-        itemOrder: exists ? state.itemOrder : [...state.itemOrder, item.contextId],
-        navigationGenerationByViewId: {
-            ...state.navigationGenerationByViewId,
-            [item.sourceViewId]: Math.max(
-                state.navigationGenerationByViewId[item.sourceViewId] ?? 0,
-                item.navigationGeneration,
-            ),
-        },
     };
 }
 

@@ -284,7 +284,9 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const [requestedMove, setMove] = React.useState<MoveState>(null);
   const managedScopeKey = JSON.stringify([props.source.serverId, props.source.refId, props.source.machineId,
     props.serviceName, props.declaration, props.lifecycleKey]);
-  const observation = useProjectServicePlacementObservation(props.serviceName, managedScopeKey);
+  const observation = useProjectServicePlacementObservation(props.serviceName, managedScopeKey, {
+    absent: placement.state.kind === 'ready' && placement.state.value.actual.status === 'absent',
+  });
   const move = observation.attachment ? { phase: 'operation' as const, ...observation.attachment } : requestedMove;
   const { binding } = useServerCredentialAccountScopeBinding(props.source.serverId);
   const [managedMove, setManagedMove] = React.useState<'confirm' | 'acquiring' | null>(null);
@@ -362,11 +364,11 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   // Stop and `copying` only once copying begins (FX12); the Action operation owner retains the final
   // phase on failure/cancellation. Absence is separately observed, so neither generic terminal
   // state nor a lost feed proves Stop.
-  const stoppedBeforeStart = observation.stoppedBeforeStart && observed?.status === 'absent';
+  const stoppedBeforeStart = observation.stoppedBeforeStart;
 
   const custodyKnown = observed?.status === 'present' || observed?.status === 'absent';
   const moving = observation.requestPending || managed.busy || managedMove === 'acquiring' || move?.phase === 'resolving' || move?.phase === 'requesting' || move?.phase === 'approval'
-    || (move?.phase === 'operation' && !stoppedBeforeStart && !observation.failedBeforeStop);
+    || (move?.phase === 'operation' && observation.relocating);
   const moveBlockedReason = actual && placement.moveBlocked
     ? resolveReasonCopy({ kind: 'localServiceLauncher', reasonCode: actual.unavailableReason ?? actual.serviceState }).body : null;
   const disabled = !ready || placement.busy || moving || !custodyKnown || !portable || moveBlockedReason !== null;

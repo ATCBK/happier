@@ -1427,6 +1427,7 @@ export async function startDaemon(
       },
     });
     const connectedAccountPurposeBindingRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+      credentialOwnerAccountId: readAccountIdFromToken(credentials.token) ?? undefined,
       coordinatorInventoryIsObserved: () => apiMachine?.hasCurrentAccountChangesObserver() === true,
       workerMachineId: machineId,
       establishedRuntimeOwner: establishedConnectedAccountRuntimeOwner,
@@ -1969,7 +1970,7 @@ export async function startDaemon(
           }
         }
       : undefined;
-    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
+    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
     const requesterRuntimeServerId = configuration.activeServerId;
     const requesterRuntimeServerHttpBaseUrl = resolveServerHttpBaseUrl();
     const openRunAccountConnectionSource = managedPolicyHomeId && externalActionAccountId
@@ -1998,9 +1999,9 @@ export async function startDaemon(
               ...request,
               homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
               openBroker: async (request, signal) => await api.openAccountConnectionProviderBroker(request, { signal }),
-              admitConsumer: async (authority, signal) => await isCurrent()
+              admitConsumer: async (authority, signal) => await isCurrent(signal)
                 && (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok
-                && await isCurrent(),
+                && await isCurrent(signal),
               openTunnel: createProviderBrokerMachineCarrierTunnelOpen({
                 homeId: managedPolicyHomeId, accountId: externalActionAccountId, localMachineId: machineId,
                 runtime, resolveTrustRoots: resolvePeerMediationTrustRoots,
@@ -2022,8 +2023,10 @@ export async function startDaemon(
     const resolveRequesterSessionRuntimeContext = createRequesterSessionRuntimeContextResolver({
       trackedSessions: pidToTrackedSession,
       getCreateRuntime: () => createRequesterRuntime,
-      recoverBootstrap: ({ sessionId, attribution: stamp, tracked }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
+      recoverBootstrap: ({ sessionId, attribution: stamp, tracked, signal, onSessionReadRefused }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
         serverId: requesterRuntimeServerId, sessionId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
+        signal,
+        onSessionReadRefused,
         machineAdmissionBoundary: requesterMachineAdmissionBoundary(),
         ...(stamp ? { expectedAttribution: stamp } : {}),
         // Retained attribution is not proof that a legacy Session has a
@@ -2072,6 +2075,7 @@ export async function startDaemon(
       sessionLiveWorkProducer,
       dispatchSessionFollowOccurrence,
       spawnSession,
+      spawnSessionForInternalResume,
       stopSession,
       stopRequesterSessionForHandoff,
       isSessionAlreadyRunning,
@@ -3059,13 +3063,13 @@ export async function startDaemon(
     connectedServiceRefreshLoopHandle = runtimeBootstrap.connectedServiceRefreshLoopHandle;
     connectedServiceQuotasCoordinator = runtimeBootstrap.connectedServiceQuotasCoordinator;
     connectedServiceQuotasLoopHandle = runtimeBootstrap.connectedServiceQuotasLoopHandle;
-    createRequesterRuntime = async bootstrap => {
+    createRequesterRuntime = async (bootstrap, signal) => {
       if (bootstrap.serverHttpBaseUrl !== requesterRuntimeServerHttpBaseUrl
         || !requesterMachineAdmissionBoundary(bootstrap.attribution).isHomeCurrent()) return null;
       bindRequesterSessionRuntimeMachineAdmissionCurrentness({
         bootstrap, boundary: requesterMachineAdmissionBoundary(bootstrap.attribution),
       });
-      return await createRequesterSessionRuntimeContext({ bootstrap,
+      return await createRequesterSessionRuntimeContext({ bootstrap, signal,
         activeServerDir: configuration.activeServerDir, connectedServicesMaterializationBaseDir,
         resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(serverFeaturesSnapshotStore.getSnapshot()),
         coordinatorInput: {
@@ -3773,6 +3777,14 @@ export async function startDaemon(
           }
           return result;
         },
+        spawnSessionForInternalResume: async (options, pendingActivation) => {
+          const result = await spawnSessionForInternalResume(options, pendingActivation);
+          if (result.type === 'success' && result.sessionId) {
+            const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === result.sessionId);
+            if (tracked) await guardSessionRestoration?.onSessionRunnerStarted(tracked);
+          }
+          return result;
+        },
         stopSession,
         sessionRunnerStatus,
         awaitAgentSessionOpen,
@@ -3832,6 +3844,8 @@ export async function startDaemon(
         acquireLocalServicePreviewApplication,
         resolveManagedPurposeBindingIntent:
           connectedAccountPurposeBindingRuntime.resolveBindingIntent,
+        resolveManagedPurposeBindingIntentSelection:
+          connectedAccountPurposeBindingRuntime.resolveBindingIntentSelection,
         mcpServers: {
           readCredentials: async () => credentials,
           issueRequestAuth: createDaemonMcpRequestAuthForTest({ credentials, materializationBaseDir: connectedServicesMaterializationBaseDir,

@@ -9,7 +9,8 @@ export type FollowRuleProjectExclusionUndo = Readonly<{
     expectedVersion: number;
 }>;
 
-async function writeDefinition(
+/** Writes a rule's whole opened definition (filter and policy) at the version it was read. */
+export async function writeSessionFollowRuleDefinition(
     serverId: string,
     rule: OpenedSessionFollowRuleV1,
     expectedVersion: number,
@@ -35,7 +36,7 @@ export async function leaveProjectToFollowRule(input: Readonly<{
 }>) {
     const previous = OpenedSessionFollowRuleV1Schema.parse(input.rule);
     const edited = { ...previous, definition: excludeProjectFromSessionFollowRuleV1(previous.definition, input.project) };
-    const result = await writeDefinition(input.serverId, edited, previous.version, input.signal);
+    const result = await writeSessionFollowRuleDefinition(input.serverId, edited, previous.version, input.signal);
     if (result.kind === 'failed') return result;
     return { kind: 'ok' as const, value: { rule: result.value, undo: {
         serverId: input.serverId, previous, expectedVersion: result.value.version,
@@ -44,5 +45,5 @@ export async function leaveProjectToFollowRule(input: Readonly<{
 
 /** A later edit causes a conflict; Undo never overwrites it or re-resolves another rule. */
 export function undoFollowRuleProjectExclusion(undo: FollowRuleProjectExclusionUndo, signal?: AbortSignal) {
-    return writeDefinition(undo.serverId, undo.previous, undo.expectedVersion, signal);
+    return writeSessionFollowRuleDefinition(undo.serverId, undo.previous, undo.expectedVersion, signal);
 }

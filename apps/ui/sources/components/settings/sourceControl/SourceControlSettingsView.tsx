@@ -10,7 +10,7 @@ import { createScmUiBackendRegistry } from '@/scm/registry/scmUiBackendRegistry'
 import { getFirstPartyScmBackendLegacyLocalId } from '@/scm/registry/firstPartyScmBackendIdentity';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettingMutable } from '@/sync/domains/state/storage';
-import { useApplySettings, useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { createScmBackendSettingsRegistry } from '@/scm/settings/scmBackendSettingsRegistry';
 import { useDaemonScmContributionCatalog } from '@/scm/registry/useDaemonScmContributionCatalog';
@@ -26,13 +26,10 @@ import type {
     ScmPushRejectPolicy,
 } from '@/scm/settings/preferences';
 import {
-    buildScmGitRepoBackendPreferenceSettingsDelta,
     resolveScmGitRepoPreferredBackendId,
 } from '@/scm/settings/preferences';
-import { scmBackendDefaultDiffStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import {
     normalizeScmRemoteConfirmPolicy,
-    setRemoteConfirmationForKind,
     shouldConfirmRemoteOperation,
 } from '@/scm/settings/remoteConfirmationPolicy';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -45,7 +42,6 @@ import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings
 import { SOURCE_CONTROL_SETTINGS } from '@/components/settings/sourceControl/sourceControlSettings';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
 import { WalkthroughSavedSettings } from '@/components/settings/sourceControl/WalkthroughSavedSettings';
-import { Modal } from '@/modal';
 
 
 /**
@@ -189,8 +185,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const [scmCommitStrategy, setScmCommitStrategy] = useSettingMutable('scmCommitStrategy');
     const [scmGitRepoPreferredBackend] = useSettingMutable('scmGitRepoPreferredBackend');
     const [scmGitRepoPreferredBackendQualifiedId] = useSettingMutable('scmGitRepoPreferredBackendQualifiedId');
-    const applySettings = useApplySettings();
-    const settingsScope = useAccountSettingsScope();
+    const { setSetting } = useSettingActionFeedback();
     const [explainChanges, setExplainChanges] = useSettingMutable('scm.diffSummary.enabled');
     const [prepareAfterTurn] = useSettingMutable('scm.diffSummary.prefetch');
     const [investigateSurroundingFiles] = useSettingMutable('scm.diffSummary.investigateSurroundingFiles');
@@ -210,21 +205,10 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     ], [selectedOutputLanguage]);
     const [summaryModel] = useSettingMutable('scm.diffSummary.modelProfileOverride');
     const [summaryModelAvailable, setSummaryModelAvailable] = React.useState(false);
-    const setWalkthroughSetting = async (anchor: string, value: string | boolean) => {
-        if (!settingsScope) { Modal.alert(t('common.error'), t('walkthroughSettings.unavailable')); return; }
-        try {
-            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-            const result = await createDefaultActionExecutor().execute('settings.set', { anchor, value }, { surface: 'ui',
-                serverId: settingsScope.serverId, expectedAccountId: settingsScope.accountId });
-            if (!result.ok || result.result && typeof result.result === 'object' && 'ok' in result.result && result.result.ok === false) {
-                Modal.alert(t('common.error'), t('walkthroughSettings.unavailable'));
-            }
-        } catch { Modal.alert(t('common.error'), t('walkthroughSettings.unavailable')); }
-    };
-    const [scmRemoteConfirmPolicy, setScmRemoteConfirmPolicy] = useSettingMutable('scmRemoteConfirmPolicy');
+    const [scmRemoteConfirmPolicy] = useSettingMutable('scmRemoteConfirmPolicy');
     const [scmPushRejectPolicy, setScmPushRejectPolicy] = useSettingMutable('scmPushRejectPolicy');
     const [scmPullRequestPlacement, setScmPullRequestPlacement] = useSettingMutable('scmPullRequestPlacement');
-    const [scmDefaultDiffModeByBackend, setScmDefaultDiffModeByBackend] = useSettingMutable('scmDefaultDiffModeByBackend');
+    const [scmDefaultDiffModeByBackend] = useSettingMutable('scmDefaultDiffModeByBackend');
     const [filesDiffSyntaxHighlightingMode, setFilesDiffSyntaxHighlightingMode] = useSettingMutable('filesDiffSyntaxHighlightingMode');
     const [filesDiffRendererMode, setFilesDiffRendererMode] = useSettingMutable('filesDiffRendererMode');
     const [filesDiffPresentationStyle, setFilesDiffPresentationStyle] = useSettingMutable('filesDiffPresentationStyle');
@@ -235,7 +219,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const [showLineNumbersInToolViews, setShowLineNumbersInToolViews] = useSettingMutable('showLineNumbersInToolViews');
     const [wrapLinesInDiffs, setWrapLinesInDiffs] = useSettingMutable('wrapLinesInDiffs');
     const [scmCommitMessageGeneratorEnabled, setScmCommitMessageGeneratorEnabled] = useSettingMutable('scmCommitMessageGeneratorEnabled');
-    const [scmCommitMessageGeneratorBackendId, setScmCommitMessageGeneratorBackendId] = useSettingMutable('scmCommitMessageGeneratorBackendId');
+    const [scmCommitMessageGeneratorBackendId] = useSettingMutable('scmCommitMessageGeneratorBackendId');
     const [scmCommitMessageGeneratorInstructions, setScmCommitMessageGeneratorInstructions] = useSettingMutable('scmCommitMessageGeneratorInstructions');
     const [scmIncludeCoAuthoredBy, setScmIncludeCoAuthoredBy] = useSettingMutable('scmIncludeCoAuthoredBy');
     const [filesEditorAutoSave, setFilesEditorAutoSave] = useSettingMutable('filesEditorAutoSave');
@@ -287,9 +271,8 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
         qualifiedPreference: scmGitRepoPreferredBackendQualifiedId,
     });
     const setScmGitRepoPreferredBackend = React.useCallback((backendId: string) => {
-        const delta = buildScmGitRepoBackendPreferenceSettingsDelta(backendId);
-        if (delta) applySettings(delta);
-    }, [applySettings]);
+        void setSetting(SOURCE_CONTROL_SETTINGS.settings.gitRouting, backendId);
+    }, [setSetting]);
 
     const routingScopeState = administrationTargetSelection.state;
     const routingScopeMachineName = routingScopeState.kind === 'unselected'
@@ -372,7 +355,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                             variant="selectable"
                             matchTriggerWidth
                             connectToTrigger
-                            onSelect={(id) => { setScmCommitMessageGeneratorBackendId(id); setCommitAgentMenuOpen(false); }}
+                            onSelect={(id) => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.commitMessageAgent, id); setCommitAgentMenuOpen(false); }}
                             itemTrigger={{
                                 title: t(SOURCE_CONTROL_SETTINGS.settings.commitMessageAgent.titleKey),
                                 subtitle: t('settingsSourceControl.page.generator.agentDescription'),
@@ -422,7 +405,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                         onPress={() => setExplainChanges(explainChanges === false)} />
                     <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.summaryModel}>
                         <ScmDiffSummaryModelPicker value={typeof summaryModel === 'string' ? summaryModel : ''}
-                            onChange={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.summaryModel.anchor, value); }}
+                            onChange={value => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.summaryModel, value); }}
                             onAvailabilityChange={setSummaryModelAvailable}
                             machineId={executionTarget?.machine.id} serverId={executionTarget?.serverId} testID="settings.sourceControl.summaryModel" />
                     </SettingAnchor>
@@ -436,7 +419,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                             matchTriggerWidth
                             connectToTrigger
                             onSelect={(id) => {
-                                void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.outputLanguage.anchor, id);
+                                void setSetting(SOURCE_CONTROL_SETTINGS.settings.outputLanguage, id);
                                 setOutputLanguageMenuOpen(false);
                             }}
                             itemTrigger={{
@@ -450,13 +433,13 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     </SettingAnchor>
                     <SettingRow setting={SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles} subtitleLines={0} showChevron={false}
                         rightElement={<Switch value={investigateSurroundingFiles === true}
-                            onValueChange={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles.anchor, value); }} />}
-                        onPress={() => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles.anchor, investigateSurroundingFiles !== true); }} />
+                            onValueChange={value => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles, value); }} />}
+                        onPress={() => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles, investigateSurroundingFiles !== true); }} />
                     <WalkthroughSavedSettings machineId={executionTarget?.machine.id ?? null} serverId={executionTarget?.serverId ?? null}
                         machineAvailability={administrationTargetSelection.state.kind}
                         machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? routingScopeMachineName ?? ''}
                         prepareAfterTurn={prepareAfterTurn === true}
-                        onPrepareAfterTurn={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.prepareAfterTurn.anchor, value); }} modelAvailable={summaryModelAvailable} />
+                        onPrepareAfterTurn={value => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.prepareAfterTurn, value); }} modelAvailable={summaryModelAvailable} />
                 </ItemGroup>
             </SettingSection>
 
@@ -564,10 +547,10 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     rightElement={(
                         <Switch
                             value={confirmsPull}
-                            onValueChange={(value) => setScmRemoteConfirmPolicy(setRemoteConfirmationForKind(effectiveRemoteConfirmPolicy, 'pull', value))}
+                            onValueChange={(value) => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.confirmBeforePulling, value); }}
                         />
                     )}
-                    onPress={() => setScmRemoteConfirmPolicy(setRemoteConfirmationForKind(effectiveRemoteConfirmPolicy, 'pull', !confirmsPull))}
+                    onPress={() => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.confirmBeforePulling, !confirmsPull); }}
                     showChevron={false}
                 />
                 <SettingRow
@@ -576,10 +559,10 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     rightElement={(
                         <Switch
                             value={confirmsPush}
-                            onValueChange={(value) => setScmRemoteConfirmPolicy(setRemoteConfirmationForKind(effectiveRemoteConfirmPolicy, 'push', value))}
+                            onValueChange={(value) => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.confirmBeforePushing, value); }}
                         />
                     )}
-                    onPress={() => setScmRemoteConfirmPolicy(setRemoteConfirmationForKind(effectiveRemoteConfirmPolicy, 'push', !confirmsPush))}
+                    onPress={() => { void setSetting(SOURCE_CONTROL_SETTINGS.settings.confirmBeforePushing, !confirmsPush); }}
                     showChevron={false}
                 />
                 <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.pushRejection}>
@@ -717,8 +700,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                                     value={selectedDiffMode ?? diffModeOptions[0].id}
                                     disabled={contributionCatalogIsStale}
                                     onChange={(mode) => {
-                                        const delta = scmBackendDefaultDiffStorage.mutate({ scmDefaultDiffModeByBackend: currentDiffModeByBackend }, { backendId: plugin.backendId, mode });
-                                        if (delta) setScmDefaultDiffModeByBackend(delta.scmDefaultDiffModeByBackend);
+                                        void setSetting(SOURCE_CONTROL_SETTINGS.settings.backendDefaultDiff, { backendId: plugin.backendId, mode });
                                     }}
                                 />
                             ) : (

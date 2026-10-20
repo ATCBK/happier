@@ -9,7 +9,7 @@ import { buildScmCommitFailureMessage } from '@/scm/operations/commitFailureMess
 import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperationLock';
 import { reportSessionScmOperation, type ScmOperationTracker, trackBlockedScmOperation } from '@/scm/operations/reporting';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { sessionScmCommitCreate, sessionScmRepositoryRemoveIndexLock } from '@/sync/ops/sessionScm';
 import { SCM_OPERATION_ERROR_CODES, createScmOperationUnknownOutcome, normalizeScmOperationOutcome, type ScmOperationOutcome } from '@happier-dev/protocol/scm';
 import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitIndexLockRecovery';

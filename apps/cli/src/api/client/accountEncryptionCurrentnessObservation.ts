@@ -344,8 +344,9 @@ function createObservation(scope: Scope): SharedObservation {
             if (connected && !fact) refresh();
             if (pending) await waitForObservation(pending, readerSignal);
             signal?.throwIfAborted();
-            if (!connected || disposed) throw new AccountEncryptionCurrentnessUnavailableError();
-            if (!fact) throw readError ?? new AccountEncryptionCurrentnessUnavailableError();
+            if (disposed) throw new AccountEncryptionCurrentnessUnavailableError();
+            if (!connected) throw Object.assign(new AccountEncryptionCurrentnessUnavailableError(), { retryable: true });
+            if (!fact) throw readError ?? Object.assign(new AccountEncryptionCurrentnessUnavailableError(), { retryable: true });
             return fact;
         },
         async dispose() {

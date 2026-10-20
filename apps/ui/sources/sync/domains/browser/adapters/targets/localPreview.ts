@@ -61,3 +61,13 @@ const EXTERNAL_URL_IFRAME_SANDBOX = [
 export function resolveExternalUrlIframeSandbox(): string {
     return EXTERNAL_URL_IFRAME_SANDBOX.join(' ');
 }
+
+/**
+ * Why a relay preview's own proxy will not serve its document: the route to the Machine is down, or
+ * the preview no longer exists for this viewer (revoked, expired or never admitted).
+ */
+export type BrowserPreviewRefusalReasonCode = 'preview_transport_unavailable' | 'preview_ended';
+
+export function isBrowserPreviewRefusalReasonCode(value: string): value is BrowserPreviewRefusalReasonCode {
+    return value === 'preview_transport_unavailable' || value === 'preview_ended';
+}

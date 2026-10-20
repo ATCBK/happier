@@ -3,6 +3,7 @@ import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCo
 
 import {
   buildDocPassageMargin,
+  readDocPassageThreadQuote,
   type DocPassageMarginMessage,
 } from './docPassageMargin';
 
@@ -41,7 +42,7 @@ function comment(
     content: {
       kind: 'doc_passage_comment',
       passage: target,
-      content: { parts: [{ t: 'text', text }] },
+      content: { v: 1, parts: [{ t: 'text', text }] },
     },
   };
 }
@@ -150,6 +151,60 @@ describe('buildDocPassageMargin', () => {
     });
     expect(later.accepted).toBeNull();
     expect(later.threads[0]!.location.state).toBe('detached');
+  });
+
+  it('reads the accepted edit from the proposal accepted into this revision while a later proposal stays open', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const after = 'A replay shows one row with a replayed badge.';
+    const source2 = source1.replace('A replay shows two rows.', after);
+    const accepted = proposal('d-replay', replay, after, {
+      state: 'accepted',
+      acceptedRevision: r2,
+      decidedBy: { accountId: 'you', atMs: 500 },
+    });
+    // A second suggestion on the same words, written against the first revision and still open.
+    const openLater = {
+      ...proposal('d-replay', replay, 'A replay shows three rows.', { state: 'open' }),
+      seq: 3,
+    };
+    const margin = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads: [
+        { discussionId: 'd-replay', messages: [comment('d-replay', replay), accepted, openLater] },
+      ],
+    });
+    const thread = margin.threads[0]!;
+    expect(thread.location.state).toBe('revised');
+    expect(margin.accepted).toMatchObject({ atMs: 500, revision: r2 });
+    // The card keeps offering the open suggestion; the words as read now are the accepted ones.
+    expect(thread.proposal?.id).toBe(openLater.id);
+    expect(thread.acceptedProposal?.id).toBe(accepted.id);
+    expect(readDocPassageThreadQuote(thread)).toBe(after);
+  });
+
+  it('keeps the accepted edit on the card when a later suggestion was declined', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const after = 'A replay shows one row with a replayed badge.';
+    const source2 = source1.replace('A replay shows two rows.', after);
+    const accepted = proposal('d-replay', replay, after, {
+      state: 'accepted',
+      acceptedRevision: r2,
+      decidedBy: { accountId: 'you', atMs: 500 },
+    });
+    const declinedLater = {
+      ...proposal('d-replay', replay, 'A replay shows three rows.', {
+        state: 'declined',
+        decidedBy: { accountId: 'you', atMs: 600 },
+      }),
+      seq: 3,
+    };
+    const thread = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads: [{ discussionId: 'd-replay', messages: [comment('d-replay', replay), accepted, declinedLater] }],
+    }).threads[0]!;
+    expect(thread.proposal?.id).toBe(accepted.id);
   });
 
   it('drops a thread whose root carries no readable passage', () => {

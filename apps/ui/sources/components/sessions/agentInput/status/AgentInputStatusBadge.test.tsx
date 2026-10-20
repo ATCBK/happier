@@ -30,7 +30,8 @@ describe('AgentInputStatusBadge', () => {
         const { AgentInputStatusBadge } = await import('./AgentInputStatusBadge');
         const label = 'Full requester sign-in and computer administrator visibility';
         const screen = await renderScreen(<AgentInputStatusBadge key="disclosure" label={label} labelNumberOfLines={0} emphasis="quiet" />);
-        expect(screen.find(node => node.props.children === label && node.props.numberOfLines === 0)).toBeTruthy();
+        // The pill's label Text carries the optional detail as a sibling child, so match the label among its children.
+        expect(screen.find(node => React.Children.toArray(node.props.children).includes(label) && node.props.numberOfLines === 0)).toBeTruthy();
     });
     it('keeps quiet badges pressable while removing persistent border and background chrome', async () => {
         const onPress = vi.fn();

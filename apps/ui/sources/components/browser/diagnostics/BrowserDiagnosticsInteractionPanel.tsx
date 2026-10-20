@@ -5,6 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { Typography } from '@/constants/Typography';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
 
 import { BrowserDiagnosticsEvalConsole } from './BrowserDiagnosticsEvalConsole';
@@ -74,9 +75,8 @@ function interactionStateLabel(props: BrowserDiagnosticsInteractionControls): st
         case 'disabled':
             return t('browserDiagnostics.host.interaction.disabled');
         case 'unavailable':
-            return t('browserDiagnostics.host.interaction.unavailable', {
-                reasonCode: props.unavailableReasonCode ?? 'policy_denied',
-            });
+            // The code stays a diagnostic; the person reads why the tools are off.
+            return resolveReasonCopy({ reasonCode: props.unavailableReasonCode ?? 'policy_denied', kind: 'browserDiagnosticsInteraction' }).body;
     }
 }
 
@@ -126,10 +126,12 @@ export function BrowserDiagnosticsInteractionPanel(props: Readonly<{
     return (
         <View testID={`${props.testID}-interaction-${props.controls.state}`} style={stylesheet.root}>
             <Text style={stylesheet.title}>{t('browserDiagnostics.host.interaction.title')}</Text>
-            <Text style={props.controls.state === 'enabled' ? stylesheet.meta : stylesheet.warning}>
+            {/* Off by design is a quiet fact; only a state the person can change speaks up. */}
+            <Text style={props.controls.state === 'disabled' ? stylesheet.warning : stylesheet.meta}>
                 {interactionStateLabel(props.controls)}
             </Text>
-            {props.controls.ownerOnly ? (
+            {/* Who may turn the tools on matters only while they can be turned on; one line per state. */}
+            {props.controls.ownerOnly && props.controls.state !== 'unavailable' ? (
                 <Text style={stylesheet.meta}>{t('browserDiagnostics.host.interaction.ownerOnly')}</Text>
             ) : null}
             {pickerLabel ? (

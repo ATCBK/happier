@@ -249,6 +249,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
         if (outcome.status === 'pending') return { ok: true as const, approvalPending: true as const };
         if (outcome.status !== 'applied') throw Object.assign(new Error(outcome.code), {
             code: outcome.status === 'unknown' ? 'outcome_unknown' : outcome.code,
+            ...('details' in outcome ? { details: outcome.details } : {}),
         });
         if (options.place && mode === 'canvas') setPlacingKey(buildWorkBoardWidgetKeyV1(ref));
         return { ok: true as const };

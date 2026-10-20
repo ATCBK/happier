@@ -5,6 +5,7 @@ import { TeamCredentialResourceTestAdmissionResponseV1Schema, TeamCredentialReso
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 
 import type { Tx } from '@/storage/inTx';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import { admitTeamCredentialBrokerMachineForResourceInTx } from './brokerPlacementResolver';
 import { resolveTeamCredentialResourceSourceInTx } from './resourceSourceResolver';
 import { admitTeamCredentialUsageInTx } from './teamCredentialUsageAdmission';
@@ -40,6 +41,7 @@ export async function admitTeamCredentialResourceTestRequestInTx(
     const parsed = TeamCredentialResourceTestAdmissionV1Schema.safeParse(input.request);
     if (!parsed.success || parsed.data.binding.kind !== 'resource_test') return failure('invalid_request');
     const { binding, brokerMachineId, relayAuthorization, requestFacts } = parsed.data;
+    await acquireAccountChangePublicationLocksInTx(tx, [input.authenticatedBrokerAccountId, binding.actorAccountId], { includeSingleAccount: true });
     const relay = verifyPeerTcpTunnelRelayAuthorizationV2({
         authorization: relayAuthorization,
         nowMs: input.observedAt.getTime(),

@@ -13,8 +13,10 @@ import {
 
 import { resolveSessionTransportContext } from './resolveSessionTransportContext';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
-import { readSessionReadiness, type SessionReadinessInventoryReader } from './readSessionReadiness';
+import { readSessionReadiness, type SessionReadinessInventoryReader, type SessionReadinessCredentialReader } from './readSessionReadiness';
 import type { SessionReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
+import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type GetSessionStatusResult =
@@ -58,7 +60,11 @@ export async function getSessionStatus(params: Readonly<{
   idOrPrefix: string;
   live: boolean;
   readiness?: boolean;
+  operation?: 'conversation' | 'credential';
+  credentialPurpose?: QualifiedConnectedAccountPurposeV1;
+  credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1;
   readReadinessInventory?: SessionReadinessInventoryReader;
+  readReadinessCredential?: SessionReadinessCredentialReader;
   serverHttpBaseUrl?: string;
   signal?: AbortSignal;
   authorization?: ExternalActionExecutionAuthorizationV1;
@@ -152,7 +158,10 @@ export async function getSessionStatus(params: Readonly<{
     }),
     ...(params.readiness === true ? { readiness: await readSessionReadiness({
       credentials: params.credentials, target: sessionTarget,
+      ...(params.operation ? { operation: params.operation } : {}), ...(params.credentialPurpose ? { credentialPurpose: params.credentialPurpose } : {}),
+      ...(params.credentialTeamSelection ? { credentialTeamSelection: params.credentialTeamSelection } : {}),
       ...(params.readReadinessInventory ? { readInventory: params.readReadinessInventory } : {}),
+      ...(params.readReadinessCredential ? { readCredential: params.readReadinessCredential } : {}),
       ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.authorization ? { authorization: params.authorization } : {}),

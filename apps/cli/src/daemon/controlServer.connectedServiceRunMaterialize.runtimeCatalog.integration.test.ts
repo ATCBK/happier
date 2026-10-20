@@ -244,10 +244,11 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
         }
     });
 
-    it('propagates fail-closed materialization denials as 403 with the handler errorCode', async () => {
+    it.each(['connected_service_run_materialization_blocked', 'provider_session_state_unavailable_for_resume'] as const)(
+      'propagates fail-closed materialization denial %s as 403', async (errorCode) => {
         const materializeConnectedServicesForExecutionRun = vi.fn(async () => ({
             ok: false as const,
-            errorCode: 'connected_service_run_materialization_blocked' as const,
+            errorCode,
             errorMessage: 'credential expired',
         }));
         const app = createApp({ materializeConnectedServicesForExecutionRun });
@@ -267,7 +268,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
             expect(response.statusCode).toBe(403);
             expect(response.json()).toEqual({
                 ok: false,
-                errorCode: 'connected_service_run_materialization_blocked',
+                errorCode,
                 errorMessage: 'credential expired',
             });
         } finally {

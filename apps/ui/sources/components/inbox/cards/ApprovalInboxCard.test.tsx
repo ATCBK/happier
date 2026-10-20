@@ -1,7 +1,12 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { act } from 'react-test-renderer';
+import type { Artifact, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { useArtifacts } from '@/sync/domains/state/storage';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { fetchAndApplyArtifactsList } from '@/sync/engine/artifacts/syncArtifacts';
+import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
@@ -55,6 +60,51 @@ afterEach(async () => {
 });
 
 describe('ApprovalInboxCard', () => {
+  it('mounts unclassified and stale-kind approvals while inventory sync repairs only their kind metadata', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'read-only-approval',
+        surface: 'cli', serverId: serverIdB, actionId: 'session.list' } });
+    const rows: Artifact[] = [undefined, 'prompt' as const].map((kind, index) => ({
+      id: `11111111-1111-4111-8111-11111111111${index}`, ownerAccountId: 'owner', access: 'owner',
+      encryptionMode: 'plain', kind, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }),
+      publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: index, createdAt: 1, updatedAt: 1,
+    }));
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    // Only the Home HTTP boundary is replaced; sync, codecs, store and mounted cards stay real.
+    const request = async (path: string, init?: RequestInit) => {
+      requests.push({ path, method: init?.method ?? 'GET',
+        ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+      if (path.startsWith('/v1/artifacts?')) return Response.json(rows.map(({ body: _body, ...head }) => head));
+      if (path === '/v1/artifacts/read') return Response.json({ items: rows.map(artifact => ({
+        artifactId: artifact.id, ok: true, artifact, recipientCensus: null,
+      })) });
+      return Response.json({ success: true });
+    };
+    function ApprovalRead() {
+      return <>{useArtifacts().filter(isOpenApprovalInboxArtifact).map(artifact =>
+        <ApprovalInboxCard key={artifact.id} artifact={artifact} onPress={() => {}} />)}</>;
+    }
+    storage.setState({ artifacts: {} });
+    const screen = await renderScreen(<ApprovalRead />);
+    await act(async () => {
+      await fetchAndApplyArtifactsList({ credentials: { token: 'fixture' }, encryption: null,
+        artifactDataKeys: new Map(), request, applyArtifacts: artifacts => storage.getState().applyArtifacts(artifacts) });
+    });
+    for (const row of rows) {
+      expect(screen.findByTestId(`inbox.approval.${row.id}`)).not.toBeNull();
+      expect(storage.getState().artifacts[row.id]).toMatchObject({ kind: row.kind, body: JSON.stringify(approval), isDecrypted: true });
+    }
+    const writes = requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read');
+    expect(writes).toEqual(rows.map(row => ({ path: `/v1/artifacts/${row.id}`, method: 'POST',
+      body: { kind: 'other', expectedHeaderVersion: 1 } })));
+    // Mounting or rerendering a card itself remains observational.
+    await act(async () => { screen.tree.update(<ApprovalRead />); });
+    expect(requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read')).toEqual(writes);
+  });
   it('localizes the first-party title in French and resolves its document through the shared reference reader', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     await preloadTranslations('fr');
@@ -317,6 +367,25 @@ describe('ApprovalInboxCard', () => {
     expect(text).not.toContain('cmv06zc2b003itmv4tsr5fin7');
     expect(text).not.toContain('home-b.example.test');
     expect(text).not.toContain(t('inbox.work.rows.approvalNeeded'));
+  });
+
+  it('names the person, not a session, when the person made the request themselves from the app', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const cardTextFor = async (surface: 'ui' | 'agent') => {
+      const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'agent', sessionId: 'cmv06zc2b003itmv4tsr5fin7' }, actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+        executionOriginV1: { v: 1, authority: surface === 'ui' ? 'present_user' : 'account_automation', caller: { kind: 'host' },
+          requestId: `own-${surface}`, surface, serverId: serverIdB, sessionId: 'cmv06zc2b003itmv4tsr5fin7', actionId: 'session.list',
+          sessionListAccess: 'current_session' } });
+      const screen = await renderScreen(<ApprovalInboxCard onPress={() => {}} artifact={{ ...createApprovalArtifact(),
+        header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) }} />);
+      return screen.getTextContent();
+    };
+
+    const own = await cardTextFor('ui');
+    expect(own).toContain(t('detailPages.approval.requesterYou'));
+    expect(own).not.toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
+    expect(await cardTextFor('agent')).toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
   });
 
   it('names the Home of a session this device cannot list when that Home has no name of its own', async () => {

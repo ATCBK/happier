@@ -193,7 +193,6 @@ describe('VirtualizedList web DOM integration', () => {
                 <div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
                     <VirtualizedList
                         ref={listRef}
-                        backendPreference="legend"
                         data={[{ id: 'padded' }]}
                         estimatedItemSize={56}
                         getFixedItemSize={() => 56}
@@ -233,7 +232,6 @@ describe('VirtualizedList web DOM integration', () => {
             root.render(
                 <div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
                     <VirtualizedList
-                        backendPreference="legend"
                         data={[{ id: 'only' }]}
                         estimatedItemSize={56}
                         getFixedItemSize={() => 56}
@@ -345,42 +343,6 @@ describe('VirtualizedList web DOM integration', () => {
         expect(diagnostics).not.toContain('windowSize');
     });
 
-    // The stable ref promises `scrollToIndex` on every backend. React Native's FlatList throws an
-    // invariant for an index outside its rendered window unless the caller supplies getItemLayout or
-    // onScrollToIndexFailed; the session list (flat on web) supplies neither, and a scroll-retention
-    // restore crashed the app shell ("scrollToIndex should be used in conjunction with ...").
-    it('scrolls a flat-backend list to an index outside its rendered window without a layout callback', async () => {
-        const rows = Array.from({ length: 500 }, (_value, index): Row => ({ id: `row-${index}` }));
-        const { VirtualizedList: List } = await import('../VirtualizedList');
-        const listRef = React.createRef<import('../virtualizedListTypes').VirtualizedListRef>();
-        await act(async () => {
-            root.render(
-                <div id="virtualized-list-host" style={{ display: 'flex', height: 400 }}>
-                    <List
-                        ref={listRef}
-                        backendPreference="flat"
-                        data={rows}
-                        keyExtractor={(item) => item.id}
-                        initialNumToRender={12}
-                        renderItem={({ item }) => <div data-row-height="56">{item.id}</div>}
-                    />
-                </div>,
-            );
-        });
-        await flushLegendWork();
-
-        expect(listRef.current).not.toBeNull();
-        let thrown: unknown = null;
-        await act(async () => {
-            try {
-                await listRef.current!.scrollToIndex({ index: 400, animated: false, viewPosition: 0 });
-            } catch (error) {
-                thrown = error;
-            }
-        });
-        expect(thrown).toBeNull();
-    });
-
     // A retained surface that is not being presented is `display: none`, so every row the list renders
     // there measures 0 x 0. Legend accepts a 0 x 0 row (its own viewport ignores 0 x 0, its row
     // coordinator does not), so a data change under a hidden surface made every row "fit": the pool
@@ -392,7 +354,6 @@ describe('VirtualizedList web DOM integration', () => {
             <RetainedPanelSurface isActive={props.presented}>
                 <div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
                     <VirtualizedList
-                        backendPreference="legend"
                         data={props.rows}
                         estimatedItemSize={560}
                         keyExtractor={(item) => item.id}

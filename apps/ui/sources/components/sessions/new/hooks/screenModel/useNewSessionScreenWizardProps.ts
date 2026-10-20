@@ -61,7 +61,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'selectedSecretIdByProfileIdByEnvVarName'
         | 'sessionOnlySecretValueByProfileIdByEnvVarName'
     >;
-    installables: Pick<NewSessionWizardParams, 'wizardInstallableDeps' | 'selectedMachineCapabilities'>;
+    installables: Pick<NewSessionWizardParams, 'wizardInstallableDeps' | 'selectedMachineCapabilities' | 'capabilitiesCacheKeySalt'>;
     agent: Pick<
         NewSessionWizardParams,
         | 'cliAvailability'

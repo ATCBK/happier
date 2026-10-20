@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deriveSessionFollowWakeEventLocalIdV1, SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
-import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol';
+import { decodeBase64 } from 'privacy-kit';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { db, initDbPostgres } from '@/storage/db';
@@ -10,6 +13,8 @@ import { getDbProviderFromEnv } from '@/storage/prisma';
 import { acknowledgeSessionFollowFrontierInTx, observePendingSessionFollowForDestinationInTx, setSessionFollowSource } from './sessionFollowEdgeService';
 import { setSessionManager } from './sessionManagerService';
 import { assertConcurrentFailedTurnRouteAcknowledgements } from './sessionFollowAcknowledgement.testkit';
+import { acceptAccountFollowPersonalProgress } from './accountFollowPersonalProgress';
+import { getAccountFollowRule, setAccountFollowRule } from './accountFollowRuleService';
 
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Follow accepted-prefix ACK on PostgreSQL', () => {
     beforeAll(async () => {
@@ -18,6 +23,90 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it('admits personal progress before a Session deletion lock can wait on its Account publication', async () => {
+        const account = await db.account.create({ data: { id: `z-${randomUUID()}`, publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const viewer = await db.account.create({ data: { id: `a-${randomUUID()}`, publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const previousHome = process.env.HAPPIER_SERVER_IDENTITY_ID;
+        const homeId = `srv_${'f'.repeat(32)}`;
+        process.env.HAPPIER_SERVER_IDENTITY_ID = homeId;
+        try {
+            const authentication = createPresentUserSessionAccessAuthentication({ env: {} });
+            const installationId = randomUUID();
+            const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: encodePlainMachineStoredContent({}), installationId,
+                dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)) } });
+            const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain',
+                agentStateVersion: 1, pendingUserActionRequestCount: 1 } });
+            await db.sessionShare.create({ data: { sessionId: source.id, sharedByUserId: account.id, sharedWithUserId: viewer.id, accessLevel: 'view' } });
+            await db.accessKey.create({ data: { accountId: account.id, sessionId: source.id, machineId: machine.id,
+                data: MACHINE_PLAIN_DATA_KEY_MARKER } });
+            await db.session.update({ where: { id: source.id }, data: { runtimeMachineTarget: {
+                homeId, accountId: account.id, sessionId: source.id, machineId: machine.id, installationId,
+            } } });
+            await db.accountSessionFollow.create({ data: { accountId: account.id, sessionId: source.id,
+                following: true, notificationLevel: 'important' } });
+            const scope = { accountId: account.id, authentication, ruleId: randomUUID() };
+            const created = await setAccountFollowRule({ ...scope, mutation: { receiver: { kind: 'account' }, expectedVersion: -1,
+                content: { t: 'plain', v: { v: 1, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' } } } } });
+            if (!created.ok) throw new Error(created.error);
+            const requestId = randomUUID();
+            const occurrence = { sourceSessionId: source.id, expectedSourcePublisherGeneration: source.publisherGeneration.toString(),
+                machineId: machine.id, installationId, rules: [{ ruleId: scope.ruleId, ruleVersion: created.value.rule.version, requestIds: [requestId] }],
+                sourceRequests: { agentStateVersion: 1, requests: [{ requestId, createdAt: Date.now() }] } };
+            // Establish the actual public admission and reserved-row writer,
+            // rather than accepting a fixture that exits before publication.
+            expect(await acceptAccountFollowPersonalProgress({ accountId: account.id, authentication, occurrence }))
+                .toEqual({ ok: true, value: { accepted: true, alreadyRepresented: false } });
+            await db.session.update({ where: { id: source.id }, data: { agentStateVersion: 2 } });
+            // Exercise a new FK insertion, not an existing coalesced row whose
+            // unchanged Session reference need not be revalidated by PostgreSQL.
+            await db.accountChange.deleteMany({ where: { accountId: account.id, kind: 'session', entityId: source.id } });
+
+            let release!: () => void;
+            let acquired!: (pid: number) => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            const ready = new Promise<number>(resolve => { acquired = resolve; });
+            // Physical deletion takes this same strong Session lock before its
+            // Account tail. NOWAIT makes the inverted edge observable without
+            // relying on a deadlock victim or changing production retry policy.
+            const holder = db.$transaction(async tx => {
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${source.id} FOR UPDATE`;
+                const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                acquired(backend!.pid);
+                await gate;
+                await tx.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${account.id} FOR NO KEY UPDATE NOWAIT`;
+            }, { timeout: 30_000 }).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
+            let progress: ReturnType<typeof acceptAccountFollowPersonalProgress> | undefined;
+            try {
+                const pid = await ready;
+                progress = acceptAccountFollowPersonalProgress({ accountId: account.id, authentication,
+                    occurrence: { ...occurrence, sourceRequests: { ...occurrence.sourceRequests, agentStateVersion: 2 } } });
+                void progress.catch(() => undefined);
+                await vi.waitFor(async () => {
+                    const [waiting] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                        SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE ${pid}::int = ANY(pg_blocking_pids(pid))) AS blocked`;
+                    expect(waiting?.blocked).toBe(true);
+                });
+                release();
+                expect(await holder).toEqual({ ok: true });
+                expect(await progress).toEqual({ ok: true, value: { accepted: true, alreadyRepresented: false } });
+                expect(await getAccountFollowRule(scope)).toMatchObject({ ok: true, value: { rule: {
+                    sources: [{ sourceSessionId: source.id, delivered: { agentStateVersion: 2 } }],
+                } } });
+                expect(await db.accountChange.findFirst({ where: { accountId: account.id, kind: 'session', entityId: source.id } }))
+                    .toMatchObject({ sessionId: source.id });
+            } finally {
+                release();
+                await holder;
+                await progress?.catch(() => undefined);
+            }
+        } finally {
+            if (previousHome === undefined) delete process.env.HAPPIER_SERVER_IDENTITY_ID;
+            else process.env.HAPPIER_SERVER_IDENTITY_ID = previousHome;
+            // The disposable database harness owns teardown of this connected
+            // Session/Machine fixture, as it does the socket ACK fixtures below.
+        }
+    });
 
     it('observes pending Follow work while the same socket heartbeat waits on Account publication', async () => {
         const previousSessions = process.env.HAPPIER_FEATURE_SESSIONS__ENABLED;

@@ -21,7 +21,7 @@ function fixture(options: Readonly<{ botRefused?: boolean }> = {}) {
     // Metadata and Account HTTP ports are persistence/transport boundaries;
     // role resolution, sparse durable edits and state bindings remain real.
     metadataPort: { update: async (_sessionId, update) => {
-      metadata = update(metadata); return { ok: true, version: ++version };
+      metadata = createTestMetadata(update(metadata)); return { ok: true, version: ++version };
     } },
   });
   const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),

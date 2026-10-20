@@ -5,6 +5,7 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createSessionFixture, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -45,14 +46,13 @@ it.each([
     const sessionCount = 401;
     const ids = Array.from({ length: sessionCount }, (_, index) => `session-${index}`);
     const messagesPerSession = 16;
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-many-sessions.test', accountId: 'account-a' }],
-      route: request => {
+    const sessionBatch = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json({ v: 1, totals: { eventCount: sessionCount,
           tokens: { input: sessionCount, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: sessionCount },
           cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } } });
         if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-        const sessionMatch = /^\/v2\/sessions\/([^/]+)$/.exec(request.path);
+        const sessionMatch = /^\/v2\/sessions\/(session-\d+)$/.exec(request.path);
         if (sessionMatch) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionMatch[1]!,
           createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
         const turnsMatch = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(request.path);
@@ -63,7 +63,9 @@ it.each([
           content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: `${request.path}-${index}-${'x'.repeat(4096)}` } } },
         })), hasMore: false });
         return undefined;
-      } });
+      });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-many-sessions.test', accountId: 'account-a' }],
+      route: sessionBatch.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
@@ -82,16 +84,17 @@ it.each([
     const started = performance.now();
     const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><Probe /></InjectedAuthProvider>);
     try {
-      await expect.poll(async () => { await flushHookEffects({ cycles: 2 }); return latest?.slice?.pending; }, { timeout: 120_000 }).toBe(false);
+      await expect.poll(async () => { await flushHookEffects({ cycles: 2 }); return latest?.slice ? latest.pending : undefined; }, { timeout: 120_000 }).toBe(false);
       const after = process.memoryUsage();
       const sessionIds = new Set(ids);
-      const sessionRequests = home.requests.filter(request => {
+      const evidenceRequests = [...home.requests, ...sessionBatch.componentRequests];
+      const sessionRequests = evidenceRequests.filter(request => {
         const match = /^\/v2\/sessions\/([^/]+)$/.exec(request.path);
         return match !== null && sessionIds.has(match[1]!);
       });
       const sessionReads = sessionRequests.length;
       const requestedSessionIds = [...new Set(sessionRequests.map(request => request.path.split('/').at(-1)))].sort();
-      const transcriptReads = home.requests.filter(request => request.path.endsWith('/messages')).length;
+      const transcriptReads = evidenceRequests.filter(request => request.path.endsWith('/messages')).length;
       console.info('FA-LOGIC-2 many-session demand', JSON.stringify({ widgetId, session, sessionCount, messagesPerSession,
         elapsedMs: performance.now() - started, sessionReads, transcriptReads,
         heapUsedBefore: before.heapUsed, heapUsedAfter: after.heapUsed, rssBefore: before.rss, rssAfter: after.rss }));
@@ -122,8 +125,7 @@ it('reuses 500 admitted Sessions across unchanged Resource wakes and refreshes o
   });
   const ids = Array.from({ length: 500 }, (_, index) => `evidence-${index}`);
   let changedSeq = 1;
-  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-session-reuse.test', accountId: 'account-a' }],
-    route: request => {
+  const sessionBatch = createSessionReadBatchHttpBoundary(request => {
       if (request.path === '/v2/usage/query') return Response.json({ v: 1, totals: { eventCount: ids.length,
         tokens: { input: ids.length, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: ids.length },
         cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } } });
@@ -143,7 +145,9 @@ it('reuses 500 admitted Sessions across unchanged Resource wakes and refreshes o
         } } },
       }], hasMore: false });
       return undefined;
-    } });
+    });
+  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-session-reuse.test', accountId: 'account-a' }],
+    route: sessionBatch.handle });
   publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
   const { TokenStorage } = await import('@/auth/storage/tokenStorage');
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
@@ -160,11 +164,14 @@ it('reuses 500 admitted Sessions across unchanged Resource wakes and refreshes o
   const coach = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({
     period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false,
   })] }) });
-  const readCounts = () => ({
-    detail: home!.requests.filter(request => /^\/v2\/sessions\/evidence-\d+$/.test(request.path)).length,
-    turns: home!.requests.filter(request => /^\/v1\/sessions\/evidence-\d+\/turns$/.test(request.path)).length,
-    messages: home!.requests.filter(request => /^\/v1\/sessions\/evidence-\d+\/messages$/.test(request.path)).length,
-  });
+  const readCounts = () => {
+    const requests = [...home!.requests, ...sessionBatch.componentRequests];
+    return {
+      detail: requests.filter(request => /^\/v2\/sessions\/evidence-\d+$/.test(request.path)).length,
+      turns: requests.filter(request => /^\/v1\/sessions\/evidence-\d+\/turns$/.test(request.path)).length,
+      messages: requests.filter(request => /^\/v1\/sessions\/evidence-\d+\/messages$/.test(request.path)).length,
+    };
+  };
   const started = performance.now();
   const release = summary.subscribe(() => {}, false);
   try {
@@ -214,8 +221,7 @@ it('publishes cold 600-Session evidence by source phase and reuses successfully 
   const ids = Array.from({ length: 600 }, (_, index) => `cold-${index}`);
   const messagesGate = createDeferred<void>();
   const lastMessageGate = createDeferred<void>();
-  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-cold-phases.test', accountId: 'account-a' }],
-    route: async request => {
+  const sessionBatch = createSessionReadBatchHttpBoundary(async request => {
       if (request.path === '/v2/usage/query') return Response.json({ v: 1, totals: { eventCount: ids.length,
         tokens: { input: ids.length, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: ids.length },
         cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } } });
@@ -237,7 +243,9 @@ it('publishes cold 600-Session evidence by source phase and reuses successfully 
         }], hasMore: true });
       }
       return undefined;
-    } });
+    });
+  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-cold-phases.test', accountId: 'account-a' }],
+    route: sessionBatch.handle });
   publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
   const { TokenStorage } = await import('@/auth/storage/tokenStorage');
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
@@ -256,7 +264,8 @@ it('publishes cold 600-Session evidence by source phase and reuses successfully 
   const release = entry.subscribe(() => {}, false);
   const reading = entry.refresh();
   const slice = () => entry.getSnapshot().value ? decodeUsageQueryResource(entry.getSnapshot().value!).results[0] : undefined;
-  const messageReads = () => home!.requests.filter(request => /^\/v1\/sessions\/cold-\d+\/messages$/.test(request.path)).length;
+  const messageReads = () => [...home!.requests, ...sessionBatch.componentRequests]
+    .filter(request => /^\/v1\/sessions\/cold-\d+\/messages$/.test(request.path)).length;
   try {
     await expect.poll(messageReads, { timeout: 120_000 }).toBe(ids.length);
     await expect.poll(() => slice()?.howYouWork?.intervals?.agentTimeMs).toBe(ids.length * 300);
@@ -264,11 +273,10 @@ it('publishes cold 600-Session evidence by source phase and reuses successfully 
       'the admitted cold batch must share its Account-currentness observation').toBe(1);
     const summaryPasses = project.mock.calls.length;
     messagesGate.resolve();
-    await expect.poll(() => opened.mock.calls.length).toBe(ids.length - 1);
-    await Promise.all(opened.mock.results.map(result => result.type === 'return' ? result.value : undefined));
     await flushHookEffects({ cycles: 20 });
-    // The last transcript is still held. Every earlier completion changes only
-    // unfinished source acquisition, not a displayed complete evidence phase.
+    // The last component holds the HTTP batch response. Earlier components
+    // must not open private bodies or reproject an unadmitted evidence phase.
+    expect(opened.mock.calls).toHaveLength(0);
     expect(project.mock.calls.length, 'intermediate Session completions must not reproject the entire corpus').toBe(summaryPasses);
     expect(slice()?.howYouWork?.intervals?.agentTimeMs).toBe(ids.length * 300);
     lastMessageGate.resolve();
@@ -319,8 +327,7 @@ it('shares opened E2EE pages across mounted Overview and Coach consumers and unc
       }) } },
     })))] as const;
   })));
-  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-encrypted-reuse.test', accountId: 'account-a',
-    accountMode: 'e2ee', credentials }], route: request => {
+  const sessionBatch = createSessionReadBatchHttpBoundary(request => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'e2ee', version: 1,
         signingKeyFingerprint: 'signing-1', contentKeyFingerprint: 'content-1', updatedAt: 1,
         recipientEnvelopeReadiness: { status: 'available' } });
@@ -335,7 +342,9 @@ it('shares opened E2EE pages across mounted Overview and Coach consumers and unc
       const page = /^\/v1\/sessions\/([^/]+)\/messages$/.exec(request.path);
       if (page && messages.has(page[1]!)) return Response.json({ messages: messages.get(page[1]!), hasMore: true });
       return undefined;
-    } });
+    });
+  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-encrypted-reuse.test', accountId: 'account-a',
+    accountMode: 'e2ee', credentials }], route: sessionBatch.handle });
   publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
   const captured = captureUiUsageQueryAccountContext(credentials)!;
   const { sync } = await import('@/sync/sync');
@@ -352,7 +361,8 @@ it('shares opened E2EE pages across mounted Overview and Coach consumers and unc
     coach = useUsageWidgetModel(input, 'usage_coach').model;
     return null;
   }
-  const reads = () => home!.requests.filter(request => request.path.endsWith('/messages')).length;
+  const reads = () => [...home!.requests, ...sessionBatch.componentRequests]
+    .filter(request => request.path.endsWith('/messages')).length;
   // Call-through observation of the existing crypto batching owner: one page
   // must not become a separate native/worker dispatch for each message.
   const openedBatches = vi.spyOn(SessionEncryption.prototype, 'decryptMessages');

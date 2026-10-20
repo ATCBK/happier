@@ -12,6 +12,8 @@ import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/au
 
 import type { Tx } from "@/storage/inTx";
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx } from "./activationCurrentness";
+import { acquireRunnerActivationLockInTx } from './activationLock';
+import { acquireAccountSessionOwnerMetadataFenceInTx, AccountSessionOwnerMetadataFenceAccountNotFoundError } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { runnerActivationBinding, type ActivationRow } from "./activationService";
 import { readRunnerActivationAuthenticationEvidence } from "./activationAuthentication";
 import { StoredRunnerCredentialSelectionV1Schema } from "./credentialSelectionRecord";
@@ -70,6 +72,15 @@ export async function verifyRunnerBrokerReadinessCurrentnessInTx(
 ): Promise<VerifiedRunnerBrokerReadinessCurrentness | null> {
     const parsed = RunnerBrokerReadinessRequestV1Schema.safeParse(input.request);
     if (!parsed.success || parsed.data.activationId !== input.activationId) return null;
+    const identity = await tx.ephemeralRunnerActivation.findUnique({ where: { id: input.activationId }, select: { creatorAccountId: true } });
+    if (!identity) return null;
+    try {
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, identity.creatorAccountId, 'content');
+    } catch (error) {
+        if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return null;
+        throw error;
+    }
+    await acquireRunnerActivationLockInTx(tx, input.activationId);
     const initial = await tx.ephemeralRunnerActivation.findUnique({ where: { id: input.activationId } });
     if (!initial) return null;
     const current = await readRunnerCreatorCurrentnessInTx(tx, initial.creatorAccountId);

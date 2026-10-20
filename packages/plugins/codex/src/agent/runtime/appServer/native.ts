@@ -59,7 +59,7 @@ import {
   AGENT_STARTUP_FAILURE_PREVIEWS,
   readAgentStartupFailureCode,
   type AgentStartupFailureCode,
-} from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+} from '@happier-dev/plugin-sdk/agents/runtime';
 
 type CodexSharedAppServer = NonNullable<Awaited<ReturnType<typeof createCodexSharedAppServer>>>;
 

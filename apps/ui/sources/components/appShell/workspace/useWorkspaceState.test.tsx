@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { StorageState } from '@/sync/store/types';
 import { createWorkspaceState, reduceWorkspaceState, type WorkspaceState } from './workspaceState';
 import { workspaceLayoutScopeKey } from './workspacePersistence';
 import { admitWorkspaceSingletonState } from './workspaceDestinationPolicy';
@@ -16,12 +19,22 @@ const storedTab = {
     pinned: true, preview: false,
 };
 
-const storageState = vi.hoisted(() => ({
-    ready: false,
-    scope: { serverId: 'home', accountId: 'alice' },
-    layouts: {} as Record<string, unknown>,
-}));
-const saveLayouts = vi.hoisted(() => vi.fn((next: Record<string, unknown>) => { storageState.layouts = next; }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { getStorage } = await import('@/sync/domains/state/storage');
+const originalState = getStorage().getState();
+const storageState = {
+    get ready() { return getStorage().getState().isDataReady; },
+    set ready(value: boolean) { act(() => getStorage().setState({ isDataReady: value })); },
+    get scope() { return getStorage().getState().profileScope!; },
+    set scope(value: { serverId: string; accountId: string }) { act(() => getStorage().setState({ profileScope: value })); },
+    get layouts() { return getStorage().getState().localSettings.workspaceLayoutV1; },
+    set layouts(value: Record<string, unknown>) {
+        act(() => getStorage().setState({ localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: value } }));
+    },
+};
+let saveLayouts: MockInstance<StorageState['applyLocalSettings']>;
 const pluginKind = 'plugin:acme.notes:notes';
 const pluginCatalog = [{ id: pluginKind, kind: 'plugin', container: 'appPage', destination: { pluginId: 'acme.notes', localId: 'notes' },
     title: 'Notes', icon: 'file', order: 40, placement: { kind: 'rail', region: 'plugins' },
@@ -33,16 +46,13 @@ const admission = (catalog: readonly CompactAppDestination[]) => (state: Workspa
     return admitWorkspaceSingletonState(state, catalog, () => 'blank', retainedState);
 };
 
-vi.mock('@/sync/domains/state/storage', () => createStorageModuleStub({
-    useIsDataReady: () => storageState.ready,
-    useActiveServerAccountScope: () => storageState.scope,
-    useLocalSettingMutable: (key: string) => {
-        if (key !== 'workspaceLayoutV1') throw new Error(`Unexpected setting: ${key}`);
-        return [storageState.layouts, saveLayouts] as const;
-    },
-}));
-
 describe('useWorkspaceState', () => {
+    beforeEach(() => {
+        storageState.ready = false;
+        storageState.scope = { serverId: 'home', accountId: 'alice' };
+        storageState.layouts = {};
+        saveLayouts = vi.spyOn(getStorage().getState(), 'applyLocalSettings');
+    });
     it('keeps a local singleton instance when a remote client opens the same destination under another ID', async () => {
         storageState.ready = true;
         const active = { id: 'device-editor', target: { kind: pluginKind, params: { subPath: 'SECOND' } }, pinned: true, preview: false };
@@ -244,11 +254,9 @@ describe('useWorkspaceState', () => {
         await hook.unmount();
     });
     afterEach(() => {
-        storageState.ready = false;
-        storageState.scope = { serverId: 'home', accountId: 'alice' };
-        storageState.layouts = {};
-        saveLayouts.mockClear();
         standardCleanup();
+        saveLayouts.mockRestore();
+        getStorage().setState(originalState, true);
     });
 
     it('hydrates the account/window layout without writing on mount and persists only an intent', async () => {
@@ -258,8 +266,8 @@ describe('useWorkspaceState', () => {
         expect(hook.getCurrent().state.tabs.new).toBeTruthy();
         expect(saveLayouts).not.toHaveBeenCalled();
 
-        storageState.ready = true;
         storageState.layouts = { [scopeKey]: createWorkspaceState(storedTab) };
+        storageState.ready = true;
         await hook.rerender(undefined);
         expect(hook.getCurrent().state.tabs['session-a']).toBeTruthy();
         expect(saveLayouts).not.toHaveBeenCalled();

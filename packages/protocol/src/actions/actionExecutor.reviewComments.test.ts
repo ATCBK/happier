@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestSchema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { createBlockingApprovalCoordinator } from './blockingApprovalCoordinator.js';
 import { ReviewCommentV1Schema } from '../reviews/comments/v1.js';
 import { deriveReviewCommentStructuralMutationV1 } from '../reviews/comments/mutation.js';
 import { splitReviewCommentV1, sealReviewCommentSensitiveEnvelopeV1, openStoredReviewCommentV1 } from '../reviews/comments/content.js';
 import { executeReviewCommentTransportV1 } from '../reviews/comments/transport.js';
 import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentCommitMutationRequestV1Schema, type ReviewCommentPreparedRecordV1 } from '../reviews/comments/mutation.js';
-import { ReviewCommentActionInputSchemasV1 } from '../reviews/comments/actions.js';
+import { ReviewCommentActionInputSchemasV1, ReviewCommentClaimPublicationDispatchResponseV1Schema } from '../reviews/comments/actions.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
   return {
@@ -44,6 +45,73 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (review comments)', () => {
+  it('returns claimed correlations to the awaiting plugin after human approval', async () => {
+    const coordinator = createBlockingApprovalCoordinator();
+    const stored: { request: ApprovalRequest | null } = { request: null };
+    let signalWaiting: (() => void) | undefined;
+    const waiting = new Promise<void>(resolve => { signalWaiting = resolve; });
+    const plan = ReviewCommentActionInputSchemasV1['reviews.comments.claimPublicationDispatch'].parse({
+      target: { providerId: 'external-forge', nativeService: { pluginId: 'acme.forge', localId: 'account' },
+        entryRef: { sourceId: 'acme.forge/source', kindId: 'pull-request', collisionScope: 'repo:1', entryId: '1' }, subtarget: null },
+      baseRevision: 'base', headRevision: 'head', entries: [], verdict: { kind: 'comment', body: 'Review verdict' },
+    });
+    const claim = ReviewCommentClaimPublicationDispatchResponseV1Schema.parse({
+      disposition: 'dispatch', dispatchToken: 'dispatch-token', publicationPlanId: 'A'.repeat(43), entries: [],
+      verdict: { publicationCorrelationId: 'B'.repeat(43) }, instructions: { entries: [], verdict: 'dispatch' }, priorResult: null,
+    });
+    let dispatched = false;
+    const executor = createActionExecutor(createDeps({
+      // Artifact persistence and the authenticated Reviews HTTP adapter are
+      // boundaries; policy, admission, waiting and replay remain real.
+      approvalsCreate: async ({ request }) => { stored.request = request; return { artifactId: 'claim-approval' }; },
+      approvalsGet: async () => stored.request,
+      approvalsUpdate: async ({ request }) => {
+        stored.request = request;
+        coordinator.notifyApprovalUpdated({ artifactId: 'claim-approval', request });
+        return { ok: true };
+      },
+      approvalsResolveBlockingDecision: async args => coordinator.resolveBlockingDecision(args),
+      approvalsWaitForDecision: async args => {
+        const pending = coordinator.waitForDecision(args);
+        signalWaiting?.();
+        const result = await pending;
+        return { ...result, request: ApprovalRequestSchema.parse(result.request) };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+      reviewCommentAction: async ({ actionId, input }) => {
+        expect(actionId).toBe('reviews.comments.claimPublicationDispatch');
+        expect(input).toEqual(plan);
+        dispatched = true;
+        return claim;
+      },
+    }));
+    const pending = executor.execute('reviews.comments.claimPublicationDispatch', plan, {
+      surface: 'plugin', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_home',
+      runtimeAccountId: 'account', actionRequestId: 'claim-request',
+      externalActionTarget: { kind: 'machine', machineId: 'machine' },
+      actionCaller: { kind: 'plugin', pluginId: 'acme.forge', contributionLocalId: 'publish-review',
+        sourceCustody: { kind: 'development', registeredRootId: 'external-forge-root' } },
+    });
+    try {
+      const admission = await Promise.race([
+        pending.then(result => ({ kind: 'completed' as const, result })),
+        waiting.then(() => ({ kind: 'waiting' as const })),
+      ]);
+      expect(admission, JSON.stringify(admission)).toEqual({ kind: 'waiting' });
+      expect(dispatched).toBe(false);
+      expect(ApprovalRequestSchema.parse(stored.request).status).toBe('open');
+      await expect(executor.execute('approval.request.decide', { artifactId: 'claim-approval', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'home', serverIdentityId: 'srv_home',
+        runtimeAccountId: 'account', actionCaller: { kind: 'host' },
+      })).resolves.toMatchObject({ ok: true });
+      await expect(pending).resolves.toEqual({ ok: true, result: claim });
+      expect(dispatched).toBe(true);
+    } finally {
+      coordinator.dispose();
+      await pending;
+    }
+  });
+
   it.each(['reviews.comments.edit', 'reviews.comments.transition'] as const)('executes an approved Session comment mutation through the human Account owner: %s', async actionId => {
     const workspace = { machineId: 'machine', path: '/workspace' };
     let comment = ReviewCommentV1Schema.parse({ v: 1, id: 'comment', accountId: 'account', workspace, sessionId: 'session',

@@ -5,6 +5,11 @@ import { projectApprovalRequestForPublicRead } from '@happier-dev/protocol/actio
 import { ApprovalRequestV2Schema, StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectApprovalExecutionFailureV2, readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { ManagedResourceDependencyV1Schema } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { ActionsSettingsV1Schema, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { readFriendMutationProfile } from '@/sync/ops/friends';
 
 const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
@@ -94,6 +99,82 @@ afterEach(() => {
 });
 
 describe('createHomeDomainActionExecutorForScope', () => {
+    it.each(['friends.add', 'friends.remove'] as const)('admits %s through the shared UI, Agent and MCP Home transport', async (actionId) => {
+        const { scope, serverId } = await scopeForNewHome('https://friends-actions.example');
+        const user = { id: 'friend-1', firstName: 'Ada', lastName: null, username: 'ada', avatar: null,
+            bio: null, publicKey: null, status: actionId === 'friends.add' ? 'requested' : 'none' };
+        runtimeFetchMock.mockImplementation(async () => jsonResponse({ user }, 200));
+        const executor = createActionExecutor({
+            homeDomainAction: createHomeDomainActionExecutorForScope(scope),
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1(context.actionsSettings), context),
+        } as ActionExecutorDeps);
+        for (const surface of ['ui', 'agent', 'mcp'] as const) {
+            const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+            const result = await executor.execute(actionId, { uid: user.id }, {
+                surface, authority: surface === 'ui' ? 'present_user' : 'account_automation', serverId,
+                runtimeAccountId: 'account', actionCaller: { kind: 'host' }, actionsSettings: settings,
+            });
+            expect(result).toMatchObject({ ok: true, result: { user: { id: user.id, status: user.status } } });
+            expect(runtimeFetchMock).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    url: `https://friends-actions.example/v1/friends/${actionId === 'friends.add' ? 'add' : 'remove'}`,
+                    init: expect.objectContaining({ method: 'POST', body: JSON.stringify({ uid: user.id }) }),
+                }),
+            );
+        }
+        expect(getActionSpec(actionId).surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+        runtimeFetchMock.mockResolvedValueOnce(jsonResponse({ user: null }, 200));
+        expect(await executor.execute(actionId, { uid: 'missing-person' }, {
+            surface: 'ui', authority: 'present_user', serverId, runtimeAccountId: 'account',
+            actionCaller: { kind: 'host' }, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { [actionId]: ['ui'] } }),
+        })).toEqual({ ok: true, result: { user: null } });
+    });
+
+    it.each(['friends.add', 'friends.remove'] as const)('keeps Off and Ask admission ahead of %s, without disabling the profile neighbour', async (actionId) => {
+        const { scope, serverId } = await scopeForNewHome('https://friends-policy.example');
+        runtimeFetchMock.mockResolvedValue(jsonResponse({ user: null }, 200));
+        let storedApproval: unknown;
+        const executor = createActionExecutor({
+            homeDomainAction: createHomeDomainActionExecutorForScope(scope),
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1(context.actionsSettings), context),
+            approvalsCreate: async ({ request }) => {
+                storedApproval = ApprovalRequestV2Schema.parse(request);
+                return { artifactId: 'friends-approval' };
+            },
+        } as ActionExecutorDeps);
+        const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId,
+            runtimeAccountId: 'account', actionRequestId: 'friends-policy-request', actionCaller: { kind: 'host' as const } };
+        const off = ActionsSettingsV1Schema.parse({ v: 1, actions: { [actionId]: { enabled: false } } });
+        expect(await executor.execute(actionId, { uid: 'friend-1' }, { ...context, actionsSettings: off }))
+            .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+        const ask = ActionsSettingsV1Schema.parse({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+        expect(await executor.execute(actionId, { uid: 'friend-1' }, { ...context, actionsSettings: ask }))
+            .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'friends-approval' } });
+        expect(storedApproval).toMatchObject({ actionId, actionArgs: { uid: 'friend-1' } });
+        expect(runtimeFetchMock).not.toHaveBeenCalled();
+        // The profile read remains available under a Friends-only policy override.
+        expect(getActionSpec('account.profile.get').surfaces.ui).toBe(true);
+        expect(await executor.prepare('account.profile.get', {}, { ...context, actionsSettings: off }))
+            .toMatchObject({ kind: 'ready' });
+    });
+
+    it.each([
+        { status: 400, body: { error: 'provider-required', provider: 'github' }, code: 'provider-required' },
+        { status: 400, body: { error: 'username-required' }, code: 'username-required' },
+        { status: 404, body: { error: 'not_found' }, code: 'not_found' },
+        { status: 404, body: { error: 'User not found' }, code: 'User not found' },
+    ])('retains the Friends server refusal $code', async ({ status, body, code }) => {
+        const { scope } = await scopeForNewHome('https://friends-refusal.example');
+        runtimeFetchMock.mockResolvedValue(jsonResponse(body, status));
+        const result = await createHomeDomainActionExecutorForScope(scope)({ actionId: 'friends.add', input: { uid: 'friend-1' },
+            context: { surface: 'ui', authority: 'present_user' } });
+        expect(result).toMatchObject({ ok: false, errorCode: code });
+        const failure = ActionExecuteFailureSchema.parse(result);
+        if (status === 404) expect(readFriendMutationProfile(failure)).toBeNull();
+        else expect(() => readFriendMutationProfile(failure)).toThrow(code);
+    });
+
     it.each([
         { actionId: 'secrets.shared.delete', input: { resourceId: 'secret-1', expectedRevision: 3, expectedSettingsVersion: 1,
             referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } } },

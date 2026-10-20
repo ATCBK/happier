@@ -463,6 +463,21 @@ export const PluginAgentStructuredOutputCapabilityV2Schema = lazyZodSchema(() =>
 }));
 export type PluginAgentStructuredOutputCapabilityV2 = z.infer<typeof PluginAgentStructuredOutputCapabilityV2Schema>;
 
+/** Public support/consent facts; native-home paths remain in the Agent runtime descriptor. */
+const PluginAgentProviderStateSharingCapabilityV2Schema = lazyZodSchema(() => z.strictObject({
+  config: z.strictObject({
+    supported: z.boolean(),
+    modes: z.array(z.enum(['linked', 'copied', 'isolated'])),
+    unavailableReason: z.optional(z.enum(['not_implemented', 'dynamic_diagnostics_required'])),
+  }),
+  state: z.strictObject({
+    supported: z.boolean(),
+    modes: z.array(z.enum(['isolated', 'shared'])),
+    sharedStatePrivacyRiskAcknowledgementRequired: z.optional(z.boolean()),
+    unavailableReason: z.optional(z.enum(['not_implemented', 'dynamic_diagnostics_required'])),
+  }),
+}));
+
 const PluginAgentCapabilitiesV2Shape = {
   surfaces: z.optional(PluginAgentCapabilitySurfacesV2Schema),
   sessions: z.optional(PluginAgentSessionCapabilitiesV2Schema),
@@ -470,6 +485,7 @@ const PluginAgentCapabilitiesV2Shape = {
   tools: z.optional(PluginAgentToolsCapabilityV2Schema),
   skills: z.optional(PluginAgentSkillsCapabilityV2Schema),
   structuredOutput: z.optional(PluginAgentStructuredOutputCapabilityV2Schema),
+  providerStateSharing: z.optional(PluginAgentProviderStateSharingCapabilityV2Schema),
 };
 
 /**
@@ -597,6 +613,7 @@ const PluginAgentSessionCapabilitiesShape = {
   tools: z.optional(PluginAgentToolsCapabilityV2Schema),
   skills: z.optional(PluginAgentSkillsCapabilityV2Schema),
   structuredOutput: z.optional(PluginAgentStructuredOutputCapabilityV2Schema),
+  providerStateSharing: z.optional(PluginAgentProviderStateSharingCapabilityV2Schema),
 };
 const PluginAgentSessionPrimaryShape = {
   primary: z.literal('sessions'),
@@ -614,6 +631,7 @@ const PluginAgentExecutionPrimaryShape = {
     tools: z.optional(PluginAgentToolsCapabilityV2Schema),
     skills: z.optional(PluginAgentSkillsCapabilityV2Schema),
     structuredOutput: z.optional(PluginAgentStructuredOutputCapabilityV2Schema),
+    providerStateSharing: z.optional(PluginAgentProviderStateSharingCapabilityV2Schema),
   }),
 };
 const PluginAgentPrimaryContributionV2Schema = lazyZodSchema(() => z.union([
@@ -625,6 +643,7 @@ const PluginAgentExternalSessionsAuxiliaryV2Schema = lazyZodSchema(() => z.stric
   ...PluginAgentDisplayV2Shape,
   capabilities: z.strictObject({
     surfaces: PluginAgentCapabilitySurfacesV2Schema.check(z.refine((values) => values.includes('externalSessions'), 'An auxiliary-only Agent must declare the externalSessions surface.')),
+    providerStateSharing: z.optional(PluginAgentProviderStateSharingCapabilityV2Schema),
   }),
 }));
 

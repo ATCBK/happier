@@ -5,9 +5,40 @@ vi.mock('axios', () => ({ default: { post } }));
 
 import { createWorkflowRunStorageClient } from './workflowRunStorageClient';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol';
+import { createWorkflowRunStorageTestkit } from './workflowRunStorage.testkit';
 
 describe('workflow Run storage client', () => {
   beforeEach(() => post.mockReset());
+
+  it('notifies Follow after storage commits a terminal, attention or progress Workflow revision', async () => {
+    const transport = await import('../controlHttp');
+    const hint = vi.spyOn(transport, 'daemonPost').mockResolvedValue({ ok: true });
+    const boundary = createWorkflowRunStorageTestkit({ runId: 'workflow-follow', machineId: 'machine-1',
+      origin: { kind: 'direct', originSessionId: 'c111111111111111111111111' }, state: 'succeeded' });
+    const committed = { ...boundary.run(), revision: 4 };
+    post.mockResolvedValueOnce({ data: committed });
+    const client = createWorkflowRunStorageClient({ token: 'token', machineId: 'machine-1', serverHttpBaseUrl: 'https://home.test',
+      createPublisherHeader: async () => 'signed-publisher' });
+    try {
+      await client.execute({ operation: 'transition', runId: committed.id });
+      expect(hint.mock.calls).toContainEqual(['/session-activity-changed', { sessionId: committed.origin.originSessionId,
+        followOccurrence: { original: { source: { kind: 'workflow_run', runId: committed.id }, revision: 4 }, event: { kind: 'finished' } },
+      }]);
+      hint.mockClear();
+      post.mockResolvedValueOnce({ data: { ...committed, state: 'running' } });
+      await client.execute({ operation: 'transition', runId: committed.id });
+      expect(hint.mock.calls).toContainEqual(['/session-activity-changed', { sessionId: committed.origin.originSessionId,
+        followOccurrence: { original: { source: { kind: 'workflow_run', runId: committed.id }, revision: 4 }, event: { kind: 'update_posted' } },
+      }]);
+      hint.mockClear();
+      post.mockResolvedValueOnce({ data: { ...committed, state: 'running', attentionRequired: true } });
+      await client.execute({ operation: 'transition', runId: committed.id });
+      expect(hint.mock.calls).toContainEqual(['/session-activity-changed', { sessionId: committed.origin.originSessionId,
+        followOccurrence: { original: { source: { kind: 'workflow_run', runId: committed.id }, revision: 4 },
+          event: { kind: 'needs_you', type: 'decision' } },
+      }]);
+    } finally { hint.mockRestore(); }
+  });
 
   it('reads batched workflow summaries with Account credentials and no worker publication', async () => {
     const result = { summaries: [], remainingSourceArtifactIds: [] };
@@ -21,6 +52,28 @@ describe('workflow Run storage client', () => {
     }, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES })).resolves.toEqual(result);
     expect(post.mock.calls[0]?.[1]).not.toHaveProperty('publisherMachineId');
     expect(post.mock.calls[0]?.[2].headers).not.toHaveProperty('x-happier-plugin-installation-manifest-publisher');
+  });
+
+  it('reads missing attention from the current source and preserves a committed transition if that read is unavailable', async () => {
+    const transport = await import('../controlHttp');
+    const hint = vi.spyOn(transport, 'daemonPost').mockResolvedValue({ ok: true });
+    const boundary = createWorkflowRunStorageTestkit({ runId: 'workflow-follow', machineId: 'machine-1',
+      origin: { kind: 'direct' }, state: 'running' });
+    const { attentionRequired: _attention, ...mutation } = { ...boundary.run(), revision: 4 };
+    const client = createWorkflowRunStorageClient({ token: 'token', machineId: 'machine-1', serverHttpBaseUrl: 'https://home.test',
+      createPublisherHeader: async () => 'signed-publisher' });
+    try {
+      post.mockResolvedValueOnce({ data: mutation }).mockResolvedValueOnce({ data: { run: { ...mutation, attentionRequired: true } } });
+      await expect(client.execute({ operation: 'transition', runId: mutation.id })).resolves.toEqual(mutation);
+      expect(hint.mock.calls).toContainEqual(['/session-activity-changed', { sessionId: null,
+        followOccurrence: { original: { source: { kind: 'workflow_run', runId: mutation.id }, revision: 4 },
+          event: { kind: 'needs_you', type: 'decision' } },
+      }]);
+      hint.mockClear();
+      post.mockResolvedValueOnce({ data: mutation }).mockRejectedValueOnce(new Error('source unavailable'));
+      await expect(client.execute({ operation: 'transition', runId: mutation.id })).resolves.toEqual(mutation);
+      expect(hint).not.toHaveBeenCalled();
+    } finally { hint.mockRestore(); }
   });
 
   it('uses the incumbent signed Automation-worker HTTP corridor', async () => {

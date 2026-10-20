@@ -148,6 +148,22 @@ describe('ActionExecutor prepared invocation', () => {
       .resolves.toMatchObject({ ok: false });
   });
 
+  it('refuses a still-led child headless Resume before the Session open effect', async () => {
+    const { caller, sessionList } = sessionReadHarness();
+    const opened: string[] = [];
+    const executor = createExecutor({ sessionList, isActionApprovalRequired: () => false,
+      sessionOpen: async ({ sessionId }) => { opened.push(sessionId); return { ok: true }; },
+    });
+    const context = caller('parent');
+    await expect(executor.execute('session.open', { sessionId: 'child', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action', details: { cause: 'action_scope_restricted' } });
+    expect(opened).toEqual([]);
+    // The same port remains reachable for the current Session.
+    await expect(executor.execute('session.open', { sessionId: 'parent', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: true });
+    expect(opened).toEqual(['parent']);
+  });
+
 
   it('admits registered Session setters for own and server-proved led targets', async () => {
     const { caller, sessionList } = sessionReadHarness();

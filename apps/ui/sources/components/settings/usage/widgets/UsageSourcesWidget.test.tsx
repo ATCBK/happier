@@ -14,6 +14,8 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { t } from '@/text';
 import { UsageSourcesMachines, projectUsageSourcesMachines } from './UsageSourcesWidget';
+import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { act } from 'react-test-renderer';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 it('retains source inventory but withdraws execution from machines with locked content', () => {
   const machines = [
@@ -139,6 +141,16 @@ async function mount(executor: ReturnType<typeof machineBoundary>['executor'], i
   );
 }
 
+type Screen = Awaited<ReturnType<typeof mount>>;
+/** The Counted switch is the consent control; its options menu holds folder and history Actions. */
+async function setCounted(screen: Screen, card: string, value: boolean) {
+  await act(async () => { await screen.findByTestId(`${card}.counted`)!.props.onValueChange(value); });
+}
+async function chooseOption(screen: Screen, card: string, option: string) {
+  const menu = screen.findAllByType(ItemRowActions).find(node => node.props.overflowTriggerTestID === `${card}.options`)!;
+  await act(async () => { await menu.props.actions.find((action: { id: string }) => action.id === `${card}.${option}`).onPress(); });
+}
+
 afterEach(() => {
   standardCleanup();
   confirm.mockReset();
@@ -146,6 +158,29 @@ afterEach(() => {
 });
 
 describe('Usage Sources body', () => {
+  it('decides missing once per Agent and hides untouched Happier runtime homes without hiding captured history', async () => {
+    const codex = { ...found, sourceId: 'codex-user', agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
+      root: { kind: 'default', path: '/Users/ada/.codex' } } satisfies UsageSourceV1;
+    const absent = { ...codex, sourceId: 'codex-absent', root: { kind: 'configured', path: null },
+      status: 'unavailable' } satisfies UsageSourceV1;
+    const runtime = { ...codex, sourceId: 'codex-runtime', root: { kind: 'materialized', path: '/stack-state/cli/connected-services/codex-home' } } satisfies UsageSourceV1;
+    const stopped = { ...runtime, sourceId: 'codex-captured', status: 'stopped', asOfMs: 100 } satisfies UsageSourceV1;
+    const boundary = machineBoundary(codex, [codex, absent, runtime, stopped]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.codex-user.add')).toBeTruthy());
+    expect(Boolean(screen.findByTestId('sources.machine.mac.source.codex-runtime'))).toBe(false);
+    expect(screen.findByTestId('sources.machine.mac.source.codex-captured')).toBeTruthy();
+    expect(Boolean(screen.findByTestId('sources.machine.mac.missing'))).toBe(false);
+    await screen.update(<UsageSourcesMachines lifetime={lifetime} serverId="home" executor={boundary.executor}
+      testID="sources" machines={[]} input={{ agents: [], machines: [], sources: [] }} />);
+    boundary.setDiscovery([absent, { ...absent, sourceId: 'codex-absent-two' }]);
+    await screen.update(<UsageSourcesMachines lifetime={lifetime} serverId="home" executor={boundary.executor}
+      testID="sources" machines={[{ id: 'mac', name: 'Mac', online: true }]} input={{ agents: [], machines: [], sources: [] }} />);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.missing')).toBeTruthy());
+    await screen.pressByTestIdAsync('sources.machine.mac.missing.toggle');
+    expect(screen.findByTestId('sources.machine.mac.missing.codex-absent')).toBeTruthy();
+    expect(Boolean(screen.findByTestId('sources.machine.mac.missing.codex-absent-two'))).toBe(false);
+  });
   it('summarizes resolved empty machines and restores discovered content and retry after fresh demand', async () => {
     const boundary = machineBoundary(found, []);
     const props = { lifetime, serverId: 'home', executor: boundary.executor, testID: 'sources', input: { agents: [], machines: [], sources: [] } };
@@ -264,13 +299,11 @@ describe('Usage Sources body', () => {
     const boundary = machineBoundary({ ...found, consent: 'enabled', status: 'unsupported', pendingCount: 4, errorCode: 'native_ingest_unsupported' });
     const screen = await mount(boundary.executor);
     const card = 'sources.machine.mac.source.claude-default';
-    await vi.waitFor(() => expect(screen.findByTestId(`${card}.stop`)).toBeTruthy());
-    expect(screen.findByTestId(`${card}.delete`)).toBeTruthy();
-    await screen.pressByTestIdAsync(`${card}.stop`);
+    await vi.waitFor(() => expect(screen.findByTestId(`${card}.counted`)?.props.value).toBe(true));
+    await setCounted(screen, card, false);
     expect(boundary.calls).toContain('usage.sources.stop');
     expect(boundary.calls).not.toContain('usage.sources.history.delete');
-    confirm.mockResolvedValueOnce(true);
-    await screen.pressByTestIdAsync(`${card}.delete`);
+    await chooseOption(screen, card, 'delete');
     expect(boundary.calls).toContain('usage.sources.history.delete');
   });
 
@@ -289,19 +322,18 @@ describe('Usage Sources body', () => {
     const boundary = machineBoundary({ ...found, root: { kind: 'override', path: '/configured' } });
     const screen = await mount(boundary.executor);
     const card = 'sources.machine.mac.source.claude-default';
-    await vi.waitFor(() => expect(screen.findByTestId(`${card}.folder`)).toBeTruthy());
-    expect(screen.findByTestId(`${card}.defaultFolder`)).toBeTruthy();
+    await vi.waitFor(() => expect(screen.findByTestId(`${card}.add`)).toBeTruthy());
     prompt.mockResolvedValueOnce('/new/root');
-    await screen.pressByTestIdAsync(`${card}.folder`);
+    await chooseOption(screen, card, 'folder');
     expect(boundary.calls).not.toContain('usage.sources.consent.set');
-    await screen.pressByTestIdAsync(`${card}.defaultFolder`);
+    await chooseOption(screen, card, 'defaultFolder');
     expect(boundary.calls).not.toContain('usage.sources.consent.set');
-    confirm.mockResolvedValueOnce(true);
     await screen.pressByTestIdAsync(`${card}.add`);
-    await screen.pressByTestIdAsync(`${card}.stop`);
+    await vi.waitFor(() => expect(screen.findByTestId(`${card}.counted`)).toBeTruthy());
+    await setCounted(screen, card, false);
     prompt.mockResolvedValueOnce('/stopped/root');
-    await screen.pressByTestIdAsync(`${card}.folder`);
-    expect(screen.findByTestId(`${card}.add`)).toBeTruthy();
+    await chooseOption(screen, card, 'folder');
+    await vi.waitFor(() => expect(screen.findByTestId(`${card}.add`)).toBeTruthy());
   });
   it('leaves waived source consent to the canonical Action policy without a caller confirmation', async () => {
     const boundary = machineBoundary();
@@ -314,7 +346,7 @@ describe('Usage Sources body', () => {
 
     await screen.pressByTestIdAsync(`${card}.add`);
     await vi.waitFor(() =>
-      expect(screen.findByTestId(`${card}.stop`)).toBeTruthy(),
+      expect(screen.findByTestId(`${card}.counted`)?.props.value).toBe(true),
     );
     expect(boundary.calls).toEqual([
       'usage.sources.discover',
@@ -324,15 +356,65 @@ describe('Usage Sources body', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it('keeps one Agent\'s sources together whatever their status', async () => {
+    const codex = { ...found, sourceId: 'codex-user', agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
+      root: { kind: 'default', path: '/Users/ada/.codex' } } satisfies UsageSourceV1;
+    const earlier = { ...codex, sourceId: 'codex-earlier', root: { kind: 'configured', path: '/tmp/codex-earlier' },
+      status: 'stopped', asOfMs: 100 } satisfies UsageSourceV1;
+    const boundary = machineBoundary(found, [earlier, found, codex]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.codex-user.add')).toBeTruthy());
+    const text = screen.getTextContent();
+    const at = (needle: string) => text.indexOf(needle);
+    expect([at('~/.claude'), at('/tmp/codex-earlier'), at('~/.codex')]).toEqual(
+      [at('~/.claude'), at('/tmp/codex-earlier'), at('~/.codex')].sort((a, b) => a - b));
+    expect(at('~/.claude')).toBeGreaterThan(-1);
+  });
   it('hides a found card on Not now without consenting or deleting anything', async () => {
     const boundary = machineBoundary();
     const screen = await mount(boundary.executor);
     const card = 'sources.machine.mac.source.claude-default';
     await vi.waitFor(() =>
-      expect(screen.findByTestId(`${card}.notNow`)).toBeTruthy(),
+      expect(screen.findByTestId(`${card}.add`)).toBeTruthy(),
     );
-    await screen.pressByTestIdAsync(`${card}.notNow`);
+    // Not now is a quiet option in the row's menu; only Add is drawn on the row.
+    expect(screen.findByTestId(`${card}.notNow`)).toBeFalsy();
+    await chooseOption(screen, card, 'notNow');
     await vi.waitFor(() => expect(screen.findByTestId(card)).toBeFalsy());
     expect(boundary.calls).toEqual(['usage.sources.discover']);
+  });
+
+  it('gives a source that cannot be read exactly one status, without an offer to resume it', async () => {
+    const boundary = machineBoundary({ ...found, sourceId: 'codex-default', agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
+      root: { kind: 'default', path: '/Users/ada/.codex' }, status: 'unavailable', coverage: 'unsupported', errorCode: 'source_unavailable' });
+    const screen = await mount(boundary.executor);
+    const card = 'sources.machine.mac.source.codex-default';
+    await vi.waitFor(() => expect(screen.findByTestId(`${card}.failed`)).toBeTruthy());
+    expect(screen.getTextContent()).not.toContain(t('usage.board.sources.unsupported'));
+    expect(screen.findByTestId(`${card}.counted`)?.props.disabled).toBe(true);
+    expect(screen.findByTestId(`${card}.add`)).toBeFalsy();
+  });
+
+  it('says the server disclosure once for the page however many sources can be added', async () => {
+    const second = { ...found, sourceId: 'claude-work', root: { kind: 'configured', path: '/Users/ada/work/.claude' } } as UsageSourceV1;
+    const boundary = machineBoundary(found, [found, second]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.claude-work.add')).toBeTruthy());
+    expect(screen.getTextContent().split(USAGE_SOURCE_CONSENT_DISCLOSURE)).toHaveLength(2);
+  });
+
+  it('groups Agents whose folder was not found into one quiet line with a folder choice on demand', async () => {
+    const missing = (localId: string): UsageSourceV1 => ({ ...found, sourceId: `${localId}-default`, agent: { pluginId: `happier.agent.${localId}`, localId },
+      root: { kind: 'default', path: null }, status: 'unavailable', coverage: 'unsupported', errorCode: 'source_unavailable' });
+    const boundary = machineBoundary(found, [found, missing('kimi'), missing('qwen'), { ...missing('qwen'), sourceId: 'qwen-work' }]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.missing')).toBeTruthy());
+    expect(screen.findByTestId('sources.machine.mac.source.kimi-default')).toBeFalsy();
+    expect(screen.findAllByTestId('sources.machine.mac.missing.kimi-default')).toHaveLength(0);
+    await screen.pressByTestIdAsync('sources.machine.mac.missing.toggle');
+    expect(screen.findByTestId('sources.machine.mac.missing.kimi-default.folder')).toBeTruthy();
+    prompt.mockResolvedValueOnce('/Users/ada/.kimi');
+    await screen.pressByTestIdAsync('sources.machine.mac.missing.kimi-default.folder');
+    expect(boundary.calls).toContain('usage.sources.root.set');
   });
 });

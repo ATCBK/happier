@@ -1,7 +1,7 @@
 import type { IconName } from '@/components/ui/icons/Icon';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
-import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
+import { useDestinationRouteNavigation as useNavigation } from '@/components/appShell/workspace/destinationInstanceContext';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';

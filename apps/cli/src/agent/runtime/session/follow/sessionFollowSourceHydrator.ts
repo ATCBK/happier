@@ -666,7 +666,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
             // frontier was observed. Reuse the authorized source read before
             // dispatch rather than waking the manager for that stale question.
             const current = useRunnerProjection
-              ? (await fetchRunnerPage(observation.delivered.transcriptSeq, recheckSignal)).source
+              ? (await fetchRunnerPage(observation.delivered.transcriptSeq, recheckSignal))?.source
               : await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
                   request: async () => {
                     const result = await resolveTransport({ credentials: input.credentials,
@@ -755,9 +755,9 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
       const selectsVoiceOriginals = selectionChannel === 'voice' && readMode === 'incremental' && !('kind' in observation);
       const requestContext = ctx;
       const readLiveRequests = async (source: Readonly<{
-          agentState?: string | null; agentStateVersion: number; encryptionMode?: unknown;
+          agentState?: string | null; agentStateVersion?: number; encryptionMode?: unknown;
         }>, minimumVersion: number) => {
-          if (!Number.isSafeInteger(source.agentStateVersion) || source.agentStateVersion < minimumVersion
+          if (typeof source.agentStateVersion !== 'number' || !Number.isSafeInteger(source.agentStateVersion) || source.agentStateVersion < minimumVersion
             || typeof source.agentState !== 'string' || resolveSessionStoredContentEncryptionMode(source) !== mode) return null;
           const opened = await openSessionStateValue(mode === 'plain' ? { mode: 'plain' } : {
             mode: 'e2ee', encryption: requestContext ? {

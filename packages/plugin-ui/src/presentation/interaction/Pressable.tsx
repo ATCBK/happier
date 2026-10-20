@@ -106,6 +106,13 @@ export type HappierPressableProps = Readonly<{
   onHoverChange?: (hovered: boolean) => void;
   disabled?: boolean;
   /**
+   * A disabled control that can say why. When given, the control stays reachable while disabled:
+   * it keeps its tab stop, hover and press, still announces itself disabled, and a press (pointer,
+   * touch or keyboard) calls this instead of `onPress`, with the press event. The caller shows its
+   * reason here, so a touch user who cannot hover still learns why the control does nothing.
+   */
+  onDisabledPress?: (event?: HappierGestureResponderEvent) => void;
+  /**
    * Declare the busy state instead of deriving it from the press promise, for a
    * control whose work is owned elsewhere. A declared or derived true value
    * keeps the control busy; `false` cannot hide a promise this owner started.
@@ -236,6 +243,7 @@ export function HappierPressable({
   onFocusChange,
   onHoverChange,
   disabled,
+  onDisabledPress,
   busy,
   invalid,
   errorMessageId,
@@ -292,6 +300,21 @@ export function HappierPressable({
   const mountedRef = useRef(true);
   const isBusy = busy === true || pendingPress;
   const isDisabled = disabled === true || isBusy;
+  // Disabled but explaining itself: reachable (focus, hover, press) while every action stays refused.
+  const explainsDisabled = disabled === true && !isBusy && onDisabledPress !== undefined;
+  // React Native Web writes `aria-disabled` from its own `disabled` prop, which stays false here so the
+  // control keeps its tab stop and press. The element still has to announce itself disabled, so the
+  // one attribute RNW overwrote is restored on the node while the control explains itself.
+  // On leaving that state the node gets the value the next render owns, read from a ref updated during
+  // render (cleanup runs after the next commit).
+  const isDisabledRef = useRef(isDisabled);
+  isDisabledRef.current = isDisabled;
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !explainsDisabled) return;
+    const node = controlNodeRef.current as unknown as { setAttribute?: (name: string, value: string) => void } | null;
+    node?.setAttribute?.('aria-disabled', 'true');
+    return () => node?.setAttribute?.('aria-disabled', String(isDisabledRef.current));
+  }, [explainsDisabled]);
 
   useEffect(() => {
     // StrictMode probes setup -> cleanup -> setup. Reasserting this in setup
@@ -330,7 +353,11 @@ export function HappierPressable({
     // A pointer or an unrelated press cannot be the paired keyboard default;
     // never let a lost keyup suppress a later real action.
     consumedKeyboardPressRef.current = null;
-    if (pendingRef.current || disabled === true || busy === true) return;
+    if (pendingRef.current || busy === true) return;
+    if (disabled === true) {
+      onDisabledPress?.(event);
+      return;
+    }
 
     const result = onPress(event);
     if (!isThenable(result)) return;
@@ -344,7 +371,7 @@ export function HappierPressable({
       pendingRef.current = false;
       if (mountedRef.current) setPendingPress(false);
     });
-  }, [busy, disabled, focused, onPress]);
+  }, [busy, disabled, focused, onDisabledPress, onPress]);
 
   const handleKeyDown = useCallback((event: unknown) => {
     // RNW still forwards custom keys while disabled. Admit them through the
@@ -491,8 +518,8 @@ export function HappierPressable({
       aria-haspopup={hasPopup}
       aria-controls={controls}
       aria-keyshortcuts={keyboardShortcuts}
-      tabIndex={isDisabled ? -1 : tabIndex}
-      disabled={isDisabled}
+      tabIndex={isDisabled && !explainsDisabled ? -1 : tabIndex}
+      disabled={isDisabled && !explainsDisabled}
       // Touch targets grow through their physical layout box, never an
       // overlapping hit-slop rectangle. Pointer layouts keep their incumbent
       // hit-slop behavior because the provider explicitly reports desktop/web.

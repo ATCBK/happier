@@ -16,8 +16,6 @@ import {
     readActiveConfiguredSourceRows,
 } from '../corpus/configuration/readConfiguredSourceRows.js';
 import type { CorpusCollectionHandleV1 } from '../corpus/collections/handles.js';
-import type { CorpusRowV1 } from '../corpus/collections/rowCodec.js';
-import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
 import { renderSourceQualifiedId } from '../corpus/identity/components.js';
 import {
     CORPUS_DEFAULT_SMART_POLICY_V1,
@@ -187,33 +185,30 @@ export async function assembleTriageListPass(
 ): Promise<TriageAssembledListPassV1> {
     const options: PluginCancellationOptions | undefined = deps.signal ? { signal: deps.signal } : undefined;
     const resumeByInstance = resumeByInstanceId(input);
-    const admittedPromise = deps.readAdmittedSources(options);
     const sources = input.sources;
-    let configuredRows: readonly CorpusSourceInstanceRowV1[];
-    let configuredRecords: readonly CorpusRowV1<CorpusSourceInstanceRowV1>[];
-    let configuredSourcesStatus: 'complete' | 'truncated';
-    let configuredSourcesNextCursor: string | undefined;
-    if (sources.kind === 'allConfigured') {
-        const page = await readActiveConfiguredSourceRowPage(deps.sourceInstances, {
-            limit: MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
-            ...(sources.cursor === undefined ? {} : { cursor: sources.cursor }),
-        }, options);
-        configuredRows = page.rows;
-        configuredRecords = page.records;
-        configuredSourcesStatus = page.status;
-        configuredSourcesNextCursor = page.nextCursor;
-    } else {
-        const configured = await readActiveConfiguredSourceRows(deps.sourceInstances, options);
-        configuredRows = configured.rows.filter((row) => sources.sourceInstanceIds.includes(
+    // Own both rejections before yielding: admission can fail during plugin
+    // retirement while Account storage is pending, and either read can fail first.
+    const [configured, admitted] = await Promise.all([
+        sources.kind === 'allConfigured'
+            ? readActiveConfiguredSourceRowPage(deps.sourceInstances, {
+                limit: MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
+                ...(sources.cursor === undefined ? {} : { cursor: sources.cursor }),
+            }, options)
+            : readActiveConfiguredSourceRows(deps.sourceInstances, options),
+        deps.readAdmittedSources(options),
+    ]);
+    const configuredRows = sources.kind === 'allConfigured'
+        ? configured.rows
+        : configured.rows.filter((row) => sources.sourceInstanceIds.includes(
             row.configured.instance.sourceInstanceId,
         ));
-        configuredRecords = configured.records.filter((record) => sources.sourceInstanceIds.includes(
+    const configuredRecords = sources.kind === 'allConfigured'
+        ? configured.records
+        : configured.records.filter((record) => sources.sourceInstanceIds.includes(
             record.value.configured.instance.sourceInstanceId,
         ));
-        configuredSourcesStatus = 'complete';
-        configuredSourcesNextCursor = undefined;
-    }
-    const admitted = await admittedPromise;
+    const configuredSourcesStatus = configured.status;
+    const configuredSourcesNextCursor = 'nextCursor' in configured ? configured.nextCursor : undefined;
 
     const admittedByQualifiedId = indexTriageAdmittedSourcesV1(admitted);
 

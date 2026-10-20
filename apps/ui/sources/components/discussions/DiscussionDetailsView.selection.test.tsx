@@ -348,7 +348,9 @@ vi.mock(
 vi.mock('@/sync/sync', () => ({
   sync: { patchSessionMetadataWithRetry: metadataWrites },
 }));
-vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({
+// The real provider module (the Run… start modal reads its context snapshot); only handler registration is stubbed.
+vi.mock('@/keyboard/KeyboardShortcutProvider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/keyboard/KeyboardShortcutProvider')>()),
   useKeyboardShortcutHandlers: () => true,
 }));
 vi.mock(
@@ -391,6 +393,9 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
     );
   },
 }));
+// The popover's portal and window measurement are the platform boundary; the sheet inside stays real.
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+  (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 vi.mock('@/components/discussions/DiscussionComposer', () => ({
   DiscussionComposer: (props: Record<string, unknown>) => {
     composerProps.current = props;
@@ -1272,6 +1277,25 @@ describe('DiscussionDetailsView selection', () => {
     // Once selecting, every eligible row carries its mark.
     await press(screen, 'session-discussion-select-message-a');
     expect(slotRevealed('message-agent')).toBe(true);
+  });
+
+  it('offers Save as decision on a committed message and opens the sheet for that exact message', async () => {
+    const screen = await renderScreen(
+      <DiscussionDetailsView
+        target={{
+          kind: 'discussion',
+          address: { serverId: 'server-a' },
+          discussionId: 'discussion-a',
+        }}
+        active
+      />,
+    );
+    expect(screen.findByTestId('save-memory-decision')).toBeNull();
+    await press(screen, 'session-discussion-save-decision-message-a');
+    expect(screen.findByTestId('save-memory-decision')).toBeTruthy();
+    expect(
+      screen.findByTestId('save-memory-decision.text')?.props.value,
+    ).toContain('Check this');
   });
 
   it('mounts row selection, copies canonical labeled text, and opens the interactive Agent draft', async () => {

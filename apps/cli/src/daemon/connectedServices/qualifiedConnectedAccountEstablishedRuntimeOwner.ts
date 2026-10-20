@@ -423,7 +423,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       'acquireRuntimeRegistry' | 'isRuntimeRegistryCurrent'
     >;
     credentials: StoredCredentials;
-    isAccountRuntimeCurrent?: () => Promise<boolean>;
+    isAccountRuntimeCurrent?: (signal?: AbortSignal) => Promise<boolean>;
     runAccountOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
     getAccountEncryptionMode(signal?: AbortSignal): Promise<ConnectedServiceAccountEncryptionMode>;
     readCredential?: CredentialSnapshotReader;
@@ -440,9 +440,9 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   // consume that invocation's authority; they do not admit another operation.
   // This is invocation custody, never a process-wide or time-based cache.
   const materialization = new AsyncLocalStorage<{ open: boolean; signal?: AbortSignal }>();
-  async function verifyAccountRuntimeCurrent(): Promise<boolean> {
+  async function verifyAccountRuntimeCurrent(signal?: AbortSignal): Promise<boolean> {
     return !params.isAccountRuntimeCurrent || await observeMaterializationPhase(
-      'established_account_currentness', () => params.isAccountRuntimeCurrent!(),
+      'established_account_currentness', () => params.isAccountRuntimeCurrent!(signal),
     );
   }
   async function isAccountRuntimeCurrent(): Promise<boolean> {
@@ -456,7 +456,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   }
   async function runMaterialization<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     assertNotAborted(signal);
-    if (!await verifyAccountRuntimeCurrent()) throw new Error('connected_account_runtime_not_current');
+    if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
     const cycle = { open: true, signal };
     try {
       const result = await materialization.run(cycle, () => runCurrentAccountRead(read));
@@ -464,7 +464,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       // Home/Machine/Session authority before publishing any prepared result.
       cycle.open = false;
       assertNotAborted(signal);
-      if (!await verifyAccountRuntimeCurrent()) throw new Error('connected_account_runtime_not_current');
+      if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
       return result;
     } finally {
       cycle.open = false;

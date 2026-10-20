@@ -227,8 +227,12 @@ Rows carry their source as data; the picker shows "· via <source>" only where a
 heading cannot (a name present under more than one source, or a Provider/Team row
 in Favorites), so identical names are never merged.
 
-Machine model projection uses the existing Provider operation wall budget for
-DNS, managed-purpose lookup and cold catalog demand. Each source resolves
+Machine model projection that can refresh a catalog uses the existing Provider
+operation wall budget for DNS, managed-purpose lookup and cold catalog demand.
+In development, launch authorization and its `current_only` model projection
+do not borrow an endpoint probe's wall cap. A current-only read does not launch
+or refresh a probe; the containing operation and transport retain cancellation
+and setup lifetime ownership. Each source resolves
 independently; a failed source is identified in `refreshFailures` while successful
 sources keep their rows. Refresh reuses the admitted connection facts and reads
 new runtime observations without repeating purpose or parser admission. Provider
@@ -434,6 +438,11 @@ Endpoint validation rejects credentials in URLs, unsafe metadata destinations, a
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
 
+In development source, transient Account catalog reads and an exhausted catalog
+admission or managed-establishment budget return retryable
+`provider_catalog_unavailable`. These failures precede an endpoint response and
+do not establish an endpoint outage or invalid saved configuration.
+
 ## Account scope and machine grants
 
 Public provider connections can be enabled account-wide. Loopback and private-network endpoints are machine-scoped by default because `localhost` and RFC1918 addresses identify different services on different machines.
@@ -522,6 +531,13 @@ prove hub readiness or local/private model inference. Shared gateway execution
 and hub transport are integrated by the daemon managed-services owner; this
 configuration contract alone is not evidence that that live journey ran.
 
+In development source, explicit probes and saved model lists on an enabled peer
+use the selected hub through the existing Account-scoped Machine RPC transport.
+The peer admits its current grant before dispatch and revalidates that admission
+before returning the hub's response. The hub retains physical probe execution,
+its own grant checks and catalog ownership; the peer does not start a local
+Gateway or copy the hub's runtime catalog into its own cache.
+
 The development managed-runtime declaration can opt into
 `sharing: 'connectionMachine'`. The daemon's existing managed-services owner
 then owns one subscription gateway per admitted Home, Account, connection and
@@ -532,6 +548,11 @@ request-auth capability and qualified purposes. A physical management bearer
 cannot authorize inference. Releasing one consumer withdraws only its access;
 the final consumer and its in-flight requests must settle before idle stop.
 
+In development source, a gateway's request-auth lookup follows the containing
+native request's deadline and cancellation. It adds no shorter transport-phase
+deadline around Home admission or OAuth materialization. Failure reports retain
+their existing recovery and quota-report lifetimes.
+
 The side-effect-free connection description reads Running/Idle from this same
 process-custody owner, using the current exact Home, Account, connection and
 execution machine. The detail page addresses the saved hub, not a different
@@ -540,10 +561,15 @@ uncertain process state remains `not_checked`; endpoint health and an online
 machine do not establish peer reachability. The current owner reports peer
 reachability as `not_checked`, separately from its process status. Reading these
 facts neither starts a gateway nor acquires a consumer claim.
+Description reobserves the Account catalog without marking an admitted row as
+changed. A confirmed catalog change still withdraws authority through the
+Account observer; an unavailable read returns a catalog error.
 
 The runner keeps its own loopback access endpoint across daemon replacement.
 Each new request re-admits the captured binding before obtaining fresh access;
 transport failure does not replay inference or substitute another source.
+An access refusal withdraws that consumer projection while the Session retains
+its Provider invocation; later access must freshly authorize before rejoining.
 An unavailable exact executable source remains unavailable: retained declaration
 attestation alone does not load an older plugin runtime. The chosen-hub path
 uses the existing machine carrier and broker with a personal Account-connection
@@ -616,7 +642,29 @@ end-to-end broker, direct-delivery, selection, usage, recovery, and revocation j
 
 The source Account keeps credential custody. A Team resource stores a typed reference to the
 current source plus audience and use policy; it does not copy a Provider definition or create a
-second credential store. Resource access has two intentionally different privacy contracts:
+second credential store.
+
+For brokered Connected Account and Pool sources, the daemon's model projector reads
+the CLIProxyAPI contribution's credential-free catalog for the exact upstream
+purpose. The plugin generates those rows from its pinned SDK source. This read
+requires a current selection from the Connected Account purpose-binding owner;
+it neither starts a Gateway nor schedules a probe. A saved Gateway does not replace
+this source catalog. Ordinary saved Gateway model reads retain their probe path.
+These rows describe static compatibility, with account entitlement unverified.
+Unknown model capabilities retain experimental compatibility and require explicit
+per-Agent confirmation by the person selecting the model in their own Account.
+The existing `providers.models.experimental.confirm` Action and private catalog
+also accept the projection's exact `connectedAccountTarget` and source-qualified
+catalog ref. This creates no saved Provider connection or grant. Source projections
+use revision zero; saved Gateways retain their captured connection revision.
+The same confirmation matcher checks the source, Agent, model scope and current
+compatibility fingerprint. Confirmed rows stay experimental and account-unverified;
+only then can the existing Team eligibility, Test, request-policy and source-catalog
+consumers admit them. Ordinary Pool member changes and access-token refresh do not
+change this static compatibility confirmation. A changed target or compatibility
+fingerprint requires its own confirmation.
+
+Resource access has two intentionally different privacy contracts:
 
 - **Brokered** access keeps usable credential material on one exact broker Machine. A custodian
   can configure that Machine directly or choose a personal Machine Pool. For a genuinely new
@@ -680,6 +728,12 @@ grant internals, revisions, limits, and encrypted material remain manager/source
 Readiness and failures use the typed Team-credential result unions; clients must preserve the
 reported recovery action and must not silently fall back to a personal connection or from direct
 to brokered delivery.
+
+The development readiness owner may attach `application_unavailable` or
+`model_unavailable` to `broker_unavailable` when every evaluated candidate reports
+that same typed refusal. Empty, mixed, and transport-failed observations remain
+generic. This diagnostic carries no model, account, or credential details and
+does not change admission or recovery authority.
 
 The development Temporary-computer flow resolves its Team credential before a Session exists. It
 authorizes the named resource through the planned-Session admission owner before it discovers any

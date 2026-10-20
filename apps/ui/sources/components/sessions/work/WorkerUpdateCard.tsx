@@ -2,6 +2,8 @@ import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { WorkerDeliverableReferenceV1, WorkerUpdateV1 } from '@happier-dev/protocol';
+import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { executeSessionFollowAction } from '@/sync/api/session/sessionFollowApi';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -232,6 +234,38 @@ function renderWorkerUpdateSurface(surface: HappierWorkUpdateCardSurface) {
     );
 }
 
+const FOLLOW_STATUS_KEY = {
+    queued: 'sessionWork.workerFollow.queued',
+    next_turn: 'sessionWork.workerFollow.nextTurn',
+    woke: 'sessionWork.workerFollow.woke',
+    answered: 'sessionWork.workerFollow.answered',
+} as const;
+const FOLLOW_REASON_KEY = {
+    held: 'sessionWork.workerFollow.held',
+    offline: 'sessionWork.workerFollow.offline',
+    archived: 'sessionWork.workerFollow.archived',
+    locked: 'sessionWork.workerFollow.locked',
+    muted: 'sessionWork.workerFollow.muted',
+    unavailable: 'sessionWork.workerFollow.unavailable',
+    check_in: 'sessionWork.workerFollow.checkIn',
+    exchange_stopped: 'sessionWork.workerFollow.exchangeStopped',
+} as const;
+
+/** "Your worker · Next turn": the routes that matched, then the delivery the receiver accepted. */
+export function describeWorkerFollowLine(
+    matches: readonly WorkerUpdateFollowMatchV1[] | undefined,
+    delivery: FollowDeliveryProjectionV1 | undefined,
+): string | null {
+    const why = [...new Set((matches ?? []).map((match) => match.kind === 'rule'
+        ? t('sessionWork.workerFollow.rule')
+        : match.relation === 'manager' ? t('sessionWork.workerFollow.manager') : t('sessionWork.workerFollow.follower')))];
+    const how = delivery?.reason ? t(FOLLOW_REASON_KEY[delivery.reason])
+        : delivery?.status ? t(FOLLOW_STATUS_KEY[delivery.status]) : null;
+    const parts = [...why, ...(how ? [how] : [])];
+    return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+
 /**
  * One transcript card for host worker updates and retained historical completions (ORC §3.2, lab
  * `cards-T1`/`T2`), drawn with the shared Work update card (`HappierWorkUpdateCard`, the frame a
@@ -248,6 +282,13 @@ function renderWorkerUpdateSurface(surface: HappierWorkUpdateCardSurface) {
  */
 export function WorkerUpdateCard(props: Readonly<{
     update: WorkerUpdateV1;
+    /** The admitted Follow routes for this particular event; absent for unrelated run cards. */
+    followMatches?: readonly WorkerUpdateFollowMatchV1[];
+    /** Exact existing input/batch identities; a caller may join only their own acceptance evidence. */
+    followInputLocalId?: string;
+    followWakeEventLocalId?: string;
+    /** Existing accepted-input/Turn projection for this particular event; null means unknown. */
+    delivery?: FollowDeliveryProjectionV1;
     /** Existing transcript row identity; historical or standalone cards do not infer answer ownership. */
     messageId?: string;
     serverId?: string | null;
@@ -342,6 +383,13 @@ export function WorkerUpdateCard(props: Readonly<{
     }
     if (content.truncated) {
         facts.push({ id: 'truncated', label: <StructuredFindText blockId="structured-worker-truncated" testID="worker-update-truncated" numberOfLines={1} style={styles.fact} text={content.truncated} /> });
+    }
+
+    // Why this card reached this session and how it landed (lab P1 L3): the admitted Follow routes and
+    // the accepted-input projection. An unknown delivery says nothing rather than guessing.
+    const followLine = describeWorkerFollowLine(props.followMatches, props.delivery);
+    if (followLine) {
+        facts.push({ id: 'follow', label: <Text testID="worker-update-follow" numberOfLines={1} style={styles.fact}>{followLine}</Text> });
     }
 
     // One primary at most, and only where the person is the blocker and the card cannot answer in

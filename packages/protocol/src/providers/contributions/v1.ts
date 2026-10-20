@@ -46,6 +46,8 @@ import {
 import { compareProviderCanonicalStringsV1 } from '../canonicalOrderV1.js';
 import type { ProviderConnectionV1 } from '../connections/v1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
+import { ProviderModelDescriptorV1Schema } from '../../models/descriptor.js';
+import { PROVIDER_CATALOG_LIMITS_V1 } from '../catalog/limits.js';
 
 const LegacyProfileEnvironmentNameSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Z_][A-Z0-9_]*$/u), z.maxLength(128)));
 
@@ -129,11 +131,22 @@ export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.s
   connectedAccounts: z.optional(z.array(z.extend(ConnectedAccountPurposeDeclarationV1Schema, {
     /** Exact managed endpoints supported by this upstream purpose; absent means no broker route. */
     endpointTemplateIds: z.optional(z.array(ProviderLocalIdSchema).check(z.minLength(1))),
+    /** Credential-free compatibility catalog for this exact upstream service, never account entitlement. */
+    staticModels: z.optional(z.array(ProviderModelDescriptorV1Schema).check(z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection))),
   })).check(z.superRefine((declarations, context) => {
     const checked = ConnectedAccountPurposeDeclarationsV1Schema.safeParse(
-      declarations.map(({ endpointTemplateIds: _endpoints, ...declaration }) => declaration),
+      declarations.map(({ endpointTemplateIds: _endpoints, staticModels: _models, ...declaration }) => declaration),
     );
     if (!checked.success) checked.error.issues.forEach((issue) => context.addIssue({ ...issue }));
+    declarations.forEach((declaration, index) => {
+      if (declaration.staticModels === undefined) return;
+      const catalog = ProviderCatalogDeclarationV1Schema.safeParse({
+        source: 'static', manualModelPolicy: 'catalog-only', staticModels: declaration.staticModels,
+      });
+      if (!catalog.success) catalog.error.issues.forEach((issue) => context.addIssue({
+        ...issue, path: [index, ...issue.path],
+      }));
+    });
   }))),
   connectedAccountPurposeBindingPolicy:
     z.optional(ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema),
@@ -204,6 +217,7 @@ export type ResolvedProviderManagedConnectedAccountPurposeDeclarationV1 =
     materializationKinds?: PluginConnectedAccountMaterializationKind[];
     credentialKinds?: ConnectedServiceCredentialKind[];
     endpointTemplateIds?: string[];
+    staticModels?: NonNullable<ProviderManagedRuntimeDeclarationV1['connectedAccounts']>[number]['staticModels'];
   }>;
 
 export type ResolvedProviderManagedRuntimeDeclarationV1 = Readonly<{
@@ -314,6 +328,8 @@ export function resolveProviderManagedRuntimeDeclarationV1(input: Readonly<{
         ? [...declaration.endpointTemplateIds].sort(compareProviderCanonicalStringsV1)
         : undefined;
       if (purposeEndpointTemplateIds) Object.freeze(purposeEndpointTemplateIds);
+      const staticModels = declaration.staticModels?.map((model) => Object.freeze(model));
+      if (staticModels) Object.freeze(staticModels);
       return Object.freeze({
         purpose: declaration.purpose,
         service: Object.freeze(service),
@@ -328,6 +344,7 @@ export function resolveProviderManagedRuntimeDeclarationV1(input: Readonly<{
           : { materializationKinds }),
         ...(credentialKinds === undefined ? {} : { credentialKinds }),
         ...(purposeEndpointTemplateIds === undefined ? {} : { endpointTemplateIds: purposeEndpointTemplateIds }),
+        ...(staticModels === undefined ? {} : { staticModels }),
       });
     }).sort((left, right) =>
       compareProviderCanonicalStringsV1(left.purpose, right.purpose));

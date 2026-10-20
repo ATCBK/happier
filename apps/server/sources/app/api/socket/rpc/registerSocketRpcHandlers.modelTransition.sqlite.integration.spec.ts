@@ -7,6 +7,7 @@ import { RPC_ERROR_CODES, SESSION_RPC_METHODS } from "@happier-dev/protocol/rpc"
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
+import { getAccountSessionSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
@@ -108,6 +109,43 @@ describe("publisher-authoritative model-transition RPC routing on SQLite", () =>
             },
         });
     }
+
+    it.each([SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION, 'session.update.post'])(
+        'distinguishes a replacement publisher gap from unsupported %s and routes to its successor', async rpcMethod => {
+            const seeded = await seed();
+            const presence = createSessionPublisherPresence();
+            const effect = vi.fn(async () => ({ persisted: true, localId: 'successor-original' }));
+            const successor = { id: 'successor', data: { clientType: 'session-scoped' } as Record<string, unknown>,
+                timeout: () => ({ emitWithAck: effect }) };
+            const method = `${seeded.binding.sessionId}:${rpcMethod}`;
+            const targets: object[] = [];
+            const peers = new Map<string, readonly object[]>();
+            const io = createRoutingIo({ accountId: seeded.binding.accountId, method, targets, targetsBySocketId: peers });
+            const caller = createCaller();
+            const callback = vi.fn();
+            registerSocketRpcHandlers({ userId: seeded.binding.accountId, socket: caller as unknown as Socket,
+                io, sessionPublisherPresence: presence });
+            const call = () => triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, params: 'opaque-request' }, callback);
+
+            await call();
+            expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ ok: false, errorCode: 'target_unavailable' }));
+            expect(effect).not.toHaveBeenCalled();
+
+            const registration = await presence.registerPublisher({ socket: successor, binding: seeded.binding,
+                completeActivitySnapshot: { state: 'active', activeCount: 1 } });
+            expect(registration.status).toBe('registered');
+            peers.set(getAccountSessionSocketRoom(seeded.binding.accountId, seeded.binding.sessionId), [successor]);
+            peers.set(successor.id, [successor]);
+            await call();
+            expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+            expect(effect).not.toHaveBeenCalled();
+
+            targets.push(successor);
+            await call();
+            expect(callback).toHaveBeenLastCalledWith({ ok: true, result: { persisted: true, localId: 'successor-original' } });
+            expect(effect).toHaveBeenCalledOnce();
+        },
+    );
 
     it("routes around a stale first socket and accepts the exact result after the selected socket advances its fence", async () => {
         const seeded = await seed();
@@ -349,10 +387,10 @@ describe("publisher-authoritative model-transition RPC routing on SQLite", () =>
         }, callback);
 
         expect(currentEffect).toHaveBeenCalledOnce();
-        expect(callback).toHaveBeenCalledWith({
+        // The selected publisher received this mutation before losing custody.
+        expect(callback).toHaveBeenCalledWith(expect.objectContaining({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
-        });
+            errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
+        }));
     });
 });

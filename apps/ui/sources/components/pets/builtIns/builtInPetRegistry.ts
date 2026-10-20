@@ -1,8 +1,8 @@
-import { PET_ATLAS_V1 } from '@happier-dev/protocol/pets/constants';
+import { BUILT_IN_PET_IDS_V1, PET_ATLAS_V1 } from '@happier-dev/protocol/pets/constants';
 import type { PetPackageManifestV1 } from '@happier-dev/protocol/pets/manifest';
 import type { ImageProps } from 'expo-image';
 
-export type BuiltInPetId = 'blink' | 'fury' | 'milo' | 'oli' | 'titi';
+export type BuiltInPetId = typeof BUILT_IN_PET_IDS_V1[number];
 
 export type BuiltInPetPackage = Readonly<{
     id: BuiltInPetId;
@@ -107,9 +107,7 @@ export const BUILT_IN_PET_PACKAGES: Readonly<Record<BuiltInPetId, BuiltInPetPack
     },
 } as const satisfies Record<BuiltInPetId, BuiltInPetPackage>;
 
-export const BUILT_IN_PET_IDS = Object.freeze(
-    Object.keys(BUILT_IN_PET_PACKAGES),
-) as readonly BuiltInPetId[];
+export const BUILT_IN_PET_IDS = Object.freeze(BUILT_IN_PET_IDS_V1);
 
 export function resolveBuiltInPetPackage(petId: string): BuiltInPetPackage {
     if (petId in BUILT_IN_PET_PACKAGES) {

@@ -12,6 +12,7 @@ import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/session
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -76,7 +77,9 @@ beforeEach(async () => {
         ...worktrees.slice(1).map(tree => ({ ...workspaceRef, id: tree.id, rootPath: tree.path }))] });
     storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now() })], true,
         { sourceServerId: runtime.serverId });
-    storage.setState({ sessions: {}, localSettings: { ...storage.getState().localSettings,
+    storage.setState({ settings: settingsParse({ ...storage.getState().settings,
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
+        sessions: {}, localSettings: { ...storage.getState().localSettings,
         uiMultiPanePanelsEnabled: true, projectLastActiveRootPathByWorkspaceRefId: {},
         projectLastActiveWorktreeIdByWorkspaceRefId: {} } });
     storage.getState().updateWorkspaceScmSnapshot({ serverId: runtime.serverId, machineId: 'machine-1', rootPath: '/repo' }, snapshot);

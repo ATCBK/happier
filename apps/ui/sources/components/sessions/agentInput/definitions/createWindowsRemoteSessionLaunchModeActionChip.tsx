@@ -136,12 +136,14 @@ export function createWindowsRemoteSessionLaunchModeActionChip(params: Readonly<
     mode: WindowsRemoteSessionLaunchMode;
     windowsTerminalAvailable: boolean;
     onModeChange: (next: WindowsRemoteSessionLaunchMode) => void;
+    onIntent?: () => void;
 }>): AgentInputExtraActionChip {
     const selectedOption = WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS.find((option) => option.value === params.mode) ?? WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS[0];
 
     return {
         key: 'new-session-windows-remote-session-launch-mode',
         controlId: 'windowsRemoteSessionMode',
+        onIntent: params.onIntent,
         collapsedOptionsPopover: {
             presentation: 'list',
             title: t('machine.windows.remoteSessionModeTitle'),

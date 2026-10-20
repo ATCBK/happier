@@ -21,7 +21,10 @@ import { DETAILS_TAB_HEADER_METRICS } from './detailsTabHeaderMetrics';
 export type DetailsTabHeaderMetaFact =
     | Readonly<{ key: string; kind?: 'text'; text: string; tone?: 'default' | 'muted' | 'strong' | 'mono'; shrink?: boolean; testID?: string;
         /** A glyph leading the fact (the task a conversation hangs off, a lock before who can read it). */
-        icon?: IconName }>
+        icon?: IconName;
+        /** A glyph-led fact that leads back to its thing (the Session, Doc or task a conversation hangs off). */
+        onPress?: () => void;
+        accessibilityLabel?: string }>
     | Readonly<{ key: string; kind: 'diffStat'; added: number; removed: number; testID?: string }>;
 
 export type DetailsTabHeaderAction = Readonly<{
@@ -75,7 +78,9 @@ function toLineSegments(meta: readonly DetailsTabHeaderMetaFact[] | undefined): 
             if (fact.removed > 0) segments.push({ text: `−${fact.removed}`, tone: 'removed' });
             continue;
         }
-        segments.push(fact.icon ? { text: fact.text, icon: fact.icon } : fact.tone === 'strong' ? { text: fact.text, emphasis: true } : fact.text);
+        segments.push(fact.icon ? { text: fact.text, icon: fact.icon,
+            ...(fact.onPress ? { onPress: fact.onPress, testID: fact.testID, ...(fact.accessibilityLabel ? { accessibilityLabel: fact.accessibilityLabel } : {}) } : {}) }
+            : fact.tone === 'strong' ? { text: fact.text, emphasis: true } : fact.text);
     }
     return segments;
 }

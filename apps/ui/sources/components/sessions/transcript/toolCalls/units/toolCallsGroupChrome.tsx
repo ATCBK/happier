@@ -23,7 +23,7 @@ import { shouldShowToolCallsGroupStatusIndicator } from '../resolveToolCallsGrou
 export type ToolCallsGroupChromeVariant = 'cards' | 'feed' | 'feed_background';
 export type ToolCallsGroupUnitPosition = 'header' | 'middle' | 'footer';
 import type { ToolCallsGroupStatus, ToolCallsGroupSummary } from '../resolveToolCallsGroupPresentation';
-export { resolveToolCallsGroupStatus, resolveToolCallsGroupSummary, type ToolCallsGroupStatus, type ToolCallsGroupSummary } from '../resolveToolCallsGroupPresentation';
+export { resolveToolCallsGroupSummary, type ToolCallsGroupStatus, type ToolCallsGroupSummary } from '../resolveToolCallsGroupPresentation';
 
 export function resolveToolCallsGroupChromeVariant(
     toolChromeCommon: TranscriptToolChromeCommon,

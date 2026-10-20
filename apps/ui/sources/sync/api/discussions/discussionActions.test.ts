@@ -16,6 +16,7 @@ import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64'
 import { readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Ready?' }] };
@@ -75,7 +76,8 @@ function http(mode: 'plain' | 'e2ee', loseCreate = false, losePost = false) {
             let message = messages.find(row => row.localId === body.localId);
             if (!message) {
                 message = { ...stored.firstMessage, id: `message-${messages.length + 1}`, seq: messages.length + 1,
-                    localId: body.localId, content: body.content, mentionedAccountIds: body.mentionedAccountIds };
+                    localId: body.localId, content: body.content, mentionedAccountIds: body.mentionedAccountIds,
+                    ...(body.replyTarget ? { replyTarget: body.replyTarget } : {}) };
                 messages.push(message);
             }
             if (losePost) { losePost = false; throw new TypeError('response lost after commit'); }
@@ -99,6 +101,23 @@ async function adapter(mode: 'plain' | 'e2ee', transport: ReturnType<typeof http
 const context = { surface: 'ui' as const, serverId: scope.serverId };
 
 describe('Discussion UI Action adapter', () => {
+    it.each(['plain', 'e2ee'] as const)('preserves a canonical Task anchor and reply target through the %s resource codec', async mode => {
+        const transport = http(mode);
+        const execute = await adapter(mode, transport);
+        const entry = TriageEntryRefV1Schema.parse({ source: { pluginId: 'acme.tasks', localId: 'issues' }, kindId: 'issue',
+            collisionScope: 'project', entryId: 'task/42' });
+        const anchor = { kind: 'task', entry };
+        const created = await execute({ actionId: 'discussion.create', input: { ...input, anchor }, context });
+        expect(created).toMatchObject({ discussion: { anchor }, firstMessage: { content } });
+        const replyTarget = { kind: 'task', entry };
+        const posted = await execute({ actionId: 'discussion.reply', input: { discussionId: 'discussion-a',
+            localId: 'task-reply', content, replyTarget }, context });
+        expect(DiscussionPostResultV1Schema.parse(posted).message).toMatchObject({ replyTarget, content });
+        expect(transport.creates[0]?.anchor).toEqual(anchor);
+        expect(transport.posts[0]?.replyTarget).toEqual(replyTarget);
+        expect(await execute({ actionId: 'discussion.get', input: { discussionId: 'discussion-a' }, context }))
+            .toMatchObject({ discussion: { anchor } });
+    });
     it('opens a filtered Doc root with its summary key without per-thread requests or a latest preview', async () => {
         const transport = http('e2ee');
         const request = transport.request;

@@ -460,6 +460,18 @@ consume that same environment and include the selected profile identity in their
 In development source, every discovery method validates supplied Connected Account bindings;
 malformed input returns `connected-service-preflight-failed` before credential resolution.
 
+In development source, native execution-run structured-output admission uses that same preflight owner
+with the Run's Connected Account selection and Saved Secret overlay. A retained
+Run probes under its requester Account and plugin occurrence, rather than the
+daemon's foreground credentials. The host-private offered-model request carries
+those selections. A failed or unreadable catalog returns `model_catalog_unavailable`,
+and typed snapshot or transport failures retain their cause; these failures are
+not reported as `model_structured_output_unsupported`. A successful observation
+still requires supported structured output for the selected model. Failed refreshes
+can retain usable last-good capability evidence, as the picker does.
+A launch profile used only for prompt composition does not
+become an independent environment selection for this probe.
+
 In development source, an Agent's optional `preflightSessionControls.prepareLaunchEnvironment`
 reuses its native account preparation after the host admits the exact selected-account operation.
 It receives only that operation's Connected Accounts service and sanitized launch environment;
@@ -572,6 +584,14 @@ Current mode facts come from native observation or accepted application, never a
 The canonical V2 catalog permits an unknown current mode while preserving known selectable
 options. Readers prefer it over retained V1/ACP aliases; the same writer projects strict
 `sessionModesV1` compatibility only when the accepted current mode is known.
+In development source, the host checks an explicit native mode against this observed inventory
+at Session open and before configuration updates. A missing mode returns
+`native_agent_session_mode_unavailable` before prompt delivery; an unobserved inventory or the
+native accepted current mode retains the Agent's authority. A mode named `default` is an explicit
+native identifier, not a host-selected fallback for another Agent's configuration.
+Session-owned Runs carry the same live catalog binding into admission. OpenCode's native
+configuration owner also consumes the shared selection rule for detached execution contexts,
+which have no Session catalog-publication service.
 
 Host-managed ACP Sessions use those same model and mode bindings at startup, on
 resume and for live ACP updates. Initial selections are applied before publishing
@@ -1313,6 +1333,14 @@ observation use that same root. Project-directory escapes and transcript-file
 symlinks remain refused; a completed turn cannot settle Activity when ordered
 source admission fails.
 
+For a linked Claude store that matches the current configured store, takeover
+preserves the native config environment, including an unset `CLAUDE_CONFIG_DIR`.
+An explicit override retains its value; a different linked store retains its
+pinned root. The plugin's `agent/environment.ts` owns that environment overlay,
+also used by target-state handoff and bundle import. Transcript-location metadata
+remains resolved. These development-source rules do not recover the original
+authentication environment of older links.
+
 The process singleton admits one active built-in job per Agent target; configured
 jobs additionally distinguish the admitted Account and pinned version. Another
 start for the same target/version returns its job id. Configured definitions resolve
@@ -1720,6 +1748,13 @@ concrete media files referenced by transcript items through the existing
 exact-file media allowance/adoption path. Roots are never copied into
 `linkData`, persisted or shared state, or transcript records; they grant no
 directory-enumeration or write authority.
+
+In 0.3 development, source admission passes `includeAccountingSource: false`
+to `resolveSource`. Claude, Codex and Pi then resolve the source and media roots
+without enumerating their accounting history. Accounting discovery leaves this
+optional hint unset and retains its file inventory and watch descriptors. Older
+contributions may ignore the hint and return the same valid source with their
+accounting projection; it changes work demand, never source authority.
 
 This is a development/preview authoring contract from the current source tree;
 it does not claim that loaded or packaged release artifacts expose the same

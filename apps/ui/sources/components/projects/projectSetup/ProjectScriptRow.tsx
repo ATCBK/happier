@@ -470,17 +470,17 @@ function RowStatus(
       : props.tone === 'attention'
         ? theme.colors.state.attention.foreground
         : theme.colors.text.secondary;
+  // One line: the command gives way (truncates) so the outcome — the part that changes and the part
+  // a failure is read from — stays whole on its line (lab s-scripts: `yarn lint · Exited with code 1 at 10:12`).
   return (
-    <Text
-      testID={props.testID}
-      numberOfLines={2}
-      style={[styles.meta, { color: theme.colors.text.secondary }]}
-    >
+    <View testID={props.testID} style={styles.statusLine}>
       {props.command ? (
         <Text
+          numberOfLines={1}
           style={[
             styles.meta,
             styles.mono,
+            styles.statusCommand,
             { color: theme.colors.text.secondary },
           ]}
         >
@@ -488,10 +488,14 @@ function RowStatus(
         </Text>
       ) : null}
       {props.command && props.text ? (
-        <Text style={{ color: theme.colors.text.tertiary }}>{' · '}</Text>
+        <Text style={[styles.meta, styles.statusOutcome, { color: theme.colors.text.tertiary }]}>{' · '}</Text>
       ) : null}
-      {props.text ? <Text style={[styles.meta, { color }]}>{props.text}</Text> : null}
-    </Text>
+      {props.text ? (
+        <Text numberOfLines={2} style={[styles.meta, props.command ? styles.statusOutcome : styles.statusTextAlone, { color }]}>
+          {props.text}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -658,6 +662,11 @@ const styles = StyleSheet.create(() => ({
     ...happierPageTextMetrics('rowDescription'),
   },
   mono: { ...Typography.mono() },
+  statusLine: { flexDirection: 'row', alignItems: 'baseline', minWidth: 0 },
+  statusCommand: { flexShrink: 1, minWidth: 0 },
+  // The outcome keeps its natural width (it is short and bounded) but never more than the line.
+  statusOutcome: { flexShrink: 0, maxWidth: '100%' },
+  statusTextAlone: { flexShrink: 1 },
   joined: {
     flexDirection: 'row',
     alignItems: 'center',

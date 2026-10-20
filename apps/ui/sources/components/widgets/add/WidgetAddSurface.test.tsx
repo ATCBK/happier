@@ -51,6 +51,7 @@ const { selectBuiltinWidgetCandidates } = await import('@/components/widgets/wid
 const { buildHomeWidgetAddSections } = await import('./HomeWidgetAddPopover');
 const { buildBoardWidgetAddContent, buildCompanionWidgetAddSections } = await import('./widgetAddSections');
 const { WidgetAddPanel } = await import('./WidgetAddSurface');
+const { AppShellPluginUiProjectionProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { buildAccountWidgetAddSections } = await import('./accountWidgetAddSections');
 const { storage } = await import('@/sync/domains/state/storage');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
@@ -108,7 +109,7 @@ async function renderPanel(props: Readonly<{
     initialEntryId?: string;
     pendingSections?: readonly Readonly<{ id: string; title: string }>[];
     onRequestClose?: () => void;
-}>) {
+}>, options: Parameters<typeof renderScreen>[1] = {}) {
     const screen = await renderScreen(
         <WidgetAddPanel
             testID="add"
@@ -124,6 +125,7 @@ async function renderPanel(props: Readonly<{
             {...(props.serverId ? { serverId: props.serverId } : {})}
             onRequestClose={props.onRequestClose ?? (() => {})}
         />,
+        options,
     );
     await flushHookEffects({ cycles: 2 });
     return screen;
@@ -510,7 +512,9 @@ describe('WidgetAddSurface', () => {
         const home = { serverId: connection.home.id, accountId: 'me', owner: { kind: 'home' as const } };
         const summary = selectBuiltinWidgetCandidates().find((candidate) => candidate.definition?.kind === 'builtin' && candidate.definition.id === 'session_summary')!;
         const rec = recorder();
-        const screen = await renderPanel({ serverId: home.serverId, sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec, { scope: home })] }] });
+        const screen = await renderPanel({ serverId: home.serverId, sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec, { scope: home })] }] }, {
+            wrapper: ({ children }) => <AppShellPluginUiProjectionProvider>{children}</AppShellPluginUiProjectionProvider>,
+        });
         await act(async () => { screen.pressByTestId(`add.entry.${summary.key}`); });
         await flushHookEffects({ cycles: 4 });
         const field = () => screen.findAllByType(HappierInputField).find(node => node.props.field.path === 'session')!;

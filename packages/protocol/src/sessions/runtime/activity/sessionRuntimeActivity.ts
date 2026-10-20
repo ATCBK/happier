@@ -10,6 +10,13 @@ export const SessionRuntimeActivityStateSchema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionRuntimeActivityState = z.infer<typeof SessionRuntimeActivityStateSchema>;
 
+/** The reported activity fact is independent of presentation freshness or foreground work. */
+export function hasActiveSessionRuntimeActivity(
+  input: Readonly<{ state?: unknown; activeCount?: unknown }> | null | undefined,
+): boolean {
+  return input?.state === 'active' && typeof input.activeCount === 'number' && input.activeCount > 0;
+}
+
 const SessionRuntimeActivityTupleSchema = lazyZodSchema(() => z.strictObject({
   state: SessionRuntimeActivityStateSchema,
   activeCount: z.number().check(z.int(), z.nonnegative(), z.maximum(SESSION_RUNTIME_ACTIVITY_ACTIVE_COUNT_MAX)),

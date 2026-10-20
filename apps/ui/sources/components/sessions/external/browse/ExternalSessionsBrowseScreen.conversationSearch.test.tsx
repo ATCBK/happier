@@ -259,7 +259,7 @@ describe('History unified conversation search', () => {
         expect(screen.findHostByTestId('direct-session-candidates:content-scan-off:settings')).not.toBeNull();
         expect(rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toBe(false);
     });
-    it('searches a ready native source while standard search is disabled and opens with a mapped Find seed', async () => {
+    it.each(['explicit Account', 'local Home alias'] as const)('searches a ready native source and opens with a mapped Find seed (%s)', async custody => {
         rpc.mockImplementation(async call => {
             if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
             if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true,
@@ -281,8 +281,11 @@ describe('History unified conversation search', () => {
         expect(lifetime?.isCurrent()).toBe(true);
         const handoff: { current: FileFindSeedHandoff | undefined } = { current: undefined };
         function HandoffProbe() { handoff.current = useOptionalAppPaneContext()?.fileFindSeedHandoff; return null; }
-        const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={lifetime}
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>,
+        const routeServerId = custody === 'local Home alias' ? connection!.home.id : serverId;
+        if (custody === 'local Home alias') expect(routeServerId).not.toBe(serverId);
+        storage.setState(state => ({ settings: { ...state.settings, keyboardShortcutsV2Enabled: false } }));
+        const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={custody === 'explicit Account' ? lifetime : undefined}
+            lockScope={{ machineId: 'machine-1', serverId: routeServerId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>,
         { flushOptions: { runOnlyPendingTimers: true } });
         await flush();
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));

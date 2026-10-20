@@ -76,6 +76,7 @@ import {
   activateListItem,
   ListSelectionActionBar,
   useOptionalListMultiSelectionStore,
+  useListMultiSelectionRow,
   useListMultiSelectionStoreSnapshot,
   type ListMultiSelectionKey,
   type ListMultiSelectionStore,
@@ -2207,6 +2208,9 @@ function ListItemRow(props: ListItemProps): ReactElement {
   const canSelectRow =
     selection?.activatable === true && selection.multiSelectable;
   const selectActionId = 'selection.select';
+  // The row menu's Select is the only way a finger builds a set, so it follows the set: it adds this row to a live
+  // selection (never replaces it) and offers Deselect for a row already chosen.
+  const selectionRow = useListMultiSelectionRow(selection?.itemKey ?? '');
   const operationActions = selection !== null && operation !== null ? [{ id: operation.id, label: operation.label, disabled: operation.disabled }] : [];
   const rowProps = operationActions.length === 0 ? props : {
     ...props,
@@ -2240,16 +2244,15 @@ function ListItemRow(props: ListItemProps): ReactElement {
                 ...(rowProps.secondaryActions ?? []),
                 {
                   id: selectActionId,
-                  label: translate(
-                    'happier.plugin-ui.list.selectItems',
-                    'Select',
-                  ),
+                  label: selectionRow.isSelected
+                    ? translate('happier.plugin-ui.list.deselectItem', 'Deselect')
+                    : translate('happier.plugin-ui.list.selectItems', 'Select'),
                 },
               ],
           onSecondaryAction: (id: string) => {
-            if (id === selectActionId)
-              multiStore?.replaceWith(selection.itemKey);
-            else rowProps.onSecondaryAction?.(id);
+            if (id !== selectActionId) rowProps.onSecondaryAction?.(id);
+            else if (selectionRow.isSelectionMode) multiStore?.toggle(selection.itemKey);
+            else multiStore?.replaceWith(selection.itemKey);
           },
         }
       : {}),

@@ -13170,6 +13170,18 @@ describe('startDaemonSessionControlRuntime', () => {
     });
 
     it('keeps unresolved terminal topology fenced without exact physical retirement proof', async () => {
+        // The canonical Stop owner can repair an obsolete unresolved index when
+        // no host exists. Retain a real descriptor whose death cannot be proven.
+        await writeTerminalHostAttachmentInfo({
+            happyHomeDir: configuration.happyHomeDir,
+            sessionId: 'session-unresolved-terminal',
+            handle: {
+                kind: 'tmux',
+                sessionName: 'happier-unresolved-terminal',
+                paneId: 'pane-unresolved',
+                attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required' },
+            },
+        });
         const runtime = await startDaemonSessionControlRuntime({
             machineId: 'machine-terminal-recovery',
             credentials: {
@@ -13199,8 +13211,7 @@ describe('startDaemonSessionControlRuntime', () => {
         });
 
         try {
-            // An unresolved startup entry supplies no exact attachment or dead
-            // process proof. It must not be treated as a positively retired host.
+            // Without an adapter/probe, the retained host is not positively dead.
             await expect(runtime.spawnSession({
                 directory: '/tmp/project',
                 backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
@@ -18278,8 +18289,8 @@ describe('startDaemonSessionControlRuntime', () => {
         }
     });
 
-    it.each(['idle', 'transcript-only input after stopped narrator', 'activity observation unavailable', 'active child', 'child exceeds existing budget', 'replacement exceeds observer budget', 'credential retirement',
-        'Stop before exit', 'shutdown before exit', 'adopted runner survives'] as const)('finishes a planned refresh after the child is idle, including shutdown respawn (%s)', async (childActivity) => {
+    it.each(['idle', 'transcript-only input after stopped narrator', 'activity observation unavailable', 'remainder capture unavailable', 'active child', 'child exceeds existing budget', 'replacement exceeds observer budget', 'credential retirement',
+        'Stop before exit', 'shutdown before exit', 'adopted runner survives', 'native active', 'confirmed native with child', 'native starts during child', 'native active at startup', 'native read failure', 'native report omitted'] as const)('finishes a planned refresh after the child is idle, including shutdown respawn (%s)', async (childActivity) => {
         const home = await mkdtemp(join(tmpdir(), 'runner-child-restart-'));
         const previousConfiguration = { happyHomeDir: configuration.happyHomeDir,
             deviceLocalSecretKeyFile: configuration.deviceLocalSecretKeyFile };
@@ -18307,10 +18318,28 @@ describe('startDaemonSessionControlRuntime', () => {
             tracked.sessionRunnerPid = tracked.pid;
             await installTrackedRunnerProcfsBoundary(tracked, () => credentialProcessLive);
         }
+        if (childActivity !== 'adopted runner survives' && childActivity !== 'credential retirement') {
+            await installTrackedRunnerProcfsBoundary(tracked, () => credentialProcessLive);
+        }
+        // The production starting-mode reader uses the reported runner's witness,
+        // which can differ from the launcher whose PID receives the signal.
+        tracked.runnerProcessIdentity = { pid: tracked.sessionRunnerPid ?? tracked.pid,
+            processStartTimeMs: 100, processCommandHash: 'a'.repeat(64), processCommand: tracked.processCommand };
+        if (childActivity === 'remainder capture unavailable') {
+            const previousReaddir = vi.mocked(filesystem.readdir).getMockImplementation()!;
+            vi.mocked(filesystem.readdir).mockImplementation((async (path, options) => {
+                if (String(path) === '/proc') throw Object.assign(new Error('Fixture census unavailable'), { code: 'EACCES' });
+                return Reflect.apply(previousReaddir, undefined, [path, options]);
+            }) as typeof filesystem.readdir);
+        }
         let shuttingDown = false;
         let signalSent = false;
+        let signalledAttempt: TrackedSession['plannedRestartAdmission'];
+        let attemptLiveAtSignal = false;
         const processKill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
             if (Math.abs(pid) === tracked.pid && signal === 'SIGTERM') {
+                signalledAttempt = tracked.plannedRestartAdmission;
+                attemptLiveAtSignal = Boolean(signalledAttempt && !signalledAttempt.signal.aborted);
                 signalSent = true;
                 credentialProcessLive = false;
                 return true;
@@ -18326,7 +18355,8 @@ describe('startDaemonSessionControlRuntime', () => {
         requestConnectedServiceSessionRestartSignalMock.mockImplementationOnce(realSignal.requestConnectedServiceSessionRestartSignal);
         vi.mocked(executeSpawnSessionRequest).mockClear();
         fetchSessionByIdCompatMock.mockResolvedValue(null);
-        const runtime = await startDaemonSessionControlRuntime({ machineId: 'machine-1',
+        const runtime = await startDaemonSessionControlRuntime({ machineId: 'machine-1', externalActionAccountId: 'owner-refresh',
+            serverId: 'server-refresh', serverBaseUrl: 'http://localhost:3000',
             credentials: { token: 'token-daemon', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
             api: {} as never, connectedServicesMaterializationBaseDir: '/tmp/connected-services',
             connectedServiceRuntimeRegistry: runtimeRegistry,
@@ -18344,7 +18374,9 @@ describe('startDaemonSessionControlRuntime', () => {
             status: 'running', startedAtMs: 1, inputTurns: { occurrenceId: 'child-occurrence',
                 current: { turnId: 'child-turn', inputIds: ['child-input'], state: 'active' } },
         } satisfies Parameters<typeof retainExecutionRunState>[0];
-        let childActive = ['active child', 'child exceeds existing budget', 'credential retirement'].includes(childActivity);
+        let childActive = ['active child', 'child exceeds existing budget', 'credential retirement', 'confirmed native with child', 'native starts during child'].includes(childActivity);
+        let nativeActive = childActivity === 'native active' || childActivity === 'native active at startup' || childActivity === 'confirmed native with child';
+        let nativeReads = 0;
         let childObserved = false;
         if (childActive) {
             await retainExecutionRunState(child);
@@ -18352,6 +18384,25 @@ describe('startDaemonSessionControlRuntime', () => {
         fetchSessionByIdMock.mockResolvedValue({ id: tracked.happySessionId!, encryptionMode: 'plain' });
         // Session RPC is a network boundary. Keep the real public Run projector and strict consumer.
         vi.mocked(callSessionRpc).mockImplementation(async request => {
+            if (request.method === `${tracked.happySessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`
+                || request.method === SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION) {
+                const action = Reflect.get(request.request as object, 'action');
+                if (action === 'activity_read') {
+                    nativeReads++;
+                    if (childActivity === 'native read failure') throw new Error('fixture native activity transport unavailable');
+                    return { session: 'settled', input: 'settled', agents: 'settled', attention: 'settled',
+                        ...(childActivity === 'native report omitted' ? {} : { nativeRuntimeActivity: nativeActive ? 'active' : 'settled' }) };
+                }
+                expect(request.request).toMatchObject({ expectedPid: tracked.sessionRunnerPid ?? tracked.pid });
+                if (action === 'restart_hold') {
+                    await new Promise<void>(resolve => {
+                        if (request.signal?.aborted) resolve();
+                        else request.signal?.addEventListener('abort', () => resolve(), { once: true });
+                    });
+                    return { status: 'released' };
+                }
+                return { status: 'ready' };
+            }
             if (request.method === `${tracked.happySessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_LIST}`) {
                 childObserved = true;
                 if (childActivity === 'activity observation unavailable') throw new Error('fixture transport unavailable');
@@ -18412,11 +18463,36 @@ describe('startDaemonSessionControlRuntime', () => {
                 return await spawn(...input);
             });
         }
-        const refresh = handlers?.handleSessionRunnerRestart?.({ sessionId: 'sess-refresh-drain', mode: 'force_current_cli', reason: 'capability_selection_change' });
+        if (childActivity === 'native active at startup') {
+            const settingsDir = await mkdtemp(join(tmpdir(), 'happier-native-startup-refresh-'));
+            const previousSettingsFile = configuration.settingsFile;
+            Object.assign(configuration, { settingsFile: join(settingsDir, 'settings.json') });
+            await writeFile(configuration.settingsFile, JSON.stringify({ schemaVersion: 6, restartSessionRunnersOnUpdate: true }));
+            onTestFinished(async () => { Object.assign(configuration, { settingsFile: previousSettingsFile }); await rm(settingsDir, { recursive: true, force: true }); });
+        }
+        const refresh = childActivity === 'native active at startup'
+            ? runtime.restartStaleSessionRunnersAfterDaemonStart().then(result => result.status === 'completed' ? result.result.results[0] : undefined)
+            : handlers?.handleSessionRunnerRestart?.({ sessionId: 'sess-refresh-drain', mode: 'force_current_cli', reason: 'capability_selection_change' },
+                childActivity === 'confirmed native with child' ? { allowNativeBackgroundInterruption: true } : undefined);
         let refreshResult: unknown;
         void refresh?.then(result => { refreshResult = result; });
         try {
-            if (childActivity === 'activity observation unavailable') {
+            if (childActivity === 'native active' || childActivity === 'native active at startup') {
+                await vi.waitFor(() => expect(nativeReads > 0 || signalSent).toBe(true));
+                expect(signalSent).toBe(false);
+                expect(await refresh).toMatchObject({ status: 'busy', diagnostics: { busySource: 'native_background_work' } });
+                expect(signalSent).toBe(false);
+                return;
+            }
+            if (childActivity === 'remainder capture unavailable') {
+                expect(RestartSessionRunnerResultV1Schema.parse(await refresh)).toMatchObject({ ok: false, status: 'partial_failure',
+                    diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } });
+                expect(signalSent).toBe(false);
+                expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+                expect(executeSpawnSessionRequest).not.toHaveBeenCalled();
+                return;
+            }
+            if (childActivity === 'activity observation unavailable' || childActivity === 'native read failure') {
                 expect(RestartSessionRunnerResultV1Schema.parse(await refresh)).toMatchObject({ ok: false, status: 'partial_failure',
                     diagnostics: { activityObservation: 'unavailable' } });
                 expect(signalSent).toBe(false);
@@ -18434,12 +18510,29 @@ describe('startDaemonSessionControlRuntime', () => {
                     expect(refreshResult).toBeUndefined();
                     expect(runtime.hasPendingRunnerRestarts()).toBe(true);
                 }
+                if (childActivity === 'native starts during child') nativeActive = true;
                 childActive = false;
                 await retainExecutionRunState({ ...child, inputTurns: { ...child.inputTurns,
                     current: { ...child.inputTurns.current, state: 'completed' } } });
             }
-            await vi.waitFor(() => expect([signalSent, refreshResult]).toEqual([true, undefined]));
+            if (childActivity === 'native starts during child') {
+                expect(await refresh).toMatchObject({ status: 'busy', reasonCode: 'turn_in_progress' });
+                expect(signalSent).toBe(false);
+                expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+                return;
+            }
+            // The real exit observer can settle a missing synthetic runner before
+            // this observation. Successful completion is checked below; only the
+            // explicit retirement/budget cases require it to remain pending here.
+            await vi.waitFor(() => expect(signalSent).toBe(true));
+            if (childActivity === 'idle') {
+                // Observe publication at the physical signal boundary; the exit
+                // observer can already have retired it by the next awaited read.
+                expect(signalledAttempt).toMatchObject({ expectedPid: tracked.sessionRunnerPid, requestId: expect.any(String) });
+                expect(attemptLiveAtSignal).toBe(true);
+            }
             if (childActivity === 'Stop before exit' || childActivity === 'shutdown before exit' || childActivity === 'adopted runner survives') {
+                expect(refreshResult).toBeUndefined();
                 if (childActivity === 'Stop before exit') await runtime.stopSession('sess-refresh-drain');
                 if (childActivity === 'shutdown before exit') await runtime.stopControlServer();
                 await vi.waitFor(() => expect(refreshResult).toMatchObject({ ok: false, status: 'partial_failure',
@@ -18467,6 +18560,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 { exit: { type: 'spawn_error', errorName: 'PlannedRunnerRestart', errorMessage: 'capability_selection_change' } });
             await expect(refresh).resolves.toMatchObject({ ok: true, status: 'restarted' });
             expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+            expect(tracked.plannedRestartAdmission).toBeUndefined();
         } finally {
             releaseSlowSpawn();
             processKill.mockRestore(); pidSafety.mockRestore(); await runtime.stopControlServer();

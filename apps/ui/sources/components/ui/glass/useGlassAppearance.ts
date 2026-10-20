@@ -1,29 +1,36 @@
 import * as React from 'react';
 
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { APPEARANCE_GLASS_SETTINGS } from '@/components/settings/appearance/appearanceSettings';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 
 import {
-    readGlassMaterials, readGlassPreset, readGlassTintIntensity, resolveGlassIntensitySettingsDelta, resolveGlassTintSettingsDelta,
-    resolveGlassPresetSettingsDelta,
+    readGlassMaterials, readGlassPreset, readGlassTintIntensity,
     type GlassPreset, type GlassSurfaceGroup,
 } from './glassMaterial';
-import { resolveGlassSurfaceModeSettingsDelta } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
+
+const surfaceSettings = {
+    content: APPEARANCE_GLASS_SETTINGS.settings.glassWindow,
+    chrome: APPEARANCE_GLASS_SETTINGS.settings.glassChrome,
+    sidebar: APPEARANCE_GLASS_SETTINGS.settings.glassSidebar,
+    card: APPEARANCE_GLASS_SETTINGS.settings.glassElements,
+    floating: APPEARANCE_GLASS_SETTINGS.settings.glassFloating,
+};
 
 /** Shared Account owner for Settings, the Appearance popover and Personalize. */
 export function useGlassAppearance() {
     const settings = useGlassMaterialSettings();
     const { glassBlurIntensity, glassTintIntensity } = settings;
-    const apply = useApplySettings();
+    const { setSetting } = useSettingActionFeedback();
     return React.useMemo(() => ({
         settings,
         materials: readGlassMaterials(settings),
         preset: readGlassPreset(settings),
         intensity: glassBlurIntensity ?? 'regular',
         tint: readGlassTintIntensity(glassTintIntensity),
-        selectPreset: (preset: GlassPreset) => apply(resolveGlassPresetSettingsDelta(settings, preset)),
-        setIntensity: (intensity: 'light' | 'regular' | 'strong') => apply(resolveGlassIntensitySettingsDelta(settings, intensity)),
-        setTint: (tint: number) => apply(resolveGlassTintSettingsDelta(settings, tint)),
-        setSurfaceMode: (group: GlassSurfaceGroup, mode: 'glass' | 'solid') => apply(resolveGlassSurfaceModeSettingsDelta(settings, group, mode)),
-    }), [apply, settings, glassBlurIntensity, glassTintIntensity]);
+        selectPreset: (preset: GlassPreset) => setSetting(APPEARANCE_GLASS_SETTINGS.settings.glassPreset, preset),
+        setIntensity: (intensity: 'light' | 'regular' | 'strong') => setSetting(APPEARANCE_GLASS_SETTINGS.settings.glassIntensity, intensity),
+        setTint: (tint: number) => setSetting(APPEARANCE_GLASS_SETTINGS.settings.glassTint, tint),
+        setSurfaceMode: (group: GlassSurfaceGroup, mode: 'glass' | 'solid') => setSetting(surfaceSettings[group], mode),
+    }), [setSetting, settings, glassBlurIntensity, glassTintIntensity]);
 }

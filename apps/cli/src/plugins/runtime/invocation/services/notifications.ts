@@ -645,7 +645,8 @@ export function createStablePluginNotificationsOwner(host: StablePluginNotificat
                     : seed.signal;
                 const result = (async (): Promise<PluginNotificationBatchResult> => {
                     const deliveries: PluginNotificationDeliveryResult[] = [];
-                    const event = category.definition.eventIds?.[0] ?? category.definition.id;
+                    const eventReference = category.definition.eventIds?.[0] ?? category.definition.id;
+                    const event = typeof eventReference === 'string' ? eventReference : qualifiedKey(eventReference);
                     const attentionDecision = (channel: string) => resolveAttentionDeliveryPolicyDecision({
                         policy: host.readAttentionPolicy?.(), event, channel, now: new Date(),
                         ...(request.type === undefined ? {} : { inboxItemType: request.type }),

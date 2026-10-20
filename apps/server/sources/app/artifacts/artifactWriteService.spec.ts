@@ -5,8 +5,9 @@ import {
 } from "@happier-dev/protocol";
 import * as privacyKit from "privacy-kit";
 
-import type { Tx } from "@/storage/inTx";
-import { createInTxHarness } from "@/app/api/testkit/txHarness";
+import { inTx, type Tx } from "@/storage/inTx";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { createPrismaTransactionBoundary } from "@/app/api/testkit/txHarness";
 import { logger } from "@/utils/logging/log";
 import { updateArtifactHttpMutation } from "./artifactMutationHttpResponse";
 
@@ -63,7 +64,21 @@ function createArtifactTxFixture(): ArtifactTxFixture {
     };
 }
 
-vi.mock("@/storage/inTx", () => createInTxHarness(() => currentTx));
+vi.mock("@/storage/db", () => ({
+    // Only the database transport is replaced; publication and inTx remain real.
+    db: new Proxy({}, {
+        get(_target, property) {
+            if (property === "$transaction") return createPrismaTransactionBoundary(() => currentTx);
+            return Reflect.get(currentTx, property);
+        },
+    }),
+}));
+
+vi.mock("@/storage/prisma", async importOriginal => ({
+    ...await importOriginal<typeof import("@/storage/prisma")>(),
+    // The separate SQLite snapshot connection is another database transport.
+    withSqliteReadSnapshot: <T>(read: (tx: Tx) => Promise<T>) => read(currentTx),
+}));
 
 import {
     createArtifact,
@@ -90,6 +105,12 @@ describe("artifactWriteService", () => {
         currentTx = {
             ...txFixture,
             __afterTxCallbacks: [],
+            // SQLite's writer admission is one no-op Account row update.
+            $executeRawUnsafe: async (query: string, accountId: unknown) => {
+                if (query !== 'UPDATE "Account" SET "settingsVersion" = "settingsVersion" WHERE "id" = ?'
+                    || typeof accountId !== "string") throw new Error("Unexpected SQLite admission query");
+                return 1;
+            },
             artifact: { ...txFixture.artifact, findFirst: async (...args: unknown[]) => {
                 const row = await txFixture.artifact.findFirst(...args);
                 if (!row) return row;
@@ -134,26 +155,25 @@ describe("artifactWriteService", () => {
                 createdAt: new Date(),
                 updatedAt: new Date(),
             });
-            const markQualifiedChange = vi.fn(async () => 77);
-
-            const result = await createArtifactTx(currentTx, {
+            const result = await inTx(tx => createArtifactTx(tx, {
                 actorUserId: "u1",
                 artifactId: "plugin-ui-archive",
                 header,
                 body,
                 dataEncryptionKey,
-                markChanged: markQualifiedChange,
-            });
+                markChanged: () => markAccountChanged(tx, { accountId: "u1", kind: "account", entityId: "qualified-fixture" }),
+            }));
 
             expect(result).toMatchObject({
                 ok: true,
                 didWrite: true,
-                cursor: 77,
             });
-            expect(markQualifiedChange).toHaveBeenCalledWith(
-                "plugin-ui-archive",
-            );
-            expect(txFixture.accountChange.upsert).not.toHaveBeenCalled();
+            expect(txFixture.accountChange.upsert).toHaveBeenCalledWith(expect.objectContaining({
+                create: expect.objectContaining({ kind: "account", entityId: "qualified-fixture" }),
+            }));
+            expect(txFixture.accountChange.upsert).not.toHaveBeenCalledWith(expect.objectContaining({
+                create: expect.objectContaining({ kind: "artifact" }),
+            }));
         });
 
         it("is idempotent for same account (no write, no cursor)", async () => {
@@ -447,7 +467,7 @@ describe("artifactWriteService", () => {
 
             expect(res.ok).toBe(true);
             if (!res.ok) throw new Error("expected ok");
-            expect(res.cursor).toBe(123);
+            expect(res.cursor?.resolveCursor()).toBe(123);
             expect(res.header?.version).toBe(11);
             expect(res.body?.version).toBe(21);
         });
@@ -661,7 +681,9 @@ describe("artifactWriteService", () => {
                 actorUserId: "u1",
                 artifactId: "a1",
             });
-            expect(res).toEqual({ ok: true, cursor: 77 });
+            expect(res.ok).toBe(true);
+            if (!res.ok) throw new Error("expected ok");
+            expect(res.cursor.resolveCursor()).toBe(77);
             expect(deleted).toBe(true);
             expect(deletedAt).toBeInstanceOf(Date);
         });

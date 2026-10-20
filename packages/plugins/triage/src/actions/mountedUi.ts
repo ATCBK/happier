@@ -4,6 +4,7 @@ import { TRIAGE_SOURCE_PANEL_REVEAL_ACTION_V1, TRIAGE_SOURCE_PANEL_INSERT_ACTION
 import { invokeTriageMountedUiAction } from '../ui/mountedActions.js';
 import { TRIAGE_TASKS_OPEN_CREATE_ACTION_LOCAL_ID_V1, TriageTaskDraftV1Schema } from './tasksProtocol.js';
 import { TRIAGE_TASK_DETAIL_DESTINATION_V1 } from '../composer/openEntryDetails.js';
+import { stageTriageTaskDraft } from '../ui/taskDraftHandoff.js';
 import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, TriageMountedUiInputV1Schema, TriageMountedSourceRevealInputV1Schema, TriageMountedSourceInsertInputV1Schema, type TriageMountedUiInputV1, type TriageMountedUiResultV1 } from './mountedUiProtocol.js';
 
 export function createTriageMountedUiActionHandler(): PluginClientActionHandler<TriageMountedUiInputV1, TriageMountedUiResultV1> {
@@ -36,11 +37,16 @@ export function activate(api: PluginClientApi): void {
     const fields = draft.body === undefined && context.messageAction?.visibleText != null
       ? { ...draft, body: context.messageAction.visibleText } : draft;
     if (context.signal.aborted) return { status: 'unavailable' };
+    const handoff = stageTriageTaskDraft(context.ephemeralSharedScope, fields);
+    if (handoff === null) return { status: 'unavailable' };
     try {
-      await context.ui.openSurface(TRIAGE_TASK_DETAIL_DESTINATION_V1, { v: 1, kind: 'createTask', fields },
+      await context.ui.openSurface(TRIAGE_TASK_DETAIL_DESTINATION_V1, handoff.input,
         { subPath: 'tasks,mine', signal: context.signal });
       return { status: 'applied' };
-    } catch { return { status: 'unavailable' }; }
+    } catch {
+      handoff.discard();
+      return { status: 'unavailable' };
+    }
   });
   api.actions.register(TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, createTriageMountedUiActionHandler());
   api.actions.register(TRIAGE_SOURCE_PANEL_REVEAL_ACTION_V1, createTriageMountedSourceRevealActionHandler());

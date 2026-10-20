@@ -9,6 +9,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readSessionManagedSessionsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { t } from '@/text';
 
 /**
@@ -69,17 +70,19 @@ export const SessionRowReportsChip = React.memo((props: Readonly<{
     const { theme } = useUnistyles();
     const status = readSessionManagedSessionsPresentationV1(props.reports);
     const needsYou = status.bucket === 'needs_you' ? status.count : 0;
-    if (props.collapsed && props.reports.total > 0) {
+    // Archived reports stay in the lead's record but are not sub-sessions a person can open from here.
+    const liveReports = readSessionLiveManagedSessionCountV1(props.reports);
+    if (props.collapsed && liveReports > 0) {
         return (
             <View
                 testID={`session-row-reports-chip:${props.sessionId}`}
                 accessible
                 accessibilityLabel={needsYou > 0
                     ? t('sessionWork.list.reportsNeedYou', { count: needsYou })
-                    : t('sessionWork.list.subSessions', { count: props.reports.total })}
+                    : t('sessionWork.list.subSessions', { count: liveReports })}
                 style={styles.chip}
             >
-                <Text style={styles.total}>{props.reports.total}</Text>
+                <Text style={styles.total}>{liveReports}</Text>
                 {needsYou > 0 ? <StatusDot color={theme.colors.state.warning.foreground} /> : null}
             </View>
         );

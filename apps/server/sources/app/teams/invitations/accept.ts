@@ -1,5 +1,6 @@
 import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol/teams/invitation';
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { AccountStatus } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
@@ -103,7 +104,7 @@ async function acceptResolvedTeamInvitationInTx(
         accountId: string;
     }>,
 ): Promise<TeamInvitationAcceptResultV1> {
-
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: invitation.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: invitation.teamId } });
     const account = await tx.account.findUnique({
         where: { id: input.accountId },
         select: { status: true },

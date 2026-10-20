@@ -1,4 +1,5 @@
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { createAccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import type { Prisma } from "@prisma/client";
 import { projectLegacyViewerLastViewedSessionSeqV1, projectLegacyViewerUnreadSinceV1 } from '@happier-dev/protocol/sessions';
 import { QUIET_SESSION_PERSONAL_DISCUSSION_FACTS } from "@/app/session/personal/discussionFacts";
@@ -113,7 +114,7 @@ async function findV1SessionListRowsWithSelect(userId: string, rowRepresentabili
                             orderBy: [...branch.orderBy],
                             ...(page.skip === undefined ? {} : { skip: page.skip }),
                             ...(page.take === undefined ? {} : { take: page.take }),
-                            select: { ...sessionSelect, ...createSessionPersonalProjectionSelect(userId), ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: userId }) },
+                            select: { ...sessionSelect, ...createSessionPersonalProjectionSelect(userId, { mode: "legacy_owner_or_direct" }), ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: userId }) },
                         }),
                     isOwner: () => true,
                     readPublication: (session) => session,
@@ -134,7 +135,7 @@ async function findV1SessionListRowsWithSelect(userId: string, rowRepresentabili
                             orderBy: branch.orderBy.map((orderBy) => ({ session: orderBy })),
                             ...(page.skip === undefined ? {} : { skip: page.skip }),
                             ...(page.take === undefined ? {} : { take: page.take }),
-                            select: { ...createV1SessionShareSelect(sessionSelect), session: { select: { ...sessionSelect, ...createSessionPersonalProjectionSelect(userId), ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: userId }) } } },
+                            select: { ...createV1SessionShareSelect(sessionSelect), session: { select: { ...sessionSelect, ...createSessionPersonalProjectionSelect(userId, { mode: "legacy_owner_or_direct" }), ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: userId }) } } },
                         }),
                     isOwner: () => false,
                     readPublication: (share) => share.session,
@@ -191,10 +192,12 @@ export async function listLegacyV1SessionsForAccount(params: Readonly<{
         projectedRows.map((row) => row.session),
         userId,
     );
+    const recipientReadiness = createAccountRecipientEnvelopeReadinessReadScope();
     const projectLegacyRow = (row: (typeof projectedRows)[number]) => {
         const v = row.session;
         const viewer = projectSessionViewer({
             row: v,
+            recipientReadiness,
             viewerAccountId: userId,
             discussion: discussionFacts.get(v.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
         });

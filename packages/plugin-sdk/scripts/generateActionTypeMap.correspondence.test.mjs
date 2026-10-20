@@ -6,6 +6,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { runApiSurfaceSourceHarnessForTests } from './apiSurfaceCli.mjs';
 
 function publicProjectionSource(protocol) {
   // Exercise the real private compiler owner, not a second test-only mapper.
@@ -170,6 +171,15 @@ test('named declarative Action DTO matches the canonical Protocol document gramm
   ], { cwd: repoRoot, encoding: 'utf8' });
   assert.equal(result.status, 0, JSON.stringify({ signal: result.signal, error: result.error?.message })
     + '\n' + result.stdout + result.stderr);
+});
+
+test('filesystem recursive Action DTO support closes through the author inventory', async () => {
+  const report = await runApiSurfaceSourceHarnessForTests({
+    packageRoot: resolve(process.cwd(), 'packages/plugin-sdk'),
+  });
+  assert.ok(report.inventory.symbols.some(symbol => symbol.specifier === './actions'
+    && symbol.exportName === 'FilesystemTreeNode' && symbol.kind === 'type'),
+  'the recursive directory-tree result must publish its named author dependency');
 });
 
 // Deliberately separate from dependency builds: drift fails this explicit gate only.

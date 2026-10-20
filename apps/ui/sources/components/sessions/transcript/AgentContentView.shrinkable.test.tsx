@@ -81,7 +81,7 @@ describe('AgentContentView (shrinkable layout)', () => {
         const { SessionViewerReadingInsetContext } = await import('@/components/sessions/viewer/SessionViewerController');
 
         const screen = await renderScreen(
-            <SessionViewerReadingInsetContext.Provider value={{ left: 0, right: 0, centred: { left: 0, right: 480 } }}>
+            <SessionViewerReadingInsetContext.Provider value={{ left: 0, right: 0, centred: { left: 0, right: 480, bottom: 0 } }}>
                 <AgentContentView placeholder={<Placeholder />} input={<Composer />} />
             </SessionViewerReadingInsetContext.Provider>,
         );

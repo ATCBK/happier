@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { db } from '@/storage/db';
-import { inTx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
+import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { listReservedAccountScopedKvRowsInTx, mutateReservedAccountScopedKvRowsInTx, type ReservedAccountScopedKvRowDomain } from './reservedAccountScopedKvRow';
 
@@ -96,17 +97,22 @@ describe('reserved catalog paging and diagnostics (SQLite)', () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const profileKey = '@happier/account/profiles/v1/a';
         const guardKey = '@happier/account/profile-reference-guard/v1';
-        const markChanged = async () => 1;
-        expect(await inTx(tx => mutateReservedAccountScopedKvRowsInTx(tx, {
-            accountId: account.id,
-            mutations: [
-                { physicalKey: profileKey, expectedRevision: 'absent', envelope: { t: 'plain', v: { id: 'a' } }, domain },
-                { physicalKey: guardKey, expectedRevision: 'absent', envelope: null, domain: guardDomain },
-            ],
-            markChanged,
-        }))).toEqual({ status: 'updated', rows: [
+        const markChanged = ({ tx, physicalKey }: Readonly<{ tx: Tx; physicalKey: string }>) =>
+            markAccountChanged(tx, { accountId: account.id, kind: 'account', entityId: physicalKey });
+        expect(await inTx(async tx => {
+            const result = await mutateReservedAccountScopedKvRowsInTx(tx, {
+                accountId: account.id,
+                mutations: [
+                    { physicalKey: profileKey, expectedRevision: 'absent', envelope: { t: 'plain', v: { id: 'a' } }, domain },
+                    { physicalKey: guardKey, expectedRevision: 'absent', envelope: null, domain: guardDomain },
+                ],
+                markChanged,
+            });
+            expect(await tx.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+            return result;
+        })).toEqual({ status: 'updated', rows: [
             { physicalKey: profileKey, revision: 0, cursor: 1 },
-            { physicalKey: guardKey, revision: 0, cursor: 1 },
+            { physicalKey: guardKey, revision: 0, cursor: 2 },
         ] });
         expect(await inTx(tx => mutateReservedAccountScopedKvRowsInTx(tx, {
             accountId: account.id,
@@ -134,14 +140,14 @@ describe('reserved catalog paging and diagnostics (SQLite)', () => {
                 { physicalKey: validKey, expectedRevision: 'absent', envelope: { t: 'plain', v: { id: 'a' } }, domain },
                 { physicalKey: corruptKey, expectedRevision: 0, envelope: null, domain },
             ],
-            markChanged: async () => 1,
+            markChanged: ({ tx, physicalKey }) => markAccountChanged(tx, { accountId: account.id, kind: 'account', entityId: physicalKey }),
         }));
         expect(result).toEqual({ status: 'invalid-stored-content' });
         expect(await db.userKVStore.count({ where: { accountId: account.id, key: validKey } })).toBe(0);
         expect(await inTx(tx => mutateReservedAccountScopedKvRowsInTx(tx, {
             accountId: account.id,
             mutations: [{ physicalKey: '@happier/account/profile-reference-guard/v1', expectedRevision: 'absent', envelope: { t: 'plain', v: { id: 'a' } }, domain: guardDomain }],
-            markChanged: async () => 1,
+            markChanged: ({ tx, physicalKey }) => markAccountChanged(tx, { accountId: account.id, kind: 'account', entityId: physicalKey }),
         }))).toEqual({ status: 'invalid-stored-content' });
         expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(1);
     });

@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import type { PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import os from 'os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -59,7 +60,7 @@ import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encrypti
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import {
   createPendingSessionActivationRecovery,
-  readRequesterPendingSessionActivation,
+  activateRequesterPendingSession,
   type PendingSessionActivationInput,
 } from '@/daemon/sessions/pendingSessionActivationRecovery';
 import type { RequesterSessionRuntimeContext, ResolveRequesterSessionRuntimeContext, RequesterSessionCredentialBindingsResult,
@@ -643,7 +644,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   resolveRequesterSessionRuntimeContext?: ResolveRequesterSessionRuntimeContext;
   readRequesterSessionCredentialBindings?: () => Promise<RequesterSessionCredentialBindingsResult>;
   releaseRequesterSessionRuntimeContext?: (context: RequesterSessionRuntimeContext) => Promise<void>;
-  dispatchSessionFollowOccurrence?: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | void>;
+  dispatchSessionFollowOccurrence?: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | import('@/daemon/sessions/sessionActivityChangedContract').SessionActivityChangedResult | void>;
   daemonSessionMutationCustody?: DaemonSessionMutationCustody;
   orphanedDeadDaemonSessions?: ReadonlyArray<OrphanedDeadDaemonSession>;
   isPublicationQuiescing?: () => boolean;
@@ -668,6 +669,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   startAutomationWorkerForMachine: (machineId: string) => AutomationWorkerHandle | null | Promise<AutomationWorkerHandle | null>;
   startMemoryWorkerForMachine: (machineId: string) => Promise<MemoryWorkerHandle | null>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+  spawnSessionForInternalResume: PendingSessionResumePort;
   onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
   stopSession: (sessionId: string) => Promise<StopSessionResult>;
   sessionRunnerStatus?: MachineRpcHandlerDeps['sessionRunnerStatus'];
@@ -718,6 +720,9 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   resolveManagedPurposeBindingIntent?: Parameters<
     typeof createRuntimeProviderModelManagementServices
   >[0]['resolveManagedPurposeBindingIntent'];
+  resolveManagedPurposeBindingIntentSelection?: Parameters<
+    typeof createRuntimeProviderModelManagementServices
+  >[0]['resolveManagedPurposeBindingIntentSelection'];
   openTeamDirect?: Parameters<
     typeof createRuntimeProviderModelManagementServices
   >[0]['openTeamDirect'];
@@ -1256,6 +1261,9 @@ export async function bootstrapMachineSyncRuntime(
       happyHomeDir: configuration.happyHomeDir,
       featureGate: providerFeatureGate,
       resolveSharedGateway,
+      ...(params.resolveManagedPurposeBindingIntentSelection
+        ? { resolveManagedPurposeBindingIntentSelection: params.resolveManagedPurposeBindingIntentSelection }
+        : {}),
       ...(readProviderModelProjection ? { readModelProjection: readProviderModelProjection } : {}),
       modelSettingsMutation: providerConnectionRuntimeServices?.service.mutateModelSettings
         ?? providerConnectionUnavailable,
@@ -1773,8 +1781,8 @@ export async function bootstrapMachineSyncRuntime(
           ? createCurrentMachineExecutionOriginContextResolver({ serverUrl: home.serverUrl, resolveCurrentMachineId: () => params.machineId })
           : params.resolveCurrentMachineExecutionOriginContext;
         const spawnSession: typeof params.spawnSession = context
-          ? options => params.spawnSession({ ...options, requesterSessionBootstrap: context.bootstrap, requesterSessionRuntimeContext: context })
-          : params.spawnSession;
+          ? options => params.spawnSessionForInternalResume({ ...options, requesterSessionBootstrap: context.bootstrap, requesterSessionRuntimeContext: context })
+          : params.spawnSessionForInternalResume;
         await runWithServerHttpBaseUrl(home.serverUrl, async () => {
             const readObservations = async () => {
               const origin = await resolveOrigin?.(followLifetime.signal);
@@ -1813,7 +1821,7 @@ export async function bootstrapMachineSyncRuntime(
             // Message-backed semantics enter Pending before any host wake.
             // Retain only the old Turn semantics that have no committed
             // original of the same kind in this exact observed range.
-            const legacyObservations = dispatched ? sessionObservations.filter(observation => {
+            const legacyObservations = dispatched && 'coveredEvents' in dispatched ? sessionObservations.filter(observation => {
               const turn = observation.observed.turn;
               if (!turn || isSessionFollowFrontierEqualV1(observation.delivered, observation.observed)) return false;
               const kind = turn.status === 'completed' ? 'finished'
@@ -1875,16 +1883,22 @@ export async function bootstrapMachineSyncRuntime(
         // receiver identities from the installed Account's existing cache;
         // every destination still proves its exact Home/Machine admission.
         const rules = await params.dispatchSessionFollowOccurrence?.({ sourceSessionIdChanged: change.sessionId });
-        const receivers = [...new Set(rules?.receiverSessionIds ?? [])].filter(sessionId => sessionId !== change.sessionId);
+        const receivers = [...new Set(rules && 'coveredEvents' in rules ? rules.receiverSessionIds ?? [] : [])].filter(sessionId => sessionId !== change.sessionId);
         const results = await Promise.allSettled([reconcileFollowReceiver(change.sessionId),
           ...receivers.map(sessionId => reconcileFollowReceiver(sessionId, change.sessionId))]);
         const rejected = results.find(result => result.status === 'rejected');
         if (rejected?.status === 'rejected') throw rejected.reason;
       });
+      const stopFollowAccountChanges = connectedApiMachine.onSessionFollowRulesChanged(async change => {
+        if (!change || followLifetime.signal.aborted) return;
+        await params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: change.full ? {} : {
+          workflowRunIds: change.workflowRunIds, discussionIds: change.discussionIds } });
+      });
       const priorFollowLifetimeCleanup = machineConnectionStateCleanup;
       machineConnectionStateCleanup = () => {
         followLifetime.abort();
         stopFollowSessionChanges();
+        stopFollowAccountChanges();
         priorFollowLifetimeCleanup?.();
       };
       const activateRequesterSession = async (
@@ -1894,27 +1908,10 @@ export async function bootstrapMachineSyncRuntime(
         if (!params.resolveRequesterSessionRuntimeContext || !params.releaseRequesterSessionRuntimeContext
           || !params.resolveCurrentMachineExecutionOriginContext
           || binding.attribution.machineId !== params.machineId) return;
-        const context = await params.resolveRequesterSessionRuntimeContext(binding.sessionId, binding.attribution);
-        if (!context) return;
-        try {
-          if (!await context.isCurrent()) return;
-          const current = await readRequesterPendingSessionActivation({ sessionId: binding.sessionId, bootstrap: context.bootstrap,
-            resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
-          if (!await context.isCurrent() || !current || hint && (hint.requestId !== current.requestId
-            || hint.requestedAt !== undefined && hint.requestedAt !== current.requestedAt)) return;
-          const result = await activatePendingInactiveSession({ credentials: context.bootstrap.credentials,
-            machineId: params.machineId, sessionId: current.sessionId, requestId: current.requestId,
-            pendingVersion: hint?.pendingVersion ?? current.pendingVersion, requester: context.bootstrap,
-            expectedTarget: current.target,
-            resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
-            onActivationRejected: params.onActivationRejected,
-            spawnSession: options => params.spawnSession({ ...options, requesterSessionBootstrap: context.bootstrap,
-              requesterSessionRuntimeContext: context }) });
-          if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
-            sessionId: current.sessionId, requestId: current.requestId, reason: result.reason,
-            failureDetails: result.failureDetails,
-          });
-        } finally { await params.releaseRequesterSessionRuntimeContext(context); }
+        await activateRequesterPendingSession({ ...params, binding, hint,
+          resolveRequesterSessionRuntimeContext: params.resolveRequesterSessionRuntimeContext,
+          releaseRequesterSessionRuntimeContext: params.releaseRequesterSessionRuntimeContext,
+          resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
       };
       const activatePendingSession = async (hint: PendingSessionActivationInput): Promise<void> => {
         if (hint.target) {
@@ -1933,7 +1930,7 @@ export async function bootstrapMachineSyncRuntime(
           sessionId: hint.sessionId,
           requestId: hint.requestId,
           pendingVersion: hint.pendingVersion,
-          spawnSession: params.spawnSession,
+          spawnSessionForInternalResume: params.spawnSessionForInternalResume,
           onActivationRejected: params.onActivationRejected,
         });
         if (result.status === 'rejected') {
@@ -2278,6 +2275,9 @@ export async function bootstrapMachineSyncRuntime(
       if (params.isShuttingDown()) return;
       await recoverPendingSessionActivationsAfterConnect().catch((error) => {
         logger.warn('[DAEMON RUN] Pending session activation reconnect scan failed; waiting custody retained', error);
+      });
+      await params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: {} }).catch(error => {
+        logger.warn('[DAEMON RUN] Personal Run Follow reconnect read remains pending', serializeAxiosErrorForLog(error));
       });
       if (params.isShuttingDown()) return;
       await workflowRecoveryTriggers?.onConnected().catch((error) => {

@@ -20,6 +20,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { describePluginInstallationReviewFacts, type PluginInstallationReviewFactSection } from './model/pluginInstallationReviewFacts';
 
 type AuthorityExpansion = Extract<PluginChangePendingReviewResult, Readonly<{
     kind: 'reviewRequired';
@@ -140,194 +141,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-function valueOrNone(values: readonly string[]): string {
-    return values.length > 0 ? values.join('\n') : t('settingsPlugins.installReviewSections.none');
-}
-
-const SCOPE_NESTING_INDENT = '  ';
-
-function formatScopeValueLines(value: unknown, depth: number): readonly string[] {
-    const indent = SCOPE_NESTING_INDENT.repeat(depth);
-    if (value === null || typeof value !== 'object') {
-        return [`${indent}${String(value)}`];
-    }
-    if (Array.isArray(value)) {
-        return value.every((entry) => entry === null || typeof entry !== 'object')
-            ? [`${indent}${value.map((entry) => String(entry)).join(', ')}`]
-            : value.flatMap((entry) => formatScopeValueLines(entry, depth));
-    }
-    return Object.entries(value).flatMap(([key, entry]) => (
-        entry !== null && typeof entry === 'object'
-            ? [`${indent}${key}:`, ...formatScopeValueLines(entry, depth + 1)]
-            : [`${indent}${key}: ${String(entry)}`]
-    ));
-}
-
-/**
- * Normalized host scope is a bounded plain-data record, so it reads as
- * `key: value` lines instead of a serialized JSON blob. Nesting renders as
- * indentation; the review schema bounds depth and cardinality.
- */
-function formatNormalizedScope(scope: Readonly<Record<string, unknown>>): string {
-    return formatScopeValueLines(scope, 0).join('\n');
-}
-
-function sourceKindLabel(kind: PluginInstallationReview['source']['kind']): string {
-    if (kind === 'path') return t('settingsPlugins.installReviewSections.sourceKind.path');
-    if (kind === 'archive') return t('settingsPlugins.installReviewSections.sourceKind.archive');
-    return t('settingsPlugins.installReviewSections.sourceKind.npm');
-}
-
-function marketplaceSourceKindLabel(kind: NonNullable<Extract<PluginInstallationReview['updateChannel'], { kind: 'npm' }>['marketplaceSource']>['kind']): string {
-    if (kind === 'curated') return t('settingsPlugins.installReviewSections.marketplaceSourceKind.curated');
-    if (kind === 'community-npm') return t('settingsPlugins.installReviewSections.marketplaceSourceKind.community-npm');
-    return t('settingsPlugins.installReviewSections.marketplaceSourceKind.user');
-}
-
-function executableRealmLabel(realm: PluginInstallationReview['executableRealms'][number]): string {
-    if (realm === 'daemon') return t('settingsPlugins.installReviewSections.executableRealm.daemon');
-    if (realm === 'hostedWeb') return t('settingsPlugins.installReviewSections.executableRealm.hostedWeb');
-    return t('settingsPlugins.installReviewSections.executableRealm.reactNative');
-}
-
-function uiArtifactStatusLabel(status: PluginInstallationReview['uiArtifacts']['status']): string {
-    if (status === 'verified') return t('settingsPlugins.installReviewSections.uiArtifactStatus.verified');
-    if (status === 'unavailable') return t('settingsPlugins.installReviewSections.uiArtifactStatus.unavailable');
-    return t('settingsPlugins.installReviewSections.uiArtifactStatus.none');
-}
-
-function authorizationClassLabel(authorizationClass: PluginInstallationReview['requiredHostAccess'][number]['authorizationClass']): string {
-    if (authorizationClass === 'cooperativeDisclosure') {
-        return t('settingsPlugins.installReviewSections.authorizationClass.cooperativeDisclosure');
-    }
-    if (authorizationClass === 'presentIntentOrOs') {
-        return t('settingsPlugins.installReviewSections.authorizationClass.presentIntentOrOs');
-    }
-    return t('settingsPlugins.installReviewSections.authorizationClass.hostResourceSelection');
-}
-
-function credentialRealmLabel(realm: PluginInstallationReview['rawCredentialAccess'][number]['realm']): string {
-    if (realm === 'web') return t('settingsPlugins.installReviewSections.realm.web');
-    if (realm === 'ios') return t('settingsPlugins.installReviewSections.realm.ios');
-    if (realm === 'android') return t('settingsPlugins.installReviewSections.realm.android');
-    return t('settingsPlugins.installReviewSections.realm.daemon');
-}
-
-function credentialPhaseLabel(phase: PluginInstallationReview['rawCredentialAccess'][number]['phase']): string {
-    if (phase === 'settings') return t('settingsPlugins.installReviewSections.phase.settings');
-    if (phase === 'prepare') return t('settingsPlugins.installReviewSections.phase.prepare');
-    if (phase === 'speech') return t('settingsPlugins.installReviewSections.phase.speech');
-    return t('settingsPlugins.installReviewSections.phase.connection');
-}
-
-function sourceEvidence(review: PluginInstallationReview): readonly string[] {
-    const integrity = review.source.kind === 'path'
-        ? t('common.none')
-        : review.source.integrityBasis === 'expected'
-            ? t('settingsPlugins.installReviewSections.integrityBasis.expected', { integrity: review.source.integrity })
-            : t('settingsPlugins.installReviewSections.integrityBasis.observed', { integrity: review.source.integrity });
-    const signature = review.signature.status === 'notProvided'
-        ? t('common.notProvided')
-        : review.signature.status === 'verified'
-            ? t('settingsPlugins.installReviewSections.signatureStatus.verified', { keyId: review.signature.keyId })
-            : t('settingsPlugins.installReviewSections.signatureStatus.unsupported', { keyId: review.signature.keyId });
-    const provenance = review.provenance.status === 'notProvided'
-        ? t('common.notProvided')
-        : review.provenance.status === 'declaredUnverified'
-            ? t('settingsPlugins.installReviewSections.provenanceDeclaredUnverified', {
-                predicateType: review.provenance.predicateType,
-            })
-            : review.provenance.status === 'retrievedUnverified'
-                ? t('settingsPlugins.installReviewSections.provenanceRetrievedUnverified', {
-                    predicateTypes: review.provenance.predicateTypes.join(', '),
-                })
-                : t('settingsPlugins.installReviewSections.provenanceUnavailable', {
-                    code: review.provenance.code,
-                });
-    const curation = review.curation.status === 'notApplicable'
-        ? t('common.notProvided')
-        : review.curation.status === 'unreviewed'
-            ? t('settingsPlugins.installReviewSections.curationUnreviewed', {
-                sourceId: review.curation.sourceId,
-            })
-            : t('settingsPlugins.installReviewSections.curationApproved', {
-                sourceId: review.curation.sourceId,
-                reviewedAt: review.curation.reviewedAt,
-                reason: review.curation.reason ? ` · ${review.curation.reason}` : '',
-            });
-    return [integrity, signature, provenance, curation];
-}
-
-function updateChannel(review: PluginInstallationReview): string {
-    if (review.updateChannel.kind === 'path') {
-        return review.updateChannel.development
-            ? t('settingsPlugins.installReviewSections.developmentPath', { locator: review.updateChannel.locator })
-            : review.updateChannel.locator;
-    }
-    if (review.updateChannel.kind === 'archive') return review.updateChannel.locator;
-    const source = review.updateChannel.marketplaceSource;
-    return [
-        `${review.updateChannel.packageName} · ${review.updateChannel.registryOrigin}`,
-        review.updateChannel.registryProfileId,
-        source ? t('settingsPlugins.installReviewSections.marketplaceSource', {
-            kind: marketplaceSourceKindLabel(source.kind),
-            source: `${source.id} · ${source.sourceUrl}`,
-        }) : null,
-    ].filter((entry): entry is string => Boolean(entry)).join('\n');
-}
-
-function credentialRequestLine(request: PluginInstallationReview['rawCredentialAccess'][number]['request']): string {
-    if (request.kind === 'httpHeaders') {
-        return t('settingsPlugins.installReviewSections.credentialRequestHeaders', {
-            origin: request.origin,
-            headers: request.headerNames.join(', '),
-        });
-    }
-    if (request.kind === 'environment') {
-        return t('settingsPlugins.installReviewSections.credentialRequestEnvironment', {
-            keys: request.keys.join(', '),
-        });
-    }
-    return t('settingsPlugins.installReviewSections.credentialRequestFiles', {
-        files: request.fileIds.join(', '),
-    });
-}
-
-function credentialSourceLines(entry: PluginInstallationReview['rawCredentialAccess'][number]): readonly string[] {
-    const sourceLines = entry.sourceClass.kind === 'savedSecret'
-        ? [
-            t('settingsPlugins.installReviewSections.savedSecret'),
-            t('settingsPlugins.installReviewSections.secretKinds', {
-                kinds: entry.sourceClass.secretKinds.join(', '),
-            }),
-        ]
-        : [
-            t('settingsPlugins.installReviewSections.connectedAccount'),
-            t('settingsPlugins.installReviewSections.connectedAccountService', {
-                service: `${entry.sourceClass.service.pluginId}/${entry.sourceClass.service.localId}`,
-            }),
-        ];
-    return [
-        `${entry.contribution.pluginId}/${entry.contribution.localId} · ${entry.credentialSlot.title}`,
-        ...sourceLines,
-        t('settingsPlugins.installReviewSections.credentialPurpose', { purpose: entry.credentialSlot.purpose }),
-        t('settingsPlugins.installReviewSections.credentialUse', {
-            realm: credentialRealmLabel(entry.realm),
-            phase: credentialPhaseLabel(entry.phase),
-        }),
-        t('settingsPlugins.installReviewSections.credentialAccess', { access: credentialRequestLine(entry.request) }),
-    ];
-}
-
 function ReviewSection(props: Readonly<{
     testID: string;
-    title: string;
-    lines: readonly string[];
+    section: PluginInstallationReviewFactSection;
 }>): React.ReactElement {
     return (
         <View testID={props.testID} style={stylesheet.section}>
-            <Text style={stylesheet.sectionTitle} accessibilityRole="header">{props.title}</Text>
-            <Text style={stylesheet.sectionBody}>{valueOrNone(props.lines)}</Text>
+            <Text style={stylesheet.sectionTitle} accessibilityRole="header">{props.section.title}</Text>
+            <Text style={stylesheet.sectionBody}>{props.section.lines.join('\n')}</Text>
         </View>
     );
 }
@@ -339,19 +160,13 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
     const [selectedByAccessId, setSelectedByAccessId] = React.useState<Readonly<Record<string, boolean>>>({});
     const [evidenceExpanded, setEvidenceExpanded] = React.useState(false);
     const isAuthorityExpansion = props.reason === 'authorityExpansion';
-    const authorityExpansion = new Set(props.authorityExpansion ?? []);
-    // Code changes of already-trusted plugins never reopen review, so a
-    // delta-only decision shows only the widened access.
-    const showsExecutableCode = !isAuthorityExpansion;
-    const showsRequiredAccess = !isAuthorityExpansion
-        || authorityExpansion.has('requiredHostAccess')
-        || authorityExpansion.has('connectedAccountPurpose');
-    const showsOptionalAccess = !isAuthorityExpansion
-        || authorityExpansion.has('selectedOptionalHostAccess');
-    const showsRequestInterceptors = !isAuthorityExpansion
-        || authorityExpansion.has('requestInterceptor');
-    const showsRawCredentials = !isAuthorityExpansion
-        || authorityExpansion.has('rawCredentialAccess');
+    // One presentation owner decides which facts this decision shows and how they read.
+    const facts = describePluginInstallationReviewFacts(props.review, {
+        reason: props.reason,
+        currentVersion: props.currentVersion,
+        authorityExpansion: props.authorityExpansion,
+    });
+    const showsOptionalAccess = facts.optionalAccess !== null;
 
     const resolve = React.useCallback((resolution: PluginInstallationReviewResolution) => {
         props.onResolve(resolution);
@@ -377,27 +192,7 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
             contentContainerStyle={styles.body}
             keyboardShouldPersistTaps="handled"
         >
-            <ReviewSection
-                testID="settings.plugins.installReview.identity"
-                title={t('settingsPlugins.installReviewSections.identity')}
-                lines={[
-                    `${props.review.displayName} · ${props.review.version}`,
-                    ...(isAuthorityExpansion && props.currentVersion
-                        ? [`${props.currentVersion} → ${props.review.version}`]
-                        : []),
-                    t('settingsPlugins.installReviewSections.source', {
-                        kind: sourceKindLabel(props.review.source.kind),
-                        locator: props.review.source.locator,
-                    }),
-                    updateChannel(props.review),
-                    props.review.publisherIdentity.status === 'unavailable'
-                        ? t('common.unavailable')
-                        : t('settingsPlugins.installReviewSections.publisherUnverified', {
-                            displayName: props.review.publisherIdentity.displayName,
-                            id: props.review.publisherIdentity.id,
-                        }),
-                ]}
-            />
+            <ReviewSection testID="settings.plugins.installReview.identity" section={facts.identity} />
             <Text
                 testID="settings.plugins.installReview.target"
                 style={styles.reviewTarget}
@@ -407,43 +202,18 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                     server: props.target.server,
                 })}
             </Text>
-            {props.review.source.kind === 'archive' && /^https?:\/\//u.test(props.review.source.locator) ? (
+            {facts.archiveUrlRetention ? (
                 <Text testID="settings.plugins.installReview.archiveUrlRetention" style={styles.reviewBody}>
-                    {t('settingsPlugins.installReviewSections.archiveUrlRetention')}
+                    {facts.archiveUrlRetention}
                 </Text>
             ) : null}
-            {!isAuthorityExpansion ? <ReviewSection
-                testID="settings.plugins.installReview.trustedCode"
-                title={t('settingsPlugins.installReviewSections.trustedCodeTitle')}
-                lines={[t('settingsPlugins.installReviewSections.trustedCodeDisclosure')]}
-            /> : null}
-            {showsExecutableCode ? <ReviewSection
-                testID="settings.plugins.installReview.executableCode"
-                title={t('settingsPlugins.installReviewSections.executableCode')}
-                lines={[
-                    ...props.review.executableRealms.map(executableRealmLabel),
-                    ...props.review.contributions.map((entry) => `${entry.family} · ${entry.count}`),
-                    ...(props.review.uiArtifacts.contributionIds.length > 0
-                        ? [t('settingsPlugins.installReviewSections.uiArtifacts', {
-                            status: uiArtifactStatusLabel(props.review.uiArtifacts.status),
-                            ids: props.review.uiArtifacts.contributionIds.join(', '),
-                        })]
-                        : [uiArtifactStatusLabel(props.review.uiArtifacts.status)]),
-                ]}
-            /> : null}
-            {showsRequiredAccess ? <ReviewSection
-                testID="settings.plugins.installReview.requiredAccess"
-                title={t('settingsPlugins.installReviewSections.requiredAccess')}
-                lines={props.review.requiredHostAccess.map((entry) => (
-                    `${entry.capability} · ${authorizationClassLabel(entry.authorizationClass)}\n${entry.reason}\n${t('settingsPlugins.installReviewSections.scope', {
-                        scope: formatNormalizedScope(entry.normalizedScope),
-                    })}`
-                ))}
-            /> : null}
-            {showsOptionalAccess && props.review.optionalHostAccess.length > 0 ? (
+            {facts.trustedCode ? <ReviewSection testID="settings.plugins.installReview.trustedCode" section={facts.trustedCode} /> : null}
+            {facts.executableCode ? <ReviewSection testID="settings.plugins.installReview.executableCode" section={facts.executableCode} /> : null}
+            {facts.requiredAccess ? <ReviewSection testID="settings.plugins.installReview.requiredAccess" section={facts.requiredAccess} /> : null}
+            {facts.optionalAccess && facts.optionalAccess.entries.length > 0 ? (
                 <View testID="settings.plugins.installReview.optionalAccess" style={styles.optionalList}>
-                    <Text style={styles.sectionTitle} accessibilityRole="header">{t('settingsPlugins.installReviewSections.optionalAccess')}</Text>
-                    {props.review.optionalHostAccess.map((entry) => {
+                    <Text style={styles.sectionTitle} accessibilityRole="header">{facts.optionalAccess.title}</Text>
+                    {facts.optionalAccess.entries.map((entry) => {
                         const selected = selectedByAccessId[entry.id] === true;
                         const accessibilityLabel = `${entry.capability}: ${entry.reason}`;
                         return (
@@ -451,11 +221,7 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                                 <View style={styles.optionalCopy}>
                                     <Text style={styles.optionalTitle}>{entry.capability}</Text>
                                     <Text style={styles.optionalReason}>{entry.reason}</Text>
-                                    <Text style={styles.optionalReason}>
-                                        {t('settingsPlugins.installReviewSections.scope', {
-                                            scope: formatNormalizedScope(entry.normalizedScope),
-                                        })}
-                                    </Text>
+                                    <Text style={styles.optionalReason}>{entry.scope}</Text>
                                 </View>
                                 <Switch
                                     testID={`settings.plugins.installReview.optional.${entry.id}`}
@@ -476,18 +242,8 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                     })}
                 </View>
             ) : null}
-            {showsRequestInterceptors ? <ReviewSection
-                testID="settings.plugins.installReview.requestInterceptors"
-                title={t('settingsPlugins.installReviewSections.requestInterceptors')}
-                lines={props.review.requestInterceptors.map((entry) => (
-                    `${entry.id}\n${entry.origins.join(', ')}\n${entry.methods?.join(', ') ?? t('common.all')} · ${t('settingsPlugins.installReviewSections.priority', { priority: entry.priority })}`
-                ))}
-            /> : null}
-            {showsRawCredentials ? <ReviewSection
-                testID="settings.plugins.installReview.rawCredentials"
-                title={t('settingsPlugins.installReviewSections.rawCredentials')}
-                lines={props.review.rawCredentialAccess.flatMap(credentialSourceLines)}
-            /> : null}
+            {facts.requestInterceptors ? <ReviewSection testID="settings.plugins.installReview.requestInterceptors" section={facts.requestInterceptors} /> : null}
+            {facts.rawCredentials ? <ReviewSection testID="settings.plugins.installReview.rawCredentials" section={facts.rawCredentials} /> : null}
             <ExpandableItem
                 expanded={evidenceExpanded}
                 onExpandedChange={setEvidenceExpanded}
@@ -496,7 +252,7 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                     <Item
                         {...headerProps}
                         testID="settings.plugins.installReview.evidenceToggle"
-                        title={t('settingsPlugins.installReviewSections.evidence')}
+                        title={facts.evidence.title}
                         accessibilityExpanded={expanded}
                         showChevron={false}
                         rightElement={<Icon name={expanded ? 'caret-up' : 'caret-down'} size={20} color={theme.colors.text.secondary} />}
@@ -504,16 +260,7 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                 )}
             >
                 <View testID="settings.plugins.installReview.evidence" style={styles.section}>
-                    <Text style={styles.sectionBody}>{valueOrNone([
-                        ...sourceEvidence(props.review),
-                        props.review.compatibility.happier ?? t('common.notProvided'),
-                        t('settingsPlugins.installReviewSections.runtimeApi', {
-                            version: props.review.compatibility.runtimeApiVersion,
-                        }),
-                        ...(props.review.compatibility.blockedNewerVersions ?? []).map((entry) => (
-                            `${entry.version}: ${entry.diagnostics.map((diagnostic) => diagnostic.message).join('; ')}`
-                        )),
-                    ])}</Text>
+                    <Text style={styles.sectionBody}>{facts.evidence.lines.join('\n')}</Text>
                 </View>
             </ExpandableItem>
             <View style={styles.actions}>

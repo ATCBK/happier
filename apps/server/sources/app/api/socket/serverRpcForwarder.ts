@@ -1,4 +1,8 @@
 import type { Server } from "socket.io";
+import {
+    SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS,
+    SocketRpcMachineReadServerOriginAuthorizationContextV1Schema,
+} from '@happier-dev/protocol/socketRpc';
 
 import { forwardRpcCall } from "./rpc/forwardRpcCall";
 
@@ -16,11 +20,20 @@ export type ForwardRpcForUser = (params: Readonly<{
 export function createServerRpcForwarder(params: Readonly<{
     io: Server;
 }>): ForwardRpcForUser {
-    return async ({ userId, method, params: callParams, timeoutMs }): Promise<ServerRpcForwardResult> => forwardRpcCall({
-        io: params.io,
-        targetUserId: userId,
-        method,
-        callParams,
-        timeoutMs,
-    });
+    return async ({ userId, method, params: callParams, timeoutMs }): Promise<ServerRpcForwardResult> => {
+        const separator = method.indexOf(':');
+        const authorization = separator > 0 && SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS.includes(method.slice(separator + 1))
+            ? SocketRpcMachineReadServerOriginAuthorizationContextV1Schema.parse({
+                kind: 'machine.read.serverOrigin', accountId: userId, machineId: method.slice(0, separator),
+            })
+            : undefined;
+        return forwardRpcCall({
+            io: params.io,
+            targetUserId: userId,
+            method,
+            callParams,
+            timeoutMs,
+            ...(authorization ? { authorization } : {}),
+        });
+    };
 }

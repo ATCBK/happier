@@ -30,12 +30,13 @@ export type WorkspaceCreateDirectoryResponse = WorkspaceFileSystemMutationRespon
 export async function workspaceCreateDirectory(
     target: WorkspaceFileSystemTarget,
     path: string,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<WorkspaceCreateDirectoryResponse> {
     try {
         return await invokeWorkspaceFileSystemMutation(target, 'daemon.filesystem.createDirectory', {
             rootPath: target.rootPath,
             path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }),
-        });
+        }, options);
     } catch (error) {
         return {
             success: false,

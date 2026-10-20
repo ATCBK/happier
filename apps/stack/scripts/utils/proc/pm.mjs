@@ -727,8 +727,22 @@ async function ensureComponentDependenciesInstalled(
         }
       }
     : null;
+  // Startup is not a dependency mutation merely because it also prepares
+  // first-party component outputs. A current, fully postinstalled tree is
+  // verified read-only; only an active installer is waited for (its custody is
+  // reused and the tree rechecked after it exits), never a long-lived reader.
+  // Stale or incomplete trees fall through to the owner's writer path.
+  const admitCurrentTree = async ({ refreshExisting }) => {
+    if (pm.name !== 'yarn' || onDependenciesReady || needsSharedUiRepair) return false;
+    const readiness = await inspectDependencyRefresh({ installDir, componentDir });
+    if (readiness.required || (await inspectUiPostinstallOutputs(componentDir, installDir, { env })).length > 0) return false;
+    await withDependencyRefresh({ installDir, componentDir, env, refreshExisting }, refreshDependencies);
+    if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
+    return true;
+  };
   const prepareWithoutInstall = async () => {
     if (!guardedDependencyReadyAction) return;
+    if (await admitCurrentTree({ refreshExisting: false })) return;
     if (pm.name === 'yarn') {
       await withDependencyRefresh({ installDir, componentDir, env,
         refreshExisting: false, onDependenciesReady: guardedDependencyReadyAction }, async () => {});
@@ -784,21 +798,7 @@ async function ensureComponentDependenciesInstalled(
       return;
     }
 
-    if (pm.name === 'yarn' && !onDependenciesReady && !needsSharedUiRepair) {
-      const readiness = await inspectDependencyRefresh({ installDir, componentDir });
-      const componentUiFailures = await inspectUiPostinstallOutputs(componentDir, installDir, { env });
-      if (!readiness.required && componentUiFailures.length === 0) {
-        // Startup is not a dependency mutation merely because it also prepares
-        // first-party component outputs. Healthy installed bytes are verified
-        // read-only; the component's existing generation owner remains separate.
-        // A concurrent installer may hold this healthy tree while preparing
-        // its next admission. Reuse refresh custody and recheck after it exits;
-        // healthy uncontended trees still take the owner's read-only fast path.
-        await withDependencyRefresh({ installDir, componentDir, env }, refreshDependencies);
-        if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
-        return;
-      }
-    }
+    if (await admitCurrentTree({ refreshExisting: true })) return;
 
     if (pm.name === 'yarn') {
       await withDependencyRefresh({

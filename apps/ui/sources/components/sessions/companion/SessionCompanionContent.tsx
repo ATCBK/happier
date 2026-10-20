@@ -10,7 +10,7 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { useEntityDragDropRuntime, readWindowBounds, measureWindowBounds, type WindowBounds, useTreeDropAutoscroll } from '@/components/ui/treeDragDrop';
 import { useSharedValue } from 'react-native-reanimated';
 import { sessionSurfaceMeasurable, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh, SessionSurfaceEntityFeedback, type SessionSurfaceEntityBinding } from '@/components/sessions/board/SessionSurfaceEntityDrag';
-import { resolveSessionCompanionEntityDrop, sessionSurfaceDropRefused } from '@/components/sessions/board/sessionSurfaceEntityDrop';
+import { resolveSessionCompanionEntityDrop, sessionSurfaceDropRefused, sessionSurfaceEntityDropDestinationKey } from '@/components/sessions/board/sessionSurfaceEntityDrop';
 import { SessionCompanionDestinationSchema } from '@/components/sessions/board/sessionBoardEntityBinding';
 import { resolveSessionSurfaceKeyboardDestination } from '@/components/sessions/board/sessionSurfaceKeyboardDestination';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
@@ -676,6 +676,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
             : { status: 'refused', reason: { code: outcome.status, message: t(outcome.status === 'unchanged' ? 'entityDragDrop.reasons.noChange' : 'entityDragDrop.reasons.gone') } };
     }, [props.session.id]);
     const target = (key?: string): NonNullable<SessionSurfaceEntityBinding['target']> => ({
+        getDestinationKey: (_context, admission) => sessionSurfaceEntityDropDestinationKey(admission),
         acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance'],
         listDestinations: item => {
             const source = item.kind === 'session-board-item' ? liveDrop.current.board?.itemsById.get(item.itemId)?.state : null;

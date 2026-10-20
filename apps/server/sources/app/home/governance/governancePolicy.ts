@@ -12,7 +12,7 @@ import { inTx, type Tx } from "@/storage/inTx";
 
 import { authorizeHomeGovernanceMutationInTx } from "./homeCapabilities";
 import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdministrationEvents";
-import { publishHomeGovernanceChangedInTx } from "./governanceChanges";
+import { acquireHomeGovernanceAdmissionInTx, publishHomeGovernanceChangedInTx } from "./governanceChanges";
 import {
     HOME_STORAGE_POLICY_KEY,
     readHomeAuthenticationLock,
@@ -171,6 +171,12 @@ export function isHomeGovernancePolicyCreateConflictError(
  * reauthorizes the actor, and observes the winning revision through the same
  * canonical owner.
  */
+function homeGovernancePolicyChangeAudience(patch: HomeGovernancePolicySetInputV1): "all_active_accounts" | "administrators" {
+    return patch.teamCreationPolicy !== undefined || patch.teamsVisibleToMembers !== undefined
+        || patch.authenticationPolicy !== undefined || patch.teamProviderPolicy !== undefined
+        || patch.identityNetworkPolicy !== undefined ? "all_active_accounts" : "administrators";
+}
+
 export async function setHomeGovernancePolicy(input: Readonly<{
     actorAccountId: string;
     patch: HomeGovernancePolicySetInputV1;
@@ -181,11 +187,8 @@ export async function setHomeGovernancePolicy(input: Readonly<{
     const attempt = async () => await inTx(async (tx) => {
         const result = await setHomeGovernancePolicyInTx(tx, { ...input, emailDeliveryReady });
         if (result.status === "applied") {
-            const minimumEligibilityMayChange = input.patch.teamCreationPolicy !== undefined
-                || input.patch.teamsVisibleToMembers !== undefined
-                || input.patch.authenticationPolicy !== undefined;
             await publishHomeGovernanceChangedInTx(tx, {
-                audience: minimumEligibilityMayChange ? "all_active_accounts" : "administrators",
+                audience: homeGovernancePolicyChangeAudience(input.patch),
             });
         }
         return result;
@@ -362,6 +365,11 @@ export async function setHomeGovernancePolicyInTx(
     if (input.patch.authenticationPolicy !== undefined
         || input.patch.teamProviderPolicy !== undefined
         || input.patch.identityNetworkPolicy !== undefined) operations.add("set_authentication_policy");
+    await acquireHomeGovernanceAdmissionInTx(tx, {
+        accountIds: [input.actorAccountId],
+        intent: operations.has("set_authentication_policy") ? "exclusive" : "content",
+        audience: homeGovernancePolicyChangeAudience(input.patch),
+    });
     for (const operation of operations) {
         const authorization = await authorizeHomeGovernanceMutationInTx(tx, {
             actorAccountId: input.actorAccountId,

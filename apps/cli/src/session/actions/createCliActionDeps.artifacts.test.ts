@@ -302,22 +302,36 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       items: [{ kind: 'widget', instance, size: 'medium', frameStyle: 'plain' }] });
     const wireRow = (id: string, header: Readonly<Record<string, unknown>>, body?: string) => ({ id,
       header: encodePlainArtifactStoredContent(header), ...(body ? { body: encodePlainArtifactStoredContent({ body }) } : {}),
-      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
       headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+    let inventoryReads = 0;
     http.get.mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (new URL(url).pathname === '/v1/artifacts') return { status: 200,
-        data: [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))] };
+      if (new URL(url).pathname === '/v1/artifacts') {
+        inventoryReads += 1;
+        return { status: 200, data: [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))] };
+      }
+      if (new URL(url).pathname === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200,
+        data: { artifactId, ownerAccountId: accountId, access: 'owner', grants: [] } };
+      if (new URL(url).pathname === `/v1/artifacts/${artifactId}/access/recipients`) return { status: 200,
+        data: { artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, callerDataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+          provenanceDataEncryptionKey: null, callerProvenanceDataEncryptionKey: null, recipients: [] } };
+      if (url.endsWith(`/v1/artifacts/${artifactId}`)) return { status: 200,
+        data: wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition), JSON.stringify(definition)) };
       if (url.endsWith(`/v1/artifacts/${homeArtifactId}`)) return { status: 200,
         data: wireRow(homeArtifactId, { kind: HOME_HUB_ARTIFACT_KIND_V1, v: 1 }, JSON.stringify(layout)) };
       throw new Error(`unexpected_get:${url}`);
     });
     const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
       sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'authored-home', serverHttpBaseUrl: 'https://authored-home.test' }));
-    expect(await executor.execute('home.hub.layout.get', {}, { surface: 'cli', bypassApprovals: true }))
+    const described = await executor.execute('home.hub.layout.get', {}, { surface: 'cli', bypassApprovals: true });
+    expect(described, JSON.stringify(described))
       .toMatchObject({ ok: true, result: { layout, sections: expect.arrayContaining([
         expect.objectContaining({ id: instance.id, size: 'wide', frameStyle: 'plain' }),
       ]) } });
+    // Describing Home reads the definitions it places by id; the Account's whole artifact inventory is not paged for it.
+    expect(inventoryReads).toBe(0);
     const catalog = await executor.execute('widgets.catalog.list', { surface: { serverId: 'authored-home', accountId, owner: { kind: 'home' } } },
       { surface: 'cli', bypassApprovals: true });
     expect(catalog.ok).toBe(true);

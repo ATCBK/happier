@@ -6,7 +6,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import * as Application from 'expo-application';
-import { useLocalSettingMutable, useSocketStatus } from '@/sync/domains/state/storage';
+import { useLocalSetting, useSocketStatus } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { sync } from '@/sync/sync';
 import { getServerUrl, setServerUrl, validateServerUrl } from '@/sync/domains/server/serverConfig';
@@ -19,10 +19,13 @@ import { StoryDeckPreviewDevSection } from '@/components/dev/StoryDeckPreviewDev
 import { WebHmrDevSettingsSection } from '@/components/dev/WebHmrDevSettingsSection';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DIAGNOSIS_SETTINGS } from '@/components/settings/diagnosis/diagnosisSettings';
 
 export default function DevScreen() {
     const router = useRouter();
-    const [debugMode, setDebugMode] = useLocalSettingMutable('debugMode');
+    const debugMode = useLocalSetting('debugMode');
+    const writeSetting = useSettingActionWriter();
     const [verboseLogging, setVerboseLogging] = React.useState(false);
     const socketStatus = useSocketStatus();
     const anonymousId = sync.encryption!.anonID;
@@ -147,7 +150,7 @@ export default function DevScreen() {
                     rightElement={
                         <Switch
                             value={debugMode}
-                            onValueChange={setDebugMode}
+                            onValueChange={value => { void writeSetting(DIAGNOSIS_SETTINGS.settings.debugMode, value); }}
                         />
                     }
                     showChevron={false}

@@ -80,7 +80,7 @@ export async function readWidgetEntityMovementAdmission(deps: ActionExecutorDeps
  */
 function describeWidgetMovementRefusal(code: string): string {
     switch (code) {
-        case WIDGET_MOVE_PENDING_CODE: return t('common.loading');
+        case WIDGET_MOVE_PENDING_CODE: return t('entityDragDrop.surface.widgetChecking');
         case WIDGET_MOVE_UNCHANGED_CODE: return t('entityDragDrop.reasons.noChange');
         case 'widget_group_width_no_fit': return t('widgetFrame.groupRefusedWidth');
         case 'widget_group_nesting_forbidden': return t('widgetFrame.groupRefusedNesting');

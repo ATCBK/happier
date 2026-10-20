@@ -4,6 +4,8 @@ import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunUserTranscriptC
 import { SessionExecutionRunBrokerAuthorityRequestV1Schema, SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
 import type { ExecutionRunPublicState, SessionTranscriptObservationProvenanceV1, ActionExecutorDeps, ReviewCommentPrincipalHeaderV1, ActionId } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { ExecutionRunFollowFrontierRequestSchema, ExecutionRunFollowFrontierResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { readRetainedExecutionRunRecord } from '@/daemon/executionRunRegistry';
 
 import { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
 import type { ExecutionRunTranscriptPublisher } from '@/agent/runtime/bridges/executionRun/executionRunTranscriptPublisher';
@@ -14,6 +16,7 @@ import type {
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
 import { acquireExecutionRunRuntimeSnapshot } from './acquireExecutionRunRuntimeSnapshot';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
+import { createExecutionBudgetRegistry } from '@/daemon/executionBudget/createExecutionBudgetRegistry';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
 import type { BrowserContextRoutes } from '@/daemon/browser/context/routes';
 import type { BrowserAutomationRoutes } from '@/daemon/browser/automation/routes';
@@ -284,6 +287,7 @@ export function registerExecutionRunRpcHandlers(
     }
     : undefined;
 
+  const budgetRegistry = ctx.budgetRegistry ?? createExecutionBudgetRegistry(policy.maxConcurrentRuns);
   const manager = new ExecutionRunHostBridge({
     resolveVoicePromptPreparation: async ({ sessionId, signal, workingDirectory }) => {
       const credentials = await ctx.readPromptCredentials?.();
@@ -301,7 +305,7 @@ export function registerExecutionRunRpcHandlers(
     onVoiceAgentWelcomed: ctx.onExecutionRunVoiceAgentWelcomed,
     boundedTimeoutMs: policy.boundedTimeoutMs ?? undefined,
     maxTurns: policy.maxTurns ?? undefined,
-    budgetRegistry: ctx.budgetRegistry,
+    budgetRegistry,
     getPermissionRequestStore: ctx.getPermissionRequestStore,
     parentSessionStateTarget: ctx.parentSessionStateTarget ?? null,
     ...(ctx.sessionInteractionHost
@@ -347,7 +351,7 @@ export function registerExecutionRunRpcHandlers(
 
   const actionExecutor = ctx.actionExecutor ?? createExecutionRunRpcActionExecutor({
     manager,
-    context: ctx,
+    context: { ...ctx, budgetRegistry },
     policy,
     isExecutionRunsEnabled,
     ...(ctx.actionsSettingsProvider
@@ -356,6 +360,22 @@ export function registerExecutionRunRpcHandlers(
     approvalDeps: ctx.actionApprovalDeps,
   });
   canonicalActionExecutor = actionExecutor;
+
+  // This content-free source read belongs to the daemon's retained owner, not
+  // the live Session handler or detached Run GET. The Home checks source grants
+  // and exact Machine placement before forwarding this read.
+  if (ctx.sessionId === null) rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+    async (request: unknown) => {
+      if (!isExecutionRunsEnabled()) return { ok: false, error: 'Execution runs disabled', errorCode: 'execution_run_not_allowed' };
+      const parsed = ExecutionRunFollowFrontierRequestSchema.safeParse(request);
+      if (!parsed.success) return invalidParams();
+      const retained = await readRetainedExecutionRunRecord(parsed.data.runId);
+      const run = retained?.state;
+      if (!run || run.sessionId !== parsed.data.sessionId || run.status !== 'running' && !run.terminalOccurrenceId)
+        return { ok: false, error: 'Execution run not found', errorCode: 'execution_run_not_found' };
+      return ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: parsed.data.sessionId, runId: run.runId,
+        status: run.status, terminalEventId: run.status === 'running' ? null : run.terminalOccurrenceId });
+    });
 
   rpc.registerHandler(
     SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1,

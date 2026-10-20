@@ -29,6 +29,9 @@ import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachabi
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
 import { useBoardAddSources, type BoardHomes } from '../model/useBoardContent';
 
@@ -198,6 +201,12 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const { rowsByServerId, machineLists, library, runs, loading } = useBoardAddSources(props.homes);
+    // The Sessions it offers are named from encrypted content: the undecided ones are demanded like list rows.
+    const undecidedSessions = React.useMemo(() => Object.entries(rowsByServerId).flatMap(([serverId, rows]) => (
+        Object.values(rows ?? {}).filter(row => typeof row.archivedAt !== 'number' && isSessionContentUnsettled(row))
+            .map((row): SessionAddress => ({ serverId, sessionId: row.id }))
+    )), [rowsByServerId]);
+    useSessionContentDemand(undecidedSessions, { tag: 'board.hydrateAddSessions', hydrate: 'unsettled' });
     const openingGroups = (['sessions', 'workflows', 'runs', 'machines'] as const).filter(group => loading[group]);
     const reachabilityRevision = useMachineReachabilityRevision();
     const machineScopeBindings = useServerCredentialAccountScopeBindings(Object.keys(machineLists));
@@ -234,9 +243,11 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             <Icon name={name} size={16} color={theme.colors.text.secondary} />
         );
 
-        // Widgets: the Add surface's own entries (its counts and Added), then the surface itself.
+        // Widgets: the Add surface's own entries (its counts and Added), then the surface itself. A short
+        // group leads (lab `dashboards` L1): the built-in families with pages of their own (Machines,
+        // Usage) stay one row away through Gallery, and a search still finds them here.
         const widgetEntries = new Map<string, WidgetAddEntry>();
-        const widgets: SelectionListOption[] = widgetSections.flatMap(section => section.entries).map((entry) => {
+        const widgetOption = (entry: WidgetAddEntry): SelectionListOption => {
             widgetEntries.set(widgetOptionId(entry), entry);
             const where = entry.count ?? (entry.added ? t('boards.add.onBoard') : null);
             const subtitle = [entry.subtitle, where].filter(Boolean).join(' · ');
@@ -247,7 +258,9 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
                 icon: glyph(entry.icon),
                 ...(entry.added ? { rightAccessory: onBoardMark, disabled: true } : {}),
             };
-        });
+        };
+        const widgets = widgetSections.filter(section => !section.family).flatMap(section => section.entries).map(widgetOption);
+        const familyWidgets = widgetSections.filter(section => section.family).flatMap(section => section.entries).map(widgetOption);
         widgets.push({
             id: GALLERY_OPTION_ID,
             label: t('boards.widgets.gallery'),
@@ -309,6 +322,13 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             ],
             sections: [
                 { kind: 'static', id: 'widgets', title: t('boards.widgets.group'), options: widgets },
+                {
+                    kind: 'dynamic', id: 'widgets-more',
+                    resolverKey: JSON.stringify(familyWidgets.map(option => [option.id, option.subtitle, option.disabled === true])),
+                    visibleWhen: (input) => input.trim().length > 0,
+                    debounceMs: 0, loadingSkeletonRows: 0, resultTransition: 'none',
+                    resolve: async () => ({ options: familyWidgets }),
+                },
                 { kind: 'static', id: 'sessions', title: t('boards.add.groups.sessions'), options: sessions, virtualization: 'auto' },
                 { kind: 'static', id: 'workflows', title: t('boards.add.groups.workflows'), options: workflows },
                 { kind: 'static', id: 'runs', title: t('boards.add.groups.runs'), options: workflowRuns },

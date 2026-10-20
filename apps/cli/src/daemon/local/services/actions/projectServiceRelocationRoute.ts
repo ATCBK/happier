@@ -220,7 +220,7 @@ export function createProjectServiceRelocationRoute(input: Readonly<{
                 }
                 const copiedFileFacts = (effect: typeof original.value.setupReview) => {
                     const reviewed = effect?.reviewedEffect;
-                    return reviewed && typeof reviewed === 'object' && !Array.isArray(reviewed) ? reviewed.files : undefined;
+                    return reviewed && typeof reviewed === 'object' && !Array.isArray(reviewed) && 'files' in reviewed ? reviewed.files : undefined;
                 };
                 const sourceFiles = copiedFileFacts(original.value.setupReview);
                 const targetFiles = copiedFileFacts(target.value.setupReview);

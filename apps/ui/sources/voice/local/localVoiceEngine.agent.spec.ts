@@ -1149,7 +1149,7 @@ describe('local voice engine agent behavior', () => {
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
         const onAccepted = vi.fn(async () => {});
-        const turn = localVoiceEngine.sendLocalVoiceAgentTextTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello world', admitted ? {
+        const turn = localVoiceEngine.sendLocalVoiceAgentTextTurn('s1', 'hello world', admitted ? {
             localId: 'typed-text-failure', deliveryCommand: 'interrupt_and_send',
         } : undefined, onAccepted);
         if (admitted) await expect(turn).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
@@ -1168,6 +1168,10 @@ describe('local voice engine agent behavior', () => {
             error: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         });
         expect(onAccepted).not.toHaveBeenCalled();
+        const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+        const dictation = voiceCaptureAdmissionController.acquire('dictation');
+        if (dictation.status === 'acquired') dictation.lease.release();
+        expect(dictation.status).toBe('acquired');
     });
 
     it('rethrows a known before-effect streamed-turn rejection for durable delivery', async () => {
@@ -1692,14 +1696,19 @@ describe('local voice engine agent behavior', () => {
                 }, 'retired-local-agent-tool'),
             ],
         }));
+        const onAccepted = vi.fn(async () => {});
         await expect(localAdapter.sendTextTurn({
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             conversationSessionId: 'voice-home-session',
             text: 'Run the retained tool.',
             localId: 'retired-local-agent-turn',
             deliveryCommand: 'interrupt_and_send',
-            onAccepted: async () => {},
-        })).rejects.toBeInstanceOf(Error);
+            onAccepted,
+        })).resolves.toBeUndefined();
+        // Account retirement already aborted this run. The existing turn
+        // boundary settles cancellation; acceptance and disclosure stay fenced.
+        expect(onAccepted).not.toHaveBeenCalled();
+        expect(startTurnRpc).toHaveBeenCalledTimes(wireTurnsBeforeLateEvents);
 
         await act(async () => {
             await Promise.resolve();

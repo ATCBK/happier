@@ -11,7 +11,7 @@ import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transpo
 import type { ActionExecutorContext } from '@happier-dev/protocol';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
-/** Consumes admitted caller evidence; a manager relation alone grants no access. */
+/** Classifies an admitted Stop author; Action dispatch and Home own target scope. */
 export function resolveSessionExplicitControlIntent(input: Readonly<{
   rawSession: RawSessionRecord;
   executionAuthority?: ActionExecutorContext['authority'];
@@ -21,7 +21,7 @@ export function resolveSessionExplicitControlIntent(input: Readonly<{
   const admittedCaller = input.actionContext?.agentStartContext?.caller;
   if (caller?.kind === 'session') {
     return admittedCaller?.kind === 'session' && admittedCaller.sessionId === caller.sessionId
-      && readSessionManagerSessionIdV1(input.rawSession) === caller.sessionId
+      && input.rawSession.id !== caller.sessionId
       ? 'manager' : 'unauthorized';
   }
   return (input.actionContext?.authority ?? input.executionAuthority) === 'account_automation'
@@ -35,6 +35,10 @@ export function resolveSessionResumeControlIntent(input: Parameters<typeof resol
   if (input.rawSession.archivedAt !== null && input.rawSession.archivedAt !== undefined) return 'session_archived';
   const stop = readSessionExplicitStopV1FromMetadata(input.metadata);
   if (stop && 'status' in stop) return 'authority_unavailable';
+  // Resume retains its direct-manager/person-hold policy; this is not the
+  // three-Action led-subtree lifecycle scope owned by dispatch and Home.
+  const caller = input.actionContext?.actionCaller;
+  if (caller?.kind === 'session' && readSessionManagerSessionIdV1(input.rawSession) !== caller.sessionId) return 'authority_unavailable';
   const intent = resolveSessionExplicitControlIntent(input);
   if (intent === 'unauthorized') return 'authority_unavailable';
   if (stop && (intent === 'automatic' || intent === 'manager' && !stop.managerSessionId)) return 'held_by_person';

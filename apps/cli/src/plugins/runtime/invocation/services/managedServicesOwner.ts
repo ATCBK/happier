@@ -3538,26 +3538,10 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     }
                     if (existing.terminal) {
                         await retireEntry(existing);
-                        removeSemanticEntry(existing);
-                        existing = semanticEntries.get(entryKey);
-                        if (
-                            existing
-                            && !isManagedServiceSemanticEntry(existing)
-                        ) {
-                            return fail(
-                                'plugin_managed_service_unavailable',
-                                'Managed-service semantic entry is unavailable',
-                            );
-                        }
-                        if (
-                            existing
-                            && existing.specIdentity !== specIdentity
-                        ) {
-                            return fail(
-                                'plugin_managed_service_spec_conflict',
-                                'A different managed-service specification already owns this exact lifecycle scope',
-                            );
-                        }
+                        // Stop yielded to other admissions. Re-resolve the
+                        // current shared census and its injected path before
+                        // comparing specifications or joining the new owner.
+                        return await services.supervise(spec, options);
                     }
                 }
                 if (existing) {
@@ -4596,6 +4580,16 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             ) {
                 await retireExplicitStartOperation(existing);
                 return Object.freeze({ status: 'not_current' as const });
+            }
+            // Shared physical custody has its own operation identity. Its
+            // observed death cannot mark each consumer's explicit-Start entry
+            // terminal through the ordinary same-scope lookup. Re-enter the
+            // existing retirement/start lifecycle instead of rejoining that
+            // consumer's dead endpoint. Authority is still checked above and
+            // by establishment; no Agent request is retried here.
+            if (existing?.sharedProvider && !existing.terminal) {
+                const retained = await existing.establishment;
+                if (!readsCurrent(retained.projection.isCurrent)) existing.terminal = true;
             }
             if (existing?.terminal) {
                 await retireExplicitStartOperation(existing);

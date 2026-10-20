@@ -60,7 +60,7 @@ export type WorkflowInvocationRecoveryObservation = (
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'stopped'; code: string }>
   | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>
-) & Readonly<{ execution?: WorkflowProgressEnvelopeV1['execution'] }>;
+) & Readonly<{ execution?: WorkflowProgressEnvelopeV1['execution']; replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'] }>;
 
 type ReconciledInvocationTransition = Readonly<{
   id: string;
@@ -299,6 +299,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
     const nextProgress: WorkflowProgressEnvelopeV1 = {
       ...applyWorkflowInvocationFactV1(progress, {
         ...(observed.execution ? { execution: observed.execution } : {}),
+        ...(observed.replyOutcome ? { replyOutcome: observed.replyOutcome } : {}),
         ...(observation.kind === 'completed' ? { result: observation.result } : {}),
         ...(observation.kind !== 'unresolved' && observation.usage ? { usage: observation.usage } : {}),
         ...(observation.kind !== 'completed' && observation.code ? { reason: observation.code,
@@ -375,7 +376,10 @@ async function recoverInvocationCustody(params: Readonly<{
   const reconciled: ReconciledInvocationTransition[] = [];
   let allResolved = true;
   let cancellationRequested = false;
-  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract, refreshRootStepProgress } = createWorkflowInvocationRecoveryFactWriter(params);
+  const { parentAttempt, ...writerParams } = params;
+  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract, refreshRootStepProgress } = createWorkflowInvocationRecoveryFactWriter({
+    ...writerParams, ...(params.run.state === 'interrupted' ? { expectedRevision: params.run.revision } : { parentAttempt }),
+  });
   let cursor: string | undefined;
   do {
     const pageBody = record(await params.storage.execute({
@@ -399,7 +403,8 @@ async function recoverInvocationCustody(params: Readonly<{
       if (currentLifecycle === 'cancel_requested' && exactIndex.parentRecordId === null) {
         cancellationRequested = true;
       }
-      if (currentLifecycle === 'pending' || currentLifecycle === 'waiting_for_capacity') {
+      if ((currentLifecycle === 'pending' || currentLifecycle === 'waiting_for_capacity')
+        && !(params.run.state === 'interrupted' && progress.blockKind === 'step')) {
         if (!TERMINAL_RUN_STATES.has(params.run.state)) {
           allResolved = false;
           continue;

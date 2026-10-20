@@ -1598,6 +1598,11 @@ describe('Pi pure External Sessions contribution leaf', () => {
     const env = { PI_CODING_AGENT_SESSION_DIR: join(root, 'legacy-sessions') };
     const contribution = createPiExternalSessionsContribution({ env });
 
+    expect(await contribution.resolveSource({ ...invocation(), source: { kind: 'piAgentDir' }, includeAccountingSource: false })).toEqual({
+      ok: true,
+      value: { source: { kind: 'piAgentDir', agentDir: expect.any(String), sessionsRoot: await realpath(join(root, 'legacy-sessions')) } },
+    });
+
     const source = await contribution.resolveSource({
       ...invocation(),
       source: { kind: 'piAgentDir' },

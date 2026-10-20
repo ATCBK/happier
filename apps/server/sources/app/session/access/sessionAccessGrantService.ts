@@ -6,7 +6,7 @@ import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelop
 import { inTx, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
     readSessionDataKeyEnvelopeInTx,
@@ -87,7 +87,7 @@ export type SessionAccessGrantEffects = Readonly<{
     /** Lost `readTranscript` entirely, not merely downgraded. */
     revokedAccountIds: readonly string[];
     rosterManagerAccountIds: readonly string[];
-    accountCursors: ReadonlyMap<string, number>;
+    accountCursors: ReadonlyMap<string, AccountChangePublication>;
 }>;
 
 export type PutSessionAccessGrantResult =
@@ -488,6 +488,23 @@ async function resolveAffectedAccountIdsInTx(
     );
 }
 
+/** Pure birth census; grant eligibility and envelope validation remain with the writer. */
+export async function readInitialSessionAccessAccountIdsInTx(tx: Tx, input: Readonly<{
+    initialAccess?: SessionInitialAccessMaterializedV1;
+    primaryTeamId?: string | null;
+}>): Promise<readonly string[]> {
+    const subjects = (input.initialAccess?.grants ?? []).map(grant => grant.subject);
+    if (input.primaryTeamId && await teamPolicyStillRequiresGrant(tx, input.primaryTeamId)
+        && !subjects.some(subject => subject.kind === "team" && subject.teamId === input.primaryTeamId)) {
+        subjects.push({ kind: "team", teamId: input.primaryTeamId });
+    }
+    const accounts = new Set<string>();
+    for (const subject of subjects) {
+        for (const accountId of await resolveAffectedAccountIdsInTx(tx, subject)) accounts.add(accountId);
+    }
+    return [...accounts].sort();
+}
+
 /** Grant changes also invalidate the explicit roster for its current managers. */
 async function applyGrantTransitionEffectsInTx(
     tx: Tx,
@@ -510,8 +527,10 @@ async function applyGrantTransitionEffectsInTx(
     }
     const effects = await applySessionAccessTransitionEffectsInTx(tx, { ...params, additionalPublicationAccountIds: [...rosterManagerAccountIds] });
     const accountCursors = new Map(effects.accountCursors);
-    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
-        accountCursors.set(accountId, Math.max(accountCursors.get(accountId) ?? 0, cursor));
+    for (const publication of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
+        // Roster publication follows the access projection for this Account,
+        // so its terminal cursor is the newest one without eager resolution.
+        accountCursors.set(publication.accountId, publication);
     }
     return { ...effects, rosterManagerAccountIds: [...rosterManagerAccountIds], accountCursors };
 }
@@ -1067,6 +1086,23 @@ export async function setSessionAccessContextInTx(
     return { ok: true, changed: true, primaryTeamId: params.primaryTeamId };
 }
 
+/** Entry discovery and cleanup share the authored-or-received retained-share predicate. */
+export function readSessionAccessGrantsForAccountErasureInTx(tx: Tx, accountId: string) {
+    return tx.sessionShare.findMany({
+        where: {
+            OR: [{ sharedByUserId: accountId }, { sharedWithUserId: accountId }],
+            session: { accountId: { not: accountId } },
+        },
+        select: {
+            id: true,
+            sessionId: true,
+            sharedWithUserId: true,
+            session: { select: { accountId: true } },
+        },
+        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
+    });
+}
+
 /**
  * Removes an erased Account's received grants and preserves the grants it merely
  * authored on surviving Sessions. The physical Account-erasure owner supplies the
@@ -1082,19 +1118,7 @@ export async function eraseSessionAccessGrantsForAccountInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const readShares = () => tx.sessionShare.findMany({
-        where: {
-            OR: [{ sharedByUserId: params.accountId }, { sharedWithUserId: params.accountId }],
-            session: { accountId: { not: params.accountId } },
-        },
-        select: {
-            id: true,
-            sessionId: true,
-            sharedWithUserId: true,
-            session: { select: { accountId: true } },
-        },
-        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
-    });
+    const readShares = () => readSessionAccessGrantsForAccountErasureInTx(tx, params.accountId);
     const capturedShares = await readShares();
     if (capturedShares.length === 0) return;
     // Retirement has closed new grants received or authored by this Account.

@@ -132,6 +132,8 @@ describe('BrowserDiagnosticsDrawer', () => {
             diagnostics={selectBrowserDiagnosticsForView(createBrowserDiagnosticsUiStore(), view)}
             eventSource={source} testID="scoped-diagnostics"
         />);
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('scoped-diagnostics-open');
         expect(screen.findByTestId('scoped-diagnostics-body-console-row-first')).toBeTruthy();
         await screen.pressByTestIdAsync('scoped-diagnostics-close');
         const closedReads = detailReads;
@@ -153,15 +155,15 @@ describe('BrowserDiagnosticsDrawer', () => {
             />,
         );
 
-        // U-12: the drawer OPENS COLLAPSED. A devtools panel that claims 45% of the surface the
-        // instant a page loads is one the user closes before reading anything; the peek says
-        // "there is something here" without deciding for them.
-        expect(screen.findByTestId('browser-diagnostics-drawer-container-collapsed')).toBeTruthy();
-        expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
+        // The drawer OPENS CLOSED (lab Q): the page is the hero, and only the handle with its
+        // reopen affordance shows until the person asks for diagnostics.
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-closed')).toBeTruthy();
+        expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeNull();
 
-        // Expand to full.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-expand');
+        // Opening goes to full height.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
         expect(screen.findByTestId('browser-diagnostics-drawer-container-expanded')).toBeTruthy();
+        expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
 
         // Collapse back to the peek-height state.
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-collapse');
@@ -186,6 +188,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         // A tab per present family.
         expect(screen.findByTestId('browser-diagnostics-drawer-tab:console')).toBeTruthy();
@@ -250,6 +254,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:pageError');
         expect(screen.findByTestId('browser-diagnostics-drawer-body-pageError-panel')).toBeTruthy();
@@ -303,6 +309,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         // Console section: the picker affordance is not shown.
         expect(screen.findByTestId('browser-diagnostics-drawer-body-picker-start')).toBeNull();
@@ -343,6 +351,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         // Console section: eval is reachable, but the element picker is not.
         expect(screen.findByTestId('browser-diagnostics-drawer-body-eval-console')).toBeTruthy();
@@ -376,6 +386,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:elements');
         // No start-picker affordance while interaction is disabled.
@@ -423,6 +435,8 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-previewProxy')).toBeTruthy();
@@ -477,16 +491,17 @@ describe('BrowserDiagnosticsDrawer', () => {
                 testID="browser-diagnostics-drawer"
             />,
         );
+        // The drawer opens closed (lab Q: the page leads); open it to read a section.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
 
         expect(screen.findByTestId('browser-diagnostics-drawer-tab:performance')).toBeTruthy();
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:performance');
         expect(screen.findByTestId('browser-diagnostics-drawer-body-performance-panel')).toBeTruthy();
 
-        // Move the drawer OFF its default state before refreshing. `collapsed` is what the drawer
-        // opens at, so asserting `collapsed` survives a refresh cannot tell persistence apart from
-        // a reset to the default; `expanded` can.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-expand');
-        expect(screen.findByTestId('browser-diagnostics-drawer-container-expanded')).toBeTruthy();
+        // Move the drawer OFF the state opening gives (`expanded`) before refreshing, so a
+        // surviving `collapsed` tells persistence apart from a reset.
+        await screen.pressByTestIdAsync('browser-diagnostics-drawer-collapse');
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-collapsed')).toBeTruthy();
 
         await screen.update(
             <mod.BrowserDiagnosticsDrawer
@@ -512,7 +527,7 @@ describe('BrowserDiagnosticsDrawer', () => {
             />,
         );
 
-        expect(screen.findByTestId('browser-diagnostics-drawer-container-expanded')).toBeTruthy();
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-collapsed')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-performance-panel')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-console-panel')).toBeNull();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-performance-metric-evt_perf_2-lcpMs')).toBeTruthy();

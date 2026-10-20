@@ -17,7 +17,8 @@ import { EmbeddedTerminalPane } from '@/components/terminal/embedded/EmbeddedTer
 import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
 import type { EmbeddedTerminalPaneController, EmbeddedTerminalPaneStatus } from '@/components/terminal/embedded/types';
 import { randomUUID } from '@/platform/randomUUID';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 /**
  * Dev-only: the phone Terminal page (terminal lab P1, P1c, P1m, A1p, B2p, STp) drawn through the real
@@ -148,11 +149,11 @@ const styles = StyleSheet.create((theme) => ({
 export function TerminalPhoneSpecimen(props: Readonly<{ variant: string | null }>) {
     const variant: Variant = VARIANTS.find((item) => item === props.variant) ?? 'P1';
     const [workspace, setWorkspace] = React.useState(() => buildWorkspace(variant));
-    const [placement, setPlacement] = useLocalSettingMutable('terminalArrowPadPlacement');
+    const placement = useLocalSetting('terminalArrowPadPlacement');
     React.useEffect(() => {
         setWorkspace(buildWorkspace(variant));
         // The pad's resting place is device-local; the specimen stages each variant's.
-        setPlacement({ portrait: PLACEMENTS[variant], landscape: placement?.landscape ?? null });
+        getStorage().getState().applyLocalSettings({ terminalArrowPadPlacement: { portrait: PLACEMENTS[variant], landscape: placement?.landscape ?? null } }, { source: 'ui' });
         // eslint-disable-next-line react-hooks/exhaustive-deps -- stage once per variant
     }, [variant]);
     const context = React.useMemo(() => buildContext(variant), [variant]);

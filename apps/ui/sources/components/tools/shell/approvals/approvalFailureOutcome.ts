@@ -1,7 +1,7 @@
 import type { ActionExecuteFailure, ApprovalRequest } from '@happier-dev/protocol';
 
 import { t } from '@/text';
-import { isApprovalDecisionStale, presentApprovalFailure } from './useApprovalDecisionHandler';
+import { isApprovalDecisionStale, presentRecordedApprovalFailure } from './useApprovalDecisionHandler';
 
 /** A request that never reached its effect must not name that effect as attempted. */
 function readFailureHeadline(approval: ApprovalRequest, failure: ActionExecuteFailure): string {
@@ -28,7 +28,7 @@ export function presentApprovalFailureOutcome(approval: ApprovalRequest, failure
     message: string | null;
     code: string | null;
 }> {
-    const presented = presentApprovalFailure(failure, failure.error);
+    const presented = presentRecordedApprovalFailure(failure);
     const readable = presented.code === null;
     return {
         headline: readFailureHeadline(approval, failure),

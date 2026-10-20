@@ -4,7 +4,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { LOCAL_SETTING_DEFINITIONS } from '@/sync/domains/settings/registry/local/localSettingDefinitions';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -74,6 +74,26 @@ function PaneScopeProbe(props: Readonly<{ triggerOpenDetails?: boolean }>) {
 }
 
 describe('AppPaneProvider persistence', () => {
+    it('remembers the Account and window workspace layout when the Settings Action is off', async () => {
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        const { useWorkspaceState } = await import('../workspace/useWorkspaceState');
+        const { readScopedWorkspaceLayout, workspaceLayoutScopeKey } = await import('../workspace/workspacePersistence');
+        getStorage().setState({ isDataReady: true, settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const initialTab = { id: 'new', target: { kind: 'newTab', params: {} }, pinned: false, preview: true };
+        const tab = { id: 'session-a', target: { kind: 'session', params: { id: 'session-a', serverId } }, pinned: true, preview: false };
+        const windowId = 'layout-memory';
+        const scopeKey = workspaceLayoutScopeKey({ serverId, accountId: 'account-a', windowId });
+        const hook = await renderHook(() => useWorkspaceState({ initialTab, windowId }));
+        expect(hook.getCurrent().isReady).toBe(true);
+        await act(async () => hook.getCurrent().dispatch({ type: 'openTab', groupId: 'group:1', tab }));
+        expect(readScopedWorkspaceLayout(getStorage().getState().localSettings.workspaceLayoutV1, scopeKey)?.tabs['session-a']).toEqual(tab);
+        await hook.unmount();
+        const restored = await renderHook(() => useWorkspaceState({ initialTab, windowId }));
+        expect(restored.getCurrent().state.tabs['session-a']).toEqual(tab);
+        await restored.unmount();
+    });
     it('hands Find launch input once to its exact destination without persisting the query', async () => {
         const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
         let context: ReturnType<typeof useAppPaneContext> | null = null;
@@ -288,7 +308,11 @@ describe('AppPaneProvider persistence', () => {
         }));
     });
 
-    it('persists pane scope updates back to local settings', async () => {
+    it('persists pane scope memory when the Settings Action is off', async () => {
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        getStorage().setState({ settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
         const { AppPaneProvider } = await import('./AppPaneProvider');
         const screen = await renderScreen(
             <AppPaneProvider>

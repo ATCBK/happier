@@ -16,6 +16,7 @@ import {
   mapMarkdownSourceToRenderedRange,
   mapRenderedSelectionToMarkdownSource,
 } from '@/components/markdown/rendering/markdownSelectionSource';
+import { MarkdownView, type MarkdownRenderedSelection, type MarkdownSelectionAction, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Text } from '@/components/ui/text/Text';
@@ -44,7 +45,19 @@ export type ArtifactPassageMargin = Readonly<{
   onFocus: (id: string) => void;
   /** Narrow layouts have no margin: a passage opens its thread instead. */
   onOpen: (id: string) => void;
+  /** An ambiguous native block opens the existing complete thread list, never its first thread. */
+  onOpenThreadList?: () => void;
   renderCard: (id: string) => React.ReactNode;
+  /** Whether the threads sit beside the passages (wide) or open on their own (narrow). */
+  reportShown?: (shown: boolean) => void;
+}>;
+
+/** UI-D supplies the visible native refinement host without replacing rich Markdown or its marks. */
+export type ArtifactNativeSelectionRequest = Readonly<{
+  /** Render this captured block through the same enriched native primitive/menu. */
+  markdown: string;
+  /** Return that menu's actual text snapshot and exact UTF-16 selection. */
+  complete: (selection: MarkdownRenderedSelection) => boolean;
 }>;
 
 type Rect = Readonly<{
@@ -68,7 +81,9 @@ const MARGIN_WIDTH = 288;
  *   revision being read, and opens the one Discussion composer with that passage;
  * - each commented passage is marked where its stored source range lands in this revision, and its
  *   thread sits beside it in the margin; a mark and its thread focus each other.
- * Web reads the browser selection and geometry; elsewhere the body renders unchanged.
+ * Web reads browser selection and geometry; native menus report actual rendered text and UTF-16
+ * offsets through the same mapper. Marked native blocks retain their renderer and request an exact
+ * selection host; without that host, no block-sized substitute is published.
  */
 export function ArtifactPassageSelection(
   props: Readonly<{
@@ -76,12 +91,111 @@ export function ArtifactPassageSelection(
     markdown: string;
     revision: Revision | null;
     margin?: ArtifactPassageMargin;
-    children: React.ReactNode;
+    onRequestNativeSelection?: (request: ArtifactNativeSelectionRequest) => void;
   }>,
 ): React.ReactElement {
-  if (Platform.OS !== 'web' || props.revision === null)
-    return <>{props.children}</>;
+  const scope = useActiveServerAccountScope();
+  if (props.revision === null)
+    return <MarkdownView testID="artifact:body" markdown={props.markdown} />;
+  if (Platform.OS !== 'web')
+    return <NativePassageSelection key={JSON.stringify([props.artifactId, scope?.serverId, scope?.accountId])}
+      {...props} revision={props.revision} scope={scope} />;
   return <WebPassageSelection {...props} revision={props.revision} />;
+}
+
+function overlapsBlock(range: Readonly<{ start: number; end: number }>, block: MarkdownSourceRangeAction): boolean {
+  return range.start < block.sourceStart + block.sourceLength && range.end > block.sourceStart;
+}
+
+/** A hit shared by several threads opens the existing list, never an arbitrary first thread. */
+function activatePassageThreads(ids: readonly string[], margin: ArtifactPassageMargin | undefined, shownInMargin: boolean): void {
+  if (ids.length > 1) margin?.onOpenThreadList?.();
+  else if (ids.length === 1) {
+    if (shownInMargin) margin?.onFocus(ids[0]!);
+    else margin?.onOpen(ids[0]!);
+  }
+}
+
+function NativePassageSelection(
+  props: Readonly<{
+    artifactId: string;
+    markdown: string;
+    revision: Revision;
+    scope: ReturnType<typeof useActiveServerAccountScope>;
+    margin?: ArtifactPassageMargin;
+    onRequestNativeSelection?: (request: ArtifactNativeSelectionRequest) => void;
+  }>,
+) {
+  const router = useRouter();
+  const client = useArtifactActionsClient();
+  const scope = props.scope;
+  const margin = props.margin;
+  // Native has no margin beside the body: a passage opens its thread (the phone thread page).
+  const reportShown = margin?.reportShown;
+  React.useEffect(() => {
+    reportShown?.(false);
+  }, [reportShown]);
+  const placed = React.useMemo(
+    () => (margin?.passages ?? []).flatMap((passage) =>
+      passage.location.state === 'detached' ? [] : [{ id: passage.id, range: passage.location.range }]),
+    [margin?.passages],
+  );
+  const focusedId = margin?.focusedId ?? null;
+  const marks = React.useMemo(
+    () => placed.length === 0 ? undefined
+      : placed.map((passage) => ({ ...passage.range, current: passage.id === focusedId }))
+        .sort((left, right) => left.start - right.start),
+    [focusedId, placed],
+  );
+  const marginRef = React.useRef(margin);
+  marginRef.current = margin;
+  const passagesIn = React.useCallback(
+    (block: MarkdownSourceRangeAction) => placed.filter((passage) => overlapsBlock(passage.range, block)),
+    [placed],
+  );
+  const openPassage = React.useCallback((block: MarkdownSourceRangeAction) => {
+    activatePassageThreads(passagesIn(block).map(passage => passage.id), marginRef.current, false);
+  }, [passagesIn]);
+  const isMarked = React.useCallback((block: MarkdownSourceRangeAction) => passagesIn(block).length > 0, [passagesIn]);
+  const { artifactId, markdown, revision } = props;
+  const basis = React.useRef({ artifactId, markdown, revision, client, scope });
+  basis.current = { artifactId, markdown, revision, client, scope };
+  const mounted = React.useRef(false);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const selectionActions = React.useMemo<readonly MarkdownSelectionAction[] | undefined>(() => !client || !scope ? undefined : [{
+    label: t('artifacts.browser.passage.comment'),
+    onPress: (block, selection) => {
+      const publish = (input: Readonly<{ renderedText: string; start: number; end: number }>): boolean => {
+        const current = basis.current;
+        if (!mounted.current || current.artifactId !== artifactId || current.markdown !== markdown || current.client !== client
+          || current.scope?.serverId !== scope.serverId || current.scope.accountId !== scope.accountId
+          || current.revision.headerVersion !== revision.headerVersion || current.revision.bodyVersion !== revision.bodyVersion
+          || markdown.slice(block.sourceStart, block.sourceStart + block.sourceLength) !== block.markdown
+          || !Number.isInteger(input.start) || !Number.isInteger(input.end)) return false;
+        const range = mapRenderedSelectionToMarkdownSource({ markdown, rendered: input.renderedText,
+          start: input.start, end: input.end, sourceRange: { start: block.sourceStart, end: block.sourceStart + block.sourceLength } });
+        if (!range) return false;
+        const passage = captureDocPassageV1({ ref: { kind: 'doc', artifactId, serverId: scope.serverId }, revision, source: markdown,
+          range });
+        router.push(client.beginPassageComment(passage) as Href);
+        return true;
+      };
+      if (selection && selection.renderedText.slice(selection.start, selection.end) === selection.text && publish(selection)) return;
+      props.onRequestNativeSelection?.({ markdown: block.renderMarkdown ?? block.markdown,
+        complete: (input) => input.renderedText.slice(input.start, input.end) === input.text && publish(input) });
+    },
+  }], [artifactId, client, markdown, props.onRequestNativeSelection, revision, router, scope]);
+  return (
+    <MarkdownView
+      testID="artifact:body"
+      markdown={markdown}
+      selectionActions={selectionActions}
+      sourceMarkKind="passage"
+      findSourceRanges={marks}
+      onPressSourceRange={marks ? openPassage : undefined}
+      sourceRangePressable={isMarked}
+    />
+  );
 }
 
 /** Text nodes in document order with their offsets in the element's `textContent`. */
@@ -109,26 +223,12 @@ function domRangeAt(
   return null;
 }
 
-/** Free width between this element's right edge and the right edge of the pane that scrolls it. */
-function measureRoomRight(element: HTMLElement): number {
-  const right = element.getBoundingClientRect().right;
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-    const overflow = getComputedStyle(parent).overflowY;
-    if (overflow === 'auto' || overflow === 'scroll') {
-      const box = parent.getBoundingClientRect();
-      return box.left + parent.clientWidth - right;
-    }
-  }
-  return 0;
-}
-
 function WebPassageSelection(
   props: Readonly<{
     artifactId: string;
     markdown: string;
     revision: Revision;
     margin?: ArtifactPassageMargin;
-    children: React.ReactNode;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -137,8 +237,8 @@ function WebPassageSelection(
   const scope = useActiveServerAccountScope();
   const container = React.useRef<View>(null);
   const [selected, setSelected] = React.useState<Selected | null>(null);
-  const outer = React.useRef<View>(null);
-  const [layout, setLayout] = React.useState<Readonly<{ width: number; roomRight: number }>>({ width: 0, roomRight: 0 });
+  const [width, setWidth] = React.useState(0);
+  const cardViews = React.useRef(new Map<string, View>());
   const [marks, setMarks] = React.useState<
     ReadonlyMap<string, readonly Rect[]>
   >(new Map());
@@ -146,11 +246,20 @@ function WebPassageSelection(
     ReadonlyMap<string, number>
   >(new Map());
   const margin = props.margin;
-  // The margin sits inside a wide body, or beside a reading column in the page's free gutter.
-  const marginMode: 'none' | 'inline' | 'outside' = margin === undefined ? 'none'
-    : layout.width >= MARGIN_MIN_FRAME_WIDTH ? 'inline'
-      : layout.roomRight >= MARGIN_WIDTH + theme.space.s24 ? 'outside' : 'none';
-  const wide = marginMode !== 'none';
+  // The page widens its column while a Doc has threads (lab K1-A/R): the body keeps a reading measure
+  // on the left and the threads take a fixed margin beside it. Too narrow for both: no margin.
+  const wide = margin !== undefined && margin.passages.length > 0 && width >= MARGIN_MIN_FRAME_WIDTH;
+  const reportShown = margin?.reportShown;
+  React.useEffect(() => {
+    reportShown?.(wide);
+  }, [reportShown, wide]);
+  // A thread chosen from elsewhere (the comment list, a mark) is brought into view beside its passage.
+  const focusedId = margin?.focusedId ?? null;
+  React.useEffect(() => {
+    if (!wide || focusedId === null) return;
+    const node = cardViews.current.get(focusedId) as unknown as HTMLElement | undefined;
+    node?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [focusedId, wide]);
   const marksRef = React.useRef(marks);
   marksRef.current = marks;
   const marginRef = React.useRef(margin);
@@ -249,7 +358,7 @@ function WebPassageSelection(
     };
   }, [passages, props.markdown, wide]);
 
-  // A click (not a selection) on a marked passage focuses its thread, or opens it without a margin.
+  // A click (not a selection) gathers every hit before the shared thread/list decision.
   React.useEffect(() => {
     const element = container.current as unknown as HTMLElement | null;
     if (!element || typeof document === 'undefined') return;
@@ -258,6 +367,7 @@ function WebPassageSelection(
       const frame = element.getBoundingClientRect();
       const x = event.clientX - frame.left;
       const y = event.clientY - frame.top;
+      const hits: string[] = [];
       for (const [id, rects] of marksRef.current) {
         if (
           rects.some(
@@ -268,11 +378,10 @@ function WebPassageSelection(
               y <= rect.top + rect.height,
           )
         ) {
-          if (wideRef.current) marginRef.current?.onFocus(id);
-          else marginRef.current?.onOpen(id);
-          return;
+          hits.push(id);
         }
       }
+      activatePassageThreads(hits, marginRef.current, wideRef.current);
     };
     element.addEventListener('click', click);
     return () => element.removeEventListener('click', click);
@@ -334,15 +443,10 @@ function WebPassageSelection(
   const placed = margin?.passages ?? [];
   return (
     <View
-      ref={outer}
-      style={[marginMode === 'inline' ? styles.row : null, marginMode === 'outside' ? { minHeight: marginHeight } : null]}
-      onLayout={(event) => {
-        const width = event.nativeEvent.layout.width;
-        const element = outer.current as unknown as HTMLElement | null;
-        setLayout({ width, roomRight: element ? measureRoomRight(element) : 0 });
-      }}
+      style={wide ? styles.row : null}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <View ref={container} style={[styles.frame, marginMode === 'inline' ? styles.body : null]}>
+      <View ref={container} style={[styles.frame, wide ? styles.body : null]}>
         {placed.map((passage) => {
           const rects = marks.get(passage.id);
           if (!rects || passage.location.state === 'detached') return null;
@@ -378,7 +482,7 @@ function WebPassageSelection(
             />
           ));
         })}
-        {props.children}
+        <MarkdownView testID="artifact:body" markdown={props.markdown} />
         {selected && client && scope ? (
           <View
             style={[styles.anchor, { top: selected.top, left: selected.left }]}
@@ -422,13 +526,15 @@ function WebPassageSelection(
       {wide && margin ? (
         <View
           testID="artifact:passage-margin"
-          style={[styles.margin, marginMode === 'outside'
-            ? { position: 'absolute', top: 0, left: layout.width + theme.space.s24 }
-            : { minHeight: marginHeight }]}
+          style={[styles.margin, { minHeight: marginHeight }]}
         >
           {cards.map((card) => (
             <View
               key={card.id}
+              ref={(view) => {
+                if (view) cardViews.current.set(card.id, view);
+                else cardViews.current.delete(card.id);
+              }}
               style={[styles.card, { top: card.top }]}
               onLayout={(event) => onCardLayout(card.id, event)}
             >

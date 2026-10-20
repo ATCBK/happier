@@ -6,6 +6,7 @@ import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionFollowRuleWitnessV1Schema } from './sessionFollowRuleV1.js';
 import { TurnIdSchema } from '../idsV1.js';
 import { isProjectedSessionStalledV1 } from '../awareness/runtime.js';
+import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 /** Existing committed presence fence + exact in-flight Turn; not a Message or a delivery cursor. */
 export const SessionFollowStalledOccurrenceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -24,10 +25,24 @@ export function isSessionFollowStalledOccurrenceCurrentV1(occurrence: SessionFol
 export const SessionFollowPublisherGenerationV1Schema = lazyZodSchema(() => z.string().check(
   z.regex(/^(?:0|[1-9]\d{0,18})$/u), z.refine(value => BigInt(value) <= 9_223_372_036_854_775_807n)));
 /** Private admission route reasons, resolved internally after provider acceptance. */
-export const SessionFollowRelationWitnessesV1Schema = lazyZodSchema(() => z.array(z.strictObject({
-  relation: z.enum(['follower', 'manager']), attachedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
-}).check(z.refine(value => (value.relation === 'manager') === (value.attachedAt !== undefined)))).check(z.minLength(1),
-  z.refine(values => new Set(values.map(value => value.relation)).size === values.length)));
+const relationAttachedAt = z.number().check(z.int(), z.nonnegative());
+export const SessionFollowRelationWitnessesV1Schema = lazyZodSchema(() => z.array(z.union([
+  z.strictObject({ relation: z.literal('follower') }),
+  z.strictObject({ relation: z.literal('manager'), attachedAt: relationAttachedAt }),
+  z.strictObject({ relation: z.literal('follower'), attachedAt: relationAttachedAt,
+    source: z.strictObject({ kind: z.literal('execution_run'), sessionId: asProtocolZod(SessionIdSchema),
+      runId: z.string().check(z.minLength(1)) }),
+    expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) }),
+  z.strictObject({ relation: z.literal('follower'), attachedAt: relationAttachedAt,
+    source: z.strictObject({ kind: z.literal('workflow_run'), runId: z.string().check(z.minLength(1)) }),
+    expectedRevision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) }),
+])).check(z.minLength(1), z.refine(values => new Set(values.map(value => JSON.stringify([
+  value.relation, 'source' in value ? value.source : null,
+]))).size === values.length)));
+export type SessionFollowRelationWitnessV1 = z.infer<typeof SessionFollowRelationWitnessesV1Schema>[number];
+// Routing custody is closed even on retained reads. Dropping Run fields could
+// reinterpret its witness as the less specific Session follower union arm.
+defineStoredReadProjection(SessionFollowRelationWitnessesV1Schema, () => SessionFollowRelationWitnessesV1Schema);
 export const SessionFollowSourceMessageV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PendingLocalIdSchema, seq: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
 }));

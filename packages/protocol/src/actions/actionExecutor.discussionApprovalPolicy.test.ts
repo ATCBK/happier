@@ -8,6 +8,9 @@ import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDe
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { getActionSpec } from './actionSpecs.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
+import { deriveWorkflowSessionInputLocalIdV2 } from '../sessions/messages/sessionInputAdmission.js';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '../sessions/messages/sessionMessageReplyV1.js';
 
 const input = { discussionId: 'discussion', localId: 'answer', content: { v: 1 as const,
   parts: [{ t: 'text' as const, text: 'Private draft answer' }] }, replyTarget: { kind: 'message' as const, messageId: 'question' } };
@@ -51,6 +54,7 @@ function harness(initialPolicy: DiscussionAnswerPolicyV1 = 'drafts_for_approval'
   };
   const executor = createActionExecutor(deps as ActionExecutorDeps);
   return { executor, publications, stored: () => stored, setPolicy: (next: DiscussionAnswerPolicyV1 | null) => { policy = next; },
+    replaceApproval: (request: ApprovalRequestV2) => { stored = ApprovalRequestV2Schema.parse(request); },
     approve: () => {
       if (!stored) throw new Error('Missing approval');
       const next = ApprovalRequestV2Schema.parse({ ...stored, status: 'approved', updatedAtMs: stored.updatedAtMs + 1,
@@ -61,6 +65,45 @@ function harness(initialPolicy: DiscussionAnswerPolicyV1 = 'drafts_for_approval'
 }
 
 describe('Discussion direct-user creation policy', () => {
+  it('lets an exact host Workflow original reach the trusted publisher without enrolling its implicit leaf', async () => {
+    const state = harness('when_addressed', { isActionApprovalRequired: undefined });
+    state.setPolicy(null);
+    const workflow = { runId: 'workflow-run', invocationRecordId: 'leaf', invocationAttempt: '0' };
+    const requestLocalId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId: workflow.runId, invocationRecordId: workflow.invocationRecordId });
+    const marker = { serverId: 'home', requestLocalId, acceptedTurnId: 'leaf-turn', workflow };
+    const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: requestLocalId, acceptedTurnId: 'leaf-turn' });
+    const publication = { ...input, localId };
+    const host: ActionExecutorContext = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1 }),
+      actionCaller: { kind: 'host' }, actionRequestId: localId,
+      discussionReplyReturn: marker, sessionInputSource: { sourceSessionId: 'receiver', sourceInputId: requestLocalId,
+        sourceTurnId: 'leaf-turn', via: 'action', discussionAddressing: {
+          discussionId: 'discussion', messageId: 'question', throughSeq: 1, participantSessionId: 'receiver' } } };
+    // This is eligibility to call the existing publisher boundary. Its native
+    // original/index/content proof remains mandatory before any append.
+    expect(await state.executor.execute('discussion.reply', publication, host)).toMatchObject({ ok: true });
+    expect(state.publications).toHaveLength(1);
+    expect(await state.executor.execute('discussion.reply', publication, { ...host,
+      sessionInputSource: { ...host.sessionInputSource!, sourceInputId: 'another-input' } })).toMatchObject({ ok: false });
+    expect(await state.executor.execute('discussion.reply', { ...publication, replyTarget: { kind: 'message', messageId: 'another-question' } }, host))
+      .toMatchObject({ ok: false });
+    state.setPolicy('reads_only');
+    expect(await state.executor.execute('discussion.reply', publication, host)).toMatchObject({ ok: false, errorCode: 'discussion_answer_policy_denied' });
+    expect(state.publications).toHaveLength(1);
+    state.setPolicy('when_addressed');
+    expect(await state.executor.execute('discussion.reply', publication, { ...host, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+      actions: { 'discussion.reply': { approvalRequiredSurfaces: ['agent'] } } }) }))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(state.publications).toHaveLength(1);
+    expect(await state.executor.execute('discussion.post', { discussionId: input.discussionId, localId: 'new-post', content: input.content },
+      { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1 }) }))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(state.publications).toHaveLength(1);
+    state.setPolicy('drafts_for_approval');
+    expect(await state.executor.execute('discussion.reply', publication, host))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(state.stored()).toMatchObject({ discussionDraftReview: true });
+    expect(state.publications).toHaveLength(1);
+  });
   const createInput = { title: 'Release review', creationLocalId: 'create-review',
     firstMessage: { localId: 'first-review', content: { v: 1, parts: [{ t: 'text', text: 'What should we check?' }] } } } as const;
   const message = { id: 'first-message', localId: 'first-review', seq: 1,
@@ -148,6 +191,119 @@ describe('Discussion direct-user creation policy', () => {
     const transfer = getActionSpec('discussion.owner.transfer');
     expect(resolveActionApprovalRouting({ actionId: transfer.id, spec: transfer, context: ui }).required).toBe(true);
     expect(transfer.requiredAuthority).toBe('present_user');
+  });
+
+  it('resolves initial Session slots once before one atomic create and retains concrete approval operands', async () => {
+    let selected = 'chosen';
+    const writes: unknown[] = [];
+    const reads: string[] = [];
+    const h = harness('when_addressed', { isActionApprovalRequired: id => id === 'discussion.create',
+      discussionAction: async ({ actionId, input, context }) => {
+      if (actionId === 'discussion.participants.list') {
+        reads.push(context.serverId!);
+        return { discussionId: 'source-discussion', ownerAccountId: 'alice', access: 'owner', grants: [],
+          participants: [{ participant: { kind: 'session', sessionId: selected }, answerPolicy: 'when_addressed', createdAt: 1 }] };
+      }
+      writes.push(input);
+      return created;
+    } });
+    const authored = { ...createInput, participants: [{ kind: 'account', accountId: 'bob' },
+      { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source-discussion' } }] };
+    const observations: unknown[] = [];
+    const caller = { ...context, surface: 'agent' as const, authority: 'account_automation' as const,
+      onSessionTargetsResolved: (resolution: unknown) => { observations.push(resolution); } };
+    expect(await h.executor.execute('discussion.create', authored, caller))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    const concrete = { ...authored, participants: [{ kind: 'account', accountId: 'bob' }, { kind: 'session', sessionId: 'chosen' }] };
+    expect(observations).toMatchObject([{ actionId: 'discussion.create', input: concrete }]);
+    expect(h.stored()).toMatchObject({ actionArgs: concrete, executionOriginV1: { sessionTargetsV1: {
+      actionId: 'discussion.create', field: 'participants.*.sessionId', targets: [{ serverId: 'home', sessionId: 'chosen' }],
+      operands: [{ field: 'participants.1.sessionId', target: { serverId: 'home', sessionId: 'chosen' } }],
+    } } });
+    expect(writes).toEqual([]);
+    selected = 'later';
+    h.approve();
+    expect(await h.executor.replayApprovedApprovalRequest({ artifactId: 'private-draft', callerAuthority: 'present_user' })).toMatchObject({ ok: true });
+    expect(reads).toEqual(['home']);
+    expect(writes).toEqual([concrete]);
+    expect(observations).toHaveLength(1);
+  });
+
+  it('invites from a captured-Home Discussion roster without inventing a default Session', async () => {
+    const writes: unknown[] = [];
+    const executor = createActionExecutor({ discussionAction: async ({ actionId, input, context }) => {
+      expect(context.serverId).toBe('home');
+      if (actionId === 'discussion.participants.list') return { discussionId: 'source-discussion', ownerAccountId: 'alice',
+        access: 'owner', grants: [], participants: [{ participant: { kind: 'session', sessionId: 'chosen' },
+          answerPolicy: 'when_addressed', createdAt: 1 }] };
+      writes.push(input);
+      return DiscussionAccessGrantMutationResponseV1Schema.parse({ discussionId: 'destination', ownerAccountId: 'alice',
+        access: 'owner', grants: [], changed: true });
+    } });
+    expect(await executor.execute('discussion.invite', { discussionId: 'destination',
+      participant: { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source-discussion' } } },
+    { serverId: 'home', surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+    expect(writes).toEqual([{ discussionId: 'destination', participant: { kind: 'session', sessionId: 'chosen' } }]);
+  });
+
+  it.each([{ sessionIds: [] }, { sessionIds: ['one', 'two'] }])('requires exactly one Session per authored invitation slot ($sessionIds)', async ({ sessionIds }) => {
+    const writes: unknown[] = [];
+    const executor = createActionExecutor({ discussionAction: async ({ actionId, input }) => {
+      if (actionId === 'discussion.participants.list') return { discussionId: 'source', ownerAccountId: 'alice', access: 'owner', grants: [],
+        participants: sessionIds.map(sessionId => ({ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 })) };
+      writes.push(input); return created;
+    } });
+    const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
+    for (const [actionId, input] of [['discussion.create', { ...createInput, participants: [participant] }],
+      ['discussion.invite', { discussionId: 'destination', participant }]] as const) {
+      expect(await executor.execute(actionId, input, { serverId: 'home', surface: 'ui', authority: 'present_user' }))
+        .toMatchObject({ ok: false, errorCode: 'session_target_cardinality_mismatch' });
+    }
+    expect(writes).toEqual([]);
+  });
+
+  it('checks every concrete initial Session against the current credential before any create effect', async () => {
+    const writes: unknown[] = [];
+    const executor = createActionExecutor({ discussionAction: async ({ input }) => { writes.push(input); return created; } });
+    expect(await executor.execute('discussion.create', { ...createInput,
+      participants: [{ kind: 'session', sessionId: 'allowed' }, { kind: 'session', sessionId: 'denied' }] },
+    { serverId: 'home', surface: 'ui', authority: 'present_user', externalActionCredential: {
+      accountId: 'alice', principalId: 'principal', credentialId: 'credential', grant: { ...API_TOKEN_FULL_GRANT_V1,
+        targets: { sessions: ['allowed'], machines: [] } },
+    } })).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+    expect(writes).toEqual([]);
+  });
+
+  it('does not custody a foreign-Home initial Session through explicit approval creation', async () => {
+    const h = harness('when_addressed', { resolveSessionReference: async () => ({ kind: 'unique',
+      address: { serverId: 'foreign-home', sessionId: 'chosen' } }) });
+    const result = await h.executor.execute('approval.request.create', {
+      actionId: 'discussion.create', actionArgs: { ...createInput,
+        participants: [{ kind: 'session', sessionId: { selector: 'self', of: 'chosen' } }] },
+      summary: 'Review invitations', createdBy: { surface: 'cli' },
+    }, { ...context, surface: 'ui', authority: 'present_user' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(h.stored()).toBeNull();
+  });
+
+  it.each(['slot', 'target-list', 'home'] as const)('rejects a reviewed initial operand with changed %s correspondence', async change => {
+    const writes: unknown[] = [];
+    const h = harness('when_addressed', { isActionApprovalRequired: id => id === 'discussion.create',
+      discussionAction: async ({ input }) => { writes.push(input); return created; } });
+    await h.executor.execute('discussion.create', { ...createInput, participants: [{ kind: 'session', sessionId: 'chosen' }] }, context);
+    const request = h.stored();
+    const snapshot = request?.executionOriginV1.sessionTargetsV1;
+    if (!request || !snapshot?.operands) throw new Error('Missing reviewed Session operands');
+    h.replaceApproval({ ...request, executionOriginV1: { ...request.executionOriginV1, sessionTargetsV1: {
+      ...snapshot,
+      ...(change === 'target-list' ? { targets: [{ serverId: 'home', sessionId: 'different' }] } : {}),
+      operands: snapshot.operands.map(operand => change === 'slot' ? { ...operand, field: 'participants.0.accountId' }
+        : change === 'home' ? { ...operand, target: { ...operand.target, serverId: 'foreign' } } : operand),
+    } } });
+    h.approve();
+    expect(await h.executor.replayApprovedApprovalRequest({ artifactId: 'private-draft', callerAuthority: 'present_user' }))
+      .toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'approval_stale' } } });
+    expect(writes).toEqual([]);
   });
 });
 

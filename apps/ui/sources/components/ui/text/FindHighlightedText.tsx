@@ -37,10 +37,29 @@ function resolveFindMarkStyles(theme: ReturnType<typeof useUnistyles>['theme']):
     };
 }
 
-/** Half-open UTF-16 display ranges; nested Text preserves parent typography and links. */
-export function FindHighlightedText(props: Readonly<{ text: string; ranges?: readonly FindTextRange[]; selectable?: boolean }>) {
+/**
+ * A Doc's commented passage (C5 lab K1): a quiet ink underline that keeps the reading colour, and the
+ * focused passage in the selection tint. Same ranges and leaves as Find; native text takes no rings.
+ */
+function resolvePassageMarkStyles(theme: ReturnType<typeof useUnistyles>['theme']) {
+    return {
+        all: { textDecorationLine: 'underline' as const, textDecorationColor: theme.colors.text.tertiary },
+        current: { backgroundColor: theme.colors.state.active.background, textDecorationLine: 'underline' as const,
+            textDecorationColor: theme.colors.state.active.border },
+    };
+}
+
+/**
+ * Half-open UTF-16 display ranges; nested Text preserves parent typography and links. `kind` says what
+ * the ranges are: Find matches (default) or a Doc's commented passages.
+ */
+export function FindHighlightedText(props: Readonly<{ text: string; ranges?: readonly FindTextRange[]; selectable?: boolean; kind?: 'find' | 'passage' }>) {
     const { theme } = useUnistyles();
+    const { kind = 'find', ...rest } = props;
     const marks = React.useMemo(() => resolveFindMarkStyles(theme), [theme]);
-    return <HappierFindHighlightedText {...props} marks={marks} renderMatch={({ key, text, current, style, selectable }) =>
-        <Text key={key} useDefaultTypography={false} selectable={selectable} testID={current ? FIND_MATCH_CURRENT_TEST_ID : 'find-match-all'} style={style}>{text}</Text>} />;
+    const passage = React.useMemo(() => kind === 'passage' ? resolvePassageMarkStyles(theme) : null, [kind, theme]);
+    return <HappierFindHighlightedText {...rest} marks={marks} renderMatch={({ key, text, current, style, selectable }) => passage
+        ? <Text key={key} useDefaultTypography={false} selectable={selectable} testID={current ? 'passage-mark-current' : 'passage-mark'}
+            style={current ? passage.current : passage.all}>{text}</Text>
+        : <Text key={key} useDefaultTypography={false} selectable={selectable} testID={current ? FIND_MATCH_CURRENT_TEST_ID : 'find-match-all'} style={style}>{text}</Text>} />;
 }

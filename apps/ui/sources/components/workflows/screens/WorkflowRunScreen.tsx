@@ -25,6 +25,7 @@ import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions
 import { WorkflowResultContractSchema } from '@happier-dev/protocol/workflows/workflowV1';
 import { parseWorkflowDefinitionRefV1, resolveBuiltinWorkflowDefinitionV1, prepareWorkflowRunStartV1 } from '@happier-dev/protocol/workflows';
 import { readWorkflowPlanResult } from '@/sync/domains/workflows/workflowPlanReview';
+import { canStartWorkflowAnotherRound } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -657,7 +658,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     : { revision: detail.run.revision, terminal: isTerminalWorkflowRunState(detail.run.state) };
 
                 const historyPromise = workflowRunDetailActions.listInvocations({ runId, includeContent: true }, controller.signal);
-                const failedPromise = observedState.terminal
+                // A parked interrupted Run is read the same way: its failed step is why it stopped.
+                const observedRunState = detail?.run.state ?? refreshedSummary?.state;
+                const failedPromise = observedState.terminal || observedRunState === 'interrupted'
                     ? workflowRunDetailActions.listInvocations({ runId, lifecycles: ['failed'], limit: 1 }, controller.signal).then(async (page) => {
                         const history = await historyPromise;
                         const indices = [...new Map([...history.invocations, ...page.invocations].map(index => [index.id, index])).values()];
@@ -2065,9 +2068,8 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     : undefined}
                 runAgainAnchorRef={runAgainAnchorRef}
                 // Offered where the definition takes the previous round as context (Debate, Panel, Fresh opinions).
-                onAnotherRound={canEdit && visibleAcceptedContext !== null && isTerminalWorkflowRunState(summary.state)
-                    && !isWorkflowRunStopPending({ ...summary, cancelRequested })
-                    && visibleDefinition?.inputs.some((input) => input.name === 'previousRoundContext') === true
+                onAnotherRound={canStartWorkflowAnotherRound({ run: summary, canEdit, cancelRequested,
+                    hasAcceptedContext: visibleAcceptedContext !== null, definition: visibleDefinition })
                     ? requestAnotherRound
                     : undefined}
                 onSaveAsWorkflow={visibleDefinition === null

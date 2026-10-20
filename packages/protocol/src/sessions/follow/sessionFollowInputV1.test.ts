@@ -5,6 +5,8 @@ import { SessionFollowObservePendingRequestV1Schema, SessionFollowAcknowledgeReq
 import { SessionFollowSourceProjectionRequestV1Schema } from './sessionFollowSourceProjectionV1.js';
 import { deriveSessionFollowOriginalOccurrenceKeyV1, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
 import { FOLLOW_EVENT_KINDS_V1 } from './sessionFollowPolicyV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { SessionFollowRelationWitnessesV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 
 const witness = { sourceSessionId: 'source', destinationSessionId: 'receiver',
   sourceMessage: { localId: 'report', seq: 3 }, expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'install',
@@ -15,6 +17,19 @@ const request = { v: 1, producer: 'sessionAction', permission: {},
   sourceSession: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' }, followDeliveryV1: delivery };
 
 describe('protected source-selected Follow input', () => {
+  it('retains exact Run relation custody on stored reads and never downgrades a malformed Run to a Session follower', () => {
+    const relations = SessionFollowRelationWitnessesV1Schema.parse([
+      { relation: 'follower', source: { kind: 'workflow_run', runId: 'workflow' }, attachedAt: 1, expectedRevision: 2 },
+      { relation: 'follower', source: { kind: 'execution_run', sessionId: 'source', runId: 'run' },
+        attachedAt: 1, expectedTerminalEventId: null },
+    ]);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).parse(relations)).toEqual(relations);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).safeParse([
+      { ...relations[0], source: { kind: 'unknown_run', runId: 'workflow' } },
+    ]).success).toBe(false);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).parse([{ relation: 'follower' }]))
+      .toEqual([{ relation: 'follower' }]);
+  });
   it('requires needs_you to name a current request original, never an immutable message', () => {
     for (const type of ['decision', 'approval', 'blocked'] as const) {
       const event = { kind: 'needs_you', type, mode: 'wait', handling: 'person' };
@@ -39,6 +54,23 @@ describe('protected source-selected Follow input', () => {
     expect(deriveSessionFollowOriginalOccurrenceKeyV1({ ...original, sourceSessionId: 'other' })).not.toBe(key);
     expect(deriveSessionFollowOriginalOccurrenceKeyV1({ ...original, sourceRequests: {
       agentStateVersion: 7, requests: [request, { ...request, requestId: 'other' }] } })).toBeNull();
+  });
+  it('keeps exact Run originals distinct from their parent Session and from later Run results', () => {
+    const execution = { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-a' }, terminalEventId: 'terminal-1' } as const;
+    const workflow = { source: { kind: 'workflow_run', runId: 'workflow-a' }, revision: 4 } as const;
+    const executionDelivery = { v: 1, delivery: 'wake', original: execution, event: { kind: 'failed_or_stopped' } };
+    const workflowDelivery = { v: 1, delivery: 'next_turn', original: workflow, event: { kind: 'finished' } };
+    expect(SessionFollowInputV1Schema.safeParse(executionDelivery).success).toBe(true);
+    expect(SessionFollowInputV1Schema.safeParse(workflowDelivery).success).toBe(true);
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(execution)).not.toBe(
+      deriveSessionFollowOriginalOccurrenceKeyV1({ sourceSessionId: 'source', sourceMessage: { localId: 'terminal-1', seq: 4 } }));
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(execution)).not.toBe(
+      deriveSessionFollowOriginalOccurrenceKeyV1({ ...execution, terminalEventId: 'terminal-2' }));
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(workflow)).not.toBe(
+      deriveSessionFollowOriginalOccurrenceKeyV1({ ...workflow, revision: 5 }));
+    expect(SessionInputRequestV1Schema.safeParse({ ...request, sourceSession: undefined, followDeliveryV1: executionDelivery }).success).toBe(true);
+    expect(SessionInputRequestV1Schema.safeParse({ ...request, followDeliveryV1: executionDelivery }).success).toBe(false);
+    expect(SessionFollowInputV1Schema.safeParse({ ...executionDelivery, original: { ...execution, revision: 4 } }).success).toBe(false);
   });
   it('uses only exact input custody for native rule observation, source projection and ACK', () => {
     const frontier = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };

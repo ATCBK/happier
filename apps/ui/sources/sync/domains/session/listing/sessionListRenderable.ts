@@ -65,6 +65,8 @@ import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 export interface SessionListRenderableMetadata {
+    /** Process lifecycle fact, retained for the shared status presenter. */
+    lifecycleState?: string;
     projectId?: string | null;
     workspaceId?: string | null;
     bot?: SessionBotV1;

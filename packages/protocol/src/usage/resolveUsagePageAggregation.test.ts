@@ -9,6 +9,7 @@ import { projectUsagePlanInsights } from './usagePlanInsights.js';
 import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
 import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
 import { readUsageScopeOptions } from './usageFilterOptions.js';
+import { projectSessionUsageWorkEvidence } from './usageWorkEvidence.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -16,6 +17,53 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('publishes one answered-approval population from opened Session evidence to Coach and Human loop', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const completion = { tool: 'Bash', createdAt: 110, completedAt: 140, status: 'approved' };
+    const detail = projectSessionUsageWorkEvidence({ id: 'session', metadata: null, agentState: { completedRequests: {
+      within: completion, earlier: { ...completion, createdAt: 90 },
+      immediate: { ...completion, createdAt: 150, completedAt: 150 },
+    } } });
+    const result = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, detail }],
+    });
+    const slice = result.results[0]!;
+    expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 3, decisionLatencyMs: 80 });
+    expect(slice.coach?.findings.find(row => row.detectorId === 'approval_friction')?.measurements)
+      .toEqual(expect.arrayContaining([{ metric: 'permission_requests', value: 3, unit: 'count' },
+        { metric: 'permission_wait', value: 80, unit: 'milliseconds' }]));
+    expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
+  });
+  it('carries admitted Session coverage independently of accounting and interval facts through retry and retirement', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const project = (selected: number, admitted: number) => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, sessionCoverage: { selected, admitted },
+        detail: { status: admitted < selected ? 'partial' : 'available', facts: [] } }],
+    });
+    const partial = project(5, 3);
+    for (const value of [partial.results[0]?.howYouWork, partial.results[0]?.coach]) {
+      expect(value?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    }
+    expect(partial.results[0]?.howYouWork?.detailStatus).toBe('partial');
+    expect(UsageQueryBatchResultSchema.safeParse(partial).success).toBe(true);
+    const pending = resolveUsagePageAggregation({ queries: [query], previous: partial,
+      sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(pending.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    const recovered = project(5, 5);
+    expect(recovered.results[0]?.howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(0);
+    expect(project(0, 0).results[0]?.coach?.sessionCoverage).toEqual({ selected: 0, admitted: 0 });
+    const refused = resolveUsagePageAggregation({ queries: [query], previous: recovered,
+      howYouWork: [{ query, detail: { status: 'unknown' } }] });
+    expect(refused.results[0]?.howYouWork?.sessionCoverage).toBeUndefined();
+    expect(refused.results[0]?.coach?.sessionCoverage).toBeUndefined();
+    expect(UsageQueryBatchResultSchema.safeParse({ ...partial, results: [{ ...partial.results[0],
+      howYouWork: { ...partial.results[0]!.howYouWork, sessionCoverage: { selected: 3, admitted: 5 } },
+    }] }).success).toBe(false);
+  });
   it('updates authorized source labels without reparsing admitted source facts on refresh', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false, includeWorkEvidence: false });
     const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, coverage: { status: 'complete', reasons: [],
@@ -550,6 +598,23 @@ describe('resolveUsagePageAggregation', () => {
     ] });
     expect(pending.results[1]).toHaveProperty('coach.findings', []);
     expect(UsageQueryBatchResultSchema.safeParse(pending).success).toBe(true);
+    const failed = resolveUsagePageAggregation({ queries: [query, other], previous: result,
+      howYouWork: [{ query, errorCode: 'usage_session_evidence_read_failed' }] });
+    expect(failed.results[0]?.sources).toContainEqual({ source: 'how_you_work', status: 'stale', asOfMs: 200, errorCode: 'usage_session_evidence_read_failed' });
+    expect(failed.results[0]?.coach?.findings[0]?.evidenceKey).toBe(result.results[0]?.coach?.findings[0]?.evidenceKey);
+    expect(failed.results[0]?.coach?.findings[0]).toMatchObject({ currentness: 'stale', remedy: null, action: null });
+    expect(failed.results[1]).toHaveProperty('coach.findings', []);
+    expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+    for (const errorCode of ['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled']) {
+      const refused = resolveUsagePageAggregation({ queries: [query], previous: result, howYouWork: [{ query, errorCode }] });
+      expect(refused.results[0]).toHaveProperty('coach.findings', []);
+      expect(refused.results[0]?.howYouWork?.intervals).toBeNull();
+      expect(UsageQueryBatchResultSchema.safeParse(refused).success).toBe(true);
+    }
+    const refusedBeforeFailure = resolveUsagePageAggregation({ queries: [query], previous: result,
+      howYouWork: [{ query, detail: { status: 'unknown' }, errorCode: 'usage_session_evidence_read_failed' }] });
+    expect(refusedBeforeFailure.results[0]).toHaveProperty('coach.findings', []);
+    expect(UsageQueryBatchResultSchema.safeParse(refusedBeforeFailure).success).toBe(true);
     const denied = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query,
       detail: { ...detail, status: 'unknown' }, asOfMs: 200 }], previous: result });
     expect(denied.results[0]).toHaveProperty('coach.findings', []);

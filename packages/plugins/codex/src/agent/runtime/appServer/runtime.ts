@@ -149,6 +149,7 @@ import { isCodexRequestUsageIdentityContradicted, resolveCodexRequestUsageAttrib
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { createCodexAppServerRealtimeConversation } from './realtime.js';
 import { registerCodexAppServerInteractionHandlers } from './interactions.js';
+import { readCodexGoalPayload } from './work/goalProjection.js';
 
 export type CodexAppServerPolicy = Readonly<{
   approvalPolicy?: unknown;
@@ -905,6 +906,36 @@ export function createCodexAppServerRuntime(
   let skillsDelivered = params.appServerTransport === 'daemonProxy' || params.skills ? false : undefined;
   let handleAsyncQuestionNotification: ((raw: unknown) => boolean) | null = null;
   let threadId: string | null = readExactCodexProviderSessionId(params.initialProviderSessionId);
+  let goalObservationState: 'reading' | 'unobserved' | 'observed' = 'reading';
+  const readAndPublishGoalSnapshot = async (goalClient: DisposableCodexAppServerClient, observedThreadId: string): Promise<void> => {
+    goalObservationState = 'reading';
+    // Requested launch scope is distinct from this plugin process's scope; the host
+    // Exec boundary can still apply its admitted environment. Keep Goal and
+    // credential contents out of this local diagnostic.
+    const goalReadScope = {
+      threadId: observedThreadId,
+      initialThreadId: readExactCodexProviderSessionId(params.initialProviderSessionId),
+      requestedCodexHome: resolveCodexHome(readRuntimeProcessEnv()),
+      requestedSqliteHome: readRuntimeProcessEnv().CODEX_SQLITE_HOME ?? null,
+      pluginProcessCodexHome: resolveCodexHome(process.env),
+      transport: params.appServerTransport ?? (params.appServerEndpoint ? 'unixWebSocket' : 'stdio'),
+    };
+    try {
+      // ThreadResumeResponse has no Goal field. An explicit native read,
+      // including goal:null, establishes the reopened source's initial state.
+      const goal = readCodexGoalPayload(await goalClient.request('thread/goal/get', { threadId: observedThreadId }));
+      goalObservationState = goal.kind === 'malformed' ? 'unobserved' : 'observed';
+      params.host.logger.debug('Codex app-server initial goal read', { ...goalReadScope, kind: goal.kind,
+        goalThreadId: goal.kind === 'present' ? readExactCodexProviderSessionId(goal.goal.threadId) : null });
+      if (goal.kind !== 'malformed') await params.observeGoal?.(goal);
+    } catch (error) {
+      goalObservationState = 'unobserved';
+      params.host.logger.debug('Codex app-server initial goal read failed', {
+        ...goalReadScope,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+    }
+  };
   let currentModelId: string | null = trimStringValue(params.initialModelId);
   let currentCollaborationModeId: string | null = trimStringValue(params.initialCollaborationModeId);
   let currentCollaborationModePayload: Readonly<{
@@ -2206,6 +2237,18 @@ export function createCodexAppServerRuntime(
     nextClient.registerNotificationHandler('thread/goal/cleared', (notificationParams) => {
       const notificationThreadId = readThreadId(notificationParams);
       if (!params.observeGoal || !threadId || notificationThreadId !== threadId) return;
+      // Resume can announce initial absence before loading the retained Goal.
+      // The post-resume read below supplies the authoritative initial snapshot.
+      if (goalObservationState === 'reading') {
+        params.host.logger.debug('Codex app-server goal clear awaits initial read', { threadId });
+        return;
+      }
+      if (goalObservationState === 'unobserved') {
+        // A failed initial read did not establish emptiness. Reconcile this
+        // notification through the same native read before publishing a clear.
+        void readAndPublishGoalSnapshot(nextClient, threadId);
+        return;
+      }
       void Promise.resolve(params.observeGoal({ kind: 'absent' })).catch((error: unknown) => {
         params.host.logger.debug('Codex app-server goal clear publication failed', {
           errorName: error instanceof Error ? error.name : typeof error,
@@ -2232,7 +2275,9 @@ export function createCodexAppServerRuntime(
       if (deferTerminalNotificationUntilTurnStartAcknowledged('turn/interrupted', notificationParams)) return;
       handleTurnInterruptedNotification(notificationParams);
     });
-    nextClient.registerNotificationHandler('error', (notificationParams) => {
+    nextClient.registerNotificationHandler('error', (notificationParams): void | Promise<void> => {
+      const childNotification = nativeChildren.observe('error', notificationParams);
+      if (childNotification) return childNotification;
       const record = readRecord(notificationParams);
       const errorThreadId = readThreadId(notificationParams);
       const errorTurnId = readProviderEventTurnId(notificationParams, { allowTopLevelId: true })
@@ -2243,6 +2288,12 @@ export function createCodexAppServerRuntime(
         notificationParams,
         pendingTurn?.providerOperationIdentity ?? null,
       );
+      if (record?.willRetry === true && pendingTurn) {
+        assistantReasoningProjector.supersedeUnfinishedAssistantMessages({
+          sidechainId: null,
+          streamScopeId: pendingTurn.sessionTurnId,
+        });
+      }
       // App-server `error` is diagnostic and can be followed by more activity
       // for the same native turn even when willRetry is false. Only a provider
       // terminal turn notification can release the active owner; otherwise a
@@ -2464,6 +2515,7 @@ export function createCodexAppServerRuntime(
   };
 
   const openSessionOnce = async (options?: Readonly<Record<string, unknown>>): Promise<string> => {
+    goalObservationState = 'reading';
     assertToolRestrictionAuthSupported();
     const authTokens = await readHostOwnedAuthTokens();
     const hasLiveExternalAuth = client !== null && clientHasExternalAuthTokens;
@@ -2649,8 +2701,13 @@ export function createCodexAppServerRuntime(
       }
     }
     if (requestedThreadId) {
+      if (params.observeGoal) {
+        await readAndPublishGoalSnapshot(appServerClient, nextThreadId);
+      }
       nativeReadyThreadId = nextThreadId;
       publishThreadIdentity(nextThreadId);
+    } else {
+      goalObservationState = 'observed';
     }
     return nextThreadId;
   };

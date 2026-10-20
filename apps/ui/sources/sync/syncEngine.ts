@@ -14,7 +14,7 @@ import {
     subscribeHomeAccountChange,
     subscribeHomeCredentialChange,
 } from '@/sync/runtime/orchestration/homeAccountChange';
-import { refreshWorkflowRunById } from '@/sync/engine/workflows/refreshWorkflowRun';
+import { refreshWorkflowRunsByIds } from '@/sync/engine/workflows/refreshWorkflowRun';
 import { invalidateMachinePoolProjection } from '@/sync/engine/machines/machinePoolProjection';
 import { invalidateSavedSecretCatalogProjection } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { readSessionMetadataLayoutVersion } from './engine/sessions/parsePlainSessionPayload';
@@ -341,7 +341,7 @@ import {
 } from '@happier-dev/agents';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { isSessionPersonallyTrackedForViewer } from './domains/session/readState/sessionViewer';
-import { updateSessionMetadataWithRetry as updateSessionMetadataWithRetryRpc, type SessionMetadataUpdateRequest, type UpdateMetadataAck } from './domains/session/metadata/updateSessionMetadataWithRetry';
+import { updateSessionMetadataWithRetry as updateSessionMetadataWithRetryRpc, type SessionMetadataUpdateRequest, type SessionMetadataTeamCredentialBinding, type UpdateMetadataAck } from './domains/session/metadata/updateSessionMetadataWithRetry';
 import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from './domains/artifacts/artifactTypes';
 import type {
     AutomationDefinition,
@@ -5295,6 +5295,7 @@ class Sync {
             maxAttempts?: number;
             sessionExpectation?:
                 SessionMetadataInactiveModelIntentExpectationV1;
+            teamCredentialBinding?: SessionMetadataTeamCredentialBinding;
             mutationIntent?: 'rename_session';
             expectedMetadataRevision?: number;
             onMetadataCommitted?: (revision: number) => void;
@@ -5505,6 +5506,7 @@ class Sync {
             })()
         );
 
+        try {
         await updateSessionMetadataWithRetryRpc<Metadata, AgentState>({
             sessionId,
             metadataLayoutVersion:
@@ -5684,11 +5686,18 @@ class Sync {
             },
             updater,
             sessionExpectation: options?.sessionExpectation,
+            teamCredentialBinding: options?.teamCredentialBinding,
             mutationIntent: options?.mutationIntent,
             expectedMetadataRevision: options?.expectedMetadataRevision,
             onMetadataCommitted: options?.onMetadataCommitted,
             maxAttempts: typeof options?.maxAttempts === 'number' ? options.maxAttempts : 8,
         });
+        } catch (error) {
+            // A refused CAS can still have read the winner's canonical tuple.
+            // Publish that read to its current mounted Home before its control settles.
+            if (mutationSession && ownsActiveProjection()) this.applySessions([mutationSession]);
+            throw error;
+        }
         } finally {
             accountCurrentnessSource?.dispose();
         }
@@ -7526,20 +7535,28 @@ class Sync {
         const normalizedSessionId = String(sessionId ?? '').trim();
         if (!normalizedSessionId) return { status: 'not_ready' };
 
-        const session = storage.getState().sessions[normalizedSessionId] ?? null;
-        if (!session && this.hasFetchedSessionsSnapshotForActiveServer && !this.isSessionKnownOnResolvedOwnerServer(normalizedSessionId)) {
-            return { status: 'not_ready' };
+        const currentness = captureActiveServerAccountScopeCurrentness();
+        const encryption = this.encryption;
+        let session = storage.getState().sessions[normalizedSessionId] ?? null;
+        if (!session || (session.encryptionMode !== 'plain' && !encryption?.getSessionEncryption(normalizedSessionId))) {
+            // Sent-before also walks list-only Sessions. Reuse by-ID hydration to
+            // acquire their mode/key without opening or populating the transcript.
+            const hydration = await this.ensureSessionVisibleForMessageRoute(normalizedSessionId, { hydrateMessages: false });
+            if (!currentness.isCurrent() || hydration.kind !== 'available') return { status: 'not_ready' };
+            session = storage.getState().sessions[normalizedSessionId] ?? null;
         }
+        if (!session || !currentness.isCurrent()) return { status: 'not_ready' };
 
-        return fetchUserMessageHistoryPage({
+        const result = await fetchUserMessageHistoryPage({
             sessionId: normalizedSessionId,
             beforeSeq: opts.beforeSeq,
             limit: opts.limit,
             ...(opts.turnProjection === true ? { turnProjection: true } : {}),
             sessionEncryptionMode: session?.encryptionMode === 'plain' ? 'plain' : 'e2ee',
             request: this.createSessionMessagesRequest(normalizedSessionId),
-            getSessionEncryption: (id) => this.encryption?.getSessionEncryption(id) ?? null,
+            getSessionEncryption: (id) => encryption?.getSessionEncryption(id) ?? null,
         });
+        return currentness.isCurrent() ? result : { status: 'not_ready' };
     }
 
     /**
@@ -8038,6 +8055,7 @@ class Sync {
             maxAttempts?: number;
             sessionExpectation?:
                 SessionMetadataInactiveModelIntentExpectationV1;
+            teamCredentialBinding?: SessionMetadataTeamCredentialBinding;
             mutationIntent?: 'rename_session';
             expectedMetadataRevision?: number;
             onMetadataCommitted?: (revision: number) => void;
@@ -8572,10 +8590,16 @@ class Sync {
         if (!this.credentials) return;
         const shouldContinue = this.createServerScopeGuard();
         const inventoryScope = getActiveServerAccountScope();
-        const inventoryReadStartedWith = storage.getState().artifacts;
+        let inventoryReadStartedWith = storage.getState().artifacts;
         await this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactsList({
             ...params,
             inventoryScope,
+            inventoryReadStartedWith,
+            changesPageLimit: this.syncTuning.changesPageLimit,
+            hydrateArtifacts: artifacts => {
+                storage.getState().applyArtifacts(artifacts);
+                inventoryReadStartedWith = storage.getState().artifacts;
+            },
             includeProvenance: this.artifactProvenanceConsumers > 0,
             shouldContinue: () => shouldContinue() && !params.signal?.aborted,
             applyArtifacts: (artifacts, source) => storage.getState().applyArtifacts(artifacts,
@@ -8872,11 +8896,14 @@ class Sync {
     }
 
     private applyTodoSocketUpdates = async (changes: any[]) => {
-        if (!this.credentials) return;
+        const target = this.getAppliedTransportTarget();
+        if (!this.credentials || !target) return;
         await applyTodoSocketUpdatesEngine({
             changes,
             credentials: this.credentials,
             encryption: this.encryption,
+            request: this.createAppliedTransportRequest(target),
+            shouldContinue: this.createAppliedTransportScopeGuard(target),
             invalidateTodosSync: () => this.todosSync.invalidate(),
         });
     }
@@ -9074,6 +9101,11 @@ class Sync {
         void task.catch(() => { if (this.projectAccountRowsRuntime === task) this.projectAccountRowsRuntime = null; });
         return task;
     }
+
+    /** Reads the Account's project rows back after a write made elsewhere (a controller daemon's lifecycle Action). */
+    public refreshProjectAccountRows = async () => {
+        await (await this.ensureProjectAccountRowsRuntime()).refresh();
+    };
 
     public mutateProjectWorkspaceRef = async (mutation: WorkspaceRefAccountMutation, expectedScope: AccountSettingsScope) => {
         if (!areAccountSettingsScopesEqual(this.pendingSettingsScope, expectedScope)) throw new Error('Project Account/Home changed');
@@ -12052,6 +12084,12 @@ class Sync {
                     return true;
                 },
                 onCursorBlocked: ({ blockedCursor, blockedReason, safeAdvanceCursor, changes }) => {
+                    // Later catalog rows may lie beyond this blocked page. Revalidate
+                    // mounted Account projections through their existing snapshot owner
+                    // without advancing past the unmaterialized change.
+                    if (!embedScope && shouldContinue() && isAppliedTransportCurrent() && transportTarget.serverId) {
+                        publishHomeAccountChange(transportTarget.serverId, undefined, { source: 'catch-up-pending' });
+                    }
                     this.rememberBlockedChangesCursorLag({
                         blockedCursor,
                         blockedReason,
@@ -12155,6 +12193,12 @@ class Sync {
                                 // to reinterpret AccountChange hints or reacting a
                                 // second time to the earlier content-free wake.
                                 publishHomeAccountChange(plannedServerId, changedEntityIds, {
+                                    entityRevisions: Object.fromEntries(changes.flatMap(change => {
+                                        const hint = change.hint;
+                                        if (!hint || typeof hint !== 'object' || !('revision' in hint)
+                                            || typeof hint.revision !== 'number' || !Number.isSafeInteger(hint.revision) || hint.revision < 0) return [];
+                                        return [[change.entityId, hint.revision]];
+                                    })),
                                     changeKinds: changes.map(change => change.kind),
                                     sessionListQueryAffects: plannedChangesAffectSessionListQuery(planned),
                                     profileCatalogAffects: plannedChangesAffectProfileCatalog(planned),
@@ -12174,7 +12218,7 @@ class Sync {
                                 this.pluginAvailabilitySync.invalidate();
                             }
                         },
-                        refreshWorkflowRun: (runId) => refreshWorkflowRunById(runId),
+                        refreshWorkflowRuns: (runIds) => refreshWorkflowRunsByIds(runIds),
                         invalidate: {
                             settings: () => this.settingsSync.invalidateAndAwait(),
                             profile: () => this.profileSync.invalidateAndAwait(),
@@ -12417,8 +12461,13 @@ class Sync {
               sourceServerId,
               shouldContinue,
               onAccountChangeWake: () => {
-                  // The focused Home's wake is only a cursor signal. The catch-up it requests
-                  // passes the detailed page through the change planner, which publishes the
+                  // Catalogs that need current rows independently of the history
+                  // cursor opt into this wake at the existing snapshot lifecycle.
+                  if (shouldContinue() && sourceServerId) {
+                      publishHomeAccountChange(sourceServerId, undefined, { source: 'catch-up-pending' });
+                  }
+                  // Other focused-Home observers wait for the detailed page. Catch-up
+                  // passes that page through the change planner, which publishes the
                   // exact changed entities (`publishAccountChanges`), so each Account projection
                   // (governance, eligibility, Teams, follow, lists) refetches only for what it
                   // shows. A content-free event here made every one of them refetch on every

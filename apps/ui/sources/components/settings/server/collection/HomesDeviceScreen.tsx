@@ -25,10 +25,10 @@ import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/Expan
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { findPersonalHomeBootstrapCompletedProfile, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 import { resolveKnownLocalRelayUrl } from '@/sync/domains/server/url/resolveKnownLocalRelayUrl';
-import { commitHomeApplicationCarrierEligibility } from '@/sync/runtime/orchestration/connectionManager';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -78,7 +78,8 @@ export const ServerLocalRuntimeControlSection = React.memo(function ServerLocalR
 export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
     const router = useRouter();
     const { controller } = useHomesCollection();
-    const [homeApplicationCarrierEligibility, setHomeApplicationCarrierEligibility] = useLocalSettingMutable('homeApplicationCarrierEligibility');
+    const homeApplicationCarrierEligibility = useLocalSetting('homeApplicationCarrierEligibility');
+    const writeSetting = useSettingActionWriter();
     const [connectionDetailsExpanded, setConnectionDetailsExpanded] = React.useState(false);
     const [localRelayUrl, setLocalRelayUrl] = React.useState<string | null>(null);
     const knownLocalRelayUrl = React.useMemo(() => resolveKnownLocalRelayUrl({
@@ -116,7 +117,7 @@ export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
                         testID="settings.server.standardOnly.switch"
                         value={homeApplicationCarrierEligibility === 'standard_only'}
                         onValueChange={(enabled) => {
-                            commitHomeApplicationCarrierEligibility(enabled ? 'standard_only' : 'automatic', setHomeApplicationCarrierEligibility);
+                            void writeSetting(SERVERS_SETTINGS.settings.standardOnly, enabled);
                         }}
                     />}
                 />

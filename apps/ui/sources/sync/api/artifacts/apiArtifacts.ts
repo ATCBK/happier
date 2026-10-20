@@ -1,4 +1,5 @@
 import { pick } from 'zod/mini';
+import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
@@ -93,6 +94,8 @@ function readArtifactResponse(value: unknown): Artifact {
 }
 
 export type ArtifactApiOptions = Readonly<{
+    serverId?: string;
+    coarseKind?: ArtifactCoarseKindV1;
     includeBody?: boolean;
     retry?: 'default' | 'none';
     request?: ServerFetch;
@@ -215,13 +218,14 @@ export async function fetchArtifactStorageUsage(credentials: AuthCredentials,
 
 /** The key holder may reseal the selected body with new restore attribution; its content stays unchanged. */
 export async function restoreArtifactRevision(credentials: AuthCredentials, input: Readonly<{
+    kind?: ArtifactCoarseKindV1;
     artifactId: string; bodyVersion: number; header: string; body?: string; expectedRevision: ArtifactRevisionV1;
     provenance?: string | null; provenanceDataEncryptionKey?: string | null;
-}>, opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {}): Promise<ArtifactRevisionV1> {
+}>, opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'serverId'> = {}): Promise<ArtifactRevisionV1> {
     opts.signal?.throwIfAborted();
     const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`, {
         method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ header: input.header, expectedHeaderVersion: input.expectedRevision.headerVersion,
+        body: JSON.stringify({ header: input.header, ...(input.kind ? { kind: input.kind } : {}), expectedHeaderVersion: input.expectedRevision.headerVersion,
             expectedBodyVersion: input.expectedRevision.bodyVersion, ...(input.body === undefined ? {} : { body: input.body }),
             ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
             ...(input.provenanceDataEncryptionKey === undefined ? {} : { provenanceDataEncryptionKey: input.provenanceDataEncryptionKey }) }),
@@ -286,12 +290,20 @@ export async function fetchArtifacts(
     credentials: AuthCredentials,
     opts: ArtifactApiOptions = {},
 ): Promise<Artifact[]> {
+    return (await fetchArtifactListPage(credentials, opts)).items;
+}
+
+export async function fetchArtifactListPage(credentials: AuthCredentials, opts: ArtifactApiOptions = {}): Promise<Readonly<{
+    items: Artifact[]; hasUnclassified?: boolean;
+}>> {
     const request = opts.request ?? createServerFetchForActiveServer();
+    const filtered = opts.coarseKind !== undefined;
     const run = async () => {
         const query = new URLSearchParams();
         if (opts.limit !== undefined) query.set('limit', String(opts.limit));
         if (opts.cursor !== undefined) query.set('cursor', opts.cursor);
         if (opts.includeBody) query.set('includeBody', 'true');
+        if (filtered && opts.coarseKind) query.set('kind', opts.coarseKind);
         const search = query.toString();
         const response = await request(`/v1/artifacts${search ? `?${search}` : ''}`, {
             ...(opts.signal ? { signal: opts.signal } : {}),
@@ -316,11 +328,14 @@ export async function fetchArtifacts(
         }
 
         const value: unknown = await response.json();
-        if (!Array.isArray(value)) {
+        const items: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'items') : value;
+        const hasUnclassified: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'hasUnclassified') : undefined;
+        if (!Array.isArray(items) || (filtered && typeof hasUnclassified !== 'boolean')) {
             throw new HappyError('Artifact content is unavailable', false, { code: 'artifact_content_unavailable' });
         }
-        const data = value.map(readArtifactResponse);
-        return opts.ownerAccountId === undefined ? data : data.filter(artifact => artifact.ownerAccountId === opts.ownerAccountId);
+        const data = items.map(readArtifactResponse);
+        return { items: opts.ownerAccountId === undefined ? data : data.filter(artifact => artifact.ownerAccountId === opts.ownerAccountId),
+            ...(filtered ? { hasUnclassified: hasUnclassified as boolean } : {}) };
     };
 
     if (opts.retry === 'none') {
@@ -383,6 +398,7 @@ export async function createArtifact(
             : request.blob ? '/v1/artifacts/content/binary' : '/v1/artifacts';
         const response = request.blob?.content
             ? await uploadArtifactContent(credentials, { kind: 'create', artifactId: request.id, blobId: request.blob.blobId,
+                ...(request.kind ? { artifactKind: request.kind } : {}),
                 header: request.header, body: request.body, dataEncryptionKey: request.dataEncryptionKey,
                 provenance: request.provenance, provenanceDataEncryptionKey: request.provenanceDataEncryptionKey }, request.blob.content, scopedOptions)
             : await artifactRequest(path, {
@@ -442,6 +458,7 @@ export async function updateArtifact(
         }
         const response = request.blob?.content && request.body !== undefined && request.expectedBodyVersion !== undefined
             ? await uploadArtifactContent(credentials, { kind: 'update', artifactId, blobId: request.blob.blobId,
+                ...(request.kind ? { artifactKind: request.kind } : {}),
                 header: request.header, expectedHeaderVersion: request.expectedHeaderVersion,
                 body: request.body, expectedBodyVersion: request.expectedBodyVersion,
                 provenance: request.provenance, provenanceDataEncryptionKey: request.provenanceDataEncryptionKey }, request.blob.content, scopedOptions)

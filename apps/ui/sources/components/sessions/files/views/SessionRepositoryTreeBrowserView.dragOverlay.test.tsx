@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     flushHookEffects,
     renderScreen,
@@ -32,22 +32,17 @@ vi.mock('@/hooks/ui/useWebFileDropZone', () => import('@/hooks/ui/useWebFileDrop
 
 vi.mock('@/utils/files/webDroppedEntries', () => import('@/utils/files/webDroppedEntries.web'));
 
+const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+const locks = installWebLockManagerMock();
+await prepareSessionFilesViewTestkit();
+// Test renderer has no ReactDOM portal host; keep the native DOM SDK boundary inline.
+const { requireReactDOM } = await import('@/utils/web/reactDomCjs');
+const portalBoundary = vi.spyOn(requireReactDOM(), 'createPortal').mockImplementation((content: unknown) => content);
+({ SessionRepositoryTreeBrowserView } = await import('./SessionRepositoryTreeBrowserView'));
+afterAll(() => { portalBoundary.mockRestore(); locks.restore(); });
+
 describe('SessionRepositoryTreeBrowserView (drag overlay)', () => {
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
-    let restorePortal = () => {};
-    let restoreLocks = () => {};
-    beforeAll(async () => {
-        // jsdom has no Web Locks; Home profile writes take a browser lock on web.
-        const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
-        restoreLocks = installWebLockManagerMock().restore;
-        await prepareSessionFilesViewTestkit();
-        // Test renderer has no ReactDOM portal host; keep the native DOM SDK boundary inline.
-        const { requireReactDOM } = await import('@/utils/web/reactDomCjs');
-        const portalBoundary = vi.spyOn(requireReactDOM(), 'createPortal').mockImplementation((content: unknown) => content);
-        restorePortal = () => portalBoundary.mockRestore();
-        ({ SessionRepositoryTreeBrowserView } = await import('./SessionRepositoryTreeBrowserView'));
-    }, 60_000);
-    afterAll(() => { restorePortal(); restoreLocks(); });
 
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});

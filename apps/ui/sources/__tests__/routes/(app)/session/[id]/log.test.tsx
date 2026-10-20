@@ -58,18 +58,15 @@ installSessionRouteCommonModuleMocks({
             },
         });
     },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: machineTargetStorage,
-                getStorage: () => machineTargetStorage,
-                useSession: ((sessionId: string) => machineTargetStorage(
-                    (state) => state.sessions[sessionId] ?? null,
-                )) as typeof import('@/sync/domains/state/storage')['useSession'],
-                useIsDataReady: () => isDataReady,
-            },
+    storageModule: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            storage: machineTargetStorage,
+            getStorage: () => machineTargetStorage,
+            useSession: ((sessionId: string) => machineTargetStorage(
+                (state) => state.sessions[sessionId] ?? null,
+            )) as typeof import('@/sync/domains/state/storage')['useSession'],
+            useIsDataReady: () => isDataReady,
         });
     },
 });

@@ -25,9 +25,9 @@ import { resolveTriageSourceSessionRelationsV1 } from './sourceSurface.js';
  *
  * Two of the three members the strict boundary requires are Account Collection
  * state. When the mounted Account data client is reachable this hook reads
- * those members through the canonical Collection-backed domain owner; when it
- * is not, the plugin's own Action remains the daemon transport. Neither path
- * reaches a provider. The third member, the applied observation, is already in
+ * those members through the canonical Collection-backed domain owner. Sources
+ * with their own Session relations and mounts without an Account data client
+ * use the plugin's own Action transport. The applied observation is already in
  * the reader's device-local projection and is passed in.
  *
  * Descriptor and operation/surface facts deliberately do not travel through
@@ -55,7 +55,7 @@ export type TriageEntryDetailStateV1 =
   }>
   /** The selected connection is retired, removed, or no longer this source's. */
   | Readonly<{ kind: 'unavailable' }>
-  /** The Account could not be read at all; retrying is the reader's move. */
+  /** Detail preparation failed; Retry or host re-admission can read it again. */
   | Readonly<{ kind: 'unreachable' }>
   /**
    * The durable facts read cleanly and still could not compose an admissible
@@ -65,7 +65,7 @@ export type TriageEntryDetailStateV1 =
    */
   | Readonly<{ kind: 'refused'; reason: 'entryMismatch' | 'instanceMismatch' | 'invalidContractValue' }>;
 
-/** The mounted form adds the reader's one recovery action to Account failure. */
+/** The mounted form adds the reader's one recovery action to read failure. */
 export type TriageMountedEntryDetailStateV1 =
   | Exclude<TriageEntryDetailStateV1, Readonly<{ kind: 'unreachable' | 'ready' }>>
   | (Extract<TriageEntryDetailStateV1, Readonly<{ kind: 'ready' }>> & Readonly<{
@@ -246,12 +246,15 @@ export function useTriageEntryDetail(
   sourceReadSelection.current = { identity, sourceOwned: admittedSourceRead
     || (sourceReadSelection.current.identity === identity && sourceReadSelection.current.sourceOwned) };
   const sourceOwned = sourceReadSelection.current.sourceOwned;
-  const readiness = usePluginHostReadiness(durable.collections === null);
+  // Source-owned relations use the Action transport even with mounted Account
+  // Collections. They must wait for and recover with that same Machine owner.
+  const machineBound = durable.collections === null || sourceOwned;
+  const readiness = usePluginHostReadiness(machineBound);
   const transport = useMemo<TriageEntryDetailTransportV1>(
-    () => durable.collections === null || sourceOwned
-      ? createActionTriageEntryDetailTransport(hostApi)
-      : createDirectTriageEntryDetailTransport(durable.collections),
-    [durable.collections, hostApi, sourceOwned],
+    () => durable.collections !== null && !machineBound
+      ? createDirectTriageEntryDetailTransport(durable.collections)
+      : createActionTriageEntryDetailTransport(hostApi),
+    [durable.collections, hostApi, machineBound],
   );
   const [state, setState] = useState<TriageEntryDetailStateV1 | null>(null);
   const stateRef = useRef<TriageEntryDetailStateV1 | null>(null);

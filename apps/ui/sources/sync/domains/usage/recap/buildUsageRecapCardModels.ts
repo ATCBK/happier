@@ -169,7 +169,9 @@ export function buildUsageRecapCardModels(input: Readonly<{
         return [];
     }
 
-    const topModel = viewModel.leaders.models[0] ?? viewModel.insights.favoriteModel ?? summary.topModel;
+    // The favorite is a named model; the ranking's leading row can instead be unattributed usage.
+    const topModel = [viewModel.insights.favoriteModel, ...viewModel.leaders.models, summary.topModel]
+        .find(model => model && isKnownUsageLabel(model.key)) ?? null;
     const modelBreakdown = viewModel.breakdowns.models.find(row => row.key === topModel?.key);
     const topEngineLabel = resolveTopEngineLabel(viewModel, summary);
     const modelShare = modelBreakdown && viewModel.overview.totalTokens > 0
@@ -230,7 +232,7 @@ export function buildUsageRecapCardModels(input: Readonly<{
             label: t('usage.summary.topModel'),
             value: input.shareFields?.names === false ? '—' : topModel ? usageDimensionLabel('model', topModel.key, topModel.label) : t('usage.board.page.unattributed'),
             subtitle: topModel
-                ? `${formatTokenCount(viewModel.insights.favoriteModelChangeCount)} ${t('usage.favoriteModelChanges')}${input.shareFields?.names === false ? '' : ` · ${topEngineLabel}`}`
+                ? `${formatTokenCount(viewModel.insights.favoriteModelChangeCount)} ${t('usage.modelSwitches')}${input.shareFields?.names === false ? '' : ` · ${topEngineLabel}`}`
                 : t('common.unavailable'),
             valueTone: 'compact',
             accentTone: 'purple',

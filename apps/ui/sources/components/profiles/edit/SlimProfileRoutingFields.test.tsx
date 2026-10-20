@@ -362,7 +362,7 @@ describe('SlimProfileRoutingFields model visibility', () => {
         expect(preferredModelRow?.props.detail).toContain('Personal');
         expect(preferredModelRow?.props.detail).not.toContain('Work');
         expect(preferredModelRow?.props.accessibilityLabel).toBe(
-            'profiles.preferredModel.title. Gateway, Personal, Shared Provider model',
+            'profiles.preferredModel.title. Gateway · Personal, Shared Provider model',
         );
     });
 

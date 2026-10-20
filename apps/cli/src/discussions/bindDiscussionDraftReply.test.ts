@@ -39,18 +39,28 @@ beforeEach(() => {
     participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy: 'drafts_for_approval', createdAt: 1 }] } });
 });
 
-it('normalizes the verified daemon Session input before its signed authorization preparation', async () => {
+it.each(['draft', 'informational'] as const)('normalizes the verified daemon Session input before signed authorization (%s)', async originalKind => {
   const { createDaemonSessionAccountActionExecutor } = await import('@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor');
   const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
   const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+  const informational = originalKind === 'informational';
+  const actionInput = informational ? { ...input, replyTarget: { kind: 'message', messageId: 'question' } } : input;
+  if (informational) http.request.mockResolvedValue({ status: 200, data: { discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [],
+    participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy: 'when_addressed', createdAt: 1 }] } });
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(features.features));
   http.get.mockImplementation(async (url: string) => {
     if (new URL(url).pathname === '/v2/sessions/participant') return { status: 200,
       data: { session: createSessionRecordFixture({ id: 'participant', share: null }) } };
     if (new URL(url).pathname === '/v1/features') return { status: 200, data: features.features };
+    if (new URL(url).pathname.endsWith('/messages/by-local-id/input/reply')) return { status: 200, data: {
+      v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'turn',
+        discussion: source.discussionAddressing },
+    } };
     throw new Error(`Unexpected daemon read: ${url}`);
   });
-  const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'participant', localId: 'input', acceptedTurnId: 'turn' });
+  const localId = informational ? 'tool-request'
+    : deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'participant', localId: 'input', acceptedTurnId: 'turn' });
+  const expectedInput = informational ? actionInput : { ...input, localId, replyTarget: { kind: 'message', messageId: 'question' } };
   const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(47));
   const target = { kind: 'machine' as const, machineId: 'machine' };
   http.post.mockImplementation(async (url: string, raw: unknown) => {
@@ -60,7 +70,7 @@ it('normalizes the verified daemon Session input before its signed authorization
       externalActionOrigin: { homeId: 'identity', actionId: 'discussion.reply', requestId: localId,
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), origin: request.sessionActionOrigin! } };
     expect(verifyMachineInstallationProof({ payload, proof: request.installationProof!, publicKey: keys.publicKey })).toBe(true);
-    expect(request.envelope).toMatchObject({ requestId: localId, input: { localId, replyTarget: { kind: 'message', messageId: 'question' } } });
+    expect(request.envelope).toMatchObject({ requestId: localId, input: expectedInput });
     return { status: 200, data: { v: 1, token: 'home-issued-reply-root', binding: {
       accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'identity', machineId: 'machine',
       custodianAccountId: 'owner', installationId: 'installation', actionId: 'discussion.reply', requestId: localId, target,
@@ -71,7 +81,7 @@ it('normalizes the verified daemon Session input before its signed authorization
   const signedPreparation = vi.fn<NonNullable<Parameters<typeof createDaemonSessionAccountActionExecutor>[0]['prepareExternalActionAuthorization']>>(
     async request => {
       expect(request.operation).toMatchObject({ actionId: 'discussion.reply', requestId: localId,
-        input: { ...input, localId, replyTarget: { kind: 'message', messageId: 'question' } } });
+        input: expectedInput });
       expect(request.sessionActionOrigin).toMatchObject({ sourceTurnId: 'turn', sourceInputId: 'input' });
       const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: request.operation.requestId, input: request.operation.input, target });
       const minted = await mintExternalActionExecutionAuthorization({ actionId: request.operation.actionId, envelope,
@@ -85,19 +95,24 @@ it('normalizes the verified daemon Session input before its signed authorization
     });
   const execute = createDaemonSessionAccountActionExecutor({ serverId: 'home', serverHttpBaseUrl: 'https://draft-reply.test',
     token, credentials: { token, encryption: null }, prepareExternalActionAuthorization: signedPreparation,
-    createExecutor: () => createCliActionExecutor({ token, sessionId: 'participant', mode: 'plain', ctx: null,
-      serverId: 'home', serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
+    createExecutor: () => createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: 'participant', mode: 'plain', ctx: null,
+      serverId: 'home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
+      externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: 'installation',
       actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {
         'discussion.post': { enabled: false }, 'discussion.reply': { enabled: false },
       } }) },
     }),
   });
-  expect(await execute({ kind: 'action.execute', actionId: 'discussion.post', input, requestId: 'tool-request',
+  const result = await execute({ kind: 'action.execute', actionId: informational ? 'discussion.reply' : 'discussion.post', input: actionInput, requestId: 'tool-request',
     witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 1,
       agentStartCaller: { kind: 'session', sessionId: 'participant', starterDepth: 1, turnDepth: 1 }, discussionAddressing: source.discussionAddressing } },
-  { sessionId: 'participant', isCurrent: async () => true })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+  { sessionId: 'participant', isCurrent: async () => true });
   expect(signedPreparation).toHaveBeenCalledTimes(1);
   expect(http.post).toHaveBeenCalledTimes(1);
+  // The informational case must reach the downstream signed roster HTTP read,
+  // not fail earlier because the fixture omitted installation signing material.
+  if (informational) expect(http.request).toHaveBeenCalledTimes(2);
+  expect(result).toMatchObject({ ok: false, errorCode: 'action_disabled' });
 });
 
 it.each(['discussion.post', 'discussion.reply'] as const)('binds an addressed %s to the final return identity before approval captures it', async actionId => {
@@ -118,6 +133,33 @@ it.each(['when_addressed', 'reads_only', 'watches_and_speaks_up'] as const)('pre
     participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy, createdAt: 1 }] } });
   expect(await bindDiscussionDraftReply({ actionId: 'discussion.post', input, context, serverId: 'home', discussionAction: readRoster }))
     .toEqual({ actionId: 'discussion.post', input, context });
+});
+
+it('does not promote a prior informational input when its participant policy changes to when-addressed', async () => {
+  http.request.mockResolvedValue({ status: 200, data: { discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [],
+    participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy: 'when_addressed', createdAt: 1 }] } });
+  const reply = { ...input, replyTarget: { kind: 'message', messageId: 'question' } };
+  const progress = { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'turn', discussion: source.discussionAddressing };
+  http.get.mockResolvedValue({ status: 200, data: { v: 1, status: 'available', progress } });
+  expect(await bindDiscussionDraftReply({ actionId: 'discussion.reply', input: reply, context, serverId: 'home',
+    discussionAction: readRoster, credentials: { token: 'token' }, serverHttpBaseUrl: 'https://draft-reply.test' }))
+    .toEqual({ actionId: 'discussion.reply', input: reply, context });
+});
+
+it.each([
+  { acceptedTurnId: 'unrelated-turn' },
+  { discussion: { ...source.discussionAddressing, participantSessionId: 'another-participant' } },
+  { disposition: 'released' },
+])('refuses a stale or mismatched original return before approval ($acceptedTurnId $disposition)', async override => {
+  http.request.mockResolvedValue({ status: 200, data: { discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [],
+    participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy: 'when_addressed', createdAt: 1 }] } });
+  http.get.mockResolvedValue({ status: 200, data: { v: 1, status: 'available', progress: {
+    v: 1, mode: 'return', disposition: 'observing', acceptedTurnId: 'turn', discussion: source.discussionAddressing, ...override,
+  } } });
+  expect(await bindDiscussionDraftReply({ actionId: 'discussion.reply', input: { ...input,
+    replyTarget: { kind: 'message', messageId: 'question' } }, context, serverId: 'home', discussionAction: readRoster,
+    credentials: { token: 'token' }, serverHttpBaseUrl: 'https://draft-reply.test' }))
+    .toMatchObject({ failure: { ok: false, errorCode: 'discussion_content_unavailable' } });
 });
 
 it('holds an addressed publication when its persisted policy read is unavailable', async () => {
@@ -192,9 +234,11 @@ it.each(['execute', 'prepare'] as const)('captures the canonical explicit reply 
 
 it.each(['different_reply', 'different_discussion', 'different_participant', 'missing_input', 'human', 'terminal_return'] as const)(
   'does not absorb an unbound explicit publication (%s)', async kind => {
+    const caller = context.actionCaller;
+    if (caller?.kind !== 'session') throw new Error('Expected the original Session caller fixture');
     const explicit = kind === 'different_reply' ? { ...input, replyTarget: { kind: 'message', messageId: 'other-question' } }
       : kind === 'different_discussion' ? { ...input, discussionId: 'other-discussion' } : input;
-    const invocation = kind === 'different_participant' ? { ...context, actionCaller: { kind: 'session' as const, sessionId: 'other-participant' } }
+    const invocation = kind === 'different_participant' ? { ...context, actionCaller: { ...caller, sessionId: 'other-participant' } }
       : kind === 'missing_input' ? { ...context, sessionInputSource: { ...source, sourceInputId: undefined } }
       : kind === 'human' ? { ...context, surface: 'ui' as const, actionCaller: { kind: 'host' as const } }
       : kind === 'terminal_return' ? { ...context, discussionReplyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn' } }

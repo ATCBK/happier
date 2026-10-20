@@ -14,19 +14,11 @@ import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
 
 const execute = createFrontDoorActionExecute();
 const EMPTY_ROWS: readonly ManagedMachineV1[] = [];
-type InventoryRead = {
-    binding: ServerCredentialAccountScopeBinding;
-    homeId: string;
-    managedId: string | undefined;
-    includeArchived: boolean;
-    executeAction: ReturnType<typeof createDefaultActionExecutor>['execute'];
-    controller: AbortController;
-    retirement: { dispose(): void };
-    awaitingApproval: boolean;
-};
+type InventoryExecute = ReturnType<typeof createDefaultActionExecutor>['execute'];
 
 export type ManagedMachineInventoryEntry = Readonly<{
     accountId: string;
+    homeId?: string;
     managedId?: string;
     includeArchived?: boolean;
     machines: readonly ManagedMachineV1[];
@@ -36,65 +28,34 @@ export type ManagedMachineInventoryEntry = Readonly<{
     approval?: ActionApprovalRegistration;
 }>;
 
-/** A demanded projection of the canonical server inventory, with no persisted UI resource state. */
-export function useManagedMachineInventory(serverIds: readonly string[], managedId?: string,
-    executeAction: ReturnType<typeof createDefaultActionExecutor>['execute'] = execute, includeArchived = false) {
-    const idsKey = JSON.stringify([...new Set(serverIds.map(id => resolveServerProfileScopeIdForIdentifier(id) || id))].sort());
-    const requestedIdsKey = JSON.stringify(serverIds);
-    const ids = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);
-    const accountScopes = useServerCredentialAccountScopeStates(ids);
-    const bindings = React.useMemo(() => new Map([...accountScopes].flatMap(([serverId, state]) => state.binding ? [[serverId, state.binding] as const] : [])), [accountScopes]);
-    const [entries, setEntries] = React.useState<Readonly<Record<string, ManagedMachineInventoryEntry>>>({});
-    const [refreshRevision, refresh] = React.useReducer(value => value + 1, 0);
-    const reads = React.useRef(new Map<string, InventoryRead>());
-    const refreshTargets = React.useRef(new Set<string>());
-    const refreshAll = React.useCallback(() => {
-        for (const serverId of ids) refreshTargets.current.add(serverId);
-        refresh();
-    }, [ids]);
+type InventoryReader = ReturnType<typeof createInventoryReader>;
+// Demand, not a row or a naming registry, owns the read. The last reader leaving
+// or retiring its credential binding removes the projection and its Home observer.
+const demandedInventories = new WeakMap<InventoryExecute, Map<string, InventoryReader>>();
 
-    React.useEffect(() => subscribeHomeAccountChange(event => {
-        if (isArtifactOnlyHomeAccountChange(event)) return;
-        const serverId = resolveServerProfileScopeIdForIdentifier(event.serverId) || event.serverId;
-        if (!ids.includes(serverId) || reads.current.get(serverId)?.awaitingApproval) return;
-        refreshTargets.current.add(serverId);
-        refresh();
-    }), [ids]);
-    React.useEffect(() => () => {
-        for (const read of reads.current.values()) { read.controller.abort(); read.retirement.dispose(); }
-        reads.current.clear();
-    }, []);
-
-    React.useEffect(() => {
-        for (const [serverId, read] of reads.current) {
-            const binding = bindings.get(serverId);
-            if (ids.includes(serverId) && binding?.accountId === read.binding.accountId && binding.revision === read.binding.revision
-                && binding.isCurrent() && read.binding.isCurrent()
-                && read.homeId === getServerProfileById(serverId)?.serverIdentityId && read.managedId === managedId
-                && read.includeArchived === includeArchived && read.executeAction === executeAction
-                && !refreshTargets.current.has(serverId)) continue;
-            read.controller.abort(); read.retirement.dispose(); reads.current.delete(serverId);
-        }
-        for (const serverId of ids) {
-            const binding = bindings.get(serverId);
-            if (!binding?.isCurrent()) continue;
-            const homeId = getServerProfileById(serverId)?.serverIdentityId;
-            if (!homeId) continue;
-            if (reads.current.has(serverId)) continue;
-            const cancellation = new AbortController();
-            const retirement = binding.onRetire(() => cancellation.abort());
-            const pendingRead: InventoryRead = { binding, homeId, managedId, includeArchived, executeAction,
-                controller: cancellation, retirement, awaitingApproval: false };
-            reads.current.set(serverId, pendingRead);
-            setEntries(previous => {
-                const current = previous[serverId];
-                const sameTarget = current?.accountId === binding.accountId && current.managedId === managedId
-                    && (current.includeArchived ?? false) === includeArchived;
-                return { ...previous, [serverId]: { accountId: binding.accountId, managedId, includeArchived,
-                    machines: sameTarget ? current.machines : EMPTY_ROWS,
-                    ...(sameTarget && current.asOf !== undefined ? { asOf: current.asOf } : {}), status: 'loading' } };
-            });
-            void (async () => {
+function createInventoryReader(serverId: string, accountId: string, homeId: string, managedId: string | undefined,
+    includeArchived: boolean, executeAction: InventoryExecute, remove: () => void, retained?: ManagedMachineInventoryEntry) {
+    const consumers = new Map<() => void, ServerCredentialAccountScopeBinding>();
+    let entry: ManagedMachineInventoryEntry = { accountId, homeId, managedId, includeArchived,
+        machines: retained?.machines ?? EMPTY_ROWS, ...(retained?.asOf !== undefined ? { asOf: retained.asOf } : {}), status: 'loading' };
+    let controller: AbortController | null = null;
+    let awaitingApproval = false;
+    let disposed = false;
+    const isCurrent = () => !disposed && getServerProfileById(serverId)?.serverIdentityId === homeId
+        && [...consumers.values()].some(binding => binding.isCurrent());
+    const publish = (next: ManagedMachineInventoryEntry) => {
+        entry = next;
+        for (const listener of consumers.keys()) listener();
+    };
+    const refresh = () => {
+        if (!isCurrent()) return;
+        controller?.abort();
+        const cancellation = new AbortController();
+        controller = cancellation;
+        awaitingApproval = false;
+        publish({ accountId, homeId, managedId, includeArchived, machines: entry.machines,
+            ...(entry.asOf !== undefined ? { asOf: entry.asOf } : {}), status: 'loading' });
+        void (async () => {
                 try {
                     type ReadResult = Readonly<{ kind: 'succeeded'; machines: ManagedMachineV1[] }> | Readonly<{ kind: 'failed'; code: string }>;
                     const actionId = managedId ? 'machines.managed.get' : 'machines.managed.list';
@@ -102,18 +63,18 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                         signal: cancellation.signal,
                         execute: async callbacks => {
                             const outcome = classifyHomeActionOutcome(await executeAction(actionId, input, { surface: 'ui', serverId,
-                                expectedAccountId: binding.accountId, signal: cancellation.signal }));
+                                    expectedAccountId: accountId, signal: cancellation.signal }));
+                            if (!isCurrent() || cancellation.signal.aborted) return { kind: 'failed', code: 'aborted' };
                             if (outcome.kind === 'failed') return { kind: 'failed', code: homeDomainFailureCode(outcome.failure) };
                             if (outcome.kind === 'approval_pending') {
-                                pendingRead.awaitingApproval = true;
+                                awaitingApproval = true;
                                 const approval = createActionApprovalContinuation<ManagedMachineV1 | { machines: ManagedMachineV1[] }, typeof actionId>({
-                                    artifactId: outcome.artifactId, actionId, scope: binding.scope, expectedInput: input,
+                                    artifactId: outcome.artifactId, actionId, scope: { serverId, accountId }, expectedInput: input,
                                     signal: cancellation.signal,
                                     onSucceeded: value => callbacks.onApprovalSucceeded('machines' in value ? value.machines : [value]),
                                     onFailed: callbacks.onApprovalFailed,
                                 });
-                                if (binding.isCurrent() && !cancellation.signal.aborted) setEntries(previous => ({ ...previous,
-                                    [serverId]: { ...previous[serverId]!, approval } }));
+                                if (isCurrent() && !cancellation.signal.aborted) publish({ ...entry, approval });
                                 return { approvalPending: true };
                             }
                             const machines = managedId
@@ -125,53 +86,126 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                         aborted: () => ({ kind: 'failed', code: 'aborted' }),
                     });
                     let result = await read(managedId ? { homeId, managedId } : { homeId });
-                    pendingRead.awaitingApproval = false;
-                    if (!managedId && includeArchived && result.kind === 'succeeded' && binding.isCurrent() && !cancellation.signal.aborted) {
+                    if (cancellation.signal.aborted || !isCurrent()) return;
+                    awaitingApproval = false;
+                    if (!managedId && includeArchived && result.kind === 'succeeded') {
                         // Archive availability must not discard a successfully read active list. Keep
                         // previous recovery rows visibly stale until the second ordinary read settles.
                         const active = result.machines;
                         if (active.some(machine => machine.homeId !== homeId)) throw new Error('managed_response_invalid');
-                        setEntries(previous => ({ ...previous, [serverId]: { ...previous[serverId]!, machines:
-                            [...new Map([...active, ...previous[serverId]!.machines.filter(machine => machine.archivedAt !== undefined)]
-                                .map(machine => [machine.id, machine])).values()] } }));
+                        publish({ ...entry, machines:
+                            [...new Map([...active, ...entry.machines.filter(machine => machine.archivedAt !== undefined)]
+                                .map(machine => [machine.id, machine])).values()] });
                         const archived = await read({ homeId, archived: true });
-                        pendingRead.awaitingApproval = false;
+                        if (cancellation.signal.aborted || !isCurrent()) return;
+                        awaitingApproval = false;
                         result = archived.kind === 'failed' ? archived : { kind: 'succeeded', machines:
                             [...new Map([...result.machines, ...archived.machines].map(machine => [machine.id, machine])).values()] };
                     }
-                    if (!binding.isCurrent() || cancellation.signal.aborted) return;
+                    if (!isCurrent() || cancellation.signal.aborted) return;
                     if (result.kind === 'failed') {
                         const code = result.code;
                         const denied = code === 'permission_denied' || code === 'not_authenticated' || code === 'action_account_scope_changed';
                         const status = denied ? 'denied' : code === 'managed_not_found' ? 'missing' : code === 'unsupported_action' ? 'unsupported' : 'error';
-                        setEntries(previous => {
-                            const { approval: _approval, ...entry } = previous[serverId]!;
-                            return { ...previous, [serverId]: { ...entry, status, errorCode: code,
-                                ...(status === 'denied' || status === 'missing' ? { machines: EMPTY_ROWS, asOf: undefined } : {}) } };
-                        });
+                        const { approval: _approval, ...previous } = entry;
+                        publish({ ...previous, status, errorCode: code,
+                            ...(status === 'denied' || status === 'missing' ? { machines: EMPTY_ROWS, asOf: undefined } : {}) });
                         return;
                     }
                     const machines = result.machines;
                     if (machines.some(machine => machine.homeId !== homeId || (managedId && machine.id !== managedId))) throw new Error('managed_response_invalid');
-                    setEntries(previous => {
-                        const current = previous[serverId];
-                        return { ...previous, [serverId]: { accountId: binding.accountId, managedId, includeArchived, status: 'ready', asOf: Date.now(),
-                            machines: current?.accountId === binding.accountId && sameStrictJsonValue(current.machines, machines) ? current.machines : machines } };
-                    });
+                    publish({ accountId, homeId, managedId, includeArchived, status: 'ready', asOf: Date.now(),
+                        machines: sameStrictJsonValue(entry.machines, machines) ? entry.machines : machines });
                 } catch {
-                    if (!binding.isCurrent() || cancellation.signal.aborted) return;
-                    setEntries(previous => {
-                        const { approval: _approval, ...entry } = previous[serverId]!;
-                        return { ...previous, [serverId]: { ...entry, status: 'error', errorCode: 'managed_request_failed' } };
-                    });
+                    if (!isCurrent() || cancellation.signal.aborted) return;
+                    const { approval: _approval, ...previous } = entry;
+                    publish({ ...previous, status: 'error', errorCode: 'managed_request_failed' });
                 } finally {
-                    pendingRead.awaitingApproval = false;
-                    retirement.dispose();
+                    if (controller === cancellation) awaitingApproval = false;
                 }
             })();
+    };
+    const unsubscribe = subscribeHomeAccountChange(event => {
+        if (isArtifactOnlyHomeAccountChange(event) || awaitingApproval) return;
+        if ((resolveServerProfileScopeIdForIdentifier(event.serverId) || event.serverId) === serverId) refresh();
+    });
+    const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        controller?.abort();
+        unsubscribe();
+        remove();
+    };
+    return {
+        get: () => entry,
+        isCurrent,
+        refresh,
+        subscribe(binding: ServerCredentialAccountScopeBinding, listener: () => void) {
+            consumers.set(listener, binding);
+            const release = () => {
+                consumers.delete(listener);
+                if (![...consumers.values()].some(current => current.isCurrent())) dispose();
+            };
+            const retirement = binding.onRetire(release);
+            listener();
+            if (controller === null) refresh();
+            return () => { retirement.dispose(); release(); };
+        },
+    };
+}
+
+/** A demanded projection of the canonical server inventory, with no persisted UI resource state. */
+export function useManagedMachineInventory(serverIds: readonly string[], managedId?: string,
+    executeAction: InventoryExecute = execute, includeArchived = false) {
+    const idsKey = JSON.stringify([...new Set(serverIds.map(id => resolveServerProfileScopeIdForIdentifier(id) || id))].sort());
+    const requestedIdsKey = JSON.stringify(serverIds);
+    const ids = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);
+    const accountScopes = useServerCredentialAccountScopeStates(ids);
+    const bindings = React.useMemo(() => new Map([...accountScopes].flatMap(([serverId, state]) => state.binding ? [[serverId, state.binding] as const] : [])), [accountScopes]);
+    const [entries, setEntries] = React.useState<Readonly<Record<string, ManagedMachineInventoryEntry>>>({});
+    const reads = React.useRef(new Map<string, { binding: ServerCredentialAccountScopeBinding; key: string;
+        executeAction: InventoryExecute; reader: InventoryReader; release(): void }>());
+    const refreshAll = React.useCallback(() => {
+        for (const { reader } of reads.current.values()) reader.refresh();
+    }, []);
+    React.useEffect(() => () => {
+        for (const read of reads.current.values()) read.release();
+        reads.current.clear();
+    }, []);
+    React.useEffect(() => {
+        const keys = new Map(ids.map(serverId => [serverId, JSON.stringify([
+            serverId, bindings.get(serverId)?.accountId, getServerProfileById(serverId)?.serverIdentityId, managedId, includeArchived,
+        ])]));
+        for (const [serverId, read] of reads.current) {
+            if (read.binding === bindings.get(serverId) && read.binding.isCurrent() && read.reader.isCurrent()
+                && read.key === keys.get(serverId) && read.executeAction === executeAction) continue;
+            read.release(); reads.current.delete(serverId);
         }
-        refreshTargets.current.clear();
-    }, [bindings, ids, managedId, includeArchived, refreshRevision, executeAction]);
+        for (const serverId of ids) {
+            const binding = bindings.get(serverId);
+            const homeId = getServerProfileById(serverId)?.serverIdentityId;
+            if (!binding?.isCurrent() || !homeId || reads.current.has(serverId)) continue;
+            let inventories = demandedInventories.get(executeAction);
+            if (!inventories) { inventories = new Map(); demandedInventories.set(executeAction, inventories); }
+            const key = keys.get(serverId)!;
+            let reader = inventories.get(key);
+            if (!reader?.isCurrent()) {
+                const current = entries[serverId];
+                const retained = current?.accountId === binding.accountId && current.homeId === homeId && current.managedId === managedId
+                    && (current.includeArchived ?? false) === includeArchived ? current : undefined;
+                const ownedInventories = inventories;
+                reader = createInventoryReader(serverId, binding.accountId, homeId, managedId, includeArchived, executeAction,
+                    () => { if (ownedInventories.get(key) === reader) ownedInventories.delete(key); }, retained);
+                inventories.set(key, reader);
+            }
+            const ownedReader = reader;
+            const release = reader.subscribe(binding, () => setEntries(previous => previous[serverId] === ownedReader.get()
+                ? previous : { ...previous, [serverId]: ownedReader.get() }));
+            reads.current.set(serverId, { binding, key, executeAction, reader, release });
+        }
+        // Entry updates are projections, not new demand. Only binding/target changes reacquire a reader.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bindings, ids, managedId, includeArchived, executeAction]);
 
     const currentEntries = React.useMemo(() => {
         const result: Record<string, ManagedMachineInventoryEntry> = {};
@@ -179,6 +213,7 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
             const binding = bindings.get(serverId);
             const entry = entries[serverId];
             if (binding?.isCurrent() && entry?.accountId === binding.accountId && entry.managedId === managedId
+                && entry.homeId === getServerProfileById(serverId)?.serverIdentityId
                 && (entry.includeArchived ?? false) === includeArchived) result[serverId] = entry;
         }
         return result;

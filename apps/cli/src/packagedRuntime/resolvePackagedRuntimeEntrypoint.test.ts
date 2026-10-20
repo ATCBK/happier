@@ -111,7 +111,7 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
                 argv: ['/usr/local/bin/node', join(layout.currentPath, 'package-dist', 'index.mjs')],
                 processEnv,
             })).toEqual({
-                root: join(layout.versionsDir, 'version-a'),
+                root: realpathSync(join(layout.versionsDir, 'version-a')),
                 packagedRuntime: {
                     kind: 'cli_version_root',
                     versionRootId: 'version-a',
@@ -152,7 +152,7 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
                 argv: ['/usr/local/bin/node', join(versionRoot, 'package-dist', 'index.mjs')],
                 processEnv,
             })).toMatchObject({
-                root: versionRoot,
+                root: realpathSync(versionRoot),
                 packagedRuntime: {
                     kind: 'cli_version_root',
                     versionRootId: 'version-a',
@@ -167,6 +167,33 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
             })).toThrow(FirstPartyVersionRootIdentityError);
         } finally {
             rmSync(homeDir, { recursive: true, force: true });
+        }
+    });
+
+    it('accepts a physical package-dist module under an aliased managed home', () => {
+        const scratchDir = mkdtempSync(join(tmpdir(), 'happier-packaged-aliased-home-'));
+        const homeDir = join(scratchDir, 'home-alias');
+        try {
+            mkdirSync(join(scratchDir, 'home'));
+            symlinkSync(realpathSync(join(scratchDir, 'home')), homeDir, process.platform === 'win32' ? 'junction' : 'dir');
+            const processEnv = { ...process.env, HAPPIER_HOME_DIR: homeDir };
+            const layout = resolveFirstPartyInstallLayout({ componentId: 'happier-cli', channel: 'publicdev', processEnv });
+            const versionRoot = join(layout.versionsDir, 'version-a');
+            mkdirSync(join(versionRoot, 'package-dist'), { recursive: true });
+            const physicalRoot = realpathSync(versionRoot);
+
+            expect(resolveAuthoritativePackagedRuntimeCustody({
+                moduleUrl: pathToFileURL(join(physicalRoot, 'package-dist', 'chunk.js')).href,
+                currentExecPath: process.execPath,
+                argv: [process.execPath, join(versionRoot, 'package-dist', 'index.mjs')],
+                processEnv,
+            })).toEqual({
+                root: physicalRoot,
+                packagedRuntime: { kind: 'cli_version_root', versionRootId: 'version-a' },
+                provenance: 'packaged-module',
+            });
+        } finally {
+            rmSync(scratchDir, { recursive: true, force: true });
         }
     });
 
@@ -330,7 +357,7 @@ describe('resolvePackagedRuntimeEntrypoint', () => {
                     HAPPIER_STACK_REPO_DIR: repoRoot,
                 },
             })).toEqual({
-                root: snapshotRoot,
+                root: realpathSync(snapshotRoot),
                 packagedRuntime: {
                     kind: 'pinned_runner_snapshot',
                     snapshotId,

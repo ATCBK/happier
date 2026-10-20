@@ -6,7 +6,7 @@
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/mini';
-import { SessionFollowRuleSourceOccurrenceV1Schema, type SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import { SessionFollowOccurrenceNotificationSchema, type SessionFollowOccurrenceNotification } from './sessions/sessionActivityChangedContract';
 import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { configuration } from '@/configuration';
@@ -37,6 +37,8 @@ import {
 import { getDaemonAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelRequestSchema, DaemonAgentInstallCancelResponseSchema, DaemonAgentInstallListRequestSchema, DaemonAgentInstallListResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { isUnattestedPublicV1RunnerRolloutMutation } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, SessionRunnerRestartAdmissionIdentitySchema,
+  SessionRunnerRestartAdmissionCurrentSchema } from './plannedRunnerRestart/sessionRunnerRestartAdmission';
 import { Metadata, type SessionCreationOutcome } from '@/api/types';
 import { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import {
@@ -103,7 +105,7 @@ import { LocalServiceActionRequestV1Schema, LocalServiceActionResultV1Schema } f
 import { LocalServicePreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 import { ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { RestartAllSessionRunnersRequestV1Schema, RestartAllSessionRunnersResultV1Schema, RestartSessionRunnerRequestV1Schema, RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
-import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
+import { RestartSessionRunnerRequestV2Schema, RestartSessionRunnerConfirmedBackgroundRequestSchema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import { SessionRunnerStatusGetRequestV1Schema, SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { SessionRunnerRuntimeStatusV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV2';
 import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
@@ -727,7 +729,7 @@ export function createDaemonControlApp({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string, intent?: 'explicit_stop') => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -741,7 +743,7 @@ export function createDaemonControlApp({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   /**
    * Settles the existing PID-correlated spawn waiter for a strict terminal
    * creation failure. It is intentionally separate from ordinary Session
@@ -824,7 +826,7 @@ export function createDaemonControlApp({
     accountSettingsVersionHint?: number;
   }>) => Promise<unknown>;
   handleSessionConnectedServiceRuntimeAuthRefresh?: SessionConnectedServiceRuntimeAuthRefreshHandler;
-  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2) => Promise<RestartSessionRunnerResultV1>;
+  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2, options?: Readonly<{ allowNativeBackgroundInterruption: true }>) => Promise<RestartSessionRunnerResultV1>;
   handleSessionRunnerRestartAll?: (request: RestartAllSessionRunnersRequestV1) => Promise<RestartAllSessionRunnersResultV1>;
   handleSessionRunnerStatusGet?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStateV1>;
   handleSessionRunnerStatusV2Get?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStatusV2>;
@@ -1688,46 +1690,53 @@ export function createDaemonControlApp({
     return result;
   });
 
-  typed.post('/session-runners/restart', {
-    schema: {
-      body: RestartSessionRunnerRequestV1Schema,
-      response: {
-        200: RestartSessionRunnerResultV1Schema,
-        401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
-        501: z.object({
-          ok: z.literal(false),
-          status: z.literal('unsupported_daemon'),
-          sessionId: z.string(),
-          reasonCode: z.literal('unsupported_daemon_version'),
-        }),
+  for (const restartRoute of [
+    { path: '/session-runners/restart', confirmedBackground: false },
+    { path: '/session-runners/restart-confirmed-background', confirmedBackground: true },
+  ] as const) {
+    typed.post(restartRoute.path, {
+      schema: {
+        body: restartRoute.confirmedBackground ? RestartSessionRunnerConfirmedBackgroundRequestSchema : RestartSessionRunnerRequestV1Schema,
+        response: {
+          200: RestartSessionRunnerResultV1Schema,
+          401: authSchema401,
+          503: daemonShuttingDownRouteResponseSchema,
+          501: z.object({
+            ok: z.literal(false),
+            status: z.literal('unsupported_daemon'),
+            sessionId: z.string(),
+            reasonCode: z.literal('unsupported_daemon_version'),
+          }),
+        },
       },
-    },
-    preHandler: requireAuth,
-  }, async (request, reply) => {
-    if (isDaemonQuiescing()) {
-      reply.code(503);
-      return daemonShuttingDownResponse();
-    }
-    if (!handleSessionRunnerRestart) {
-      reply.code(501);
-      return {
-        ok: false as const,
-        status: 'unsupported_daemon' as const,
-        sessionId: request.body.sessionId,
-        reasonCode: 'unsupported_daemon_version' as const,
-      };
-    }
-    if (isUnattestedPublicV1RunnerRolloutMutation(request.body)) {
-      return {
-        ok: false as const,
-        status: 'ineligible' as const,
-        sessionId: request.body.sessionId,
-        reasonCode: 'runner_generation_unattested' as const,
-      };
-    }
-    return await handleSessionRunnerRestart(request.body);
-  });
+      preHandler: requireAuth,
+    }, async (request, reply) => {
+      if (isDaemonQuiescing()) {
+        reply.code(503);
+        return daemonShuttingDownResponse();
+      }
+      if (!handleSessionRunnerRestart) {
+        reply.code(501);
+        return {
+          ok: false as const,
+          status: 'unsupported_daemon' as const,
+          sessionId: request.body.sessionId,
+          reasonCode: 'unsupported_daemon_version' as const,
+        };
+      }
+      if (isUnattestedPublicV1RunnerRolloutMutation(request.body)) {
+        return {
+          ok: false as const,
+          status: 'ineligible' as const,
+          sessionId: request.body.sessionId,
+          reasonCode: 'runner_generation_unattested' as const,
+        };
+      }
+      return restartRoute.confirmedBackground
+        ? await handleSessionRunnerRestart(request.body, { allowNativeBackgroundInterruption: true })
+        : await handleSessionRunnerRestart(request.body);
+    });
+  }
 
   typed.post('/session-runners/restart-v2', {
     schema: {
@@ -1856,10 +1865,20 @@ export function createDaemonControlApp({
     return await handleSessionRunnerStatusV2Get({ sessionId: request.body.sessionId });
   });
 
+  typed.post(SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, {
+    schema: { body: SessionRunnerRestartAdmissionIdentitySchema,
+      response: { 200: SessionRunnerRestartAdmissionCurrentSchema, 401: authSchema401 } },
+    preHandler: requireAuth,
+  }, async request => {
+    const { expectedPid, requestId } = request.body;
+    const attempt = getChildren().find(tracked => (tracked.sessionRunnerPid ?? tracked.pid) === expectedPid)?.plannedRestartAdmission;
+    return { current: Boolean(attempt && attempt.requestId === requestId && !attempt.signal.aborted) };
+  });
+
   // Session reports itself after creation
   typed.post('/session-activity-changed', {
     schema: {
-      body: z.strictObject({ sessionId: z.string().check(z.minLength(1)), followOccurrence: z.optional(SessionFollowRuleSourceOccurrenceV1Schema) }),
+      body: z.strictObject({ sessionId: z.nullable(z.string().check(z.minLength(1))), followOccurrence: z.optional(SessionFollowOccurrenceNotificationSchema) }),
       response: { 200: SessionActivityChangedResponseSchema, 401: authSchema401,
         503: daemonShuttingDownRouteResponseSchema },
     },
@@ -1869,8 +1888,11 @@ export function createDaemonControlApp({
       reply.code(503);
       return daemonShuttingDownResponse();
     }
-    if (getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
-      if (!request.body.followOccurrence || request.body.followOccurrence.sourceSessionId === request.body.sessionId) {
+    const occurrence = request.body.followOccurrence;
+    const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
+    if (runOriginal || getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
+      if (runOriginal ? runOriginal.source.kind === 'workflow_run' || runOriginal.source.sessionId === request.body.sessionId
+        : !occurrence || 'sourceSessionId' in occurrence && occurrence.sourceSessionId === request.body.sessionId) {
         const result = await onSessionActivityChanged?.(request.body.sessionId, request.body.followOccurrence);
         if (result?.personalFollow?.sourceSessionId === request.body.sessionId) {
           return { ok: true as const, personalFollow: result.personalFollow };
@@ -2561,7 +2583,9 @@ export function createDaemonControlApp({
         401: authSchema401,
         403: z.object({
           ok: z.literal(false),
-          errorCode: z.enum([CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked, CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable]),
+          errorCode: z.enum([CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked,
+            CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable,
+            CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable]),
           modelId: z.optional(z.string()),
           errorMessage: z.optional(z.string()),
         }),
@@ -3600,11 +3624,14 @@ export function createDaemonControlApp({
       }
     },
     preHandler: requireAuth,
-  }, async (request) => {
+  }, async (request, reply) => {
     const { sessionId } = request.body;
 
     logger.debug(`[CONTROL SERVER] Stop session request: ${sessionId}`);
-    return await stopSession(sessionId, 'explicit_stop');
+    const lifetime = createDaemonControlRequestLifetime(request, reply);
+    try {
+      return await lifetime.run(() => stopSession(sessionId, 'explicit_stop', lifetime.signal));
+    } finally { lifetime.dispose(); }
   });
 
   // Spawn new session
@@ -4219,7 +4246,7 @@ export function startDaemonControlServer({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string, intent?: 'explicit_stop') => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -4233,7 +4260,7 @@ export function startDaemonControlServer({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   onSessionStartupFailure?: (input: Readonly<{
     spawnNonce: string;
     errorDetail: SessionCreationTerminalSpawnErrorDetail;
@@ -4316,7 +4343,7 @@ export function startDaemonControlServer({
     accountSettingsVersionHint?: number;
   }>) => Promise<unknown>;
   handleSessionConnectedServiceRuntimeAuthRefresh?: SessionConnectedServiceRuntimeAuthRefreshHandler;
-  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2) => Promise<RestartSessionRunnerResultV1>;
+  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2, options?: Readonly<{ allowNativeBackgroundInterruption: true }>) => Promise<RestartSessionRunnerResultV1>;
   handleSessionRunnerRestartAll?: (request: RestartAllSessionRunnersRequestV1) => Promise<RestartAllSessionRunnersResultV1>;
   handleSessionRunnerStatusGet?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStateV1>;
   handleSessionRunnerStatusV2Get?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStatusV2>;

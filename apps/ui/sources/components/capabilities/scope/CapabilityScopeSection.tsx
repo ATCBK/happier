@@ -27,6 +27,7 @@ import { useReachRules } from '@/sync/domains/capabilities/reach/useReachRules';
 import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
 import { t } from '@/text';
 import { joinList } from '@/utils/text/joinList';
+import { describeOfflineMachines } from '@/components/capabilities/where/whereItsOnPresentation';
 
 import {
   SCOPE_ROW_LIMIT,
@@ -175,8 +176,8 @@ export const ScopeSheet = React.memo(function ScopeSheet(
     list: ScopeListData;
     place: Place;
     data: Pick<CapabilityScopeData, 'machines' | 'names' | 'open'>;
-    /** The machine the sheet reads from is offline: its list comes when it runs, so a failed read is not an error. */
-    offline: boolean;
+    /** The name of the covered machine that is offline: its list comes when it runs, so a failed read is not an error. */
+    offlineMachine: string | null;
   }>,
 ) {
   const { list, data, kind } = props;
@@ -189,15 +190,15 @@ export const ScopeSheet = React.memo(function ScopeSheet(
         {list.total > 0 ? <Text variant="meta" style={styles.count}>{String(list.total)}</Text> : null}
       </View>
       {/* A read that failed while its machine is offline is not an error: the list comes when the machine runs. */}
-      {list.state === 'unavailable' && props.offline ? (
+      {list.state !== 'ready' && props.offlineMachine !== null ? (
         <Item
           testID={`${props.testID}.offline`}
           mode="info"
           showChevron={false}
-          title={t('capabilities.scopeSection.whenRunning', { machine: props.place.label })}
+          title={t('capabilities.scopeSection.whenRunning', { machine: props.offlineMachine })}
         />
       ) : null}
-      {list.state === 'unavailable' && !props.offline ? (
+      {list.state === 'unavailable' && props.offlineMachine === null ? (
         <EmptyLine
           testID={`${props.testID}.unavailable`}
           title={t('capabilities.scopeSection.loadFailed')}
@@ -205,7 +206,7 @@ export const ScopeSheet = React.memo(function ScopeSheet(
           onPress={list.retry}
         />
       ) : null}
-      {list.state === 'loading' ? (
+      {list.state === 'loading' && props.offlineMachine === null ? (
         <CollectionSkeletonRows count={SCOPE_ROW_LIMIT} />
       ) : null}
       {list.state === 'ready' && list.total === 0 ? (
@@ -322,7 +323,8 @@ export const CapabilityScopeSection = React.memo(
       [data.machines, data.names, data.open],
     );
     const migratedNames = data.migrated.names;
-    const placeOffline = props.place.t === 'machine' && data.offlineNames.length > 0;
+    const offlineMachine = data.unreachableMachineName;
+    const offlineNote = describeOfflineMachines(data.offlineNames);
     return (
       <ItemGroup
         testID={props.testID}
@@ -330,13 +332,11 @@ export const CapabilityScopeSection = React.memo(
         description={props.description}
         surface="none"
       >
-        {data.offlineNames.length > 0 && props.offlineStatedAbove !== true ? (
+        {offlineNote && props.offlineStatedAbove !== true ? (
           <View style={styles.offline}>
             <SurfaceFreshnessLine
               testID={`${props.testID}.offline`}
-              reason={t('capabilities.where.offlineNote', {
-                machine: joinList(data.offlineNames),
-              })}
+              reason={offlineNote}
             />
           </View>
         ) : null}
@@ -360,7 +360,7 @@ export const CapabilityScopeSection = React.memo(
                 list={data.skills}
                 place={place}
                 data={rowData}
-                offline={placeOffline}
+                offlineMachine={offlineMachine}
               />
             </ItemGroupColumn>
             <ItemGroupColumn>
@@ -371,7 +371,7 @@ export const CapabilityScopeSection = React.memo(
                 list={data.mcp}
                 place={place}
                 data={rowData}
-                offline={placeOffline}
+                offlineMachine={offlineMachine}
               />
             </ItemGroupColumn>
           </ItemGroupColumns>

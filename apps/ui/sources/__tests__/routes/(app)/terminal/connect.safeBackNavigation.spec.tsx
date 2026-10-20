@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import tweetnacl from 'tweetnacl';
 import { encodeTerminalConnectLinkV4Payload } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { installTerminalRouteCommonModuleMocks, initializeTerminalRouteRuntimeForTests, renderTerminalRoute } from './terminalRouteTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,7 +14,6 @@ const replaceMock = vi.fn();
 const canGoBackMock = vi.fn(() => false);
 const homeUrl = 'https://navigation-home.example.test';
 const homeIdentity = 'srv_navigation_home';
-const credentials = { token: 'e30.eyJzdWIiOiJuYXZpZ2F0aW9uLWFjY291bnQifQ.signature' };
 const approvals: unknown[] = [];
 
 installTerminalRouteCommonModuleMocks({
@@ -26,11 +26,18 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+const browser = await installBrowserRuntimeForTests({ url: 'https://ui.example.test/terminal/connect' });
+const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const credentials = { token: createAccountTokenForTests('terminal-navigation-account', { currentAccount: true }) };
 await initializeTerminalRouteRuntimeForTests();
+afterAll(() => browser.restore());
 
 describe('TerminalConnectScreen safe navigation', () => {
-    let restoreCredentials: (() => void) | undefined;
+    let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     beforeEach(async () => {
+        browser.activate();
+        browser.window.sessionStorage.clear();
         backMock.mockClear();
         replaceMock.mockClear();
         canGoBackMock.mockClear();
@@ -39,12 +46,8 @@ describe('TerminalConnectScreen safe navigation', () => {
         const { adoptHomeProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
         const home = await adoptHomeProfile({ descriptor, source: 'manual', descriptorAuthority: 'current_connection_observation' });
         await setActiveServerId(home.id, { scope: 'device' });
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        // Credential persistence and remote HTTP are the replaced system boundaries.
-        const credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(credentials);
-        restoreCredentials = () => credentialBoundary.mockRestore();
-        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        setRuntimeFetch(async (input, init) => {
+        connection = await restoreServerAccountForTest({ serverUrl: homeUrl, serverIdentityId: homeIdentity,
+            accountId: 'terminal-navigation-account', credentials, request: async (input, init) => {
             const url = new URL(String(input));
             expect(url.origin).toBe(homeUrl);
             const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -58,8 +61,8 @@ describe('TerminalConnectScreen safe navigation', () => {
                 return json({});
             }
             if (url.pathname === '/v1/auth/ping') return json({});
-            throw new Error('Unexpected pairing HTTP request: ' + url.pathname);
-        });
+            return null;
+        } });
         const createdAtMs = Date.now();
         const payload = encodeTerminalConnectLinkV4Payload({
             v: 4,
@@ -68,15 +71,14 @@ describe('TerminalConnectScreen safe navigation', () => {
             homeConnectionDescriptor: descriptor,
         });
         const href = 'https://ui.example.test/terminal/connect#v4=' + encodeURIComponent(payload);
-        const url = new URL(href);
-        vi.stubGlobal('window', { location: { hash: url.hash, pathname: url.pathname, search: '', href }, history: { replaceState: vi.fn() } });
+        browser.reconfigureUrl(href);
         const { clearPendingTerminalConnect } = await import('@/sync/domains/pending/pendingTerminalConnect');
         clearPendingTerminalConnect();
     });
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
-        restoreCredentials?.();
-        vi.unstubAllGlobals();
+        await connection?.dispose();
+        connection = undefined;
     });
 
     it('replaces with / after approving terminal connect', async () => {

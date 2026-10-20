@@ -40,7 +40,6 @@ import {
 } from '@/voice/settings/panels/realtime/realtimeVoiceCatalogMenu';
 import { useBundledConversationProviderSettings } from '@/voice/settings/panels/realtime/useBundledConversationProviderSettings';
 import { readDeclaredVoiceSettingsCatalog } from '@/voice/settings/panels/realtime/voiceCatalog';
-import type { VoiceCatalogPreviewSynthesizer } from '@/voice/settings/panels/realtime/catalogPreview';
 import { resolveSessionVoicePreference } from '@/voice/settings/resolveSessionVoicePreference';
 
 import { readSessionVoiceInUse, resolveSessionVoiceLine } from './sessionVoiceLine';
@@ -96,14 +95,15 @@ export const SessionVoiceSection = React.memo(function SessionVoiceSection(
     >
       {field && declaration ? (
         <SessionVoicePicker
+          key={JSON.stringify([props.serverId, props.session.id, choice.providerId])}
           session={props.session}
           serverId={props.serverId}
           providerId={choice.providerId}
           providerLabel={providerLabel}
           declaration={declaration}
-          client={choice.client}
+          catalogAvailable={choice.catalogAvailable}
           catalogTargetKey={choice.targetKey}
-          preview={choice.preview}
+          canPreview={choice.canPreview}
           config={choice.config}
           searchPlaceholderKey={
             settings.descriptor?.fields.find(
@@ -128,9 +128,9 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     providerId: string;
     providerLabel: string;
     declaration: Parameters<typeof readSessionVoiceSettingFieldV1>[0];
-    client: Parameters<typeof useRealtimeVoiceCatalog>[0]['client'];
+    catalogAvailable: boolean;
     catalogTargetKey: string;
-    preview?: VoiceCatalogPreviewSynthesizer;
+    canPreview?: boolean;
     config: VoiceProviderSettingsJsonValueV1;
     searchPlaceholderKey?: unknown;
   }>,
@@ -156,13 +156,14 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const [refused, setRefused] = React.useState(false);
   const declaredRows = React.useMemo(() => readDeclaredVoiceSettingsCatalog(declaration), [declaration]);
   const { catalog, lastKnownRows, requestCatalog } = useRealtimeVoiceCatalog({
-    client: props.client,
+    providerId,
+    catalogAvailable: props.catalogAvailable,
     credentialUsable: true,
     targetKey: props.catalogTargetKey,
     declaredRows,
   });
-  const { previewingId, playPreview, stopPreview } =
-    useRealtimeCatalogPreview(providerId, { targetKey: props.catalogTargetKey, synthesize: props.preview });
+  const { previewingId, playPreview, retirePreview } =
+    useRealtimeCatalogPreview(providerId, { targetKey: props.catalogTargetKey });
   const catalogRows = catalog.phase === 'ready' ? catalog.rows : null;
   const resolution = React.useMemo(
     () =>
@@ -275,7 +276,7 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     credentialUnavailableDetail: t('sessionVoice.loading'),
     previewingId,
     onPreview: playPreview,
-    canPreview: Boolean(props.preview),
+    canPreview: props.canPreview,
     inUseId: inUse?.providerContributionId === providerId ? inUseId : null,
     category: t('sessionVoice.voicesHeading', { provider: providerLabel }),
     onRetry: requestCatalog,
@@ -338,7 +339,7 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
         onOpenChange={(next) => {
           setOpen(next);
           if (next) requestCatalog();
-          else stopPreview();
+          else retirePreview();
         }}
         variant="selectable"
         search

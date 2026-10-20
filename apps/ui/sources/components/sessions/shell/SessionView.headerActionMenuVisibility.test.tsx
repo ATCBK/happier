@@ -26,6 +26,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { buildRealmQualifiedSessionCompanionPreferenceKey } from '@/components/sessions/companion/state/sessionCompanionPreferenceKey';
 import type { SessionCompanionPreferencesV1 } from '@/components/sessions/companion/state/sessionCompanionPreference';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
@@ -548,7 +549,7 @@ function applyShellFixtures() {
     ? createToolCallMessageFixture({ ...message, id: message.id ?? `tool-${index}`, tool: { ...createToolCallMessageFixture().tool, ...message.tool } })
     : { localId: null, createdAt: 1, ...message });
   const messagesById = Object.fromEntries(messages.map(message => [message.id, message]));
-  canonicalStorage.setState({ isDataReady: true, sessionMessages: { s1: createSessionMessagesFixture({
+  canonicalStorage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
     isLoaded: true, messagesById, messageIdsOldestFirst: messages.map(message => message.id),
   }) } });
   canonicalStorage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: localSettingsState.mobileWorkspaceExperienceV1 });
@@ -598,7 +599,10 @@ beforeEach(async () => {
                 if (bootstrapResponse) return bootstrapResponse;
                 return new Response('{}', { status: 404 });
   } });
-  await vi.waitFor(() => expect(canonicalStorage.getState().profile.id).toBe('header-account'));
+  await waitForHomeGovernance(() => {
+    expect(canonicalStorage.getState().profile.id).toBe('header-account');
+    expect(canonicalStorage.getState().isDataReady).toBe(true);
+  });
   canonicalStorage.getState().applyLocalSettings({ appPaneScopesV1: {} }, { persist: false });
 });
 afterEach(async () => {
@@ -688,14 +692,14 @@ function createSessionSurfacePlacement(input: Readonly<{
     display: { developerFallback: input.descriptorId },
     availability: { state: 'available', reason: 'available', diagnostics: [] },
     headerActions: [],
-    ...({
+    executionOrigin: {
       serverIdentityId: 'srv_account_one',
       materializationRef: {
         pluginId: 'acme.preview',
         machineId: 'machine-1',
         materializationId: `${input.descriptorId}-install-a`,
       },
-    } satisfies PluginMachineExecutionOriginV1),
+    } satisfies PluginMachineExecutionOriginV1,
   };
 }
 
@@ -900,7 +904,9 @@ describe('SessionView header action menu visibility', () => {
       destination: rightSidebarPlacement.binding.destination,
       input: { source: 'session-header' },
     } as const;
-    await expect(openSurface(rightSidebarRequest)).resolves.toEqual({ ok: true });
+    await act(async () => {
+      await expect(openSurface(rightSidebarRequest)).resolves.toEqual({ ok: true });
+    });
     expect(pane.scopeState?.right.selectedDestination).toEqual({
       kind: 'plugin',
       destination: rightSidebarPlacement.binding.destination,

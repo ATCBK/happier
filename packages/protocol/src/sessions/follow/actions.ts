@@ -1,22 +1,20 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { ACTION_ID_FAMILIES_V1 } from '../../actions/actionIds.js';
-import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
-import { SessionIdSchema } from '../idsV1.js';
-import { GetSessionFollowResponseSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, GetSessionAutoFollowPreferencesRequestSchema, SetSessionAutoFollowPreferencesRequestSchema, SessionAutoFollowPreferencesResponseSchema } from './api.js';
+import { GetSessionFollowResponseSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, GetOtherAccountFollowResponseV1Schema, SetOtherAccountFollowResponseV1Schema, GetSessionAutoFollowPreferencesRequestSchema, SetSessionAutoFollowPreferencesRequestSchema, SessionAutoFollowPreferencesResponseSchema } from './api.js';
 import { SetSessionFollowSourceResponseSchema } from './sessionFollowSourcesApi.js';
 import { FollowReceiverRefV1Schema, ChangeDeliveryMuteRequestV1Schema, ChangeDeliveryMuteResponseV1Schema, ListDeliveryMutesResponseV1Schema } from './sessionDeliveryMuteV1.js';
 import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
 import { SessionFollowRuleDefinitionV1Schema, SessionFollowRuleIdV1Schema, SessionFollowRuleV1Schema, SetSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleResponseV1Schema } from './sessionFollowRuleV1.js';
 import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
-import { PersonalFollowOnceV1Schema, AccountSessionFollowV1Schema } from './accountFollow.js';
-import { SessionFollowSourceV1Schema } from './sessionFollowSourcesApi.js';
+import { PersonalFollowOnceV1Schema, AccountFollowRelationV1Schema } from './accountFollow.js';
+import { FollowSourceRelationV1Schema } from './sessionFollowSourcesApi.js';
 import { SessionListFilterV1Schema } from '../listFilter/sessionListFilterV1.js';
 import { FollowRulePreviewResultV1Schema } from './sessionFollowRulePreviewV1.js';
 import { SessionTargetV1Schema } from '../../actions/sessionTargetV1.js';
+import { FollowListPageRequestV1Schema, FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
 
 export type SessionFollowActionIdV1 = typeof ACTION_ID_FAMILIES_V1.session_follow[number];
-const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
 /** Operational receiver intent resolves once at Actions; stored/wire refs remain exact. */
 export const FollowActionReceiverV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('account') }),
@@ -56,13 +54,13 @@ export type FollowRuleRemoveActionInputV1 = z.infer<typeof FollowRuleRemoveActio
 export type FollowRuleGetActionOutputV1 = z.infer<typeof FollowRuleGetActionOutputV1Schema>;
 export type FollowRuleSetActionOutputV1 = z.infer<typeof FollowRuleSetActionOutputV1Schema>;
 export type FollowRuleRemoveActionOutputV1 = z.infer<typeof FollowRuleRemoveActionOutputV1Schema>;
-const ordinarySource = z.strictObject({ kind: z.literal('session'), sessionId: SessionIdZodSchema });
+const ordinarySource = FollowSourceRefV1Schema.check(z.refine(source => source.kind !== 'rule'));
 const ordinaryPair = { receiver: FollowActionReceiverV1Schema, source: ordinarySource };
 export const FollowGetActionInputV1Schema = z.strictObject(followPair);
 export const FollowSetActionInputV1Schema = lazyZodSchema(() => z.union([
   FollowRuleSetActionInputV1Schema,
   z.strictObject({ ...ordinaryPair, policy: z.optional(FollowPolicyV1Schema), once: z.optional(z.nullable(PersonalFollowOnceV1Schema)) })
-    .check(z.refine(value => value.receiver.kind === 'account'
+    .check(z.refine(value => value.receiver.kind === 'account' && value.source.kind === 'session'
       ? value.policy !== undefined || value.once !== undefined
       : value.policy !== undefined && value.once === undefined)),
 ]));
@@ -70,15 +68,16 @@ export const FollowRemoveActionInputV1Schema = z.union([
   FollowRuleRemoveActionInputV1Schema, z.strictObject(ordinaryPair),
 ]);
 export const FollowListActionInputV1Schema = z.union([
-  z.strictObject({ direction: z.literal('following'), receiver: FollowActionReceiverV1Schema }),
-  z.strictObject({ direction: z.literal('followers'), source: FollowSourceRefV1Schema }),
+  z.strictObject({ direction: z.literal('following'), receiver: FollowActionReceiverV1Schema, ...FollowListPageRequestV1Schema.shape }),
+  z.strictObject({ direction: z.literal('followers'), source: FollowSourceRefV1Schema, ...FollowListPageRequestV1Schema.shape }),
 ]);
 export const FollowListActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
-  follows: z.array(AccountSessionFollowV1Schema),
-  sources: z.array(SessionFollowSourceV1Schema),
+  follows: z.array(AccountFollowRelationV1Schema),
+  sources: z.array(FollowSourceRelationV1Schema),
   rules: z.array(OpenedSessionFollowRuleV1Schema),
   coverage: z.enum(['complete', 'partial', 'unavailable']),
   peopleCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  ...FollowListPageResultFieldsV1,
 }));
 export const FollowPreviewActionInputV1Schema = z.strictObject({ receiver: FollowActionReceiverV1Schema, filter: SessionListFilterV1Schema });
 export type FollowPreviewActionInputV1 = z.output<typeof FollowPreviewActionInputV1Schema>;
@@ -95,8 +94,8 @@ export const SessionFollowActionInputSchemasV1 = Object.freeze({
   'session.delivery.mute.list': muteReceiver,
 });
 export const SessionFollowActionOutputSchemasV1 = Object.freeze({
-  'follow.get': z.union([GetSessionFollowResponseSchema, z.strictObject({ source: z.nullable(SessionFollowSourceV1Schema) }), FollowRuleGetActionOutputV1Schema]),
-  'follow.set': z.union([SetSessionFollowResponseSchema, SetSessionFollowSourceResponseSchema, FollowRuleSetActionOutputV1Schema]),
+  'follow.get': z.union([GetSessionFollowResponseSchema, GetOtherAccountFollowResponseV1Schema, z.strictObject({ source: z.nullable(FollowSourceRelationV1Schema) }), FollowRuleGetActionOutputV1Schema]),
+  'follow.set': z.union([SetSessionFollowResponseSchema, SetOtherAccountFollowResponseV1Schema, SetSessionFollowSourceResponseSchema, FollowRuleSetActionOutputV1Schema]),
   'follow.remove': z.union([RemoveSessionFollowResponseSchema, FollowRuleRemoveActionOutputV1Schema]),
   'follow.list': FollowListActionOutputV1Schema,
   'follow.preview': FollowRulePreviewResultV1Schema,

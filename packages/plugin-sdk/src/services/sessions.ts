@@ -3,6 +3,8 @@ import type { PluginOperationAvailability } from '../availability.js';
 import type { PluginDiagnosticData } from '../diagnostics.js';
 import type { JsonValue } from '../identity.js';
 import type { Disposable, PluginCancellationOptions } from '../lifecycle.js';
+import type { ProjectKeyV1, SessionSpawnNewInputV2, SessionServerStartSpawnDraftV1 } from '../sessions/authoring.js';
+export type { ProjectKeyV1, SessionSpawnNewInputV2, SessionServerStartSpawnDraftV1 } from '../sessions/authoring.js';
 import type {
     SessionMcpElicitDecisionV1,
     SessionMcpElicitRequestV1,
@@ -71,13 +73,8 @@ export interface SessionSchema<T> {
         | Readonly<{ success: false; error: unknown }>;
 }
 
-export type ProjectKeyV1 =
-    | Readonly<{ id: string; serverId?: string }>
-    | Readonly<{ serverId: string; machineId: string; rootPath: string }>
-    | Readonly<{ serverId: string; projectKey: string }>;
 export const ProjectKeyV1Schema: SessionSchema<ProjectKeyV1> = protocolProjectKeyV1Schema;
 
-export type SessionSpawnNewInputV2 = PluginActionInputById['session.spawn_new'];
 /** Browser-safe Session-create input projected at the SDK author boundary. */
 export const SessionSpawnNewInputV2Schema: SessionSchema<SessionSpawnNewInputV2> = /* @__PURE__ */ projectProtocolValue(protocolSessionSpawnNewInputV2Schema);
 
@@ -95,10 +92,6 @@ export type SessionAuthoringCheckoutCreationDraftV1 = {
 export const SessionAuthoringCheckoutCreationDraftV1Schema:
     SessionSchema<SessionAuthoringCheckoutCreationDraftV1> = protocolSessionAuthoringCheckoutCreationDraftV1Schema;
 
-export type SessionServerStartSpawnDraftV1 = Omit<
-    SessionSpawnNewInputV2,
-    'creationKey' | 'initialInput' | 'environmentVariables' | 'attestedContext'
->;
 /** Browser-safe server-start draft projected at the SDK author boundary. */
 export const SessionServerStartSpawnDraftV1Schema: SessionSchema<SessionServerStartSpawnDraftV1> = /* @__PURE__ */ projectProtocolValue(protocolSessionServerStartSpawnDraftV1Schema);
 
@@ -645,7 +638,3 @@ export interface SessionsService {
     readonly external: ExternalSessionsService;
 }
 
-export const MAX_AGENT_WORK_STATE_SOURCES_PER_CONTRIBUTION = 32;
-export const MAX_AGENT_WORK_STATE_ITEMS_PER_SOURCE = 100;
-export const MAX_AGENT_WORK_STATE_TITLE_CODE_UNITS = 4_000;
-export const MAX_AGENT_WORK_STATE_SUMMARY_CODE_UNITS = 8_000;

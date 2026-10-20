@@ -5,13 +5,60 @@ import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/co
 import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { isDiscussionReplyDestinationCurrentInTx } from '@/app/session/messages/sessionMessageReply';
+import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
 import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
 import type { Tx } from '@/storage/inTx';
 import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { FollowPolicyV1Schema, resolveFollowDeliveryV1, serializeFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { readAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
+import { readAccountOtherFollowInTx } from './accountFollowService';
+import { resolveDiscussionContextInTx } from '@/app/discussions/access';
+import { projectReadableMessagesInTx } from '@/app/discussions/queries';
+import { DISCUSSION_MESSAGE_SELECT } from '@/app/discussions/projection';
+import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import type { SessionFollowDiscussionOccurrenceRoutesRequestV1, SessionFollowDiscussionOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+
+/** Personal Follow reads original C3 messages, never executable participant addressing or an attention mirror. */
+export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; request: SessionFollowDiscussionOccurrenceRoutesRequestV1;
+}>): Promise<SessionFollowDiscussionOccurrenceV1 | null> {
+    const { source, messageId } = input.request;
+    const follow = await readAccountOtherFollowInTx(tx, { ...input, source });
+    // A missing seed is unavailable custody, never an implicit history replay.
+    if (!follow || follow.deliveredDiscussionSeq === null) return null;
+    const deliveredSeq = follow.deliveredDiscussionSeq;
+    const context = await resolveDiscussionContextInTx(tx, { discussionId: source.discussionId,
+        accountId: input.accountId, authentication: input.authentication });
+    const discussion = await tx.discussion.findUnique({ where: { id: source.discussionId }, select: { archivedAt: true } });
+    if (!context?.keyReadiness || !discussion || discussion.archivedAt !== null) return null;
+    let afterSeq = deliveredSeq;
+    for (;;) {
+        const rows = await tx.discussionMessage.findMany({ where: { discussionId: source.discussionId,
+            ...(messageId ? { id: messageId } : { seq: { gt: afterSeq } }) },
+            select: DISCUSSION_MESSAGE_SELECT, orderBy: { seq: 'asc' }, take: DISCUSSION_DEFAULT_PAGE_SIZE_V1 });
+        if (!rows.length) return null;
+        const readable = await projectReadableMessagesInTx(tx, { actorAccountId: input.accountId,
+            authentication: input.authentication, discussionId: source.discussionId, context, rows });
+        if (!readable.ok) return null;
+        for (const message of readable.value) {
+            const producer = message.producerV1;
+            // These are protected append-owner facts: an absent producer is
+            // admitted only for present-user ingress, never authored metadata.
+            if (!producer && message.authorAccountId === input.accountId
+                || producer?.actionRequestAttributionV1?.requester?.accountId === input.accountId) continue;
+            if (!producer && message.authorAccountId === null) return null;
+            const event = { kind: producer ? 'message' as const : 'person_wrote' as const };
+            if (!resolveFollowDeliveryV1({ policies: [follow.policy], event }).selected) continue;
+            if (await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
+                candidate: { source, ...(producer ? { senderSessionId: producer.sessionId } : {}) } }) !== false) return null;
+            return { source, messageId: message.id, seq: message.seq, event,
+                personal: { policy: follow.policy, alreadyRepresented: deliveredSeq >= message.seq } };
+        }
+        if (messageId || rows.length < DISCUSSION_DEFAULT_PAGE_SIZE_V1) return null;
+        afterSeq = rows[rows.length - 1]!.seq;
+    }
+}
 /** Attachment and delivery progress belong to C1, never the policy-only participant row. */
 export async function attachDiscussionFollowSourceInTx(tx: Tx, input: Readonly<{ discussionId: string; destinationSessionId: string }>): Promise<void> {
     const existing = await tx.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceDiscussionId_relation: {
@@ -94,6 +141,8 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                     : { kind: 'needs_you', type: 'decision', mode: 'wait' };
                 const addressing = { discussionId, messageId: row.id, throughSeq: row.seq, participantSessionId: input.destinationSessionId };
                 return [{ addressing, localId: deriveDiscussionFollowInputLocalIdV1(addressing), event,
+                    original: { id: row.id, discussionId: row.discussionId, seq: row.seq, addressingV1: snapshot.data },
+                    sourceSession: producer?.success ? producer.data.sourceSession : undefined,
                     senderSessionId: producer?.success ? producer.data.sessionId : undefined }];
             });
             const localIds = candidates.map(candidate => candidate.localId);
@@ -103,7 +152,10 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
             ]) : [];
             for (const candidate of candidates) {
                 if (accepted.flat().some(original => original.localId === candidate.localId && receiptHasAddressing(original.inputAdmissionReceipt, candidate.addressing))) continue;
-                if (!await isDiscussionReplyDestinationCurrentInTx(tx, { accountId: input.destinationRuntimeAccountId, discussion: candidate.addressing })) continue;
+                const reply = await createSessionInputReplyProgressInTx(tx, { accountId: input.destinationRuntimeAccountId,
+                    reply: { mode: 'return', discussion: candidate.addressing,
+                        ...(candidate.sourceSession ? { sourceSession: candidate.sourceSession } : {}) } });
+                if (!reply) continue;
                 // Shared receiver policy suppresses a muted original. A later
                 // accepted eligible original may cross it; there is no second
                 // deferred queue or suppression receipt for that earlier ask.
@@ -111,7 +163,8 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                     receiver: { kind: 'session', sessionId: input.destinationSessionId }, candidate: {
                         source: { kind: 'discussion', discussionId }, ...(candidate.senderSessionId ? { senderSessionId: candidate.senderSessionId } : {}),
                     } }) !== false) continue;
-                if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event }).selected) continue;
+                if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event,
+                    discussionInput: { addressing: candidate.addressing, original: candidate.original, reply } }).selected) continue;
                 observations.push({ source: { kind: 'discussion', discussionId }, destinationSessionId: input.destinationSessionId,
                     addressing: candidate.addressing, policy, event: candidate.event });
                 break;

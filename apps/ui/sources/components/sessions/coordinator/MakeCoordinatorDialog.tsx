@@ -5,7 +5,6 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import { SessionCoordinatorEnableResultV1Schema } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorActionsV1';
 import type { SessionCoordinatorRuleCensusV1 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorSetupV1';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
-import type { FollowRulePreviewResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
@@ -29,7 +28,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { randomUUID } from '@/platform/randomUUID';
-import { executeSessionFollowAction } from '@/sync/api/session/sessionFollowApi';
+import { describeFollowRuleMatchCount, useFollowRuleMatchCounts, type FollowRuleMatchCount } from '@/components/sessions/follow/followRuleMatchCounts';
 import { leaveProjectToFollowRule, undoFollowRuleProjectExclusion } from '@/sync/api/session/sessionFollowRuleEdits';
 import { readSessionFollowRules } from '@/sync/api/session/sessionFollowRulesApi';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -51,7 +50,7 @@ import {
 
 type MakeCoordinatorDialogProps = CustomModalInjectedProps & Readonly<{ sessionId: string; serverId: string }>;
 type RuleScope = 'project' | 'home';
-type RuleCount = Readonly<{ status: 'loading' } | { status: 'ready'; preview: FollowRulePreviewResultV1 } | { status: 'unavailable' }>;
+type RuleCount = FollowRuleMatchCount;
 type Census = SessionCoordinatorRuleCensusV1 | null | 'loading';
 
 const KEEP_VALUES = ['rail_bot', 'list_pin', 'none'] as const satisfies readonly MakeCoordinatorKeep[];
@@ -240,34 +239,13 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
 }
 
 function describeRuleCount(count: RuleCount | undefined): string {
-    const level = t('session.follow.policy.important');
-    if (!count || count.status === 'loading') return t('sessionCoordinator.make.countLoading', { level });
-    if (count.status === 'unavailable' || count.preview.coverage === 'unavailable') return t('sessionCoordinator.make.countUnavailable', { level });
-    return count.preview.coverage === 'partial'
-        ? t('sessionCoordinator.make.countAtLeast', { count: count.preview.matchCount, level })
-        : t('sessionCoordinator.make.count', { count: count.preview.matchCount, level });
+    return describeFollowRuleMatchCount(count, t('session.follow.policy.important'));
 }
 
-/** Live counts for each suggested rule: the same `follow.preview` the rule editor reads, never a local match. */
+/** What a suggestion would match is fixed for the dialog's life; toggling it changes nothing here. */
 function useRulePreviews(serverId: string, sessionId: string, rules: MakeCoordinatorDraft['rules']) {
-    const [counts, setCounts] = React.useState<Partial<Record<RuleScope, RuleCount>>>({});
-    const rulesRef = React.useRef(rules);
-    React.useEffect(() => {
-        // What a suggestion would match is fixed for the dialog's life; toggling it changes nothing here.
-        const controller = new AbortController();
-        for (const rule of rulesRef.current) {
-            setCounts((previous) => ({ ...previous, [rule.scope]: { status: 'loading' } }));
-            void executeSessionFollowAction('follow.preview', {
-                receiver: { kind: 'session', sessionId }, filter: rule.suggestion.ruleDefinition.filter,
-            }, serverId, controller.signal).then((result) => {
-                if (controller.signal.aborted) return;
-                setCounts((previous) => ({ ...previous, [rule.scope]: result.kind === 'ok'
-                    ? { status: 'ready', preview: result.value } : { status: 'unavailable' } }));
-            });
-        }
-        return () => controller.abort();
-    }, [serverId, sessionId]);
-    return counts;
+    const previews = React.useMemo(() => rules.map((rule) => ({ key: rule.scope, filter: rule.suggestion.ruleDefinition.filter })), [rules]);
+    return useFollowRuleMatchCounts(serverId, sessionId, previews) as Partial<Record<RuleScope, RuleCount>>;
 }
 
 /** The same Role catalog and marks every role picker reads. */

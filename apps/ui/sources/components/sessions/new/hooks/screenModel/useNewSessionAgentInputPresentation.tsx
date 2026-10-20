@@ -88,6 +88,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     selectedMachineIsWindows: boolean;
     effectiveWindowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchMode | null;
     windowsTerminalAvailable: boolean;
+    onWindowsTerminalIntent?: () => void;
     setWindowsRemoteSessionLaunchModeOverride: (mode: WindowsRemoteSessionLaunchMode | null) => void;
     temporaryComputerTeamAccess?: Readonly<{
         authorized: boolean;
@@ -260,6 +261,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         selectedMachineIsWindows: params.selectedMachineIsWindows,
         windowsRemoteSessionLaunchMode: params.effectiveWindowsRemoteSessionLaunchMode,
         windowsTerminalAvailable: params.windowsTerminalAvailable,
+        onWindowsTerminalIntent: params.onWindowsTerminalIntent,
         onWindowsRemoteSessionLaunchModeChange: params.setWindowsRemoteSessionLaunchModeOverride,
         onActionShortcutPress: handleActionShortcutPress,
     });

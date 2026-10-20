@@ -13,9 +13,23 @@ import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { sync } from '@/sync/sync';
 import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
 
 type RelationshipActionExecute = (actionId: ActionId, input: unknown) => Promise<ActionExecuteResult>;
+
+/**
+ * Pause, resume and stop are written by the controller daemon into the Account's relationship
+ * rows. Reading them back once the Action settles keeps every list in step with the Action the
+ * person just ran, whether or not the row-change hint has arrived.
+ */
+async function readAccountRowsBack(): Promise<void> {
+    try {
+        await sync.refreshProjectAccountRows();
+    } catch {
+        // The Action outcome stands; the next row change hint converges the list.
+    }
+}
 
 async function executeRelationshipAction<T>(
     actionId: ActionId,
@@ -23,6 +37,7 @@ async function executeRelationshipAction<T>(
     outputSchema: Readonly<{ parse(value: unknown): T }>,
     lifetime: ActiveServerAccountScopeLifetime | null,
     execute?: RelationshipActionExecute,
+    options: Readonly<{ writesRelationshipRows?: boolean }> = {},
 ) {
     const retired = { ok: false as const, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
     if (!execute && !lifetime?.isCurrent()) return retired;
@@ -40,7 +55,9 @@ async function executeRelationshipAction<T>(
         if (!outcome.ok) return outcome;
         const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(outcome.result);
         if (deferred.success) return { ok: true as const, ...deferred.data };
-        return { ok: true as const, ...outputSchema.parse(outcome.result) };
+        const parsed = outputSchema.parse(outcome.result);
+        if (options.writesRelationshipRows) await readAccountRowsBack();
+        return { ok: true as const, ...parsed };
     } catch {
         return { ok: false as const, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
     }
@@ -53,7 +70,7 @@ export async function terminateWorkspaceSyncRelationship(
     execute?: RelationshipActionExecute,
 ) {
     return await executeRelationshipAction('workspace.sync.relationship.terminate', input,
-        WorkspaceSyncRelationshipTerminateActionOutputV1Schema, lifetime, execute);
+        WorkspaceSyncRelationshipTerminateActionOutputV1Schema, lifetime, execute, { writesRelationshipRows: true });
 }
 
 export async function disableWorkspaceSyncRelationshipAction(
@@ -62,7 +79,7 @@ export async function disableWorkspaceSyncRelationshipAction(
     execute?: RelationshipActionExecute,
 ) {
     return await executeRelationshipAction('workspace.sync.relationship.disable', input,
-        WorkspaceSyncRelationshipDisableActionOutputV1Schema, lifetime, execute);
+        WorkspaceSyncRelationshipDisableActionOutputV1Schema, lifetime, execute, { writesRelationshipRows: true });
 }
 
 export async function enableWorkspaceSyncRelationshipAction(
@@ -71,7 +88,7 @@ export async function enableWorkspaceSyncRelationshipAction(
     execute?: RelationshipActionExecute,
 ) {
     return await executeRelationshipAction('workspace.sync.relationship.enable', input,
-        WorkspaceSyncRelationshipEnableActionOutputV1Schema, lifetime, execute);
+        WorkspaceSyncRelationshipEnableActionOutputV1Schema, lifetime, execute, { writesRelationshipRows: true });
 }
 
 export async function flushWorkspaceSyncRelationshipAction(

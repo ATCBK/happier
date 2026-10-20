@@ -14,14 +14,14 @@ export const en = {
     ...workflowRunCompositionTranslations.en,
     shortcutStarts: 'starts',
     runPattern: 'Run…', runPatternTitle: 'Run a pattern', anotherRound: 'Another round',
-    participantTitle: 'Choose who takes part', participantSearch: 'Find a session or model', participantSession: 'Your session · answers with its own setup', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `New ${agent} session on ${machine}`, participantDone: 'Done',
+    participantTitle: 'Choose who takes part', participantSearch: 'Find a session or model', participantSession: 'Each answers with its own setup', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `New ${agent} session on ${machine}`, participantDone: 'Done', choicesFailed: 'Couldn’t load the choices',
     workflow: 'Workflow', inputs: 'Inputs', start: 'Start', starting: 'Starting…', stillStarting: 'Still starting…',
     needed: ({ count }: { count: number }) => `Inputs · ${count} needed`,
     neededNamed: ({ name }: { name: string }) => `Inputs · ${name} needed`,
     addToStart: ({ name }: { name: string }) => `${name} is needed to start`,
     required: 'Required to start', preview: 'What it will do', unsaved: 'Includes unsaved edits',
-    remove: 'Return to a plain session', search: 'Find a workflow', builtin: 'Built-in', library: 'Your library',
-    noInputs: 'No inputs needed', asksFor: ({ names }: { names: string }) => `Asks for ${names}`,
+    remove: 'Return to a plain session', search: 'Find a pattern', builtin: 'Built-in', library: 'Your library',
+    noInputs: 'No inputs needed', needsSession: 'Needs a session', asksFor: ({ names }: { names: string }) => `Asks for ${names}`,
     optional: 'Optional — left empty', defaultValue: ({ value }: { value: string }) => `Default: ${value}`,
 };
 

@@ -370,9 +370,7 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('expo-router', async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
-            get pathname() {
-                return nativeBoundary.pathname;
-            },
+            pathname: () => nativeBoundary.pathname,
             router: {
                 push: routerPushSpy,
                 replace: vi.fn(),
@@ -435,7 +433,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     return createSyncOpsModuleMock({
         importOriginal,
         overrides: {
-            sessionStopWithServerScope: vi.fn(async () => ({ success: true })),
+            sessionStopWithServerScope: vi.fn(async (sessionId: string) => ({ success: true, sessionId, stopped: true as const })),
             sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
         },
     });
@@ -728,7 +726,7 @@ describe('SessionsList (native virtualization)', () => {
         // These host rows represent the focused Account's restored native cache.
         // Credential observers must be able to prove its Account before retaining them.
         setWarmCacheAccountScope('account-a');
-        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1 } } });
+        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false } } });
         home.answer(homeA, tagsPath, { body: { sessionId: 'sess_a', tagIds: ['fixture-tag-2'] } });
         const activeHome = listServerProfiles().find(profile => profile.id === homeA);
         const accountId = activeHome ? home.findByServerUrl(activeHome.serverUrl)?.accountId : null;
@@ -1367,7 +1365,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(rowWrapper.props.collapsable).toBe(false);
     });
 
-    it('opens the iOS native context menu when the row reports its long press (K1: the long press is the menu)', async () => {
+    it.each(['ios', 'android'] as const)('opens the %s native context menu when the row reports its long press', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const initialListProps = virtualizedListState.current?.props;
         expect(initialListProps).toBeTruthy();
@@ -1394,7 +1393,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('suppresses iOS native context menu activation while the native list is being scrolled', async () => {
+    it.each(['ios', 'android'] as const)('suppresses %s native context menu activation while the native list is being scrolled', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const row = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1425,7 +1425,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(opened.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('closes an open iOS native context menu when native list scrolling starts', async () => {
+    it.each(['ios', 'android'] as const)('closes an open %s native context menu when native list scrolling starts', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1445,7 +1446,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('ignores stale iOS native context menu close requests from another row', async () => {
+    it.each(['ios', 'android'] as const)('ignores stale %s native context menu close requests from another row', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
 
@@ -1476,15 +1478,15 @@ describe('SessionsList (native virtualization)', () => {
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
-    it('keeps Android session rows free of drag gestures and native inline context menus outside Organize mode', async () => {
+    it('shares Android context-menu state without drag gestures outside Organize mode', async () => {
         nativeBoundary.platformOs = 'android';
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.dragGripGesture).toBeUndefined();
-        expect(first.props.nativeContextMenuOpen).toBeUndefined();
-        expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
+        expect(first.props.nativeContextMenuOpen).toBe(false);
+        expect(first.props.onNativeContextMenuOpenChange).toEqual(expect.any(Function));
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
@@ -2044,8 +2046,10 @@ describe('SessionsList (native virtualization)', () => {
             serverId: homeA, serverUrl: 'https://server-a.example.test', input: { pinned: true }, token: home.findByServerUrl('https://server-a.example.test')?.token,
         })]);
         const { storage } = await import('@/sync/domains/state/storageStore');
-        expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
-            sessionId: 'sess_a', sortKey: null, pinnedAt: 1,
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
+                sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false,
+            });
         });
     });
 

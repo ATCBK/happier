@@ -630,6 +630,20 @@ six-worker ceiling; the shared override takes precedence. Explicit single-fork,
 single-thread and non-parallel lanes retain their stronger isolation contract.
 No test selection, assertions or coverage settings change with this budget.
 
+The current 0.3 public UI `test:unit` wrapper caps requested partition concurrency
+at `max(1, floor(availableParallelism() / (maxWorkers + 1)))`, using the shared
+worker policy above. Each partition owns a transform server and its fork pool;
+keeping that pool together reuses its transform cache. With the default four-fork
+budget, a 12-CPU worker admits two partitions and a 48-CPU worker can admit eight.
+Native CLI worker overrides still retain Vitest's resolution and precedence.
+Partition caches start cold; the wrapper does not persist a shared transform cache.
+
+The pinned `vite-node+3.2.4` patch recognizes pending transitive import cycles
+entered concurrently, complementing the Vitest patch that retains async-mock
+import ancestry. `sources/dev/vitestAsyncMockContext.test.ts` in the UI owns the
+real cycle and non-cycle controls; run them when upgrading either dependency
+before removing a patch replaced upstream.
+
 Automatic v0.3 Gate UI partitions use one native Vitest invocation per partition,
 with disjoint native selection rather than repeated 16-file processes. The non-UI
 Gate partition runs CLI, Protocol, Server and plugin projects in one Vitest instance,

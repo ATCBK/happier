@@ -312,7 +312,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     const unavailableMachine = recovery.unavailableMachine ?? null;
     const showRecoveryCard = choiceOffered || recovery.workspaceUnavailable || failureCause !== null
         || props.lifecycle === 'failed' || props.lifecycle === 'outcome_uncertain';
-    const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.message : null;
+    const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.headline : null;
     const causeHeadline = reportedMessage
         ?? props.cause
         ?? (failureCause?.kind === 'cause_not_recorded' ? t('workflows.recovery.causeNotRecorded') : null)

@@ -1,6 +1,7 @@
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountLifecycleAdmissionInTx } from "./accountLifecycle";
 import { captureSessionAccessMembershipImpactsInTx, applySessionAccessMembershipImpactsInTx } from "@/app/session/access/sessionAccessMembershipImpact";
 import {
     prepareProvisionedIdentityRebindForAccountReplacementInTx,
@@ -110,6 +111,8 @@ export async function replaceAccountForProviderResetInTx(
     tx: Tx,
     input: ProviderResetAccountReplacementInput,
 ): Promise<ProviderResetAccountReplacementResult> {
+    await acquireAccountLifecycleAdmissionInTx(tx,
+        { accountId: input.oldAccountId, additionalAccountIds: [input.replacement.accountId] });
     const replaced = await tx.account.findUnique({
         where: { id: input.oldAccountId },
         select: { id: true, homeRole: true, feedSeq: true, status: true },

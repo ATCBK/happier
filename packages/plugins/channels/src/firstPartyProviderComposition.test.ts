@@ -15,7 +15,8 @@ import {
   activate as activateGithub,
   PLUGIN_MANIFEST as GITHUB_PLUGIN_MANIFEST,
 } from '@happier-dev/plugins-scm-github';
-import type { PluginServices } from '@happier-dev/plugin-sdk';
+import { definePlugin, type PluginServices } from '@happier-dev/plugin-sdk';
+import { ConversationProvidersContributionProtocolV1, type ConversationProviderSetupOutcomeV1 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { activate } from './activate.js';
@@ -106,6 +107,112 @@ function jsonResponse(value: unknown, finalUrl: string): Readonly<{
 }
 
 describe('Channels first-party provider composition', () => {
+  it('prepares, remediates through the public Channels intent, and prepares the same Telegram account', async () => {
+    const credentialRef = {
+      service: { pluginId: 'happier.channel.telegram', localId: 'telegram-bot' },
+      accountId: 'telegram-account',
+    } as const;
+    let webhook = 'https://previous.example.test/webhook';
+    const request = vi.fn(async ({ url }: Readonly<{ url: string }>) => {
+      if (url.endsWith('/deleteWebhook')) {
+        webhook = '';
+        return jsonResponse({ ok: true, result: true }, url);
+      }
+      return jsonResponse({ ok: true, result: url.endsWith('/getWebhookInfo')
+        ? { url: webhook, pending_update_count: 0 }
+        : { id: 123, is_bot: true, first_name: 'Happier Bot', username: 'HappierBot' } }, url);
+    });
+    const http = httpStub(request);
+    const provider = await createPluginTestkit({
+      manifest: TELEGRAM_PLUGIN_MANIFEST,
+      module: { activate: activateTelegram },
+      services: { http, connectedAccounts: connectedAccountsStub(async () => ({
+        kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '123:bot-token' },
+      })) },
+    });
+    const core = await createPluginTestkit({
+      manifest: PLUGIN_MANIFEST, module: { activate }, targetedContributionContributors: [provider],
+    });
+    const services = channelsTargetedContributionServices(core);
+    const selection = providerSelection(core);
+    const setup = { providerSelection: selection, providerSetupInput: { credentialRef }, credentialRef };
+    try {
+      expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface: 'agent' }))
+        .toEqual({ kind: 'requiresRemediation' });
+      expect(await core.invokeAction('connection/setup-remediate-v1', {
+        providerSelection: selection, providerRemediationInput: { credentialRef }, credentialRef,
+      }, { services, surface: 'agent' })).toEqual({ kind: 'remediated' });
+      expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface: 'mcp' }))
+        .toMatchObject({ kind: 'ready', recommendedTransport: 'checkpointedPull' });
+      expect(request.mock.calls.filter(([request]) => request.url.endsWith('/deleteWebhook'))).toHaveLength(1);
+    } finally {
+      await core.dispose();
+      await provider.dispose();
+    }
+  });
+
+  it('remediates an external provider through its selected arbitrary role and refuses a retired selection', async () => {
+    const roles = ConversationProvidersContributionProtocolV1;
+    const provider = definePlugin({
+      id: 'example.external-channel', version: '0.0.0', displayName: 'External channel',
+      engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.js' },
+      hostAccess: { required: [{ id: 'external-api', capability: 'network', reason: 'Inspect and repair external setup.',
+        scope: { targets: [{ kind: 'fixedOrigin', origin: 'https://external.example.test' }], methods: ['GET', 'POST'] } }], optional: [] },
+      actions: {
+        inspect: { title: 'Inspect', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+          resultSchema: roles.operations.setup.declaration.resultSchema.jsonSchema,
+          surfaces: ['plugin', 'ui'], hostAccess: ['external-api'], run: async (_input, context): Promise<ConversationProviderSetupOutcomeV1> => {
+            const response = await context.services.http.request({ url: 'https://external.example.test/setup', method: 'GET', redirect: 'error' }, { signal: context.signal });
+            return response.status === 200 ? { v: 1, credentialRef: null, providerConnectionKey: 'external-mailbox', providerConfigVersion: 1,
+              providerConfig: {}, integrationPrincipal: { id: 'external-bot' }, supportedTransports: ['socket'], recommendedTransport: 'socket',
+              overlapSafety: 'safe', replayContinuity: 'none' } : { kind: 'requiresRemediation' };
+          } },
+        repair: { title: 'Repair', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+          resultSchema: roles.operations.setupRemediation.declaration.resultSchema.jsonSchema,
+          surfaces: ['plugin', 'ui'], dangerLevel: 'writesRemote', hostAccess: ['external-api'],
+          confirmation: { title: 'Repair external setup?', body: 'Apply the external provider setup repair.', confirmLabel: 'Repair setup' },
+          run: async (_input, context) => {
+            const response = await context.services.http.request({ url: 'https://external.example.test/repair', method: 'POST', redirect: 'error' }, { signal: context.signal });
+            return response.status === 200 ? { kind: 'remediated' } : { kind: 'outcomeUnknown' };
+          } },
+        test: { title: 'Test', inputSchema: roles.operations.connectionTest.declaration.input.schema.jsonSchema,
+          resultSchema: roles.operations.connectionTest.declaration.resultSchema.jsonSchema,
+          surfaces: ['plugin', 'ui'], run: async () => ({ kind: 'notReady', reason: 'unsupported' }) },
+        deliver: { title: 'Deliver', inputSchema: roles.operations.messageDeliver.declaration.input.schema.jsonSchema,
+          resultSchema: roles.operations.messageDeliver.declaration.resultSchema.jsonSchema,
+          surfaces: ['plugin'], dangerLevel: 'writesRemote', run: async () => ({ kind: 'notReady', reason: 'unsupported' }) },
+      },
+      contributesTo: { 'happier.channels': { providers: { external: roles.contribute({ operations: {
+        setup: roles.operations.setup.bind('inspect'), setupRemediation: roles.operations.setupRemediation.bind('repair'),
+        connectionTest: roles.operations.connectionTest.bind('test'), messageDeliver: roles.operations.messageDeliver.bind('deliver'),
+      } }) } } },
+    });
+    let repaired = false;
+    const request = vi.fn(async ({ url }: Readonly<{ url: string }>) => {
+      if (url.endsWith('/repair')) repaired = true;
+      return { ...jsonResponse({}, url), status: repaired ? 200 : 409 };
+    });
+    const external = await createPluginTestkit({ manifest: provider.manifest, module: provider, services: { http: httpStub(request) } });
+    const core = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, targetedContributionContributors: [external] });
+    const selection = providerSelection(core);
+    const input = { providerSelection: selection, providerRemediationInput: {}, credentialRef: null };
+    try {
+      expect(await core.invokeAction('connection/prepare-v1', { providerSelection: selection, providerSetupInput: {}, credentialRef: null },
+        { services: channelsTargetedContributionServices(core) })).toEqual({ kind: 'requiresRemediation' });
+      expect(await core.invokeAction('connection/setup-remediate-v1', input,
+        { surface: 'mcp', services: channelsTargetedContributionServices(core) })).toEqual({ kind: 'remediated' });
+      expect(await core.invokeAction('connection/prepare-v1', { providerSelection: selection, providerSetupInput: {}, credentialRef: null },
+        { services: channelsTargetedContributionServices(core) })).toMatchObject({ kind: 'ready', recommendedTransport: 'socket' });
+      const beforeStaleSelection = request.mock.calls.length;
+      await expect(core.invokeAction('connection/setup-remediate-v1', {
+        ...input, providerSelection: { ...selection, contributor: { ...selection.contributor,
+          sourceCustody: { kind: 'managed', immutableGenerationId: 'retired-provider', installSource: 'npm' } } },
+      }, { services: channelsTargetedContributionServices(core) })).rejects.toMatchObject({ code: 'channels_provider_contribution_unavailable' });
+      expect(request.mock.calls).toHaveLength(beforeStaleSelection);
+      expect(request.mock.calls.filter(([request]) => request.url.endsWith('/repair'))).toHaveLength(1);
+    } finally { await core.dispose(); await external.dispose(); }
+  });
+
   it('uses Telegram\'s declared arbitrary-local setup handle through the core preparation owner', async () => {
     assertConversationProviderContributionV1(TELEGRAM_PLUGIN_MANIFEST);
     const telegramCredential = {
@@ -183,7 +290,7 @@ describe('Channels first-party provider composition', () => {
         kind: 'environment' as const,
         env: { DISCORD_BOT_TOKEN: 'discord-token' },
       })));
-    const discordHttp = httpStub(vi.fn(async (request: Readonly<{ url: string }>) => {
+    const discordRequest = vi.fn(async (request: Readonly<{ url: string }>) => {
         if (request.url.endsWith('/oauth2/applications/@me')) {
           return jsonResponse({ id: 'application-1', name: 'Happier Discord' }, request.url);
         }
@@ -202,7 +309,8 @@ describe('Channels first-party provider composition', () => {
           }, request.url);
         }
         throw new Error(`Unexpected Discord request: ${request.url}`);
-      }));
+      });
+    const discordHttp = httpStub(discordRequest);
     assertConversationProviderContributionV1(DISCORD_PLUGIN_MANIFEST);
     const discord = await createPluginTestkit({
       manifest: DISCORD_PLUGIN_MANIFEST,
@@ -246,6 +354,13 @@ describe('Channels first-party provider composition', () => {
         { kind: 'environment', keys: ['DISCORD_BOT_TOKEN'] },
         expect.objectContaining({ expectedAccount: discordCredential }),
       );
+      const beforeUnsupportedRepair = discordRequest.mock.calls.length;
+      await expect(discordCore.invokeAction('connection/setup-remediate-v1', {
+        providerSelection: providerSelection(discordCore), providerRemediationInput: { credentialRef: discordCredential }, credentialRef: discordCredential,
+      }, { services: channelsTargetedContributionServices(discordCore) })).rejects.toMatchObject({
+        code: 'channels_connection_setup_remediation_unavailable',
+      });
+      expect(discordRequest.mock.calls).toHaveLength(beforeUnsupportedRepair);
     } finally {
       await discordCore.dispose();
       await discord.dispose();

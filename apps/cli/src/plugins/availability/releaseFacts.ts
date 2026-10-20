@@ -20,28 +20,31 @@ export function projectVerifiedPluginUiReleaseSlotsV2(input: Readonly<{
   const declarations: Array<Readonly<{
     contributionId: string;
     artifactId: string;
+    tier: 'reactNative' | 'hostedWeb';
     platforms: readonly ('web' | 'ios' | 'android')[];
   }>> = [];
   for (const renderer of input.manifest.contributes.ui.renderers) {
     if (renderer.kind === 'reactNative') {
-      declarations.push({ contributionId: renderer.id, artifactId: renderer.artifact, platforms: ALL_EXECUTABLE_UI_PLATFORMS });
+      declarations.push({ contributionId: renderer.id, artifactId: renderer.artifact, tier: 'reactNative', platforms: ALL_EXECUTABLE_UI_PLATFORMS });
     } else if (renderer.kind === 'hostedWeb' && renderer.source.kind === 'artifact') {
-      declarations.push({ contributionId: renderer.id, artifactId: renderer.source.artifact, platforms: ['web'] });
+      declarations.push({ contributionId: renderer.id, artifactId: renderer.source.artifact, tier: 'hostedWeb', platforms: ['web'] });
     }
   }
   for (const provider of input.manifest.contributes.voiceProviders) {
     if (provider.kind === 'conversation') {
-      declarations.push({ contributionId: provider.id, artifactId: provider.client.artifactId, platforms: provider.platforms });
+      declarations.push({ contributionId: provider.id, artifactId: provider.client.artifactId, tier: 'reactNative', platforms: provider.platforms });
     }
   }
   for (const action of input.manifest.contributes.actions) {
     if (action.execution.target === 'client') {
-      declarations.push({ contributionId: action.id, artifactId: action.execution.client.artifactId, platforms: action.execution.platforms });
+      declarations.push({ contributionId: action.id, artifactId: action.execution.client.artifactId, tier: 'reactNative', platforms: action.execution.platforms });
     }
   }
   return declarations.flatMap((declaration) => {
     const artifact = entriesByArtifactId.get(declaration.artifactId);
-    if (!artifact) throw new Error(`Generated UI artifact is missing for declaration: ${declaration.artifactId}`);
+    // Missing or mismatched artifacts have no verified release slot. The UI
+    // projection retains the declaration and its typed contribution refusal.
+    if (!artifact || artifact.tier !== declaration.tier) return [];
     return declaration.platforms.map((platform) => ({
       contributionId: declaration.contributionId,
       artifactId: artifact.artifactId,

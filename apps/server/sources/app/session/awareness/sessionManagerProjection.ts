@@ -114,7 +114,7 @@ function projectReportWorkStatus(row: ReportSessionRow, nowMs: number) {
 }
 
 export type SessionManagerContribution = Readonly<{
-    sessionId: string; managerSessionId: string; working: boolean; needsYou: boolean; stalled: boolean;
+    sessionId: string; managerSessionId: string; working: boolean; needsYou: boolean; stalled: boolean; archived: boolean;
 }>;
 
 type SessionManagerProjectionRow = {
@@ -125,11 +125,12 @@ type SessionManagerProjectionRow = {
 
 function projectCapturedReports<T extends SessionManagerProjectionRow>(sessions: readonly T[], contributions: readonly SessionManagerContribution[]): (T & SessionManagerProjectionRow)[] {
     const leads = new Map<string, string>();
-    const reports = new Map<string, SessionManagedSessionsV1>();
+    const reports = new Map<string, Required<SessionManagedSessionsV1>>();
     for (const contribution of contributions) {
         leads.set(contribution.sessionId, contribution.managerSessionId);
-        const counts = reports.get(contribution.managerSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 };
+        const counts = reports.get(contribution.managerSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0 };
         counts.total += 1;
+        if (contribution.archived) counts.archived += 1;
         if (contribution.working) counts.working += 1;
         if (contribution.needsYou) counts.needsYou += 1;
         if (contribution.stalled) counts.stalled += 1;
@@ -140,7 +141,7 @@ function projectCapturedReports<T extends SessionManagerProjectionRow>(sessions:
         delete projected.manager;
         const lead = leads.get(session.id);
         if (lead) projected.manager = { sessionId: lead };
-        projected.managedSessions = reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 };
+        projected.managedSessions = reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0 };
         return projected;
     });
 }
@@ -199,7 +200,7 @@ export async function projectSessionManagerForRowsInTx<T extends SessionManagerP
         const child = readable.get(edge.sourceSessionId)!;
         const { status, stalled } = projectReportWorkStatus(child, input.nowMs);
         contributions.push({ sessionId: edge.sourceSessionId, managerSessionId: edge.destinationSessionId, working: status.bucket === 'working' && !stalled,
-            needsYou: status.bucket === 'needs_you', stalled });
+            needsYou: status.bucket === 'needs_you', stalled, archived: child.archivedAt != null });
     }
     input.captureContributions?.(contributions);
     return projectCapturedReports(input.sessions.map(session => {

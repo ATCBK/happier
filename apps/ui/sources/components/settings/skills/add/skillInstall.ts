@@ -88,10 +88,10 @@ export async function installSkills(
   };
 }
 
-/** The dry run behind From a link and Upload: what would be added, pinned, before anything is written. */
+/** The dry run behind From a link, Upload and a Browse detail's siblings: what would be added, pinned, before anything is written. */
 export async function previewSkillInstall(
   execute: MountedAuthoringActionExecute,
-  source: Exclude<SkillInstallSource, { kind: 'registry' }>,
+  source: SkillInstallSource,
 ): Promise<
   | Readonly<{ ok: true; items: readonly SkillInstallPreviewV1[] }>
   | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>

@@ -115,26 +115,30 @@ const TriageAgentExecutionTargetV1Schema = defineProtocolObject({
 }, { policy: 'closed' });
 
 /**
- * `profileId` is the ONE Session-authoring member a Triage start may carry, and
- * it is not authoring: it is the reference the pressed action already stores.
- * The canonical creator is the sole applier of what a profile means — its
- * agent, model, permission and persistence defaults, its environment and its
- * coding-prompt overrides — and Triage neither reads those nor restates them.
- * Passing the id is what makes a configured action's profile decide the Session
- * it starts; omitting it is exactly today's behaviour, where the profile a
- * person configured did nothing at all.
- *
- * It is bounded by `LaunchProfileV2.id`'s own ceiling, so a value this wire
- * would carry but the profile owner would refuse cannot be sent.
+ * Choices already authored by the host's recipe controls, carried unchanged to
+ * the canonical Session creator. Triage does not resolve profiles, credentials,
+ * configuration or tool policy. Both settlement and Action ingress use this
+ * same carrier; Session admission remains the authority over these JSON values.
  */
-const TriageNewSessionSpawnV1Schema = defineProtocolObject({
-    executionTarget: TriageSessionExecutionTargetV1Schema,
-    agentTarget: TriageAgentExecutionTargetV1Schema,
+const settledSessionChoices = {
     profileId: ProtocolLaunchProfileIdV2Schema.optional(),
     modelSelection: defineProtocolJsonValue().optional(),
     permissionMode: defineProtocolJsonValue().optional(),
     transcriptStorage: defineProtocolJsonValue().optional(),
     terminal: defineProtocolJsonValue().optional(),
+    agentModeId: defineProtocolJsonValue().optional(),
+    configuration: defineProtocolJsonValue().optional(),
+    connectedServices: defineProtocolJsonValue().optional(),
+    capabilitySelection: defineProtocolJsonValue().optional(),
+    allowedTools: defineProtocolJsonValue().optional(),
+    unlistedTools: defineProtocolJsonValue().optional(),
+    organizationPlacement: defineProtocolJsonValue().optional(),
+};
+
+const TriageNewSessionSpawnV1Schema = defineProtocolObject({
+    executionTarget: TriageSessionExecutionTargetV1Schema,
+    agentTarget: TriageAgentExecutionTargetV1Schema,
+    ...settledSessionChoices,
 }, { policy: 'closed' });
 
 /**
@@ -153,10 +157,9 @@ const TriageNewSessionSpawnV1Schema = defineProtocolObject({
  * can already carry and Triage never acquires a second Agent-target grammar.
  *
  * The policy is additive-open/drop because the settled draft is the host's
- * New Session projection after admission. The small set of Session defaults that the
- * canonical spawn wire already owns (model, permission, transcript and
- * terminal selection) survives unchanged, together with the configured
- * profile reference. Unowned authoring members such as title and startup
+ * New Session projection after admission. The host's recipe-control choices
+ * survive unchanged, together with the configured profile reference.
+ * Unowned authoring members such as title and startup
  * instructions are dropped here rather than teaching Triage a second spelling
  * for them.
  */
@@ -169,11 +172,7 @@ export const TriageStartEntrySessionSettledDraftV1Schema = defineProtocolObject(
         kind: defineProtocolLiteral('path'),
         path: triageText,
     }, { policy: 'closed' }),
-    profileId: ProtocolLaunchProfileIdV2Schema.optional(),
-    modelSelection: defineProtocolJsonValue().optional(),
-    permissionMode: defineProtocolJsonValue().optional(),
-    transcriptStorage: defineProtocolJsonValue().optional(),
-    terminal: defineProtocolJsonValue().optional(),
+    ...settledSessionChoices,
 }, { policy: 'additive-open/drop' });
 export type TriageStartEntrySessionSettledDraftV1 =
     ReturnType<typeof TriageStartEntrySessionSettledDraftV1Schema.parse>;

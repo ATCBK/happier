@@ -14,6 +14,7 @@ import { ensureMinimalMonorepoLayout } from '../testkit/core/minimal_monorepo_la
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 import { runNodeCapture } from '../testkit/core/run_node_capture.mjs';
 import { resolveTransientRepoOverrides } from './transient_repo_overrides.mjs';
+import { getDaemonEnv } from '../daemon.mjs';
 
 async function withTempStackEnvFixture(fn, { includeServerPort = true } = {}) {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-stack-env-sanitize-'));
@@ -47,6 +48,46 @@ async function withTempStackEnvFixture(fn, { includeServerPort = true } = {}) {
     await rm(tmp, { recursive: true, force: true });
   }
 }
+
+test('withStackEnv restores the selected borrowed UI origin for CLI and daemon preflight', async () => {
+  await withTempStackEnvFixture(async ({ stackName, storageDir }) => {
+    const producerStackName = 'repo-expo-producer';
+    const producerDir = join(storageDir, producerStackName);
+    await mkdir(producerDir, { recursive: true });
+    await writeFile(join(producerDir, 'stack.runtime.json'), JSON.stringify({
+      expo: { webPort: 19364 },
+      placement: { expo: 'fixture-host' },
+      remoteTargets: { 'fixture-host': { status: 'stopped', services: { expo: false } } },
+      processes: {},
+    }));
+    const runtimePath = join(storageDir, stackName, 'stack.runtime.json');
+    await writeFile(runtimePath, JSON.stringify({ sourceUi: 'borrowed', processes: {} }));
+    const query = {
+      stackName,
+      reconcileDaemonRuntimeState: false,
+      extraEnv: { HAPPIER_STACK_EXPO_SOURCE_STACK: producerStackName },
+      fn: ({ env }) => env,
+    };
+    const env = await withStackEnv(query);
+    assert.equal(env.HAPPIER_WEBAPP_URL, 'http://happier-sanitize.localhost:19364');
+    const daemonEnv = getDaemonEnv({
+      baseEnv: env,
+      cliHomeDir: join(storageDir, stackName, 'cli'),
+      internalServerUrl: 'http://127.0.0.1:3555',
+      publicServerUrl: 'http://happier-sanitize.localhost:3555',
+      stackName,
+    });
+    assert.equal(daemonEnv.HAPPIER_WEBAPP_URL, env.HAPPIER_WEBAPP_URL);
+
+    const explicit = await withStackEnv({ ...query,
+      extraEnv: { ...query.extraEnv, HAPPIER_WEBAPP_URL: 'https://selected.example.test' },
+    });
+    assert.equal(explicit.HAPPIER_WEBAPP_URL, 'https://selected.example.test');
+
+    await writeFile(runtimePath, JSON.stringify({ sourceUi: 'export', processes: {} }));
+    assert.equal((await withStackEnv(query)).HAPPIER_WEBAPP_URL, undefined);
+  });
+});
 
 test('withStackEnv persists runtime stdout and stderr in the selected stack logs', async () => {
   await withTempStackEnvFixture(async ({ stackName, storageDir }) => {

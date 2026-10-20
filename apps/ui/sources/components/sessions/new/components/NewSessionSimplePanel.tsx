@@ -31,6 +31,7 @@ import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import type { AcpConfigOptionOverridesV1, ProviderErrorV1 } from '@happier-dev/protocol';
 import type { HandleCreateSessionOptions } from '../hooks/useCreateNewSession';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { layout } from '@/components/ui/layout/layout';
 import {
     ComposerKeyboardScaffold,
     useComposerKeyboardLayoutContext,
@@ -398,6 +399,23 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
         : props;
     const showPendingLaunchPreview = props.launchPendingPreviewVisible === true
         && props.pendingLaunchAttempt != null;
+    // A bottom-anchored composer leaves the screen above it to the card; a centred desktop composer
+    // has no such region (its content area is zero-height), so there the card sits in the composer
+    // column, directly above the composer, and can never cover it.
+    const pendingLaunchPreview = showPendingLaunchPreview ? (
+        <View
+            style={{
+                width: '100%',
+                alignSelf: 'stretch',
+                paddingHorizontal: props.newSessionSidePadding,
+                paddingBottom: 8,
+            }}
+        >
+            <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
+                <NewSessionLaunchPendingPreview launchAttempt={props.pendingLaunchAttempt} />
+            </View>
+        </View>
+    ) : null;
     const shellStyle = [
         props.containerStyle,
         ...(shouldBottomAnchor
@@ -481,6 +499,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                           * band a capsule-plus-gap higher than the edge it is supposed to seat.
                           */}
                         <View>
+                        {shouldBottomAnchor ? null : pendingLaunchPreview}
                         {isFloatingComposer && !isWebFloatingComposer ? (
                             <OverlayScrim
                                 progress={enterProgress}
@@ -519,20 +538,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                         onPress={isFloatingComposer && !props.isCreating ? handleDismissScreen : handleDismissKeyboard}
                     />
                 ) : null}
-                {showPendingLaunchPreview ? (
-                    <View
-                        style={{
-                            width: '100%',
-                            alignSelf: 'stretch',
-                            paddingHorizontal: props.newSessionSidePadding,
-                            paddingBottom: 8,
-                        }}
-                    >
-                        <View style={{ width: '100%', alignSelf: 'center' }}>
-                            <NewSessionLaunchPendingPreview launchAttempt={props.pendingLaunchAttempt} />
-                        </View>
-                    </View>
-                ) : null}
+                {shouldBottomAnchor ? pendingLaunchPreview : null}
             </View>
         </ComposerKeyboardScaffold>
         </EscapeLayerProvider>

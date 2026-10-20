@@ -4513,6 +4513,8 @@ export {
 } from './sessions/control/sessionRunnerRestartV1.js';
 
 export {
+  RestartSessionRunnerConfirmedBackgroundRequestSchema,
+  type RestartSessionRunnerConfirmedBackgroundRequest,
   RestartSessionRunnerRequestV2Schema,
   type RestartSessionRunnerRequestV2,
 } from './sessions/control/sessionRunnerRestartV2.js';
@@ -4773,6 +4775,7 @@ export {
   SessionInputAdmissionReceiptV1Schema,
   SessionInputAdmissionRejectionCodeV1Schema,
   SessionInputAdmissionResultV1Schema,
+  SessionInputEnqueueResultV1Schema,
   SessionMessageSendResultV1Schema,
   SessionInputAuthorityV1Schema,
   SessionInputAuthorityV2Schema,
@@ -4835,6 +4838,7 @@ export {
   type SessionInputMachineTargetV1,
   type SessionInputAdmissionRejectionCodeV1,
   type SessionInputAdmissionResultV1,
+  type SessionInputEnqueueResultV1,
   type SessionMessageSendResultV1,
   type SessionInputAuthorityV1,
   type SessionInputAuthorityV2,
@@ -5960,6 +5964,7 @@ export {
   type ExecutionRunStartRunCreation,
   type ExecutionRunStartFailureDetailsV1,
   type ExecutionRunStartResponse,
+  type ExecutionRunError,
   type ExecutionRunWaitResult,
   type ExecutionRunRetentionPolicy,
   type ExecutionRunClass,

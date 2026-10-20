@@ -1,4 +1,4 @@
-import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { mapCodexRolloutEventToActions } from '../../../rollout/projection/actions.js';
 import {

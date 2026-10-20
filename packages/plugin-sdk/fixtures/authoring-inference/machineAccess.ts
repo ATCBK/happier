@@ -24,19 +24,19 @@ export async function machineSharing(actions: ActionsService) {
   await actions.execute('machines.terminal.read', { ...target, terminalId: 'pty', byteOffset: 0 });
   await actions.execute('machines.terminal.write', { ...target, terminalId: 'pty', event: { t: 'text', text: 'pwd\r' } });
   await actions.execute('machines.terminal.close', { ...target, terminalId: 'pty' });
+  // @ts-expect-error Requester custody is stamped by the trusted host, not an author.
   await actions.execute('machines.terminal.open', {
     ...terminal,
-    // @ts-expect-error Requester custody is stamped by the trusted host, not an author.
     requesterAccountId: 'forged',
   });
+  // @ts-expect-error Public grants cannot accept physical recipient ciphertext.
   await actions.execute('machines.access.grant.set', {
     ...input,
-    // @ts-expect-error Public grants cannot accept physical recipient ciphertext.
     recipientKeyEnvelopes: [],
   });
+  // @ts-expect-error An author cannot supply an admission or grant proof.
   await actions.execute('machines.access.grants.list', {
     ...target,
-    // @ts-expect-error An author cannot supply an admission or grant proof.
     admission: { role: 'manage' },
   });
 }

@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from '../actions/actionIds.js';
 import { createProviderErrorV1 } from '../providers/errors.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { projectApprovalRequestForPublicRead } from '../actions/actionApprovalPresentation.js';
 import {
   ApprovalRequestSchema,
+  ApprovalExecutionV2Schema,
   ApprovalExecutionOriginV1Schema,
   ApprovalRequestV1Schema,
   ApprovalRequestV2Schema,
@@ -13,6 +15,23 @@ import {
   requiresExactDaemonApprovalReplay,
   isMountedPluginBlockingApprovalEligibleForLiveClient,
 } from './approvalRequestV1.js';
+
+it('retains only closed, content-free admitted operation credential facts beside the original outcome', () => {
+  const personal = { v: 1, kind: 'connected_account', label: 'Personal GitHub',
+    owner: { kind: 'account', accountId: 'alice' }, service: { pluginId: 'example.service', localId: 'github' },
+    why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'example.worker', localId: 'publish' }, purpose: 'repository-write' }, target: 'account' },
+    currentness: { kind: 'current_at_materialization' } };
+  const team = { ...personal, kind: 'team_resource', label: 'Acme GitHub', owner: { kind: 'team', teamId: 'acme' },
+    currentness: { kind: 'current_at_materialization', resourceRevision: 7 } };
+  const receipt = { executedAtMs: 30, effectAttempted: true, ok: true, result: { publicationId: 'post-1' },
+    operationCredentialUses: [personal, team] };
+  expect(ApprovalExecutionV2Schema.safeParse(receipt).success).toBe(true);
+  expect(ApprovalExecutionV2Schema.safeParse({ ...receipt, operationCredentialUses: [{ ...personal, token: 'must-not-be-retained' }] }).success).toBe(false);
+  expect(ApprovalExecutionV2Schema.safeParse({ ...receipt, operationCredentialUses: [{ ...personal, owner: team.owner }] }).success).toBe(false);
+  expect(ApprovalExecutionV2Schema.safeParse({ ...receipt, effectAttempted: false }).success).toBe(false);
+  expect(createStoredReadSchema(ApprovalExecutionV2Schema).parse({ ...receipt, futureReceiptFact: true,
+    operationCredentialUses: [{ ...personal, futureAdmissionFact: true }, team] })).toEqual(receipt);
+});
 
 it('admits only unsigned mounted plugin Account/client blocking continuations to their live client', () => {
   const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

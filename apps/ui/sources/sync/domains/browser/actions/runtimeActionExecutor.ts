@@ -9,7 +9,11 @@ import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-de
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeControlRegistry';
+import {
+    readClaimedBrowserRuntimeWorkspaceOpenRegion,
+    readRegisteredBrowserRuntimeWorkspaceOpeningAdapter,
+    type BrowserWorkspaceOpenerRegion,
+} from './runtimeControlRegistry';
 import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
 import {
@@ -47,7 +51,9 @@ export type BrowserRuntimeActionDisabledReason =
     | 'browser_diagnostics_unavailable'
     | 'browser_recording_unavailable'
     | 'browser_view_unavailable'
-    | 'browser_adapter_unavailable';
+    | 'browser_adapter_unavailable'
+    /** AMD-8: a third-party page in the web iframe engine keeps its history and loading to itself. */
+    | 'browser_page_history_uncontrollable';
 
 type BrowserRuntimeActionFailure = Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
 
@@ -71,7 +77,11 @@ export type BrowserRuntimeDiagnosticsAdapter = Readonly<{ execute: RuntimeAction
 export type BrowserRuntimeWorkspaceOpeningAdapter = Readonly<{
     scopeId: string;
     accountLifetime: ServerAccountScopeLifetime | null;
-    open: (input: PublicActionInputById['browser.workspace.open'], context: ActionExecutorContext) => Promise<unknown>;
+    open: (
+        input: PublicActionInputById['browser.workspace.open'],
+        context: ActionExecutorContext,
+        presentation?: Readonly<{ openerRegion: BrowserWorkspaceOpenerRegion }>,
+    ) => Promise<unknown>;
 }>;
 
 export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
@@ -173,6 +183,8 @@ function mapControlRejectedReason(
     switch (reasonCode) {
         case 'adapter_unavailable':
             return 'browser_adapter_unavailable';
+        case 'page_history_uncontrollable':
+            return 'browser_page_history_uncontrollable';
         case 'automation_busy':
             return 'browser_control_unavailable';
         case 'view_not_found':
@@ -251,7 +263,8 @@ async function executeBrowserControlAction(
             || args.context.runtimeAccountId !== lifetime.scope.accountId) {
             return browserRuntimeActionDisabledResult('browser_view_unavailable');
         }
-        return await owner.open(request, args.context);
+        const openerRegion = readClaimedBrowserRuntimeWorkspaceOpenRegion(lifetime.scope, request.scopeId, request.commandId);
+        return await owner.open(request, args.context, openerRegion ? { openerRegion } : undefined);
     }
 
     const parsed = parseRuntimeActionInput(args);

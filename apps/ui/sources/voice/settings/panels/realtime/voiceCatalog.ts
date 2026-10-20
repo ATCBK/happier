@@ -1,9 +1,29 @@
 import type { BundledConversationProviderClient } from '@/voice/credentials/bundledConversationClient';
 import { readSessionVoiceSettingFieldV1, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { tLoose } from '@/text';
+import { z } from 'zod/mini';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
-export type VoiceCatalogRow = Readonly<{ id: string; name: string; subtitle?: string; previewUrl?: string | null }>;
+export const VoiceCatalogRowsSchema = z.array(z.strictObject({
+    id: z.string().check(z.minLength(1)), name: z.string(), subtitle: z.optional(z.string()),
+    previewUrl: z.optional(z.nullable(z.string())),
+    previewAvailable: z.optional(z.boolean()),
+}));
+export type VoiceCatalogRow = Readonly<z.infer<typeof VoiceCatalogRowsSchema>[number]>;
 export type VoiceCatalogClient = Pick<BundledConversationProviderClient, 'fetchVoiceCatalog'>;
+export function readVoiceCatalogSettingsActionResult(result: ActionExecuteResult): readonly VoiceCatalogRow[] {
+    if (!result.ok) throw new Error('voice_catalog_unavailable');
+    const receipt = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result);
+    const value = record(receipt.value);
+    if (receipt.status !== 'completed' || !value) throw new Error('voice_catalog_unavailable');
+    return VoiceCatalogRowsSchema.parse(value.rows);
+}
+/** Catalog inspection exposes preview capability, while playback keeps provider URLs private. */
+export function projectVoiceSettingsCatalogList(rows: readonly VoiceCatalogRow[], canSynthesize = false) {
+    return rows.map(row => ({ id: row.id, name: row.name, ...(row.subtitle ? { subtitle: row.subtitle } : {}),
+        previewAvailable: canSynthesize || Boolean(row.previewUrl) }));
+}
 function record(value: unknown): Readonly<Record<string, unknown>> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null;
 }

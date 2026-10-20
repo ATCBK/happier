@@ -195,12 +195,14 @@ describe('AgentInput (image attachment thumbnails)', () => {
 
         const screen = await renderAgentInput(attachments);
 
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         for (const key of ['image', 'file']) {
             const remove = screen.findByTestId(`agent-input-attachment-remove:${key}`);
             expect(remove?.props.accessibilityRole).toBe('button');
             expect(remove?.props.accessibilityLabel).toBe('common.remove');
             expect(remove?.props.hitSlop).toBeUndefined();
-            expect(flattenStyle(remove?.props.style)).toMatchObject({ minHeight: 44, minWidth: 44 });
+            expect(flattenStyle(remove?.props.style)).toMatchObject({ minHeight: touchFloor, minWidth: touchFloor });
         }
     });
 

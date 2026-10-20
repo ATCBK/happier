@@ -333,7 +333,8 @@ describe('createDefaultActionExecutor approvals', () => {
             expect(decided).toMatchObject({ ok: true });
             const status = source === 'replaced' || source === 'unavailable' ? 'failed' : 'approved';
             expect(persistedApproval(artifactId)).toMatchObject({ status,
-                ...(status === 'failed' ? { execution: { ok: false, errorCode: 'approval_stale' } } : {}) });
+                ...(status === 'failed' ? { execution: { ok: false, errorCode: 'approval_stale',
+                    details: { reason: source === 'unavailable' ? 'currentness_read_failed' : 'plugin_source_changed' } } } : {}) });
             expect(coordinator.getLiveWaiterCount(artifactId)).toBe(0);
             if (completed) await expect(completed).resolves.toMatchObject({ decision: 'approve', request: { status } });
             expect(homes.requestsFor('/v1/actions/approval.request.decide')).toHaveLength(source === 'detached' ? 1 : 0);

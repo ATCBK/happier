@@ -228,6 +228,9 @@ describe("Team credential direct material consumed boundary (SQLite integration)
                 sourceMemberKey,
             });
             expect(openedDirect.ok, JSON.stringify(openedDirect)).toBe(true);
+            expect(openedDirect).toMatchObject({
+                admittedResource: { displayName: resource.displayName, teamId: team.id },
+            });
             const attachedRequest = {
                 resourceId: resource.id,
                 consumer: { kind: "execution_run" as const, executionRunId: "attached-run", workerMachineId: "worker-1" },

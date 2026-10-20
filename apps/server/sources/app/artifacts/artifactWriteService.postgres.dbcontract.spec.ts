@@ -6,12 +6,23 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { updateArtifactHttpMutation } from "./artifactMutationHttpResponse";
-import { createArtifact, updateArtifact } from "./artifactWriteService";
+import { createArtifact, deleteArtifact, updateArtifact, updateArtifactTx } from "./artifactWriteService";
 import { readArtifactStorageUsageInTx } from "./artifactStorageService";
 import { inTx } from "@/storage/inTx";
-import { setArtifactAccessGrantInTx } from "./artifactAccessService";
+import { readArtifactForCaller, removeArtifactAccessGrantInTx, setArtifactAccessGrantInTx } from "./artifactAccessService";
+import { decideArtifactEditProposalInTx } from "./artifactEditProposalService";
+import { createDiscussion } from "@/app/discussions/mutations";
+import { buildDiscussionMutationRequestBodyV1 } from "@happier-dev/protocol/discussions/api";
+import { createDiscussionMessageRefV1 } from "@happier-dev/protocol/discussions/messageRefs";
+import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
+import { admitTeamMemberInTx } from '@/app/teams/memberships/membershipService';
+import { publishTeamChangedInTx } from '@/app/teams/teamChanges';
 
 const bytes = (value: unknown) => privacyKit.decodeBase64(encodePlainArtifactStoredContent(value));
+
+function waitForDatabasePause<T>(operation: Promise<T>, paused: Promise<void>): Promise<void> {
+    return Promise.race([paused, operation.then(() => { throw new Error("Artifact operation finished before its database interleaving boundary"); })]);
+}
 
 async function plainArtifact(accountId: string) {
     return db.artifact.create({ data: {
@@ -65,6 +76,143 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         connected = true;
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it.each([true, false])('rechecks Team recipients at terminal publication (recovery disabled: %s)', async disabled => {
+        const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        if (disabled) process.env.HAPPIER_DB_TX_MAX_RETRIES = '0';
+        else delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        vi.stubEnv('HAPPIER_ARTIFACT_ACCOUNT_LIMIT_BYTES', '');
+        vi.stubEnv('HAPPIER_FEATURE_TEAMS__ENABLED', '1');
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const newcomer = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const team = await db.team.create({ data: { name: randomUUID() } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: 'owner' } });
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactTeamGrant.create({ data: { artifactId: artifact.id, teamId: team.id,
+            createdByAccountId: owner.id, accessLevel: 'view' } });
+        const transaction = db.$transaction;
+        let advanced = false;
+        let checkpoint = -1;
+        // Interpose only on the real SQL transport, after the writer has queued
+        // its captured recipients. All admission and mutation owners stay real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                get(inner, property, innerReceiver) {
+                    if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                    return async (query: string, ...values: unknown[]) => {
+                        if (!advanced && query.includes('FROM "Account"') && query.includes('FOR NO KEY UPDATE')) {
+                            advanced = true;
+                            expect(await inTx(async client => {
+                                const result = await admitTeamMemberInTx(client, { teamId: team.id,
+                                    accountId: newcomer.id, role: 'member', historyAccess: 'all_existing' });
+                                if (result.ok) await publishTeamChangedInTx(client, { teamId: team.id });
+                                return result;
+                            }))
+                                .toMatchObject({ ok: true, outcome: 'added' });
+                            // The newly admitted reader can checkpoint the old committed body.
+                            expect(await readArtifactForCaller({ actorAccountId: newcomer.id, artifactId: artifact.id }))
+                                .toMatchObject({ ok: true, artifact: { bodyVersion: 1 } });
+                            checkpoint = (await db.account.findUniqueOrThrow({ where: { id: newcomer.id }, select: { seq: true } })).seq;
+                            expect(checkpoint).toBeGreaterThan(0);
+                        }
+                        return inner.$queryRawUnsafe(query, ...values);
+                    };
+                },
+            })), ...args.slice(1)]);
+        } });
+        const write = () => updateArtifactHttpMutation(owner.id, artifact.id, {
+            body: encodePlainArtifactStoredContent({ status: 'approved' }), expectedBodyVersion: 1,
+        });
+        try {
+            const result = await write();
+            expect(advanced).toBe(true);
+            if (disabled) {
+                // This adapter reports exhausted recovery as a failed request;
+                // the contract here is rollback, not a new HTTP error mapping.
+                expect(result.statusCode).toBeGreaterThanOrEqual(400);
+                expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id }, select: { bodyVersion: true } }))
+                    .toEqual({ bodyVersion: 1 });
+                expect((await write()).statusCode).toBe(200);
+            } else expect(result.statusCode).toBe(200);
+            const change = await db.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: {
+                accountId: newcomer.id, kind: 'artifact', entityId: artifact.id,
+            } } });
+            expect(change.cursor).toBeGreaterThan(checkpoint);
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id }, select: { bodyVersion: true } }))
+                .toEqual({ bodyVersion: 2 });
+        } finally {
+            db.$transaction = transaction;
+            vi.unstubAllEnvs();
+            if (previousRetries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
+            await db.artifact.deleteMany({ where: { id: artifact.id } });
+            await db.team.delete({ where: { id: team.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, newcomer.id] } } });
+        }
+    });
+
+    it.each(["update", "revoke"] as const)("orders an existing grant %s before physical Artifact deletion without transaction retries", async operation => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { encryptionMode: "plain" } });
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: recipient.id,
+            accessLevel: "view", createdByAccountId: owner.id } });
+        const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
+        let releaseWriter!: () => void;
+        const writerRelease = new Promise<void>(resolve => { releaseWriter = resolve; });
+        let writerReady!: () => void;
+        const ready = new Promise<void>(resolve => { writerReady = resolve; });
+        let writerPid = 0;
+        const writer = inTx(async tx => {
+            writerPid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+            const input = { artifactId: artifact.id, actorAccountId: owner.id,
+                principal: { kind: "account" as const, accountId: recipient.id } };
+            const result = operation === "update"
+                ? await setArtifactAccessGrantInTx(tx, { ...input, accessLevel: "edit" })
+                : await removeArtifactAccessGrantInTx(tx, input);
+            writerReady();
+            await writerRelease;
+            return result;
+        }).then(value => ({ value }), error => ({ error }));
+        const transaction = db.$transaction;
+        const deletionPids: number[] = [];
+        const failures: unknown[] = [];
+        try {
+            await waitForDatabasePause(writer, ready);
+            // Only the genuine transaction boundary is wrapped. Retirement,
+            // physical deletion, cascades, grant mutation and publication run real SQL.
+            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                    deletionPids.push((await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid);
+                    try { return await callback(tx); } catch (error) { failures.push(error); throw error; }
+                }, ...args.slice(1)]);
+            } });
+            const deletion = deleteArtifact({ actorUserId: owner.id, artifactId: artifact.id });
+            let blocked: Array<{ pid: number; blockers: number[]; query: string; wait_event: string | null }> = [];
+            await vi.waitFor(async () => {
+                blocked = await db.$queryRawUnsafe('SELECT pid, pg_blocking_pids(pid) AS blockers, query, wait_event FROM pg_stat_activity WHERE pid = ANY($1::int[]) AND $2 = ANY(pg_blocking_pids(pid))', deletionPids, writerPid);
+                expect(blocked.length).toBe(1);
+            }, { timeout: 10_000 });
+            console.info("Artifact grant/deletion database boundary", JSON.stringify({ operation, writerPid, blocked, maxRetries: 0 }));
+            releaseWriter();
+            const [written, removed] = await Promise.all([writer, deletion]);
+            console.info("Artifact grant/deletion outcomes", { written, removed, failures });
+            expect(written).toMatchObject({ value: { ok: true } });
+            expect(removed).toMatchObject({ ok: true });
+            expect(await db.artifact.findUnique({ where: { id: artifact.id } })).toBeNull();
+        } finally {
+            releaseWriter();
+            db.$transaction = transaction;
+            await writer;
+            if (previousRetries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
+        }
+    });
 
     it("commits an approval update while another Artifact publishes changes on the same Account", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
@@ -179,6 +327,54 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         } finally { vi.unstubAllEnvs(); }
     });
 
+    it("replays an overlapping create of the same Artifact without another write or cursor", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const input = { actorUserId: account.id, artifactId: randomUUID(), header: bytes({ kind: "document" }),
+            body: bytes({ value: "content" }), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) };
+        let firstReady!: () => void;
+        const ready = new Promise<void>(resolve => { firstReady = resolve; });
+        let secondReady!: () => void;
+        const competing = new Promise<void>(resolve => { secondReady = resolve; });
+        let releaseFirst!: () => void;
+        const released = new Promise<void>(resolve => { releaseFirst = resolve; });
+        let releaseSecond!: () => void;
+        const secondReleased = new Promise<void>(resolve => { releaseSecond = resolve; });
+        const transaction = db.$transaction;
+        let attempts = 0;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            const first = attempts++ === 0;
+            return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== "artifact") return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.artifact, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== "create") return operation;
+                    return async (...queryArgs: Parameters<typeof tx.artifact.create>) => {
+                        if (first) { firstReady(); await released; }
+                        else { secondReady(); await secondReleased; }
+                        return Reflect.apply(operation, delegate, queryArgs);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            const first = createArtifact(input);
+            await waitForDatabasePause(first, ready);
+            const second = createArtifact(input);
+            await waitForDatabasePause(second, competing);
+            releaseFirst();
+            const created = await first;
+            releaseSecond();
+            const replay = await second;
+            expect(created).toMatchObject({ ok: true, didWrite: true });
+            expect(replay).toMatchObject({ ok: true, didWrite: false });
+            if (!created.ok || !replay.ok) throw new Error("Expected an idempotent create replay");
+            expect(replay.artifact).toEqual(created.artifact);
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).seq).toBe(1);
+        } finally { releaseFirst(); releaseSecond(); db.$transaction = transaction; }
+    });
+
     it("keeps retained-body quota admission atomic across concurrent Artifact updates", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
         const artifacts = await Promise.all([plainArtifact(account.id), plainArtifact(account.id)]);
@@ -192,6 +388,53 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
             expect(outcomes.filter(result => !result.ok).map(result => result.error)).toEqual(["quota_exceeded"]);
             expect((await inTx(tx => readArtifactStorageUsageInTx(tx, account.id))).usedBytes).toBe(baseline + body.byteLength);
         } finally { vi.unstubAllEnvs(); }
+    });
+
+    it("checks the complete document budget when independent header and body writes overlap", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const artifact = await plainArtifact(account.id);
+        const header = bytes({ kind: "document", title: "a larger header" });
+        const body = bytes({ value: "replacement content" });
+        const baseline = artifact.header.byteLength + artifact.body.byteLength;
+        const limit = baseline + Math.max(header.byteLength - artifact.header.byteLength, body.byteLength);
+        vi.stubEnv("HAPPIER_ARTIFACT_DOCUMENT_LIMIT_BYTES", String(limit));
+        let firstReady!: () => void;
+        const ready = new Promise<void>(resolve => { firstReady = resolve; });
+        let releaseFirst!: () => void;
+        const released = new Promise<void>(resolve => { releaseFirst = resolve; });
+        let secondReady!: () => void;
+        const competing = new Promise<void>(resolve => { secondReady = resolve; });
+        // Pause the first writer after its real budget projection. The peer
+        // either reaches the same projection or waits at the resource lock.
+        const instrument = (tx: Tx, first: boolean) => new Proxy(tx, { get(inner, property, receiver) {
+            if (property === "$queryRawUnsafe") return async (query: string, ...values: unknown[]) => {
+                if (!first && query.includes('FROM "Artifact"') && query.includes("FOR ")) secondReady();
+                return inner.$queryRawUnsafe(query, ...values);
+            };
+            if (property !== "artifact") return Reflect.get(inner, property, receiver);
+            return new Proxy(inner.artifact, { get(delegate, method, delegateReceiver) {
+                const operation = Reflect.get(delegate, method, delegateReceiver);
+                if (method !== "updateMany") return operation;
+                return async (...args: Parameters<typeof tx.artifact.updateMany>) => {
+                    if (first) { firstReady(); await released; }
+                    else secondReady();
+                    return Reflect.apply(operation, delegate, args);
+                };
+            } });
+        } });
+        try {
+            const first = inTx(tx => updateArtifactTx(instrument(tx, true), { actorUserId: account.id,
+                artifactId: artifact.id, header: { bytes: header, expectedVersion: 1 } }));
+            await waitForDatabasePause(first, ready);
+            const second = inTx(tx => updateArtifactTx(instrument(tx, false), { actorUserId: account.id,
+                artifactId: artifact.id, body: { bytes: body, expectedVersion: 1 } }));
+            await waitForDatabasePause(second, competing);
+            releaseFirst();
+            const outcomes = await Promise.all([first, second]);
+            expect(outcomes.filter(result => result.ok)).toHaveLength(1);
+            expect(outcomes.filter(result => !result.ok).map(result => result.error)).toEqual(["quota_exceeded"]);
+            expect((await inTx(tx => readArtifactStorageUsageInTx(tx, account.id))).usedBytes).toBeLessThanOrEqual(limit);
+        } finally { releaseFirst(); vi.unstubAllEnvs(); }
     });
 
     it("replays an expanded audience before publishing to a newly granted recipient", async () => {
@@ -226,5 +469,56 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 body: { bytes: bytes({ status: "approved" }), expectedVersion: 1 } })).toMatchObject({ ok: false, error: "not-found" });
             expect((await db.artifact.findUniqueOrThrow({ where: { id: artifact.id }, select: { bodyVersion: true } })).bodyVersion).toBe(1);
         } finally { restore(); }
+    });
+
+    it("admits the complete cross-owner proposal audience before locking either resource", async () => {
+        const suffix = randomUUID();
+        const owner = await db.account.create({ data: { id: `a-artifact-${suffix}`, encryptionMode: "plain" } });
+        const author = await db.account.create({ data: { id: `z-discussion-${suffix}`, encryptionMode: "plain" } });
+        const viewer = await db.account.create({ data: { id: `0-discussion-viewer-${suffix}`, encryptionMode: "plain" } });
+        const artifactId = randomUUID();
+        expect(await createArtifact({ actorUserId: owner.id, artifactId, header: bytes({ title: "Doc" }),
+            body: bytes({ body: "Hello" }), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) })).toMatchObject({ ok: true });
+        await db.artifactAccountGrant.create({ data: { artifactId, accountId: author.id, accessLevel: "edit", createdByAccountId: owner.id } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const ref = { kind: "doc" as const, artifactId, serverId: "home" };
+        const revision = { headerVersion: 1, bodyVersion: 1 };
+        const content = { kind: "doc_edit_proposal" as const, proposal: {
+            target: { ref, revision, range: { start: 0, end: 5 }, quote: "Hello" },
+            baseRevision: revision, before: "Hello", after: "World", reason: "Replacement",
+        } };
+        const request = buildDiscussionMutationRequestBodyV1({ kind: "create", creationLocalId: randomUUID(),
+            titleContent: { t: "plain", v: { v: 1, title: "Proposal" } }, firstMessage: { localId: randomUUID(),
+                content: { t: "plain", v: content }, authoredContent: content, mentionedAccountIds: [],
+                replyTarget: { kind: "doc_passage", doc: { ref, revision } } } });
+        const discussion = await createDiscussion({ actorAccountId: author.id, authentication, request });
+        if (!discussion.ok) throw new Error(discussion.error);
+        await db.discussionAccountGrant.create({ data: { discussionId: discussion.value.discussion.id, accountId: viewer.id,
+            accessLevel: "view", createdByAccountId: author.id } });
+        const proposalRef = createDiscussionMessageRefV1({ serverId: "home", discussionId: discussion.value.discussion.id }, discussion.value.firstMessage);
+        const admitted = new Set<string>();
+        const lateAdmissions: string[] = [];
+        let resourceLocked = false;
+        const result = await inTx(tx => decideArtifactEditProposalInTx(new Proxy(tx, { get(inner, property, receiver) {
+            if (property !== "$queryRawUnsafe") return Reflect.get(inner, property, receiver);
+            return async (query: string, ...values: unknown[]) => {
+                if (query.includes('FROM "Account"') && query.includes("FOR ")) {
+                    const ids = values.flatMap(value => typeof value === "string" ? [value]
+                        : Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : []);
+                    for (const id of ids) {
+                        if (resourceLocked && !admitted.has(id)) lateAdmissions.push(id);
+                        admitted.add(id);
+                    }
+                }
+                const result = await inner.$queryRawUnsafe(query, ...values);
+                if ((query.includes('FROM "Artifact"') || query.includes('FROM "DiscussionMessage"')) && query.includes("FOR ")) resourceLocked = true;
+                return result;
+            };
+        } }), { actorAccountId: author.id, authentication, proposalRef, decision: "accept", expectedRevision: revision }));
+        expect(result).toMatchObject({ ok: true, disposition: { state: "accepted" } });
+        expect(lateAdmissions).toEqual([]);
+        expect(admitted.has(owner.id)).toBe(true);
+        expect(admitted.has(viewer.id)).toBe(true);
+        expect((await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })).bodyVersion).toBe(2);
     });
 });

@@ -1,4 +1,13 @@
 import { isPrismaErrorCode } from "@/storage/prisma";
+import { discussionFailure, type DiscussionFailureCode, type DiscussionResult } from './serviceTypes';
+
+/** A declined initial invitation must unwind the entire create transaction before returning its refusal. */
+export class DiscussionCreationRejectedError extends Error {
+    constructor(readonly code: DiscussionFailureCode) {
+        super(code);
+        this.name = 'DiscussionCreationRejectedError';
+    }
+}
 
 const DISCUSSION_CREATION_IDENTITY_CONSTRAINT = "Discussion_createdByAccountId_creationLocalId_key";
 
@@ -39,11 +48,18 @@ export function isDiscussionCreationIdentityConflict(error: unknown): boolean {
  */
 export async function reconcileDiscussionCreationIdentityRace<T>(
     operation: () => Promise<T>,
-): Promise<T> {
+): Promise<T | DiscussionResult<never>> {
+    const attempt = async () => {
+        try { return await operation(); }
+        catch (error) {
+            if (error instanceof DiscussionCreationRejectedError) return discussionFailure(error.code);
+            throw error;
+        }
+    };
     try {
-        return await operation();
+        return await attempt();
     } catch (error) {
         if (!isDiscussionCreationIdentityConflict(error)) throw error;
-        return await operation();
+        return await attempt();
     }
 }

@@ -1,5 +1,5 @@
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema, type ProviderDefaultModelSelectionsByAgentTargetKeyV1 } from '../selection/v1.js';
-import { type ProviderSettingsV1 } from '../settings/v1.js';
+import type { ProviderSettingsV1 } from '../settings/v1.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';

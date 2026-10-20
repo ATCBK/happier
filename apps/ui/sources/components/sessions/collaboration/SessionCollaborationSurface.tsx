@@ -27,6 +27,7 @@ import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/s
 import { t } from '@/text';
 import { SessionPeopleFollowSections } from './SessionPeopleFollowSections';
 import { SessionPresenceSection } from './SessionPresenceSection';
+import { SessionPeopleReadinessSection } from './SessionPeopleReadinessSection';
 import { SessionPublicLinkSection, useSessionCollaborationPublicLink, type SessionCollaborationPublicLink } from './SessionPublicLinkSection';
 import { SessionConversationsBody } from '@/components/sessions/conversations/SessionConversationsBody';
 import { useSessionConversationsAvailability } from '@/components/sessions/conversations/useSessionConversationsAvailability';
@@ -387,7 +388,11 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
     const hidden = props.shareOpen;
     // Who hears about this session and what it follows (lab P1p): on every session, after its conversations.
     const followSections = (
-        <SessionPeopleFollowSections target={props.target} session={props.snapshot.session} followingAnchorRef={refs.followingAnchor} />
+        <>
+            {/* Configured vs ready (C7): whether asking this session can work now, before who hears about it. */}
+            <SessionPeopleReadinessSection scope={props.scope} sessionId={props.sessionId} />
+            <SessionPeopleFollowSections target={props.target} session={props.snapshot.session} followingAnchorRef={refs.followingAnchor} />
+        </>
     );
     return (
         <View style={styles.surface} onLayout={onContainerLayout}>

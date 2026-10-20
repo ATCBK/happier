@@ -4,7 +4,7 @@ import { SessionQuestionHandlerV1Schema, type SessionQuestionHandlerV1 } from '@
 
 import { knownTools } from '@/components/tools/catalog';
 import { inferToolNameForRendering } from '@/components/tools/normalization/policy/toolNameInference';
-import { formatMCPSubtitle, formatMCPTitle } from '@/components/tools/renderers/system/MCPToolView';
+import { formatMCPTitle, formatMCPToolSubtitle } from '@/components/tools/renderers/system/MCPToolView';
 import { t } from '@/text';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAskUserQuestionAnsweredByLabel } from '@/components/tools/renderers/workflow/askUserQuestionCardState';
@@ -85,7 +85,7 @@ export function resolveToolHeaderTextPresentation(params: {
             normalizedToolName: tool.name,
             usedInferenceFallback: false,
             title: formatMCPTitle(tool.name, tool.permission?.mcpTool, tool.input),
-            subtitle: formatMCPSubtitle(tool.input),
+            subtitle: formatMCPToolSubtitle(tool.name, tool.input),
             statusText: null,
             answeredBy,
             answeredByLabel,

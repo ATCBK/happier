@@ -22,7 +22,7 @@ import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScree
 import { applyConnectedAccountCatalogSnapshot, getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { applyAcpCatalogSnapshot, getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
 import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { refreshMachineAgents } from '@/agents/machineAgents/useMachineAgents';
+import { refreshMachineAgents, useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { machineAgentInventoryStore } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -45,6 +45,7 @@ import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/co
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { randomUUID } from '@/platform/randomUUID';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -307,7 +308,7 @@ describe('New Session selected credential launch gate', () => {
             if (method === 'capabilities.detect') return { protocolVersion: 1, results: { 'cli.claude': { ok: true, checkedAt: Date.now(), data: nativeFacts(nativeStatus) } } };
             return { jobs: [] };
         });
-        const draftId = `credential-${scenario.native}-${scenario.connected}-${scenario.selected}`;
+        const draftId = randomUUID();
         const connectedDraft = {
             input: 'hello', selectedMachineId: machine.id, selectedPath: '/repo', targetServerId: scope.serverId,
             agentType: 'claude', acpSessionModeId: null, selectedProfileId: null, selectedSecretId: null,
@@ -446,24 +447,27 @@ describe('New Session selected credential launch gate', () => {
             expect(model.simpleProps.connectionStatus?.action?.testID?.startsWith('new-session-agent-blocker.') === true, observedAdmission)
                 .toBe(!scenario.ready && !scenario.selected.startsWith('provider'));
             if (scenario.native === 'signedOut' && !scenario.connected && scenario.selected === 'native') {
-                const accountLifetime = captureActiveServerAccountScopeLifetime();
-                if (!accountLifetime) throw new Error('Expected current credential Account');
-                // Real inventory -> selected credential -> admission/status wiring. Picker eligibility
-                // stays true across sign-in changes and therefore cannot substitute for admission.
-                for (const status of ['signedIn', 'signedOut'] as const) {
-                    nativeStatus = status;
-                    await act(async () => { await refreshMachineAgents({ serverId: scope.serverId,
-                        machineId: machine.id, accountLifetime }); });
-                    await vi.waitFor(() => {
-                        const current = hook.getCurrent();
-                        if (current.variant !== 'simple') throw new Error('Expected refreshed simple launcher');
-                        expect(current.simpleProps.canCreate).toBe(status === 'signedIn');
-                        expect(Boolean(current.simpleProps.connectionStatus?.text)).toBe(status === 'signedOut');
-                        expect(current.simpleProps.connectionStatus?.action?.testID)
-                            .toBe(status === 'signedOut' ? 'new-session-agent-blocker.action' : undefined);
-                        expect(current.simpleProps.agentPickerOptions?.find(option => option.id === agentTargetKey)?.disabled).toBe(false);
-                    });
-                }
+                const inventory = await renderHook(() => useMachineAgents({
+                    serverId: scope.serverId, machineId: machine.id, load: false,
+                }));
+                try {
+                    // Use the same explicit refresh as Machine Agents' Check again after native
+                    // auth changes; passive inventory reads may reuse the five-minute auth cache.
+                    // Picker eligibility stays true and cannot substitute for credential admission.
+                    for (const status of ['signedIn', 'signedOut'] as const) {
+                        nativeStatus = status;
+                        await act(async () => { await inventory.getCurrent().refresh(); });
+                        await vi.waitFor(() => {
+                            const current = hook.getCurrent();
+                            if (current.variant !== 'simple') throw new Error('Expected refreshed simple launcher');
+                            expect(current.simpleProps.canCreate).toBe(status === 'signedIn');
+                            expect(Boolean(current.simpleProps.connectionStatus?.text)).toBe(status === 'signedOut');
+                            expect(current.simpleProps.connectionStatus?.action?.testID)
+                                .toBe(status === 'signedOut' ? 'new-session-agent-blocker.action' : undefined);
+                            expect(current.simpleProps.agentPickerOptions?.find(option => option.id === agentTargetKey)?.disabled).toBe(false);
+                        });
+                    }
+                } finally { await inventory.unmount(); }
             }
             if (!scenario.ready && scenario.connected) {
                 await act(async () => { model.simpleProps.connectionStatus?.action?.onPress(); });

@@ -1,5 +1,6 @@
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import type { InboxItem } from './inboxItems';
+import { admittedInboxDiscussionOccurrences, inboxItemView, type InboxDiscussionSource } from './inboxItemProjection';
 
 /**
  * The one Inbox count. The rail badge, the popover's header and the page's two views all read it, so
@@ -18,10 +19,25 @@ export type InboxCountParts = Readonly<{
     approvalsAndNotices: number;
     operations: number;
     friendRequests: number;
+    discussions?: number;
 }>;
 
 export function countInboxItems(parts: InboxCountParts): number {
-    return parts.sessions + parts.workflowRuns + parts.automationRuns + parts.approvalsAndNotices + parts.operations + parts.friendRequests;
+    return parts.sessions + parts.workflowRuns + parts.automationRuns + parts.approvalsAndNotices + parts.operations + parts.friendRequests + (parts.discussions ?? 0);
+}
+
+/** Read is not disposition: a live request remains attention until its owning source removes it. */
+function countsInboxItem(item: Pick<InboxItem, 'view' | 'read'>): boolean {
+    return item.view === 'needs_you' || !item.read;
+}
+
+export function countInboxDiscussionItems(source: InboxDiscussionSource | null): number {
+    if (!source) return 0;
+    let count = 0;
+    for (const { discussion, message, type } of admittedInboxDiscussionOccurrences(source)) {
+        if (countsInboxItem({ view: inboxItemView(type), read: discussion.lastReadSeq !== null && message.seq <= discussion.lastReadSeq })) count += 1;
+    }
+    return count;
 }
 
 /** The model facts the counts read; lengths only. */
@@ -39,7 +55,9 @@ export type InboxCountSource = Readonly<{
 /** The "Needs you" view's share of the count. */
 export function countInboxNeedsYou(model: InboxCountSource): number {
     if (model.items) return countInboxItems({
-        sessions: model.items.filter(item => item.producer === 'live' && item.source.kind === 'session' && item.view === 'needs_you' && !item.read).length,
+        sessions: model.items.filter(item => item.producer === 'live' && item.source.kind !== 'approval'
+            && item.source.kind !== 'workflow_run' && item.source.kind !== 'automation_run'
+            && item.view === 'needs_you' && countsInboxItem(item)).length,
         workflowRuns: model.workflowAttention.runIds.length - model.items.filter(item => item.source.kind === 'workflow_run' && item.view !== 'needs_you').length,
         automationRuns: model.automationAttention.runIds.length - model.items.filter(item => item.source.kind === 'automation_run' && item.view !== 'needs_you').length,
         approvalsAndNotices: model.openApprovals.length + model.items.filter(item => item.producer === 'notice' && item.view === 'needs_you').length,

@@ -8,6 +8,8 @@ import { normalizeSessionListFilterV1 } from '../sessions/listFilter/sessionList
 import { createActionExecutor } from './actionExecutor.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
 import { resolveActionSessionTargets } from './executor/sessionTargets.js';
+import { OpenedSessionFollowRuleV1Schema, SessionFollowActionOutputSchemasV1 } from '../sessions/follow/actions.js';
+import { DiscussionParticipantsListResponseV1Schema } from '../discussions/participants.js';
 
 const context: ActionExecutorContext = {
   serverId: 'home', defaultSessionId: 'parent', defaultSessionMachineId: 'machine', surface: 'cli', authority: 'present_user',
@@ -74,6 +76,198 @@ function harness() {
 }
 
 describe('SessionTarget at the Actions front door', () => {
+  it('keeps ambiguous exact-reference previews unavailable without disclosing candidate addresses', async () => {
+    const h = harness();
+    const ambiguous = createActionExecutor({ ...h.deps, resolveSessionReference: async () => ({ kind: 'ambiguous',
+      candidates: [{ serverId: 'home', sessionId: 'a' }, { serverId: 'other-home', sessionId: 'a' }] }),
+    } as unknown as ActionExecutorDeps);
+    expect(await ambiguous.execute('session.targets.resolve', { actionId: 'session.message.send', target: 'a' }, context))
+      .toEqual({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable', cause: 'session_id_ambiguous' } });
+  });
+  it('keeps a canceled exact-reference preview unavailable even when its reader returns an address', async () => {
+    const h = harness();
+    const controller = new AbortController();
+    const canceled = createActionExecutor({ ...h.deps, resolveSessionReference: async () => {
+      controller.abort();
+      return { kind: 'unique', address: { serverId: 'home', sessionId: 'a' } };
+    } } as unknown as ActionExecutorDeps);
+    expect(await canceled.execute('session.targets.resolve', { actionId: 'session.message.send', target: 'a' }, { ...context, signal: controller.signal }))
+      .toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'cancelled' } });
+  });
+  it('publishes authorized target inspection without sending and resolves a later invocation from its own current corpus', async () => {
+    const h = harness();
+    const preview = await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context);
+    expect(preview).toEqual({ ok: true, result: { coverage: 'complete', addresses: [
+      { serverId: 'home', sessionId: 'a' }, { serverId: 'home', sessionId: 'b' },
+    ], error: null } });
+    expect(h.effects).toEqual([]);
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: 'exact-session',
+    }, context)).toEqual({ ok: true, result: { coverage: 'complete',
+      addresses: [{ serverId: 'home', sessionId: 'exact-session' }], error: null } });
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'artifact.get', target: { selector: 'workers' },
+    }, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    h.setWorkers(['c']);
+    expect(await h.executor.execute('session.message.send', { sessionId: { selector: 'workers' }, message: 'hello' }, context))
+      .toMatchObject({ ok: true });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['c']);
+    h.setWorkers([]);
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context)).toEqual({ ok: true, result: { coverage: 'complete', addresses: [], error: null } });
+    h.incomplete();
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context)).toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' } });
+  });
+  const rule = (receiver: string | null, enabled = true) => OpenedSessionFollowRuleV1Schema.parse({
+    ruleId: receiver ?? 'personal-rule', version: 1,
+    receiver: receiver ? { kind: 'session', sessionId: receiver } : { kind: 'account' },
+    definition: { v: 1, enabled, policy: { preset: 'important' },
+      filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'sessions' }) },
+  });
+  const edge = (sourceSessionId: string, destinationSessionId: string) => ({
+    sourceSessionId, destinationSessionId, policy: { preset: 'important' },
+    deliveryState: 'eligible', hasPendingUpdates: false, relation: 'follower',
+  });
+  const preview = (sessionIds: string[]) => ({ coverage: 'complete', matchCount: sessionIds.length,
+    matches: sessionIds.map(sessionId => ({ serverId: 'home', source: { kind: 'session', sessionId } })),
+    unavailable: [], overlaps: [] });
+
+  it('resolves Followers through complete Follow facts, including matched Session rules and excluding personal rules', async () => {
+    const h = harness();
+    const executor = createActionExecutor({ ...h.deps,
+      sessionFollowAction: async ({ actionId, input }: Parameters<NonNullable<ActionExecutorDeps['sessionFollowAction']>>[0]) => {
+        expect({ actionId, input }).toEqual({ actionId: 'follow.list', input: { direction: 'followers',
+          source: { kind: 'session', sessionId: 'parent' } } });
+        return { follows: [], sources: [edge('parent', 'manager'), { ...edge('parent', 'manager'), relation: 'manager' }],
+          rules: [], coverage: 'complete', peopleCount: 7 };
+      },
+      readSessionFollowRules: async () => ({ kind: 'complete', rules: [rule('manager'), rule('rule-receiver'), rule('parent'), rule(null), rule('off', false)] }),
+      sessionFollowPreview: async () => preview(['parent']),
+    } as unknown as ActionExecutorDeps);
+    await expect(executor.execute('session.message.send', { sessionId: { selector: 'followers' }, message: 'hello' }, context))
+      .resolves.toMatchObject({ ok: true, result: { kind: 'fanout', results: [
+        { target: { serverId: 'home', sessionId: 'manager' } },
+        { target: { serverId: 'home', sessionId: 'rule-receiver' } },
+      ] } });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['manager', 'rule-receiver']);
+  });
+
+  it('resolves Following as Session sources plus current rule matches without inventing non-Session targets', async () => {
+    const h = harness();
+    const executor = createActionExecutor({ ...h.deps,
+      sessionFollowAction: async () => ({ follows: [], sources: [edge('explicit', 'parent')],
+        rules: [rule('parent')], coverage: 'complete' }),
+      sessionFollowPreview: async () => preview(['explicit', 'parent', 'rule-source']),
+    } as unknown as ActionExecutorDeps);
+    await expect(executor.execute('session.message.send', { sessionId: { selector: 'following' }, message: 'hello' }, context))
+      .resolves.toMatchObject({ ok: true, result: { kind: 'fanout', results: [
+        { target: { sessionId: 'explicit' } }, { target: { sessionId: 'rule-source' } },
+      ] } });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['explicit', 'rule-source']);
+  });
+
+  it('uses admitted Discussion participants and only already-bound model Sessions', async () => {
+    const h = harness();
+    // The authoritative roster was read on this Home; its saved launch alias belongs to its creator's device.
+    const modelLaunch = { executionTarget: { serverId: 'creator-device-home', machineId: 'machine' },
+      directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent',
+        identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+    const executor = createActionExecutor({ ...h.deps,
+      discussionAction: async ({ actionId, input }: Parameters<NonNullable<ActionExecutorDeps['discussionAction']>>[0]) => {
+        expect({ actionId, input }).toEqual({ actionId: 'discussion.participants.list', input: { discussionId: 'discussion' } });
+        return DiscussionParticipantsListResponseV1Schema.parse({ discussionId: 'discussion', ownerAccountId: 'person',
+          access: 'owner', grants: [], participants: [
+            { participant: { kind: 'session', sessionId: 'a' }, answerPolicy: 'when_addressed', createdAt: 1 },
+            { participant: { kind: 'model', participantSlotId: 'bound' }, launch: modelLaunch,
+              sessionId: 'model-session', answerPolicy: 'when_addressed', createdAt: 1 },
+            { participant: { kind: 'model', participantSlotId: 'unbound' }, launch: modelLaunch,
+              sessionId: null, answerPolicy: 'when_addressed', createdAt: 1 },
+          ] });
+      },
+    } as unknown as ActionExecutorDeps);
+    await expect(executor.execute('session.message.send', { sessionId: { selector: 'discussion', discussionId: 'discussion' }, message: 'hello' }, context))
+      .resolves.toMatchObject({ ok: true, result: { kind: 'fanout', results: [
+        { target: { serverId: 'home', sessionId: 'a' } }, { target: { serverId: 'home', sessionId: 'model-session' } },
+      ] } });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['a', 'model-session']);
+  });
+
+  it.each(['partial', 'rules_unavailable', 'rule_match_partial', 'wrong_source'] as const)(
+    'refuses %s Follow facts before any target effect', async cause => {
+      const h = harness();
+      const executor = createActionExecutor({ ...h.deps,
+        sessionFollowAction: async () => ({ follows: [], sources: [edge(cause === 'wrong_source' ? 'wrong' : 'parent', 'a')],
+          rules: [], coverage: cause === 'partial' ? 'partial' : 'complete', peopleCount: 0 }),
+        readSessionFollowRules: async () => cause === 'rules_unavailable' ? { kind: 'unavailable' }
+          : { kind: 'complete', rules: [rule('b')] },
+        sessionFollowPreview: async () => ({ ...preview(['parent']), coverage: cause === 'rule_match_partial' ? 'partial' : 'complete' }),
+      } as unknown as ActionExecutorDeps);
+      await expect(executor.execute('session.message.send', { sessionId: { selector: 'followers' }, message: 'hello' }, context))
+        .resolves.toMatchObject({ ok: false, errorCode: 'session_target_unavailable' });
+      expect(h.effects).toEqual([]);
+    });
+
+  it.each(['followers', 'following', 'discussion'] as const)('replays %s only against the reviewed concrete list', async selector => {
+    const h = harness();
+    let members = ['a', 'b'];
+    const executor = createActionExecutor({ ...h.deps,
+      sessionFollowAction: async () => ({ follows: [], sources: members.map(member => selector === 'followers'
+        ? edge('parent', member) : edge(member, 'parent')), rules: [], coverage: 'complete', peopleCount: 0 }),
+      readSessionFollowRules: async () => ({ kind: 'complete', rules: [] }),
+      discussionAction: async () => ({ discussionId: 'discussion', ownerAccountId: 'person', access: 'owner', grants: [],
+        participants: members.map(sessionId => ({ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 })) }),
+      isActionApprovalRequired: (id: string) => id === 'session.message.send',
+    } as unknown as ActionExecutorDeps);
+    await expect(executor.execute('session.message.send', { sessionId: selector === 'discussion'
+      ? { selector, discussionId: 'discussion' } : { selector }, message: 'hello' }, context))
+      .resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    members = ['b', 'c'];
+    h.deny('b');
+    await executor.execute('approval.request.decide', { artifactId: 'targets-approval', decision: 'approve' }, context);
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['a']);
+    expect(h.approval()).toMatchObject({ execution: { result: { results: [
+      { target: { sessionId: 'a' }, result: { ok: true } },
+      { target: { sessionId: 'b' }, result: { ok: false, errorCode: 'permission_denied' } },
+    ] } } });
+  });
+
+  it('refuses a rule receiver whose current Session access cannot be established', async () => {
+    const h = harness();
+    const executor = createActionExecutor({ ...h.deps,
+      resolveSessionReference: async ({ sessionId }: Parameters<NonNullable<ActionExecutorDeps['resolveSessionReference']>>[0]) => sessionId === 'lost-access'
+        ? { kind: 'none' } : { kind: 'unique', address: { serverId: 'home', sessionId: sessionId! } },
+      sessionFollowAction: async () => ({ follows: [], sources: [edge('parent', 'a')], rules: [], coverage: 'complete', peopleCount: 0 }),
+      readSessionFollowRules: async () => ({ kind: 'complete', rules: [rule('lost-access')] }),
+      sessionFollowPreview: async () => preview(['parent']),
+    } as unknown as ActionExecutorDeps);
+    await expect(executor.execute('session.message.send', { sessionId: { selector: 'followers' }, message: 'hello' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'session_target_unavailable' });
+    expect(h.effects).toEqual([]);
+  });
+
+  it('exhausts Follow continuation before dispatch and ignores non-Session sources', async () => {
+    const h = harness();
+    const firstPage = SessionFollowActionOutputSchemasV1['follow.list'].parse({ follows: [], sources: [edge('first', 'parent')],
+      rules: [], coverage: 'partial', continuation: 'follow-next' });
+    const secondPage = SessionFollowActionOutputSchemasV1['follow.list'].parse({ follows: [], sources: [edge('second', 'parent'), {
+      source: { kind: 'discussion', discussionId: 'discussion' }, destinationSessionId: 'parent',
+      policy: { preset: 'important' }, deliveryState: 'eligible', sourceAvailability: 'available', hasPendingUpdates: false, relation: 'follower',
+    }], rules: [], coverage: 'complete' });
+    const executor = createActionExecutor({ ...h.deps,
+      sessionFollowAction: async ({ input }: Parameters<NonNullable<ActionExecutorDeps['sessionFollowAction']>>[0]) => input.cursor ? secondPage : firstPage,
+    } as unknown as ActionExecutorDeps);
+    const result = await executor.execute('session.message.send', { sessionId: { selector: 'following' }, message: 'hello' }, context);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { kind: 'fanout', results: [
+        { target: { sessionId: 'first' } }, { target: { sessionId: 'second' } },
+      ] } });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['first', 'second']);
+  });
+
   it('resolves declaration-owned nested receivers and leaves an Account receiver without a Session target', async () => {
     const h = harness();
     const declaration = { field: 'receiver.sessionId', cardinality: 'one' as const };

@@ -108,6 +108,7 @@ async function deleteAutomationRunHistory(
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             run.accountId,
+            "content",
         );
         if (accountFence.status !== 'ready') return false;
         const current = await tx.automationRun.findFirst({
@@ -135,7 +136,7 @@ async function deleteAutomationRunHistory(
             afterTx(tx, () => emitAutomationUpsert({
                 accountId: current.accountId,
                 automation: current.automation!,
-                cursor,
+                cursor: cursor.resolveCursor(),
             }));
         }
         return true;

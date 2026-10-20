@@ -29,7 +29,9 @@ import type { StoredCredentials } from '@/persistence';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveSessionEncryptionContext } from '@/api/client/encryptionKey';
-import { createHttpStatusError, HttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
+import { createHttpStatusError, HttpStatusError, isAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatusError';
+import { readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { encodeBase64 } from '@/api/encryption';
 import {
   buildCurrentAccountStoredContentCompatibilityHttpHeaders,
@@ -1510,6 +1512,45 @@ export async function importHistoricalSessionTranscript(params: Readonly<{
   };
 }
 
+/** One HTTP boundary for the API client's and seeded creator's Session birth. */
+export async function postSessionCreationRequest<T>(params: Readonly<{
+  serverUrl: string;
+  token: string;
+  body: unknown;
+  creationAuthorizationToken?: string;
+  signal?: AbortSignal;
+  validateStatus?: (status: number) => boolean;
+}>): Promise<AxiosResponse<T>> {
+  params.signal?.throwIfAborted();
+  const response = await axios.post<T>(`${params.serverUrl}/v1/sessions`, params.body, {
+    headers: {
+      ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+      ...(params.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: params.creationAuthorizationToken } : {}),
+      Authorization: `Bearer ${params.token}`,
+      'Content-Type': 'application/json',
+    },
+    // An admitted creation operation owns its lifetime through native open.
+    // Standalone callers without that lifetime retain the existing timeout.
+    timeout: params.signal ? 0 : 60_000,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.validateStatus ? { validateStatus: params.validateStatus } : {}),
+  }).catch((cause: unknown) => {
+    // A response is handled by the existing refusal/rollback readers. Losing
+    // the response after dispatch cannot prove that Session birth rolled back.
+    if (readHttpStatus(cause) !== null || classifyHomeDomainHttpMutationFailureV1({
+      error: cause, issued: true, aborted: params.signal?.aborted === true,
+    }) !== 'outcome_unknown') throw cause;
+    throw Object.assign(new Error('Session creation outcome is unknown; reconcile the original creation key before retrying'), {
+      code: 'outcome_unknown' as const,
+      cause: { ...serializeAxiosErrorForLog(cause), code: readNormalizedConnectionErrorCode(cause) },
+    });
+  });
+  // Cancellation cannot undo a remote commit, but it cannot report success to
+  // an invocation that has already retired either.
+  params.signal?.throwIfAborted();
+  return response;
+}
+
 export async function getOrCreateSessionByTag(params: Readonly<import('@happier-dev/protocol').SessionCreateOriginFieldsV1 & {
   credentials: StoredCredentials;
   tag: string;
@@ -1526,6 +1567,7 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   creationAuthorizationToken?: string;
   prepareCreationAuthorizationProof?: import('@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1').SessionCreationAuthorizationV1['prepareRequestProof'];
   accountEncryptionCurrentness?: AccountEncryptionCurrentnessResponse;
+  signal?: AbortSignal;
 }>): Promise<{
   session: RawSessionRecord;
   created: boolean;
@@ -1536,6 +1578,7 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   const encryptionModeResolution = await resolveSessionCreateEncryptionMode({
     token: params.credentials.token,
     serverBaseUrl: serverUrl,
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.accountEncryptionCurrentness
       ? { accountEncryptionCurrentness: params.accountEncryptionCurrentness }
       : {}),
@@ -1596,6 +1639,7 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
       : null,
     token: params.credentials.token,
     serverHttpBaseUrl: serverUrl,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   if (params.shouldCommit && !params.shouldCommit()) {
@@ -1615,16 +1659,12 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
     ...(serverSupportsFeatureSnapshot ? { encryptionMode: desiredSessionEncryptionMode } : {}),
   };
   const creationAuthorizationProof = await params.prepareCreationAuthorizationProof?.(body);
-  const response = await axios.post(`${serverUrl}/v1/sessions`, {
-    ...body, ...(creationAuthorizationProof ? { creationAuthorizationProof } : {}),
-  }, {
-    headers: {
-      ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-      ...(params.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: params.creationAuthorizationToken } : {}),
-      Authorization: `Bearer ${params.credentials.token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 60_000,
+  const response = await postSessionCreationRequest<unknown>({
+    serverUrl,
+    token: params.credentials.token,
+    body: { ...body, ...(creationAuthorizationProof ? { creationAuthorizationProof } : {}) },
+    ...(params.creationAuthorizationToken ? { creationAuthorizationToken: params.creationAuthorizationToken } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
     validateStatus: () => true,
   });
 
@@ -1681,7 +1721,9 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
     token: params.credentials.token,
     serverHttpBaseUrl: serverUrl,
     ...(params.shouldCommit ? { isScopeCurrent: params.shouldCommit } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
   // Released and predecessor servers omit `created`; preserve their historical
   // create-or-load behavior while current servers report the exact race result.
   return {

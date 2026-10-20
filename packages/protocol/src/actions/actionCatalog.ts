@@ -1,4 +1,6 @@
 import type { ActionId } from './actionIds.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
+import { pluginJsonValuesEqual } from '../plugins/contributions/jsonSchemaValues.js';
 import {
   getActionSpec,
   isActionSpecSurfacedOn,
@@ -555,20 +557,21 @@ export function serializeActionFieldOptions(field: ActionInputFieldHint): readon
 
 export function filterResolvedActionOptions(
   options: readonly ResolvedActionOption[],
-  params?: Readonly<{ query?: string | null; limit?: number | null }>,
+  params?: Readonly<{ query?: string | null; limit?: number | null; values?: readonly JsonValue[] | null }>,
 ): readonly ResolvedActionOption[] {
   const query = typeof params?.query === 'string' ? params.query.trim().toLowerCase() : '';
   const limit = typeof params?.limit === 'number' && Number.isFinite(params.limit)
     ? Math.max(1, Math.min(200, Math.floor(params.limit)))
     : null;
 
+  const valued = params?.values ? options.filter(option => params.values!.some(value => pluginJsonValuesEqual(option.value, value))) : options;
   const filtered = query
-    ? options.filter((option) =>
+    ? valued.filter((option) =>
         [actionInputOptionValueSearchText(option.value), option.label, option.description ?? '']
           .join(' ')
           .toLowerCase()
           .includes(query))
-    : [...options];
+    : [...valued];
 
   return limit === null ? filtered : filtered.slice(0, limit);
 }

@@ -36,6 +36,7 @@ import type {
     MaterializeNextPendingOptions,
     MaterializeNextPendingResult,
     PendingMaterializationDiagnosticPhase,
+    SessionProviderInputConsumer,
 } from '../../sessionClientPort';
 import { serializeAxiosErrorForLog } from '../../../client/serializeAxiosErrorForLog';
 import { serializeEphemeralSendError } from '../transcript/ephemeralSendOutcome';
@@ -48,9 +49,9 @@ import {
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { SessionCatchUpRequest } from '../../sessionChangesSyncOnConnect';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol/sessions/messages/coerceSessionUserPromptV1';
-import { SessionInputAdmissionReceiptV1Schema, assertSessionInputAdmissionReceiptForRequest, SESSION_INPUT_REQUEST_META_KEY, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputRequest, readSessionInputAuthority, readSessionInputSenderSessionIdV1, readSessionMessageProvenance, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, SessionInputRequestSchema, assertSessionInputAdmissionReceiptForAuthorityV1, assertSessionInputAdmissionReceiptForRequest, SESSION_INPUT_REQUEST_META_KEY, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputRequest, readSessionInputAuthority, readSessionInputSenderSessionIdV1, readSessionMessageProvenance, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
+import { PENDING_INPUT_PROTOCOL_VERSION_V3, PENDING_INPUT_PROTOCOL_VERSION_V5 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
 import type { SessionInputRequest, SessionInputAuthority, SessionInputSettlementValidationV1 } from '@happier-dev/protocol';
@@ -63,7 +64,7 @@ import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/r
 
 export type SessionInputProviderDispatchReconciliation = Readonly<{
     localId: string;
-    discussionAddressing: DiscussionAddressingV1;
+    discussionAddressing?: DiscussionAddressingV1;
     signal: AbortSignal;
 }>;
 
@@ -74,7 +75,9 @@ export type SessionInputProviderDispatchAdmission = 'admitted' | 'rejected' | 'h
  * consumer. Runtime code composes this type; it must not publish a second
  * admitted-input schema or re-derive these facts from the pending row.
  */
-export type ExecutionRunAdmittedPendingInputV1 = UserMessage & Readonly<{
+export type ExecutionRunAdmittedPendingInputV1 = {
+    [Key in keyof UserMessage as Key extends 'inputAdmissionReceipt' ? never : Key]: UserMessage[Key];
+} & Readonly<{
     authorAccountId: string | null;
     inputAdmissionReceipt: PendingQueueMaterializedMessage['inputAdmissionReceipt'] | null;
     pendingProviderAction: PendingQueueMaterializedMessage['providerAction'] | null;
@@ -209,23 +212,43 @@ function readPendingStoredPayload(
         : null;
 }
 
+function readProtectedPendingInputAdmission(meta: unknown, inputAdmissionReceipt: unknown): Readonly<{
+    request: SessionInputRequest;
+    settledAuthority?: SessionInputAuthority;
+}> | null {
+    const request = readSessionInputRequest(meta, 'stored');
+    if (request) return { request };
+    const authority = readSessionInputAuthority(meta, 'stored');
+    if (!authority) return null;
+    try {
+        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt });
+        // Materialization replaces the request with immutable authority. Recover
+        // its request-shaped facts only for the same receiver revalidation;
+        // never persist the request again or replace the original authority.
+        const { admittedPermissionCeiling: _ceiling, ...permission } = authority.permission;
+        return { request: SessionInputRequestSchema.parse({ ...authority, permission }), settledAuthority: authority };
+    } catch {
+        return null;
+    }
+}
+
 function buildInputSettlementValidation(
     request: SessionInputRequest,
     autonomousCheckIn?: Readonly<{ afterTurns: number | null }>,
 ): SessionInputSettlementValidationV1 | undefined {
-    if (request.v === 2) return undefined;
     const validation = {
         ...(request.sourceSession
             ? { sourceSession: request.sourceSession }
             : {}),
-        ...(request.automation ? { automation: request.automation } : {}),
+        ...(request.v === 1 && request.automation ? { automation: request.automation } : {}),
         ...(request.replyIntent ? { reply: { mode: request.replyIntent.mode,
             ...(request.replyIntent.humanOrigin ? { humanOrigin: request.replyIntent.humanOrigin } : {}),
             ...(request.discussionAddressing ? { discussion: request.discussionAddressing } : {}),
+            ...(request.v === 2 && request.discussionAddressing ? { workflow: request.workflow } : {}),
             ...(request.actionRequestAttributionV1 ? { actionRequestAttributionV1: request.actionRequestAttributionV1 } : {}),
             ...(request.sourceSession ? { sourceSession: request.sourceSession } : {}) } } : {}),
-        ...(request.returnedAnswer ? { returnedAnswer: request.returnedAnswer } : {}),
-        ...(autonomousCheckIn ? { autonomousCheckIn } : {}),
+        ...(request.v === 1 && request.returnedAnswer ? { returnedAnswer: request.returnedAnswer } : {}),
+        ...(request.v === 1 && autonomousCheckIn ? { autonomousCheckIn } : {}),
     };
     return Object.keys(validation).length > 0 ? validation : undefined;
 }
@@ -247,7 +270,9 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     const meta = payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta)
         ? payload.meta as Record<string, unknown>
         : {};
-    const request = readSessionInputRequest(meta, 'stored');
+    const admission = readProtectedPendingInputAdmission(meta, params.message.inputAdmissionReceipt);
+    const request = admission?.request;
+    const settledAuthority = admission?.settledAuthority;
     const requestEqualityEvidenceV1 = params.executionRun && params.crypto.mode === 'e2ee'
         ? {
             kind: 'e2eeTag' as const,
@@ -259,7 +284,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             }),
         }
         : undefined;
-    if (!Object.hasOwn(meta, SESSION_INPUT_REQUEST_META_KEY)) {
+    if (!Object.hasOwn(meta, SESSION_INPUT_REQUEST_META_KEY) && !settledAuthority) {
         const retainedReceipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(params.message.inputAdmissionReceipt);
         if (retainedReceipt.success && retainedReceipt.data.issuer === 'authenticatedMachine'
             && retainedReceipt.data.discussionAddressing?.participantSessionId === params.sessionId) {
@@ -320,7 +345,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     }
 
     const senderSessionId = readSessionInputSenderSessionIdV1(request);
-    const discussionAddressing = request.v === 1 ? request.discussionAddressing : undefined;
+    const discussionAddressing = request.discussionAddressing;
     if (senderSessionId || discussionAddressing) {
         const scopes = await readSessionDeliveryMutedScopes({
             receiver: { kind: 'session', sessionId: params.sessionId }, token: params.token,
@@ -343,9 +368,17 @@ async function reconcileProtectedPendingInput(params: Readonly<{
         ?? 'default';
     let authority: SessionInputAuthority;
     try {
-        authority = request.v === 2
-            ? settleSessionInputRequestV2({ request, currentSessionPermissionCeiling, inputAdmissionReceipt })
-            : settleSessionInputRequestV1({ request, currentSessionPermissionCeiling, inputAdmissionReceipt });
+        const permissionRequest = settledAuthority
+            ? SessionInputRequestSchema.parse({ ...request, permission: { ...request.permission,
+                requestedPermissionCeiling: settledAuthority.permission.admittedPermissionCeiling } })
+            : request;
+        const currentAuthority = permissionRequest.v === 2
+            ? settleSessionInputRequestV2({ request: permissionRequest, currentSessionPermissionCeiling, inputAdmissionReceipt })
+            : settleSessionInputRequestV1({ request: permissionRequest, currentSessionPermissionCeiling, inputAdmissionReceipt });
+        if (settledAuthority && currentAuthority.permission.admittedPermissionCeiling !== settledAuthority.permission.admittedPermissionCeiling) {
+            throw new TypeError('Current Session policy no longer admits the original immutable authority');
+        }
+        authority = settledAuthority ?? currentAuthority;
     } catch {
         const result = await settlePendingQueueV2Admission({
             signal: params.signal,
@@ -368,10 +401,10 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     // A missing current preference must not block a person's input or an
     // informational returned answer. Their later autonomous child can initialize
     // the original root when current Account authority becomes available.
-    if (request.sourceSession && !request.returnedAnswer && !autonomousCheckIn) {
+    if (request.sourceSession && !(request.v === 1 && request.returnedAnswer) && !autonomousCheckIn) {
         return { status: 'outcomeUnknown' };
     }
-    const finalPayload = {
+    const finalPayload = settledAuthority ? payload : {
         ...payload,
         meta: {
             ...withSessionInputAuthority(meta, authority),
@@ -388,7 +421,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
                 }),
         },
     };
-    const finalContent = params.message.content.t === 'plain'
+    const finalContent = settledAuthority ? params.message.content : params.message.content.t === 'plain'
         ? { t: 'plain' as const, v: finalPayload }
         : params.crypto.mode === 'e2ee'
             ? {
@@ -440,7 +473,7 @@ function reportPendingMaterializationDiagnosticPhase(
 
 export type SessionClientInteractionApi = Readonly<{
     reconcileSessionInputForProviderDispatch: (input: SessionInputProviderDispatchReconciliation) => Promise<SessionInputProviderDispatchAdmission>;
-    onUserMessage: (callback: (data: UserMessage) => boolean | void) => void;
+    onUserMessage: (callback: SessionProviderInputConsumer) => void;
     waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
     ensureMetadataSnapshot: (opts?: { timeoutMs?: number; abortSignal?: AbortSignal }) => Promise<Metadata | null>;
     refreshSessionSnapshotFromServerBestEffort: (opts?: { reason?: SessionSnapshotRefreshReason }) => Promise<void>;
@@ -484,7 +517,8 @@ export function createSessionClientInteractionApi(
         getRuntimeActivityRevision?: () => number | null;
         getPendingWakeSeq: () => number;
         getProviderInputBacklog: () => UserMessage[];
-        setProviderInputConsumer: (callback: ((message: UserMessage) => boolean | void) | null) => void;
+        setProviderInputConsumer: (callback: SessionProviderInputConsumer | null) => void;
+        readRetainedContextLocalIds?: () => readonly string[];
         getProviderInputConsumerAttachedAtMs: () => number | null;
         setProviderInputConsumerAttachedAtMs: (value: number | null) => void;
         wakePendingMaterialization: () => void;
@@ -566,6 +600,11 @@ export function createSessionClientInteractionApi(
         if (contractResult.pendingInput === 'indeterminate') {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
         }
+        const retainedContextLocalIds = target ? [] : [...deps.readRetainedContextLocalIds?.() ?? []];
+        if (retainedContextLocalIds.length > 0
+            && (contractResult.pendingInputProtocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V5) {
+            return { didMaterialize: false, result: { type: 'unsupported', code: 'session_input_target_update_required' } };
+        }
         if (target && (contractResult.pendingInputProtocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V3) {
             return {
                 didMaterialize: false,
@@ -641,6 +680,7 @@ export function createSessionClientInteractionApi(
                         deliveryStateOptIn: true,
                         deliveryTiming: deliveryTiming ?? 'after_foreground_ready',
                         foregroundState: 'ready',
+                        ...(retainedContextLocalIds.length ? { retainedContext: { localIds: retainedContextLocalIds } } : {}),
                         ...(deliveryTiming === 'after_runtime_idle' && opts.expectedRuntimeActivityRevision !== undefined
                             ? { expectedRuntimeActivityRevision: opts.expectedRuntimeActivityRevision }
                             : {}),
@@ -660,7 +700,7 @@ export function createSessionClientInteractionApi(
                 },
             });
             // The bound socket request may have committed its exact frozen claim even when
-            // its acknowledgement was lost. Rejoin that claim once after a short delay;
+            // its acknowledgement was lost. Rejoin that claim after the requested delay;
             // failures before a current socket request remain connection-event driven.
             return {
                 didMaterialize: false,
@@ -1294,13 +1334,13 @@ export function createSessionClientInteractionApi(
                 providerAction: null, requestedAction: { v: 1, kind: 'enqueue' } };
             const crypto = deps.getStoredContentCryptoContext();
             const payload = readPendingStoredPayload(message, crypto);
-            const request = readSessionInputRequest(payload?.meta, 'stored');
-            const originalAddress = request?.v === 1 ? request.discussionAddressing : undefined;
+            const request = readProtectedPendingInputAdmission(payload?.meta, message.inputAdmissionReceipt)?.request;
+            const originalAddress = request?.discussionAddressing;
             const address = input.discussionAddressing;
-            if (!originalAddress || originalAddress.discussionId !== address.discussionId
+            if (address && (!originalAddress || originalAddress.discussionId !== address.discussionId
                 || originalAddress.messageId !== address.messageId || originalAddress.throughSeq !== address.throughSeq
                 || originalAddress.participantSessionId !== address.participantSessionId
-                || address.participantSessionId !== deps.sessionId) return 'rejected';
+                || address.participantSessionId !== deps.sessionId)) return 'rejected';
             const result = await runWithServerHttpBaseUrl(serverUrl, () => reconcileProtectedPendingInput({
                 socket, sessionId: deps.sessionId, token: deps.token, message, metadata: deps.getMetadata(), crypto,
                 signal: input.signal, ...(deps.readCurrentAutonomousCheckIn

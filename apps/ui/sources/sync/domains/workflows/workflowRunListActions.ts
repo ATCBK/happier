@@ -6,6 +6,7 @@ import {
     WorkflowRunSummariesResultV1Schema,
     type WorkflowRunSummariesResultV1,
     type WorkflowRunAcceptedContextV1,
+    type WorkflowRunGetResultV1,
 } from '@happier-dev/protocol/workflows/actionsV1';
 import type {
     WorkflowRunStateV1,
@@ -14,7 +15,7 @@ import type {
 
 import { callWorkflowAction } from './callWorkflowAction';
 import { WorkflowActionError } from './workflowActionError';
-import { workflowRunDetailActions } from './workflowRunDetailActions';
+import { createWorkflowRunDetailActions, workflowRunDetailActions } from './workflowRunDetailActions';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { sync } from '@/sync/sync';
@@ -47,7 +48,9 @@ export type WorkflowRunListFilter = Readonly<{
     origin?: 'automation' | 'direct';
     automationId?: string;
     originSessionId?: string;
+    originDiscussionId?: string;
     targetSessionId?: string;
+    underSessionId?: string;
     machineId?: string;
 }>;
 
@@ -60,6 +63,8 @@ export type WorkflowRunListPage = Readonly<{
      * `unavailable` value is content this host could not open.
      */
     metadataByRunId: Readonly<Record<string, WorkflowRunPrivateMetadataV1 | null>>;
+    supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
+    callerAccessByRunId?: Readonly<Record<string, WorkflowRunGetResultV1['callerAccess']>>;
     nextCursor: string | undefined;
     invocationProvenance?: ReturnType<typeof WorkflowRunListResultV1Schema.parse>['invocationProvenance'];
 }>;
@@ -103,6 +108,8 @@ export async function listWorkflowRuns(params: Readonly<{
         ]),
     );
     return { runs: result.runs, metadataByRunId, nextCursor: result.nextCursor,
+        ...(result.supportsAnotherRoundByRunId ? { supportsAnotherRoundByRunId: result.supportsAnotherRoundByRunId } : {}),
+        ...(result.callerAccessByRunId ? { callerAccessByRunId: result.callerAccessByRunId } : {}),
         ...(result.invocationProvenance ? { invocationProvenance: result.invocationProvenance } : {}) };
 }
 
@@ -110,9 +117,12 @@ export async function listWorkflowRuns(params: Readonly<{
 export async function listAllWorkflowRuns(params: Readonly<{
     filter: WorkflowRunListFilter;
     signal: AbortSignal;
-}>): Promise<Pick<WorkflowRunListPage, 'runs' | 'metadataByRunId'>> {
+    accountLifetime?: ServerAccountScopeLifetime | null;
+}>): Promise<Pick<WorkflowRunListPage, 'runs' | 'metadataByRunId' | 'supportsAnotherRoundByRunId' | 'callerAccessByRunId'>> {
     const runs: WorkflowRunSummaryV1[] = [];
     const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1 | null> = {};
+    const supportsAnotherRoundByRunId: Record<string, boolean> = {};
+    const callerAccessByRunId: Record<string, WorkflowRunGetResultV1['callerAccess']> = {};
     let cursor: string | undefined;
     do {
         params.signal.throwIfAborted();
@@ -120,9 +130,11 @@ export async function listAllWorkflowRuns(params: Readonly<{
         params.signal.throwIfAborted();
         runs.push(...page.runs);
         Object.assign(metadataByRunId, page.metadataByRunId);
+        Object.assign(supportsAnotherRoundByRunId, page.supportsAnotherRoundByRunId);
+        Object.assign(callerAccessByRunId, page.callerAccessByRunId);
         cursor = page.nextCursor;
     } while (cursor !== undefined);
-    return { runs, metadataByRunId };
+    return { runs, metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId };
 }
 
 /** FIN §4.8: memory is the starter's newest accepted Run, not another preference store. */
@@ -130,15 +142,19 @@ export async function readWorkflowRunRolePrefill(params: Readonly<{
     sourceArtifactId: string;
     accountId: string;
     signal: AbortSignal;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<WorkflowRunAcceptedContextV1['roleOverrides']> {
+    const detail = params.accountLifetime === undefined ? workflowRunDetailActions
+        : createWorkflowRunDetailActions({ accountLifetime: params.accountLifetime });
     let cursor: string | undefined;
     do {
         const page = await listWorkflowRuns({ filter: { sourceArtifactId: params.sourceArtifactId },
-            ...(cursor === undefined ? {} : { cursor }), signal: params.signal });
+            ...(cursor === undefined ? {} : { cursor }), signal: params.signal,
+            ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }) });
         const own = page.runs.find((run) => run.ownerAccountId === params.accountId
             && run.sourceArtifactId === params.sourceArtifactId);
         if (own) {
-            const accepted = await workflowRunDetailActions.getRun(own.id, params.signal);
+            const accepted = await detail.getRun(own.id, params.signal);
             if (accepted.run.ownerAccountId !== params.accountId
                 || accepted.run.sourceArtifactId !== params.sourceArtifactId) {
                 throw new WorkflowActionError({ message: 'Workflow role prefill unavailable', rawCode: 'run_access_denied' });
@@ -163,42 +179,9 @@ export async function summarizeWorkflowRuns(params: Readonly<{
     });
 }
 
-/**
- * One exact Run summary plus its sparse private metadata, through the lean
- * list projection.
- *
- * This is what background Account invalidation and transcript initial
- * materialization read: the Run display fields and the accepted private title
- * the Account row needs, without paging invocations or opening progress
- * envelopes to recompute usage. An empty page is the authoritative deleted
- * signal, so it raises `run_not_found` for the change materializer to remove
- * the row; any other failure is left rejected so the caller holds its cursor
- * and retries instead of losing the invalidation.
- */
-export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal, invocationRecordIds?: readonly string[], accountLifetime?: ServerAccountScopeLifetime | null): Promise<Readonly<{
-    run: WorkflowRunSummaryV1;
-    /**
-     * Sparse private metadata: `null` is a readable Run whose accepted
-     * snapshot opened but carries no authored title (Untitled), while
-     * `unavailable` is content this host could not open.
-     */
-    metadata: WorkflowRunPrivateMetadataV1 | null;
-    invocationProvenance?: ReturnType<typeof WorkflowRunListResultV1Schema.parse>['invocationProvenance'];
-}>> {
-    const page = await listWorkflowRuns({ filter: { runId,
-        ...(invocationRecordIds?.length ? { invocationProvenance: [{ runId, invocationRecordIds }] } : {}) },
-        limit: 1, ...(signal === undefined ? {} : { signal }), ...(accountLifetime === undefined ? {} : { accountLifetime }) });
-    const run = page.runs.find((candidate) => candidate.id === runId);
-    if (!run) {
-        throw new WorkflowActionError({ message: 'Workflow Run not found', rawCode: 'run_not_found' });
-    }
-    return { run, metadata: page.metadataByRunId[run.id] ?? null,
-        ...(page.invocationProvenance ? { invocationProvenance: page.invocationProvenance } : {}) };
-}
-
 /** Shared read windows; starter membership belongs to SessionListFilterV1. */
 export const WORKFLOW_RUN_LIST_FILTERS = ['all', 'active', 'attention'] as const;
-export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number] | `automation:${string}` | `destination:${string}`;
+export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number] | `automation:${string}` | `destination:${string}` | `under:${string}`;
 
 /**
  * Projects a filter chip onto the canonical request.
@@ -210,6 +193,7 @@ export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number]
 export function buildWorkflowRunListFilter(id: WorkflowRunListFilterId): WorkflowRunListFilter {
     if (id.startsWith('automation:')) return { automationId: id.slice('automation:'.length) };
     if (id.startsWith('destination:')) return { targetSessionId: id.slice('destination:'.length), ...buildWorkflowRunListFilter('active') };
+    if (id.startsWith('under:')) return { underSessionId: id.slice('under:'.length) };
     switch (id) {
         case 'all':
             return {};

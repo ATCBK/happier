@@ -460,7 +460,7 @@ describe('createCliActionExecutorFromCredentials', () => {
     }));
   });
 
-  it('forwards target-action approval replay only when daemon composition injects it', async () => {
+  it('preserves the target-action approval replay owner injected by daemon composition', async () => {
     const credentials = {
       token: 'token_test',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
@@ -468,12 +468,6 @@ describe('createCliActionExecutorFromCredentials', () => {
     const targetActionApprovalReplay = vi.fn<
       NonNullable<ActionExecutorDeps['targetActionApprovalReplay']>
     >();
-
-    await createCliActionExecutorFromCredentials({ credentials })
-      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
-    expect(createCliActionExecutor).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ targetActionApprovalReplay: expect.any(Function) }),
-    );
 
     await createCliActionExecutorFromCredentials({ credentials, targetActionApprovalReplay })
       .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });

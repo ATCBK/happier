@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, createSessionMessagesFixture, flushHookEffects, renderHook } from '@/dev/testkit';
 import { createReducer } from "@happier-dev/session-core/reducer";
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
@@ -94,6 +94,77 @@ describe('useUserMessageHistory server role query', () => {
             sessionMessages: {},
         }));
         await account.reset();
+    });
+
+    it('hydrates a list-only Session for Sent before without hydrating its transcript', async () => {
+        const sessionId = 'list-only-history';
+        const text = 'transcript fixture: a prompt from another Session';
+        const session = createSessionFixture({ id: sessionId, serverId });
+        storage.setState({ sessions: {}, sessionMessages: {}, sessionListRowsByServerId: {
+            [serverId]: { [sessionId]: createSessionListRenderableSessionFixture({ id: sessionId }) },
+        } });
+        account.home.answer(serverId, `/v2/sessions/${sessionId}`, {
+            body: createPlainSessionByIdResponseFixture(session),
+        });
+        installHistoryHttpPage(sessionId);
+        historyPageHttpReply.mockResolvedValueOnce({ status: 'loaded', rows: [
+            { messageId: 'older-prompt', routeMessageId: 'server:older-prompt', seq: 7, createdAt: 70, role: 'user', text },
+        ], hasMore: false, nextBeforeSeq: null });
+        const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'global', enabled: true }));
+        expect(hook.getCurrent().coverage).toBe('loaded');
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
+        await act(async () => { await hook.getCurrent().loadMore(); });
+        expect(hook.getCurrent().entries).toEqual([
+            { serverId, sessionId, messageId: 'older-prompt', seq: 7, createdAtMs: 70, text },
+        ]);
+        expect(hook.getCurrent().error).toBe(false);
+        expect(hook.getCurrent().coverage).toBe('partial');
+        expect(hook.getCurrent().hasMore).toBe(false);
+        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst ?? []).toEqual([]);
+        await hook.unmount();
+    });
+
+    it('opens an unhydrated E2EE Session reader before paging Sent before', async () => {
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import('@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1');
+        const { V2SessionByIdResponseSchema } = await import('@happier-dev/protocol/sessions/control/contract');
+        const secret = new Uint8Array(32).fill(7);
+        ({ serverId } = await account.restore({ accountId: 'account-1', e2eeSecret: secret }));
+        roleQuerySupportedState.supported = true;
+        const sessionId = 'encrypted-list-only-history';
+        const writer = await Encryption.create(secret);
+        const dataKey = new Uint8Array(32).fill(8);
+        await writer.initializeSessions(new Map([[sessionId, dataKey]]));
+        const cipher = writer.getSessionEncryption(sessionId)!;
+        const text = 'transcript fixture: an encrypted prompt from another Session';
+        const metadata = await cipher.encryptRaw({ path: '/repo', host: 'fixture' });
+        const { ownerMetadata: _ownerMetadata, ...sessionRecord } = createPlainSessionByIdResponseFixture(
+            createSessionFixture({ id: sessionId, serverId }),
+        ).session;
+        account.home.answer(serverId, `/v2/sessions/${sessionId}`, { body: V2SessionByIdResponseSchema.parse({ session: {
+            ...sessionRecord, metadataLayoutVersion: 0,
+            id: sessionId, seq: 7, createdAt: 1, updatedAt: 70, active: false, activeAt: 1,
+            encryptionMode: 'e2ee', metadata, metadataVersion: 1, agentState: null, agentStateVersion: 0, share: null,
+            dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+                dataKey, recipientPublicKey: writer.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3),
+            }), 'base64'),
+        } }) });
+        account.home.answer(serverId, `/v1/sessions/${sessionId}/messages`, { body: SessionMessagesPageV1Schema.parse({
+            messages: [{ id: 'encrypted-prompt', seq: 7, createdAt: 70, localId: null, messageRole: 'user',
+                content: { t: 'encrypted', c: await cipher.encryptRaw({ role: 'user', content: { type: 'text', text } }) } }],
+            hasMore: false, nextBeforeSeq: null,
+        }) });
+        storage.setState({ sessions: {}, sessionMessages: {}, sessionListRowsByServerId: {
+            [serverId]: { [sessionId]: createSessionListRenderableSessionFixture({ id: sessionId, encryptionMode: 'e2ee' }) },
+        } });
+        const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'global', enabled: true }));
+        await act(async () => { await hook.getCurrent().loadMore(); });
+        expect(hook.getCurrent().entries.map(row => row.text)).toEqual([text]);
+        expect(hook.getCurrent().error).toBe(false);
+        expect(hook.getCurrent().hasMore).toBe(false);
+        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst ?? []).toEqual([]);
+        await hook.unmount();
     });
 
     it('pages global sent history from unhydrated sessions in recency order, one page per demand', async () => {

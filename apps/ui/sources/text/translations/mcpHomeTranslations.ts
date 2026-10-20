@@ -16,12 +16,6 @@ export type McpHomeTranslation = Readonly<{
   factAs: (params: Readonly<{ identity: string }>) => string;
   factSignedIn: string;
   factKey: string;
-  factRemote: string;
-  tools: (params: Count) => string;
-  notTested: string;
-  reconnect: string;
-  signIn: string;
-  addKey: string;
   present: (
     params: Readonly<{ servers: number; tools: number; tokens: string }>,
   ) => string;
@@ -75,12 +69,6 @@ const en: McpHomeTranslation = {
   factAs: ({ identity }) => `as ${identity}`,
   factSignedIn: 'Signed in',
   factKey: 'API key · saved secret',
-  factRemote: 'Remote',
-  tools: ({ count }) => `${count} ${plural(count, 'tool', 'tools')}`,
-  notTested: 'Not tested yet',
-  reconnect: 'Reconnect',
-  signIn: 'Sign in',
-  addKey: 'Add key',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'server gives', 'servers give')} your agents ${tools} ${plural(tools, 'tool', 'tools')}, about ${tokens} tokens of context.`,
   presentNoTools: ({ count }) =>
@@ -160,12 +148,6 @@ const ca: McpHomeTranslation = {
   factAs: ({ identity }) => `com a ${identity}`,
   factSignedIn: 'Sessió iniciada',
   factKey: 'Clau d’API · secret desat',
-  factRemote: 'Remot',
-  tools: ({ count }) => `${count} ${plural(count, 'eina', 'eines')}`,
-  notTested: 'Encara no s’ha provat',
-  reconnect: 'Reconnecta',
-  signIn: 'Inicia la sessió',
-  addKey: 'Afegeix una clau',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'servidor dona', 'servidors donen')} als teus agents ${tools} ${plural(tools, 'eina', 'eines')}, uns ${tokens} tokens de context.`,
   presentNoTools: ({ count }) =>
@@ -226,12 +208,6 @@ const de: McpHomeTranslation = {
   factAs: ({ identity }) => `als ${identity}`,
   factSignedIn: 'Angemeldet',
   factKey: 'API-Schlüssel · gespeichertes Secret',
-  factRemote: 'Remote',
-  tools: ({ count }) => `${count} ${plural(count, 'Tool', 'Tools')}`,
-  notTested: 'Noch nicht getestet',
-  reconnect: 'Neu verbinden',
-  signIn: 'Anmelden',
-  addKey: 'Schlüssel hinzufügen',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'Server gibt', 'Server geben')} deinen Agenten ${tools} ${plural(tools, 'Tool', 'Tools')}, etwa ${tokens} Tokens Kontext.`,
   presentNoTools: ({ count }) =>
@@ -293,12 +269,6 @@ const es: McpHomeTranslation = {
   factAs: ({ identity }) => `como ${identity}`,
   factSignedIn: 'Sesión iniciada',
   factKey: 'Clave de API · secreto guardado',
-  factRemote: 'Remoto',
-  tools: ({ count }) => `${count} ${plural(count, 'herramienta', 'herramientas')}`,
-  notTested: 'Aún sin probar',
-  reconnect: 'Reconectar',
-  signIn: 'Iniciar sesión',
-  addKey: 'Añadir clave',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'servidor da', 'servidores dan')} a tus agentes ${tools} ${plural(tools, 'herramienta', 'herramientas')}, unos ${tokens} tokens de contexto.`,
   presentNoTools: ({ count }) =>
@@ -359,12 +329,6 @@ const fr: McpHomeTranslation = {
   factAs: ({ identity }) => `en tant que ${identity}`,
   factSignedIn: 'Connecté',
   factKey: 'Clé API · secret enregistré',
-  factRemote: 'Distant',
-  tools: ({ count }) => `${count} ${plural(count, 'outil', 'outils')}`,
-  notTested: 'Pas encore testé',
-  reconnect: 'Reconnecter',
-  signIn: 'Se connecter',
-  addKey: 'Ajouter une clé',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'serveur donne', 'serveurs donnent')} à vos agents ${tools} ${plural(tools, 'outil', 'outils')}, environ ${tokens} tokens de contexte.`,
   presentNoTools: ({ count }) =>
@@ -426,12 +390,6 @@ const it: McpHomeTranslation = {
   factAs: ({ identity }) => `come ${identity}`,
   factSignedIn: 'Accesso effettuato',
   factKey: 'Chiave API · segreto salvato',
-  factRemote: 'Remoto',
-  tools: ({ count }) => `${count} ${plural(count, 'strumento', 'strumenti')}`,
-  notTested: 'Non ancora testato',
-  reconnect: 'Riconnetti',
-  signIn: 'Accedi',
-  addKey: 'Aggiungi chiave',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'server dà', 'server danno')} ai tuoi agenti ${tools} ${plural(tools, 'strumento', 'strumenti')}, circa ${tokens} token di contesto.`,
   presentNoTools: ({ count }) =>
@@ -492,12 +450,6 @@ const ja: McpHomeTranslation = {
   factAs: ({ identity }) => `${identity} として`,
   factSignedIn: 'サインイン済み',
   factKey: 'API キー・保存したシークレット',
-  factRemote: 'リモート',
-  tools: ({ count }) => `ツール ${count} 個`,
-  notTested: 'まだテストしていません',
-  reconnect: '再接続',
-  signIn: 'サインイン',
-  addKey: 'キーを追加',
   present: ({ servers, tools, tokens }) =>
     `${servers} 台のサーバーがエージェントに ${tools} 個のツールを提供しています。コンテキストは約 ${tokens} トークンです。`,
   presentNoTools: ({ count }) =>
@@ -556,13 +508,6 @@ const pl: McpHomeTranslation = {
   factAs: ({ identity }) => `jako ${identity}`,
   factSignedIn: 'Zalogowano',
   factKey: 'Klucz API · zapisany sekret',
-  factRemote: 'Zdalny',
-  tools: ({ count }) =>
-    `${count} ${pluralSlavic(count, 'narzędzie', 'narzędzia', 'narzędzi')}`,
-  notTested: 'Jeszcze nie przetestowano',
-  reconnect: 'Połącz ponownie',
-  signIn: 'Zaloguj się',
-  addKey: 'Dodaj klucz',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${pluralSlavic(servers, 'serwer daje', 'serwery dają', 'serwerów daje')} Twoim agentom ${tools} ${pluralSlavic(tools, 'narzędzie', 'narzędzia', 'narzędzi')}, około ${tokens} tokenów kontekstu.`,
   presentNoTools: ({ count }) =>
@@ -623,12 +568,6 @@ const pt: McpHomeTranslation = {
   factAs: ({ identity }) => `como ${identity}`,
   factSignedIn: 'Conectado',
   factKey: 'Chave de API · segredo salvo',
-  factRemote: 'Remoto',
-  tools: ({ count }) => `${count} ${plural(count, 'ferramenta', 'ferramentas')}`,
-  notTested: 'Ainda não testado',
-  reconnect: 'Reconectar',
-  signIn: 'Entrar',
-  addKey: 'Adicionar chave',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${plural(servers, 'servidor dá', 'servidores dão')} aos seus agentes ${tools} ${plural(tools, 'ferramenta', 'ferramentas')}, cerca de ${tokens} tokens de contexto.`,
   presentNoTools: ({ count }) =>
@@ -689,13 +628,6 @@ const ru: McpHomeTranslation = {
   factAs: ({ identity }) => `как ${identity}`,
   factSignedIn: 'Вход выполнен',
   factKey: 'API-ключ · сохранённый секрет',
-  factRemote: 'Удалённый',
-  tools: ({ count }) =>
-    `${count} ${pluralRu(count, 'инструмент', 'инструмента', 'инструментов')}`,
-  notTested: 'Ещё не проверен',
-  reconnect: 'Подключить заново',
-  signIn: 'Войти',
-  addKey: 'Добавить ключ',
   present: ({ servers, tools, tokens }) =>
     `${servers} ${pluralRu(servers, 'сервер даёт', 'сервера дают', 'серверов дают')} вашим агентам ${tools} ${pluralRu(tools, 'инструмент', 'инструмента', 'инструментов')}, около ${tokens} токенов контекста.`,
   presentNoTools: ({ count }) =>
@@ -754,12 +686,6 @@ const zhHans: McpHomeTranslation = {
   factAs: ({ identity }) => `以 ${identity} 身份`,
   factSignedIn: '已登录',
   factKey: 'API 密钥 · 已保存的机密',
-  factRemote: '远程',
-  tools: ({ count }) => `${count} 个工具`,
-  notTested: '尚未测试',
-  reconnect: '重新连接',
-  signIn: '登录',
-  addKey: '添加密钥',
   present: ({ servers, tools, tokens }) =>
     `${servers} 个服务器为你的智能体提供 ${tools} 个工具，约占 ${tokens} 个上下文 token。`,
   presentNoTools: ({ count }) => `已为你的智能体开启 ${count} 个服务器。`,
@@ -809,12 +735,6 @@ const zhHant: McpHomeTranslation = {
   factAs: ({ identity }) => `以 ${identity} 身分`,
   factSignedIn: '已登入',
   factKey: 'API 金鑰 · 已儲存的機密',
-  factRemote: '遠端',
-  tools: ({ count }) => `${count} 個工具`,
-  notTested: '尚未測試',
-  reconnect: '重新連線',
-  signIn: '登入',
-  addKey: '新增金鑰',
   present: ({ servers, tools, tokens }) =>
     `${servers} 個伺服器為你的代理提供 ${tools} 個工具，約佔 ${tokens} 個上下文 token。`,
   presentNoTools: ({ count }) => `已為你的代理開啟 ${count} 個伺服器。`,

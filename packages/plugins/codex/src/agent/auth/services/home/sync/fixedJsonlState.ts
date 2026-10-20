@@ -1,4 +1,5 @@
 import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { parseCodexRolloutFilename } from '../../../../rollout/discovery/indexData.js';
 
 type CodexJsonlStateFile = Readonly<{
   name: 'history.jsonl' | 'session_index.jsonl';
@@ -65,6 +66,17 @@ function resolveMissingSessionIndexLines(current: string | null, incoming: strin
 }
 
 export const reconcileCodexSharedJsonlState: AgentConnectedAccountSharedStateFileMergeV1 = (input) => {
+  if ((input.entryPath.startsWith('sessions/') || input.entryPath.startsWith('archived_sessions/'))
+    && parseCodexRolloutFilename(input.entryPath)) {
+    const current = input.currentContents ?? '';
+    const incoming = input.incomingContents;
+    // Adopt an append-only continuation, never interleave divergent conversations or
+    // publish a partially written JSONL record. Other conflicts retain the importer policy.
+    if ((current && !current.endsWith('\n')) || !incoming.endsWith('\n')) return null;
+    if (incoming.startsWith(current)) return { appendText: incoming.slice(current.length) };
+    if (current.startsWith(incoming)) return { appendText: '' };
+    return null;
+  }
   const file = CODEX_JSONL_STATE_FILES.find(candidate => candidate.name === input.entryPath);
   if (!file) return null;
   const missing = file.kind === 'history'

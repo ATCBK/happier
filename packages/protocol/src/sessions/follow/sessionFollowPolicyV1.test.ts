@@ -10,6 +10,27 @@ import {
 } from './sessionFollowPolicyV1.js';
 
 describe('Follow policy receiver projections', () => {
+  it.each([{ preset: 'quiet' }, { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } } } }] satisfies FollowPolicyV1[])(
+    'routes an exact Discussion answer obligation as a direct ask without changing $preset informational policy', policy => {
+      const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
+      const original = { id: addressing.messageId, discussionId: addressing.discussionId, seq: addressing.throughSeq,
+        addressingV1: { throughSeq: 2, participantSessionIds: ['receiver'] } };
+      const reply = { mode: 'return' as const, discussion: addressing };
+      const request = { policies: [policy], event: { kind: 'needs_you' as const, type: 'decision' as const, mode: 'wait' as const } };
+      const discussionInput = { addressing, original, reply };
+      expect(resolveFollowDeliveryV1({ ...request, discussionInput }).session).toEqual({ nextTurn: false, wake: true });
+      // An event or a return tuple alone is not evidence of an addressed ask.
+      const ordinary = resolveFollowDeliveryV1(request);
+      for (const input of [
+        { ...discussionInput, reply: null },
+        { ...discussionInput, reply: { ...reply, discussion: { ...addressing, messageId: 'another' } } },
+        { ...discussionInput, original: { ...original, seq: 3 } },
+        { ...discussionInput, original: { ...original, addressingV1: { throughSeq: 2, participantSessionIds: [] } } },
+        { ...discussionInput, original: { ...original, addressingV1: { ...original.addressingV1, watcherSessionIds: ['receiver'] } } },
+      ]) expect(resolveFollowDeliveryV1({ ...request, discussionInput: input })).toEqual(ordinary);
+      expect(resolveFollowDeliveryV1({ ...request, discussionInput, muted: true }).selected).toBe(false);
+      expect(resolveFollowDeliveryV1({ ...request, discussionInput, causalEcho: true }).selected).toBe(false);
+    });
   it('compares exact canonical policies independently of nested input property order', () => {
     const left: FollowPolicyV1 = { preset: 'custom', events: { person_wrote: { voice: true, delivery: 'interrupt' },
       needs_you: { approval: { delivery: 'quiet' }, decision: { delivery: 'off' } } } };

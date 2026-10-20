@@ -179,6 +179,7 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
     const bootstrap = createDaemonMachineBootstrapRuntime({ api: await ApiClient.create(credentials), credentials, controlPort: 0,
       runtimeId: 'fixture-runtime', publicReleaseChannel: 'dev', startupSource: 'manual', serviceLabel: undefined,
       transferRuntimeStatePublisher: null, directPeerServerLifecycle: null,
+      spawnSessionForInternalResume: unused,
       spawnSession: unused, stopSession: unused, awaitAgentSessionOpen: unused,
       isSessionAlreadyRunning: unused, loadLocalSessionMetadataForHandoff: unused,
       beforeShutdown: async () => {}, requestShutdown: () => {},

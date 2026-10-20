@@ -9,7 +9,7 @@ import { PendingRequestedActionV1Schema } from '../pending/pendingRequestedActio
 import { PendingProviderActionSchema } from '../pending/pendingProviderAction.js';
 import { AcceptedPendingSettlementResponseV1Schema } from '../pending/acceptedPendingSettlementV1.js';
 import { SessionPendingEnqueueByMachineFieldsV1, refineSessionPendingMachineEqualityEvidenceV1 } from './sessionPendingMachineAdmissionV1.js';
-import { SessionInputAdmissionResultV1Schema, SessionInputAdmissionReceiptV1Schema } from './sessionInputAdmission.js';
+import { SessionInputEnqueueResultV1Schema, SessionInputAdmissionReceiptV1Schema } from './sessionInputAdmission.js';
 import { SessionMessageRoleSchema } from './sessionMessageRole.js';
 import { PendingDeliveryBlockedReasonSchema } from './pendingDeliveryBlockedReason.js';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from './sessionStoredMessageContent.js';
@@ -46,7 +46,7 @@ export const SessionPendingExecutionRunEnqueueByMachineRequestV2Schema = lazyZod
 export type SessionPendingExecutionRunEnqueueByMachineRequestV2 = z.infer<typeof SessionPendingExecutionRunEnqueueByMachineRequestV2Schema>;
 export const SessionPendingExecutionRunEnqueueByMachineResponseV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
-  result: SessionInputAdmissionResultV1Schema,
+  result: SessionInputEnqueueResultV1Schema,
 }));
 export type SessionPendingExecutionRunEnqueueByMachineResponseV2 = z.infer<typeof SessionPendingExecutionRunEnqueueByMachineResponseV2Schema>;
 

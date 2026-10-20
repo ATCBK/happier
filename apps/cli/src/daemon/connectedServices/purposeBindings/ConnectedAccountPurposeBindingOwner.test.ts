@@ -68,6 +68,7 @@ function createOwner(input: Readonly<{
   ];
   materializeAccount?: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount'];
   materializeNative?: ConnectedAccountPurposeBindingOwnerDependencies['materializeNative'];
+  credentialOwnerAccountId?: string;
 }> = {}) {
   const store = input.store ?? memoryStore();
   const materializeAccount = vi.fn(input.materializeAccount ?? (async ({ account, request }) => {
@@ -100,6 +101,7 @@ function createOwner(input: Readonly<{
     resolveCredentialRevision: input.resolveCredentialRevision,
     materializeAccount,
     materializeNative: input.materializeNative,
+    credentialOwnerAccountId: input.credentialOwnerAccountId,
     async projectTargetAccounts() {
       throw new Error('target-scoped listing is outside this binding-lifecycle fixture');
     },
@@ -117,6 +119,56 @@ const authorized = {
 } as const;
 
 describe('ConnectedAccountPurposeBindingOwner', () => {
+  it('records the actual personal credential use only after exact operation materialization succeeds', async () => {
+    let finish!: () => void;
+    const { owner, materializeAccount } = createOwner({
+      credentialOwnerAccountId: 'credential-owner',
+      materializeAccount: async () => {
+        await new Promise<void>(resolve => { finish = resolve; });
+        return { kind: 'environment', env: { TOKEN: 'private-token' } };
+      },
+    });
+    const recordOperationCredentialUse = vi.fn();
+    const lease = owner.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: 'credential-action', consumer: purpose.consumer, isCurrent: () => true },
+      purposes: [purpose],
+      bindings: [{ purpose, target: { kind: 'account', account: { service, accountId: 'selected' } } }],
+      recordOperationCredentialUse,
+    });
+    const pending = owner.materialize({ ...authorized, exactPurposeBindingSubjectId: lease.subjectId,
+      signal: new AbortController().signal, request: { kind: 'environment', keys: ['TOKEN'] } });
+    await vi.waitFor(() => expect(materializeAccount).toHaveBeenCalledOnce());
+    expect(recordOperationCredentialUse).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+      v: 1, kind: 'connected_account', label: 'Account selected',
+      owner: { kind: 'account', accountId: 'credential-owner' }, service,
+      why: { kind: 'purpose_binding', purpose, target: 'account' },
+      currentness: { kind: 'current_at_materialization' },
+    }]]);
+    lease.dispose();
+  });
+
+  it.each(['retired', 'failed'] as const)('does not record credential use when materialization is %s', async failure => {
+    let current = true;
+    const { owner } = createOwner({ materializeAccount: async () => {
+      if (failure === 'failed') throw new Error('materializer unavailable');
+      current = false;
+      return { kind: 'environment', env: { TOKEN: 'private-token' } };
+    } });
+    const recordOperationCredentialUse = vi.fn();
+    const lease = owner.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: `credential-${failure}`, consumer: purpose.consumer, isCurrent: () => current },
+      purposes: [purpose], bindings: [{ purpose, target: { kind: 'account', account: { service, accountId: 'selected' } } }],
+      recordOperationCredentialUse,
+    });
+    await expect(owner.materialize({ ...authorized, exactPurposeBindingSubjectId: lease.subjectId,
+      signal: new AbortController().signal, request: { kind: 'environment', keys: ['TOKEN'] } })).rejects.toThrow();
+    expect(recordOperationCredentialUse).not.toHaveBeenCalled();
+    lease.dispose();
+  });
+
   it('reads and updates a stored purpose catalog with retired nested fields', async () => {
     const store = memoryStore();
     await store.update(() => ({ v: 1, retiredCatalogField: true, bindings: [{
@@ -545,6 +597,40 @@ describe('ConnectedAccountPurposeBindingOwner', () => {
         expectedCredentialRevision: revision,
       }),
     }));
+    lease.dispose();
+  });
+
+  it.each(['current', 'revision_changed', 'invalid_bearer'] as const)('records request-auth use only after final admission and bearer parsing: %s', async outcome => {
+    const revision = 'csr_0123456789ABCDEFGHJKMNPQRS';
+    let reads = 0;
+    const { owner } = createOwner({
+      resolveCredentialRevision: async () => outcome === 'revision_changed' && ++reads >= 3 ? 'csr_abcdefghijklmnopqrstuv' : revision,
+      materializeAccount: async ({ credentialRevisionBasis }) => {
+        credentialRevisionBasis?.captureCredentialRevision(revision);
+        return { kind: 'httpHeaders', headers: { authorization: outcome === 'invalid_bearer' ? 'invalid' : 'Bearer private-token' } };
+      },
+    });
+    const recordOperationCredentialUse = vi.fn();
+    const binding = { purpose, target: { kind: 'account' as const, account: { service, accountId: 'selected' } } };
+    const lease = owner.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: `request-auth-${outcome}`, consumer: purpose.consumer, isCurrent: () => true },
+      purposes: [purpose], bindings: [binding], recordOperationCredentialUse,
+    });
+    const signal = new AbortController().signal;
+    const resolved = await owner.resolveCurrentRequestAuthBinding({ subjectId: lease.subjectId, binding, signal });
+    expect(resolved).not.toBeNull();
+    const pending = owner.materializeRequestAuthBearer({ subjectId: lease.subjectId, binding, resolved: resolved!,
+      materialization: { kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'] }, signal });
+    if (outcome === 'current') {
+      await expect(pending).resolves.toMatchObject({ accessToken: 'private-token' });
+      expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+        v: 1, kind: 'connected_account', label: 'Account selected', owner: null, service,
+        why: { kind: 'purpose_binding', purpose, target: 'account' }, currentness: { kind: 'current_at_materialization' },
+      }]]);
+    } else {
+      await expect(pending).rejects.toThrow();
+      expect(recordOperationCredentialUse).not.toHaveBeenCalled();
+    }
     lease.dispose();
   });
 

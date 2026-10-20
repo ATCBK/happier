@@ -358,6 +358,18 @@ describe('inline transcript candidacy', () => {
         })).toBe('sidebar');
     });
 
+    it('hands the one live body to the reply the person asked to show it here, over a visible Board host', () => {
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: boardSidebar, itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: true, inlineTranscriptDemanded: true, inlineTranscriptPreferred: true },
+        })).toBe('inlineTranscript');
+        // A preference with no reply on screen runs nothing in the transcript.
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: boardSidebar, itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: true, inlineTranscriptDemanded: false, inlineTranscriptPreferred: true },
+        })).toBe('sidebar');
+    });
+
     it('elects no reply when no reply that draws the item is on screen', () => {
         expect(resolveSessionBoardItemPrimaryMountHost({
             visibility: nothingOnScreen, itemVisibleInCompanion: false, itemId: 'visual',

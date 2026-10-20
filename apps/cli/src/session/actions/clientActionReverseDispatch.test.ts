@@ -9,6 +9,11 @@ function executor(client: ClientActionMachineRpc | null) {
     settingsDeclarationAction: createCliSettingsDeclarationAction({}) } as unknown as ActionExecutorDeps);
 }
 
+const disconnectedClient: ClientActionMachineRpc = {
+  hasConnectedClientRpcHandler: () => false,
+  callConnectedClientRpc: async () => { throw new Error('must not issue without a registered client'); },
+};
+
 describe('client Action reverse delivery', () => {
   it.each(['cli', 'mcp'] as const)('addresses Run-on mutations to an exact answering client from %s', async surface => {
     const client: ClientActionMachineRpc = {
@@ -68,7 +73,7 @@ describe('client Action reverse delivery', () => {
     };
     const context = { surface: 'cli', authority: 'account_automation', serverId: 'home', bypassApprovals: true } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
-    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(await executor(disconnectedClient).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
   });
   it('discovers and delegates keyed device Storage preferences without admitting unsupported Account keys', async () => {
     const anchor = 'machines.storage.view';
@@ -95,7 +100,7 @@ describe('client Action reverse delivery', () => {
       const context = { surface, authority: 'account_automation', bypassApprovals: true } as const;
       expect(await executor(client).execute('settings.get', { anchor, key }, context)).toEqual({ ok: true, result: { anchor, value } });
       expect(await executor(client).execute('settings.set', { anchor, key, value }, context)).toEqual({ ok: true, result: { anchor, value } });
-      expect(await executor(null).execute('settings.get', { anchor, key }, context))
+      expect(await executor(disconnectedClient).execute('settings.get', { anchor, key }, context))
         .toMatchObject({ ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable', recovery: { kind: 'connect_client' } } });
     }
     expect(delivered).toHaveLength(6);
@@ -125,7 +130,32 @@ describe('client Action reverse delivery', () => {
     };
     const context = { surface: 'cli', authority: 'account_automation', serverId: 'home' } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
-    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await executor(disconnectedClient).execute(request.actionId, request.input, context))
+      .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await executor(null).execute(request.actionId, request.input, context)).toEqual({
+      ok: false, errorCode: 'machine_transport_unavailable', error: 'machine_transport_unavailable',
+    });
+  });
+
+  it.each([
+    ['response', 'machine_socket_unavailable'],
+    ['throw', 'machine_transport_unavailable'],
+  ] as const)('does not report a pre-issue reverse transport %s as noClient', async (disposition, expectedErrorCode) => {
+    let deliveries = 0;
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async () => {
+        deliveries += 1;
+        if (disposition === 'throw') throw new Error('machine transport unavailable');
+        return { ok: false, errorCode: 'machine_socket_unavailable' };
+      },
+    };
+    await expect(executor(client).execute('ui.current_context.read', {}, {
+      surface: 'agent', authority: 'account_automation', serverId: 'home',
+    })).resolves.toEqual({
+      ok: false, errorCode: expectedErrorCode, error: expectedErrorCode,
+    });
+    expect(deliveries).toBe(1);
   });
 
   it('delivers a direct Home continuation to the App that owns its opaque current-context command', async () => {
@@ -154,7 +184,8 @@ describe('client Action reverse delivery', () => {
       items: [], managedRuns: { phase: 'loaded', refreshFailed: false },
     }, absent: { ok: true, result: { status: 'unavailable' } } },
     { actionId: 'inbox.get', input: {}, result: {
-      status: 'ready', groups: [], approvalIds: ['approval'], usageNoticeIds: [], friendRequestIds: [],
+      status: 'ready', groups: [], items: [], coverage: { discussions: 'complete' },
+      approvalIds: ['approval'], usageNoticeIds: [], friendRequestIds: [],
       automationRunIds: [], readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false,
     }, absent: { ok: true, result: { status: 'unavailable' } } },
     { actionId: 'inbox.mark_all_read', input: { targets: [{ serverId: 'home', sessionId: 'lead' }] },
@@ -188,7 +219,7 @@ describe('client Action reverse delivery', () => {
     const context = { surface: 'cli', authority: 'present_user', serverId: 'home',
       presentUserConfirmation: { actionId: request.actionId } } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
-    expect(await executor(null).execute(request.actionId, request.input, context)).toEqual(request.absent);
+    expect(await executor(disconnectedClient).execute(request.actionId, request.input, context)).toEqual(request.absent);
   });
 
   it.each(['session.work.get', 'inbox.get'] as const)('preserves mounted-owner absence for %s when a client is connected', async actionId => {
@@ -220,7 +251,7 @@ describe('client Action reverse delivery', () => {
     const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
     await expect(executor(client).execute('session.open', input, context)).resolves.toEqual({ ok: true,
       result: { status: 'opened', sessionId: 'session', serverId: 'home' } });
-    await expect(executor(null).execute('session.open', input, context)).resolves.toMatchObject({
+    await expect(executor(disconnectedClient).execute('session.open', input, context)).resolves.toMatchObject({
       ok: false, errorCode: 'unavailable', error: 'noClient',
     });
   });
@@ -250,7 +281,7 @@ describe('client Action reverse delivery', () => {
     const context = { surface, authority: 'account_automation', bypassApprovals: true } as const;
     for (const operation of operations) {
       expect(await executor(client).execute(operation.actionId, operation.input, context)).toEqual({ ok: true, result: operation.result });
-      expect(await executor(null).execute(operation.actionId, operation.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+      expect(await executor(disconnectedClient).execute(operation.actionId, operation.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
     }
     expect(delivered).toBe(operations.length);
     expect((await executor(client).execute('machines.add.ssh.start', operations[0].input, { ...context, surface: 'cli' })).ok).toBe(false);
@@ -270,7 +301,7 @@ describe('client Action reverse delivery', () => {
     };
     const context = { surface, authority: 'account_automation', serverId: 'home' } as const;
     expect(await executor(client).execute('machines.metadata.update', input, context)).toEqual({ ok: true, result: { version: 5 } });
-    expect(await executor(null).execute('machines.metadata.update', input, context)).toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await executor(disconnectedClient).execute('machines.metadata.update', input, context)).toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
   });
 
   const reversal = { scope: { serverId: 'home', accountId: 'account' }, beforeVersion: 4, appliedVersion: 5,
@@ -298,7 +329,7 @@ describe('client Action reverse delivery', () => {
     const context = { surface: 'cli', authority: 'present_user', presentUserConfirmation: { actionId: request.actionId } } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
     expect(deliveries).toBe(1);
-    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject(
+    expect(await executor(disconnectedClient).execute(request.actionId, request.input, context)).toMatchObject(
       { ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable', recovery: { kind: 'connect_client' } } });
     expect(await executor(client).execute('settings.get', { anchor: 'delegation.workDepthLimit' }, { surface: 'cli' }))
       .toMatchObject({ ok: false, errorCode: 'not_authenticated' });
@@ -353,7 +384,7 @@ describe('client Action reverse delivery', () => {
     };
     expect(await executor(client).execute('settings.get', { anchor: 'appearance.themeMode' }, { surface: 'cli', authority: 'present_user' }))
       .toEqual({ ok: true, result });
-    expect(await executor(null).execute('settings.get', { anchor: 'appearance.themeMode' }, { surface: 'cli' }))
+    expect(await executor(disconnectedClient).execute('settings.get', { anchor: 'appearance.themeMode' }, { surface: 'cli' }))
       .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient', details: {
         reason: 'client_unavailable', recovery: { kind: 'connect_client', rpcMethod: RPC_METHODS.UI_ACTION_EXECUTE },
       } });
@@ -377,7 +408,7 @@ describe('client Action reverse delivery', () => {
     await expect(executor(client).execute(actionId, input, context)).resolves.toEqual({ ok: true, result: {
       kind: 'opened', draftId: 'draft', destination: 'newSession',
     } });
-    await expect(executor(null).execute(actionId, input, context)).resolves.toEqual({ ok: true, result: {
+    await expect(executor(disconnectedClient).execute(actionId, input, context)).resolves.toEqual({ ok: true, result: {
       kind: 'unavailable', reason: 'client_unavailable',
     } });
   });
@@ -397,7 +428,7 @@ describe('client Action reverse delivery', () => {
     const context = { surface: 'agent', defaultSessionId: 'session', serverId: 'home' } as const;
     await expect(executor(client).execute('widgets.item.inputs.get', { ref }, context))
       .resolves.toEqual({ ok: true, result: { ref, bindings } });
-    await expect(executor(null).execute('widgets.item.inputs.get', { ref }, context))
+    await expect(executor(disconnectedClient).execute('widgets.item.inputs.get', { ref }, context))
       .resolves.toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
     expect(UiActionDispatchRequestV1Schema.safeParse({ v: 1, actionId: 'widgets.item.inputs.get',
       input: { ref: { ...ref, surface: { ...surface, owner: { kind: 'home' } } } },

@@ -6,6 +6,7 @@ import { WriteStream } from 'node:fs';
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Writable } from 'node:stream';
 
 import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
 import { killProcessTree, markSpawnedProcessPlannedExit, run, runCapture, runCaptureResult, runCommand, spawnProc } from './proc.mjs';
@@ -784,6 +785,91 @@ test('spawnProc bounds long-lived tee logs with one rotated predecessor', async 
   assert.ok((await stat(`${teeFile}.1`)).size <= teeMaxBytes);
   assert.match(await readFile(teeFile, 'utf-8'), /\[bounded\] 003-abcdefghij/);
 });
+
+test('spawnProc propagates a stalled tee to both child pipes without retaining the output flood', { timeout: 15_000 }, async (t) => {
+  const root = await withTempRoot(t);
+  const teeFile = join(root, 'backpressure.log');
+  let release;
+  let notifyBlocked;
+  const blocked = new Promise(resolve => { notifyBlocked = resolve; });
+  for (const method of ['_write', '_writev']) {
+    const original = WriteStream.prototype[method];
+    t.mock.method(WriteStream.prototype, method, function (...args) {
+      const callback = args.pop();
+      original.call(this, ...args, error => {
+        if (this.path !== teeFile || release) return callback(error);
+        release = () => callback(error);
+        notifyBlocked();
+      });
+    });
+  }
+  const linesPerStream = 2048;
+  const lineBytes = 4096;
+  const observed = { stdout: 0, stderr: 0 };
+  const child = spawnProc('flood', process.execPath, ['-e', `
+    const { once } = require('node:events');
+    const line = 'x'.repeat(${lineBytes - 1}) + '\\n';
+    async function flood(stream) {
+      for (let i = 0; i < ${linesPerStream}; i++) {
+        if (!stream.write(line)) await once(stream, 'drain');
+      }
+    }
+    Promise.all([flood(process.stdout), flood(process.stderr)]);
+  `], process.env, {
+    silent: true,
+    teeFile,
+    teeMaxBytes: linesPerStream * (lineBytes + '[flood] '.length) * 2,
+    onLine: ({ stream }) => { observed[stream] += 1; },
+  });
+  try {
+    await blocked;
+    // Both data callbacks must reach the shared stalled tee before observing it.
+    while (observed.stdout === 0 || observed.stderr === 0) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(child.stdout.isPaused(), true, 'tee backpressure must pause stdout rather than queue the remaining flood');
+    assert.equal(child.stderr.isPaused(), true, 'the same stalled tee must pause stderr independently');
+    const before = { ...observed };
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(observed, before, 'retained lines must stop growing while the destination is blocked');
+  } finally {
+    release?.();
+    await child.completion;
+  }
+  assert.deepEqual(observed, { stdout: linesPerStream, stderr: linesPerStream });
+  assert.equal((await stat(teeFile)).size, linesPerStream * (lineBytes + '[flood] '.length) * 2);
+});
+
+for (const withError of [false, true]) {
+  test(`runCaptureResult resumes its child when a blocked diagnostic destination closes (error=${withError})`, { timeout: 15_000 }, async () => {
+    let notifyBlocked;
+    const blocked = new Promise(resolve => { notifyBlocked = resolve; });
+    // The writable boundary models a terminal/transport disappearing while full.
+    const destination = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, _callback) { notifyBlocked(); },
+    });
+    destination.on('error', () => {});
+    const line = 'x'.repeat(4095) + '\n';
+    const lines = 256;
+    const pending = runCaptureResult(process.execPath, ['-e', `
+      const { once } = require('node:events');
+      (async () => {
+        const line = ${JSON.stringify(line)};
+        for (let i = 0; i < ${lines}; i++) {
+          if (!process.stdout.write(line)) await once(process.stdout, 'drain');
+        }
+      })();
+    `], {
+      streamLabel: 'closed-destination',
+      stdoutDiagnosticStream: destination,
+    });
+    await blocked;
+    destination.destroy(withError ? new Error('diagnostic destination lost') : undefined);
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.equal(result.out, line.repeat(lines));
+  });
+}
 
 test('runCaptureResult uses the same bounded tee-log owner as spawnProc', async (t) => {
   const root = await withTempRoot(t);

@@ -13,10 +13,11 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 
 import type { ArtifactActionsClient } from './artifactActionsClient';
-import { ArtifactEditProposal } from './ArtifactEditProposal';
-import type { DocPassageMarginThread } from './docPassageMargin';
+import { ArtifactEditProposal, type AdmittedDocRead } from './ArtifactEditProposal';
+import { readDocPassageThreadQuote, type DocPassageMarginThread } from './docPassageMargin';
 
 const NO_SESSION_LABEL = () => null;
 
@@ -31,14 +32,17 @@ export function ArtifactPassageThreadCard(
     thread: DocPassageMarginThread<DiscussionOpenedMessageV1>;
     focused: boolean;
     client: ArtifactActionsClient;
+    docRead: AdmittedDocRead;
+    mountThread: (discussionId: string) => () => void;
     viewerAccountId: string;
     onFocus: () => void;
     onOpen: () => void;
-    onOpenHistory: () => void;
+    onOpenHistory: (compareFromBodyVersion: number) => void;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const { thread } = props;
+  React.useEffect(() => props.mountThread(thread.discussionId), [props.mountThread, thread.discussionId]);
   const labels = React.useMemo(
     () =>
       new Map(
@@ -68,6 +72,21 @@ export function ArtifactPassageThreadCard(
       .reverse()
       .find((message) => message !== thread.proposal) ?? null;
   const detached = thread.location.state === 'detached';
+  // Who suggested the edit, named as the thread names them: an agent by its Session, a person by name.
+  const producer = thread.proposal?.producerV1 ?? null;
+  const producerAddresses = React.useMemo(
+    () => producer && thread.proposal?.messageRef
+      ? [{ serverId: thread.proposal.messageRef.discussion.serverId, sessionId: producer.sessionId }] : [],
+    [producer, thread.proposal?.messageRef],
+  );
+  const [producerTitle] = useSessionDisplayTitles(producerAddresses);
+  const proposer = React.useMemo(() => {
+    const message = thread.proposal;
+    if (!message) return null;
+    const accountLabel = resolveDiscussionMessageAuthorLabel(message);
+    if (message.producerV1) return { label: producerTitle ?? accountLabel, mention: { sessionId: message.producerV1.sessionId } };
+    return message.authorAccountId ? { label: accountLabel, mention: { accountId: message.authorAccountId } } : null;
+  }, [producerTitle, thread.proposal]);
   const testID = `artifact:passage-thread:${thread.discussionId}`;
   const proposalContent =
     thread.proposal?.content &&
@@ -99,9 +118,7 @@ export function ArtifactPassageThreadCard(
           color={theme.colors.text.tertiary}
         />
         <Text variant="meta" numberOfLines={1} style={styles.quote}>
-          {thread.location.state === 'revised' && proposalContent
-            ? proposalContent.after
-            : thread.passage.quote}
+          {readDocPassageThreadQuote(thread)}
         </Text>
         {detached ? (
           <Text
@@ -216,7 +233,7 @@ export function ArtifactPassageThreadCard(
               n: thread.passage.revision.bodyVersion,
             })}
             textStyle={{ color: theme.colors.text.primary }}
-            onPress={props.onOpenHistory}
+            onPress={() => props.onOpenHistory(thread.passage.revision.bodyVersion)}
           />
         </View>
       ) : null}
@@ -224,11 +241,13 @@ export function ArtifactPassageThreadCard(
         <ArtifactEditProposal
           testID={`${testID}.proposal`}
           client={props.client}
+          docRead={props.docRead}
           proposalRef={thread.proposal.messageRef ?? null}
           proposal={proposalContent}
           disposition={thread.proposal.docEditProposalDispositionV1}
           viewerAccountId={props.viewerAccountId}
           resolveAccountLabel={resolveAccountLabel}
+          proposer={proposer}
         />
       ) : null}
     </View>

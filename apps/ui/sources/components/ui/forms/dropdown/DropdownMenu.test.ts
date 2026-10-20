@@ -327,6 +327,15 @@ describe('DropdownMenu', () => {
         expect(onOpenChange).toHaveBeenCalledWith(true);
     });
 
+    it('does not call every empty menu a command list', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true, onOpenChange: vi.fn(), items: [], onSelect: vi.fn(), trigger: React.createElement('View'),
+        }));
+
+        expect(screen.findByType('SelectableMenuResults' as any)?.props?.emptyLabel).toBe('common.noMatches');
+    });
+
     it('closes the menu when an item is selected by default', async () => {
         const scheduled: FrameRequestCallback[] = [];
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {

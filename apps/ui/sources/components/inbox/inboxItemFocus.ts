@@ -6,6 +6,7 @@ import { buildPluginAppPageRoutePath } from '@/components/appShell/plugins/plugi
 import type { AccountNoticeArtifactHeaderV1, UsageNoticeArtifactHeaderV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { machineVitalsNoticeHref } from '@/components/machines/page/machinePageHref';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
+import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
 
 /**
  * The Inbox route's one focus parameter (`session:<Home>:<id>`, `run:<Home>:<id>` or
@@ -53,6 +54,13 @@ export function resolveInboxNoticePageRoute(id: string, notice?: InboxItemDetail
     }
     if (notice?.notice?.topic === 'connected_service_usage') return '/settings/usage';
     if (notice?.notice?.topic === 'resource_limit') return machineVitalsNoticeHref(notice.notice, serverId);
+    if (notice?.notice?.topic === 'follow_update') {
+        const source = notice.notice.follow.original.source;
+        const route = source.kind === 'execution_run'
+            ? buildSessionExecutionRunRouteHref({ sessionId: source.sessionId, runId: source.runId, serverId })
+            : createWorkflowRunRoute(source.runId, serverId);
+        if (route) return route;
+    }
     return `/artifacts/${encodeURIComponent(id)}`;
 }
 

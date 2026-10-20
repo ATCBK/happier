@@ -1,5 +1,7 @@
 // @ts-check
 
+import { validateLinuxWebKitRuntime } from './linux-webkit-runtime.mjs';
+
 /** @type {const} */
 export const LINUX_HOST_GRAPHICS_LIBRARY_PATTERNS = [
   'libwayland-client.so',
@@ -24,4 +26,12 @@ export function validateLinuxPackageMetadata(packagePath, inspect) {
   if (fileName.toLowerCase().endsWith('.deb')) { output = inspect('dpkg-deb', ['--show', '--showformat', '${Package}\\n${Version}\\n${Architecture}\\n', fileName]); if (!/^.+\n.+\n(?:amd64|x86_64)\n$/m.test(output)) throw new Error(`invalid DEB metadata: ${fileName}`); return; }
   if (fileName.toLowerCase().endsWith('.rpm')) { output = inspect('rpm', ['-qp', '--queryformat', '%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}\\n', fileName]); if (!/^.+\n.+\n(?:x86_64|amd64)\n$/m.test(output)) throw new Error(`invalid RPM metadata: ${fileName}`); return; }
   throw new Error(`unsupported Linux package: ${fileName}`);
+}
+
+/** Validate the required AppImage engine and helper closure, independent of CI env.
+ * @param {string} appDir
+ * @param {Parameters<typeof validateLinuxWebKitRuntime>[0]['inspect']} [inspect]
+ */
+export function validateLinuxAppImageRuntime(appDir, inspect) {
+  return validateLinuxWebKitRuntime({ root: appDir, layout: 'appimage', inspect });
 }

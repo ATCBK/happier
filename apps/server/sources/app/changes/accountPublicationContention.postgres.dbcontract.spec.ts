@@ -432,7 +432,13 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
                     largestNonQueryGaps: gaps.sort((a, b) => b.ms - a.ms).slice(0, 3) };
             }).sort((a, b) => b.holdMs.total - a.holdMs.total);
             console.info('INT_ACCTLOCK_MIXED_CONTENTION', JSON.stringify({ sessions: sessions.length,
-                elapsedMs: duration(performance.now(), loadStartedAt), owners }));
+                elapsedMs: duration(performance.now(), loadStartedAt),
+                accountLockTransactions: measurements.filter(row => row.lockAcquiredAt !== undefined).length,
+                acquisitionMs: distribution(measurements.flatMap(row => row.lockAcquiredAt !== undefined && row.lockRequestedAt !== undefined
+                    ? [row.lockAcquiredAt - row.lockRequestedAt] : [])),
+                holdMs: distribution(measurements.flatMap(row => row.lockAcquiredAt !== undefined && row.settledAt !== undefined
+                    ? [row.settledAt - row.lockAcquiredAt] : [])),
+                owners }));
             let cursor = 0;
             const observedSessionIds: string[] = [];
             while (true) {

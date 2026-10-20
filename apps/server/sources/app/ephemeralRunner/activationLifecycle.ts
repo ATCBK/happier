@@ -4,7 +4,7 @@ import type { Tx } from '@/storage/inTx';
 
 export const PREMATERIALIZED_RUNNER_ACTIVATION_STATES = ['pending', 'claimed', 'consented'];
 
-/** Called only after successful draft CAS under the shared Account-first fence. */
+/** Draft CAS precedes this conditional row update, which locks each activation. */
 export async function closeDraftEphemeralRunnerActivationsInTx(
     tx: Tx,
     params: Readonly<{ creatorAccountId: string; draftId: string }>,
@@ -15,7 +15,7 @@ export async function closeDraftEphemeralRunnerActivationsInTx(
     });
 }
 
-/** Exact proof/currentness or creator cancellation under the same Account-first fence. */
+/** Conditional row update shares the activation lock with proof/currentness writers. */
 export async function closeEphemeralRunnerActivationInTx(
     tx: Tx,
     params: Readonly<{ activationId: string; creatorAccountId: string; reason: z.infer<typeof RunnerActivationCloseReasonV1Schema> }>,

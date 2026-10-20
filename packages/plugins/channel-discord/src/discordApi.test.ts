@@ -16,6 +16,39 @@ function response(value: unknown, status = 200) {
   };
 }
 
+describe('Discord Gateway Bot snapshot', () => {
+  it.each([1_000, 0])('accepts reset_after zero with %i remaining starts', async (remaining) => {
+    const api = createDiscordBotApi({
+      token: 'bot-token',
+      http: { request: vi.fn(async () => response({
+        url: 'wss://gateway.discord.gg',
+        shards: 1,
+        session_start_limit: { total: 1_000, remaining, reset_after: 0, max_concurrency: 1 },
+      })) },
+    });
+
+    await expect(api.getGatewayBot()).resolves.toEqual({
+      gatewayUrl: 'wss://gateway.discord.gg/?v=10&encoding=json',
+      sessionStartLimit: { total: 1_000, remaining, resetAfterMs: 0, maxConcurrency: 1 },
+    });
+  });
+
+  it.each([-1, 0.5, '0'])('refuses an invalid reset_after %s', async (resetAfter) => {
+    const api = createDiscordBotApi({
+      token: 'bot-token',
+      http: { request: vi.fn(async () => response({
+        url: 'wss://gateway.discord.gg',
+        session_start_limit: { total: 1_000, remaining: 1_000, reset_after: resetAfter, max_concurrency: 1 },
+      })) },
+    });
+
+    await expect(api.getGatewayBot()).resolves.toMatchObject({
+      kind: 'notReady',
+      reason: 'invalidConfiguration',
+    });
+  });
+});
+
 describe('Discord application Message Content preflight', () => {
   it('uses both flags fields and fails closed on malformed or inconsistent permission evidence', () => {
     expect(readDiscordApplicationMessageContentIntentPermission({

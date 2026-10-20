@@ -1,5 +1,5 @@
 import { DISCUSSION_RECENT_AUTHOR_AVATAR_STACK_V1, DocEditProposalDispositionV1Schema, type DiscussionCapabilitiesV1, type DiscussionMessageV1, type DiscussionSummaryV1 } from '@happier-dev/protocol/discussions/models';
-import { DiscussionMessageContentV1Schema, DiscussionProducerV1Schema, DiscussionTitleV1Schema } from '@happier-dev/protocol/discussions/content';
+import { DiscussionMessageContentV1Schema, DiscussionProducerV1StoredSchema, DiscussionTitleV1Schema } from '@happier-dev/protocol/discussions/content';
 import { DiscussionMessageAddressingV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
@@ -10,6 +10,8 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { getActivePrismaRuntime } from "@/storage/prisma";
 import type { Tx } from "@/storage/inTx";
 import type { Prisma } from '@prisma/client';
+import { projectAuthenticatedAccountActorsById } from '@/app/session/messages/projectSessionMessageAccountActors';
+import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 
 export type DiscussionStoredContentFailure =
     | "discussion_encryption_mode_mismatch"
@@ -122,7 +124,7 @@ export function validateDiscussionStoredMessage(
         if (!addressing.success || addressing.data.throughSeq !== row.seq) return 'discussion_invalid_content';
     }
     if (row.producerV1 === null || row.producerV1 === undefined) return null;
-    const producer = DiscussionProducerV1Schema.safeParse(row.producerV1);
+    const producer = DiscussionProducerV1StoredSchema.safeParse(row.producerV1);
     return producer.success
         ? null
         : "discussion_invalid_content";
@@ -134,7 +136,25 @@ function readEnvelope(value: unknown) {
 
 function readProducer(value: unknown) {
     if (value === null || value === undefined) return null;
-    return DiscussionProducerV1Schema.parse(value);
+    return DiscussionProducerV1StoredSchema.parse(value);
+}
+
+/** One sanitized, batched projection for admitted message rows and their explicit roster. */
+export async function projectDiscussionAccountActorsInTx(tx: Tx, rows: readonly DiscussionMessageRow[], participantAccountIds: readonly string[] = []): Promise<{
+    messages: { accountActor: SessionMessageAccountActorV1 | null; requesterAccountActor: SessionMessageAccountActorV1 | null }[];
+    participants: (SessionMessageAccountActorV1 | null)[];
+}> {
+    const requesters = rows.map(row => readProducer(row.producerV1)?.actionRequestAttributionV1?.requester);
+    const home = requesters.some(requester => requester != null) ? await readCurrentServerIdentityId(undefined, tx) : null;
+    // A matching Account id on another Home is not this Home's person.
+    const requesterIds = requesters.map(requester => home && requester?.serverId === home ? requester.accountId : null);
+    const actors = await projectAuthenticatedAccountActorsById(tx, [
+        ...rows.map(row => row.authorAccountId), ...requesterIds, ...participantAccountIds,
+    ]);
+    return {
+        messages: rows.map((_, index) => ({ accountActor: actors[index] ?? null, requesterAccountActor: actors[rows.length + index] ?? null })),
+        participants: actors.slice(rows.length * 2),
+    };
 }
 
 /**
@@ -167,6 +187,7 @@ export function projectDiscussionMessageV1(
     row: DiscussionMessageRow,
     viewerAccountId: string,
     accountActor: SessionMessageAccountActorV1 | null,
+    requesterAccountActor: SessionMessageAccountActorV1 | null = null,
 ): DiscussionMessageV1 {
     return {
         id: row.id,
@@ -175,6 +196,7 @@ export function projectDiscussionMessageV1(
         seq: row.seq,
         authorAccountId: row.authorAccountId,
         accountActor,
+        requesterAccountActor,
         producerV1: readProducer(row.producerV1),
         ...(row.replyTargetV1 == null ? {} : { replyTarget: DiscussionReplyTargetV1Schema.parse(row.replyTargetV1) }),
         content: readEnvelope(row.content),
@@ -369,6 +391,7 @@ export function projectDiscussionSummaryV1(params: Readonly<{
     includeLatestMessageContent: boolean;
     facts: DiscussionViewerFacts;
     latestMessageAccountActor: SessionMessageAccountActorV1 | null;
+    latestMessageRequesterAccountActor?: SessionMessageAccountActorV1 | null;
     participantAccounts: readonly SessionMessageAccountActorV1[];
     capabilities: DiscussionCapabilitiesV1;
 }>): DiscussionSummaryV1 {
@@ -390,6 +413,7 @@ export function projectDiscussionSummaryV1(params: Readonly<{
             seq: latest.seq,
             authorAccountId: latest.authorAccountId,
             accountActor: params.latestMessageAccountActor,
+            requesterAccountActor: params.latestMessageRequesterAccountActor ?? null,
             producerV1: readProducer(latest.producerV1),
             ...(params.includeLatestMessageContent ? { content: readEnvelope(latest.content) } : {}),
             createdAt: latest.createdAt.getTime(),

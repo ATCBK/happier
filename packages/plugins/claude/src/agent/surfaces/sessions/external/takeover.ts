@@ -5,6 +5,8 @@ import type {
 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import { readClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
+import { resolveClaudeConfigDirEnvOverlay } from '../../../environment.js';
+import { canonicalizeClaudeConfigDir, resolveCanonicalConfiguredClaudeConfigDir } from './source.js';
 type ClaudeExternalSessionTakeoverIdentity =
     Pick<
         AgentExternalSessionTakeoverResolveLaunchRequest,
@@ -20,6 +22,7 @@ function readNonEmptyString(value: unknown): string | null {
 export function resolveClaudeExternalSessionTakeoverPlan(
     identity: ClaudeExternalSessionTakeoverIdentity,
 ): AgentExternalSessionTakeoverLaunchPlan | null {
+    const env = process.env;
     const remoteSessionId = readClaudeProviderIdentityValue(identity.remoteSessionId);
     const configDir = readNonEmptyString(identity.source.configDir);
     const sourceProjectId = readNonEmptyString(identity.source.projectId);
@@ -35,9 +38,14 @@ export function resolveClaudeExternalSessionTakeoverPlan(
     }
 
     return Object.freeze({
-        environmentVariables: Object.freeze({
-            CLAUDE_CONFIG_DIR: configDir,
-        }),
+        // Source normalization records a transcript root, not the presence of
+        // the native auth override. Preserve the current environment for its
+        // own store and retain pinning for a different linked store.
+        environmentVariables: Object.freeze(
+            canonicalizeClaudeConfigDir(configDir, env) === resolveCanonicalConfiguredClaudeConfigDir({ env })
+                ? resolveClaudeConfigDirEnvOverlay(env)
+                : { CLAUDE_CONFIG_DIR: configDir },
+        ),
         applyConnectedAccountDefaults: true,
     });
 }

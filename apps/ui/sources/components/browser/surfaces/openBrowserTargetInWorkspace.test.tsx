@@ -220,6 +220,25 @@ describe('openBrowserTargetInWorkspace', () => {
         expect(Object.keys(tabs[1].resource as Record<string, unknown>).sort())
             .toEqual(['browserSessionId', 'kind', 'target', 'viewId']);
     });
+    it('a UI open from a side list lends its column to the scope\'s opener; an Agent open lends none', async () => {
+        // Services (side column) and a Details panel share one scope; the panel's opener mounts last
+        // and keeps deciding the open (platform, policy, tab).
+        const servicesOpen = vi.fn();
+        const panelOpen = vi.fn();
+        const services = createBrowserWorkspaceOpeningFixture({ scope: 'sessionDetails', platform: 'web',
+            openDetailsTab: servicesOpen, readOpenerRegion: () => 'side' });
+        const panel = createBrowserWorkspaceOpeningFixture({ scope: 'sessionDetails', platform: 'web', openDetailsTab: panelOpen });
+        expect(await services.open(localServicePreviewTarget)).toMatchObject({ ok: true, result: { status: 'dispatched' } });
+        expect(servicesOpen).not.toHaveBeenCalled();
+        expect(panelOpen).toHaveBeenCalledTimes(1);
+        expect(panelOpen.mock.calls[0]?.[1]).toEqual({ intent: 'default', origin: 'side' });
+        // An Agent has no UI column: the same Action still opens, with the owner's own region.
+        expect(await panel.executor.execute('browser.workspace.open', { scopeId: 'workspace_1', commandId: 'agent_open',
+            target: localServicePreviewTarget }, { ...panel.context, surface: 'ui', authority: 'present_user' }))
+            .toMatchObject({ ok: true, result: { commandId: 'agent_open', status: 'dispatched' } });
+        expect(panelOpen).toHaveBeenCalledTimes(2);
+        expect(panelOpen.mock.calls[1]?.[1]).toEqual({ intent: 'default' });
+    });
     it('does not resolve an absent workspace or another Home/Account with the same scope id', async () => {
         const openDetailsTab = vi.fn();
         const { executor, context } = createBrowserWorkspaceOpeningFixture({ scope: 'sessionDetails', platform: 'web', openDetailsTab });

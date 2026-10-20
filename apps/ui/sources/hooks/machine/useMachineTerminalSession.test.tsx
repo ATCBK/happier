@@ -9,7 +9,7 @@ import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/o
 import { TerminalStreamReadResponseSchema } from '@happier-dev/protocol/terminal/stream';
 import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { isRecoverableTerminalRpcError, resolveTerminalAutoRetryDelayMs } from '@/components/sessions/terminal/terminalRpcRecovery';
+import { isRecoverableTerminalRpcError, resolveTerminalAutoRetryDelayMs, TERMINAL_AUTO_RETRY_MAX_ATTEMPTS } from '@/components/sessions/terminal/terminalRpcRecovery';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -154,6 +154,12 @@ describe('terminal RPC recovery policy', () => {
     it('retains the same policy for thrown RPC errors', () => {
         expect(isRecoverableTerminalRpcError(createRpcCallError({ error: 'RPC method not available',
             errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }))).toBe(true);
+    });
+
+    it('recovers from typed transport loss before terminal delivery', () => {
+        for (const errorCode of [RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE, 'MACHINE_RPC_TIMEOUT']) {
+            expect(isRecoverableTerminalRpcError(createRpcCallError({ error: 'Transport unavailable', errorCode }), 'stream')).toBe(true);
+        }
     });
 
     it('does not treat ambiguous, denied, cancelled or arbitrary admission failures as a no-handler refusal', () => {
@@ -337,6 +343,60 @@ describe('useMachineTerminalSession', () => {
         expect(hook.getCurrent().error).toBeNull();
         await hook.unmount();
     });
+
+    it('settles terminal disposal when its close RPC loses transport', async () => {
+        vi.useRealTimers();
+        terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'closing', reused: false });
+        terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'closing', frames: [], nextByteOffset: 0,
+            availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });
+        const closing = createDeferred<{ ok: true }>();
+        terminalOps.close.mockReturnValue(closing.promise);
+        const unhandled: unknown[] = [];
+        const onUnhandled = (error: unknown) => { unhandled.push(error); };
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+            const terminalRef = { current: { write: vi.fn(), clear: vi.fn() } satisfies EmbeddedTerminalRendererHandle };
+            const hook = await renderHook(() => useMachineTerminalSession({
+                machineId: 'machine', serverId: homeIds.primary, cwd: '/repo', terminalKey: 'close-transport',
+                terminalRef, closeOnUnmount: true,
+            }));
+            await act(async () => hook.getCurrent().onReady(80, 24));
+            await vi.waitFor(() => expect(hook.getCurrent().status).toBe('exited'));
+            await hook.unmount();
+            expect(terminalOps.close).toHaveBeenCalled();
+            closing.reject(createRpcCallError({ error: 'RPC target unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE }));
+            await new Promise(resolve => setImmediate(resolve));
+            await new Promise(resolve => setImmediate(resolve));
+            expect(unhandled).toEqual([]);
+        } finally { process.off('unhandledRejection', onUnhandled); }
+    });
+
+    it.each([RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE, 'MACHINE_RPC_TIMEOUT'])(
+        'uses the existing finite recovery budget for a stream %s failure', async errorCode => {
+            terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'recover-stream', reused: true });
+            terminalOps.streamReadBytes.mockRejectedValue(createRpcCallError({ error: 'Stream unavailable', errorCode }));
+            terminalOps.streamRead.mockRejectedValue(createRpcCallError({ error: 'Stream unavailable', errorCode }));
+            const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+            const terminalRef = { current: { write: vi.fn(), clear: vi.fn() } satisfies EmbeddedTerminalRendererHandle };
+            const hook = await renderHook(() => useMachineTerminalSession({
+                machineId: 'machine', serverId: homeIds.primary, cwd: '/repo', terminalKey: `stream-recovery:${errorCode}`, terminalRef,
+            }));
+            await act(async () => hook.getCurrent().onReady(80, 24));
+            await flushHookEffects({ cycles: 4, turns: 2 });
+            expect(hook.getCurrent().status).toBe('connecting');
+            for (let attempt = 1; attempt <= TERMINAL_AUTO_RETRY_MAX_ATTEMPTS; attempt++) {
+                await act(async () => { await vi.advanceTimersByTimeAsync(resolveTerminalAutoRetryDelayMs(attempt)); });
+                await flushHookEffects({ cycles: 4, turns: 2 });
+            }
+            expect(hook.getCurrent().status).toBe('error');
+            expect(hook.getCurrent().error).toBe('terminal_rpc_target_unavailable');
+            const settledReads = terminalOps.streamReadBytes.mock.calls.length;
+            await act(async () => { await vi.advanceTimersByTimeAsync(resolveTerminalAutoRetryDelayMs(TERMINAL_AUTO_RETRY_MAX_ATTEMPTS)); });
+            await flushHookEffects({ cycles: 4, turns: 2 });
+            expect(terminalOps.streamReadBytes).toHaveBeenCalledTimes(settledReads);
+            await hook.unmount();
+        });
 
     it('attributes an owned terminal ensure to its Session', async () => {
         terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'attributed', reused: false });
@@ -1774,7 +1834,44 @@ describe('useMachineTerminalSession', () => {
         await hook.unmount();
     });
 
-    it('reports non-recoverable stream input failures instead of silently staying connected', async () => {
+    it('keeps the live terminal connected after unsupported resizes and accepts subsequent input', async () => {
+        const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+        terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'term-fixed-size', reused: false });
+        terminalOps.streamReadBytes.mockResolvedValue({
+            ok: true,
+            terminalId: 'term-fixed-size',
+            frames: [],
+            nextByteOffset: 0,
+            availableByteOffset: 0,
+            droppedBeforeByteOffset: 0,
+            done: false,
+        });
+        terminalOps.streamSendInput
+            .mockResolvedValueOnce({ ok: false, code: 'terminal_resize_unavailable', message: 'Resize unavailable' })
+            .mockResolvedValue({ ok: true });
+
+        const renderer: EmbeddedTerminalRendererHandle = { write: vi.fn(), writeBytes: vi.fn(), clear: vi.fn() };
+        const terminalRef = { current: renderer };
+        const hook = await renderHook(() => useMachineTerminalSession({
+            machineId: 'machine-1', cwd: '/repo', terminalKey: 'session:fixed-size:terminal', terminalRef,
+        }), { flushOptions: { cycles: 1, turns: 1 } });
+        await act(async () => { hook.getCurrent().onReady(80, 24); });
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+
+        await act(async () => { hook.getCurrent().onResize(120, 40); });
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+        expect(hook.getCurrent()).toMatchObject({ status: 'connected', error: null });
+
+        hook.getCurrent().onInput('echo still connected\r');
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+        expect(terminalOps.streamSendInput).toHaveBeenLastCalledWith('machine-1', {
+            terminalId: 'term-fixed-size', event: { t: 'text', text: 'echo still connected\r' },
+        }, expect.any(Object));
+        expect(hook.getCurrent()).toMatchObject({ status: 'connected', error: null });
+        await hook.unmount();
+    });
+
+    it.each(['text', 'resize'] as const)('reports non-recoverable %s failures instead of silently staying connected', async (event) => {
         terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'term-input-failure', reused: false });
         terminalOps.streamReadBytes.mockResolvedValue({
             ok: true,
@@ -1813,7 +1910,10 @@ describe('useMachineTerminalSession', () => {
         });
         await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
 
-        hook.getCurrent().onInput('echo hidden\r');
+        await act(async () => {
+            if (event === 'resize') hook.getCurrent().onResize(120, 40);
+            else hook.getCurrent().onInput('echo hidden\r');
+        });
         await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
 
         expect(hook.getCurrent()).toEqual(expect.objectContaining({

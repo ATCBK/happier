@@ -63,10 +63,11 @@ describe('Voice brief from the mounted Inbox', () => {
             metadata: WorkflowRunPrivateMetadataV1Schema.parse({ kind: 'available', value: { title: 'Publish release notes' } }) };
         const route = '/workflows/runs/run%2Fb?target=occurrence&automationId=automation' as const;
         const brief = buildVoiceBrief({ inbox: { ...inbox,
+            workflowAttention: { ...inbox.workflowAttention, serverId: 'home-b' },
             workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,
                 openApprovals: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
             automationAttentionItems: [{ key: 'automation:run/b', title: 'Nightly dependency check', run: createAutomationRunFixture({ id: 'run/b', state: 'dispatch_failed' }), route }] }, settings: {} });
-        expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ title: 'Publish release notes', destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa' });
+        expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ title: 'Publish release notes', destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa?serverId=home-b' });
         expect(brief.items.find((item) => item.destination.kind === 'automation')).toMatchObject({ title: 'Nightly dependency check', destination: { kind: 'automation', route }, route });
         expect(brief.items).toHaveLength(5);
     });

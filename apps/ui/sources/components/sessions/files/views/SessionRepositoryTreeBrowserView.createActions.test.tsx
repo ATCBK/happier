@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -37,16 +37,14 @@ vi.mock('@/components/ui/popover', async importOriginal => (await import('@/dev/
 vi.mock('@/hooks/ui/useWebFileDropZone', () => import('@/hooks/ui/useWebFileDropZone.web'));
 vi.mock('@/utils/files/webDroppedEntries', () => import('@/utils/files/webDroppedEntries.web'));
 
+// Load the real runtime graph during collection, after the web boundaries are installed.
+const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+const locks = installWebLockManagerMock();
+await prepareSessionFilesViewTestkit();
+afterAll(() => locks.restore());
+
 describe('SessionRepositoryTreeBrowserView (create actions)', () => {
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
-    let restoreLocks = () => {};
-    beforeAll(async () => {
-        // jsdom has no Web Locks; Home profile writes take a browser lock on web.
-        const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
-        restoreLocks = installWebLockManagerMock().restore;
-        await prepareSessionFilesViewTestkit();
-    });
-    afterAll(() => restoreLocks());
 
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});

@@ -15,6 +15,8 @@ import { ScmComparisonSourceProtocolSchema as canonicalScmComparisonSourceProtoc
 import { ScmHostingProviderKindProtocolSchema as canonicalScmHostingProviderKindProtocolSchema } from '@happier-dev/protocol/scm/pullRequests';
 import type { ScmComparison, ScmComparisonSource as CanonicalScmComparisonSource } from '@happier-dev/protocol/scm';
 import type { JsonValue, PluginContributionRef } from '../identity.js';
+import type { ScmComparisonSource } from './comparisonSource.js';
+export type { ScmComparisonSource } from './comparisonSource.js';
 import type { ProtocolComposableSchema } from '../protocol/protocolFacade.js';
 import { ScmHistoryEntriesInputV1Schema as canonicalHistoryInput, ScmHistoryEntriesResponseSchema as canonicalHistoryResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 export type { ScmEntryHistoryV1, ScmHistoryEntriesInputV1, ScmHistoryEntriesOutputV1, ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
@@ -29,18 +31,6 @@ export const ScmHistoryEntriesResponseSchema: {
 } = canonicalHistoryResponse;
 
 export type { ScmComparison } from '@happier-dev/protocol/scm';
-/** Declaration-neutral projection; the portable Protocol parser is the sole validator. */
-export type ScmComparisonSource =
-    | { kind: 'turnCheckpoint'; sessionId?: string; turnId?: string; checkpointReceiptId?: string;
-        evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' }
-    | { kind: 'session'; sessionId: string }
-    | { kind: 'workingTree' }
-    | { kind: 'branch'; head: string; base: string }
-    | { kind: 'commit'; commit: string; parent?: string }
-    | { kind: 'pullRequest'; locator: {
-        providerId: string; repository: string; number: number; baseOid?: string; headOid?: string;
-        sourceAction?: { action: PluginContributionRef; input?: JsonValue };
-    } };
 type AssertScmSourceProjection<T extends true> = T;
 type _ScmSourceProjectionMustMatchCanonical = AssertScmSourceProjection<
     [ScmComparisonSource] extends [CanonicalScmComparisonSource]

@@ -20,44 +20,63 @@ export function useSessionExchangeControl(address: SessionAddress, originInputLo
     const [error, setError] = React.useState<string | null>(null);
     const [pending, setPending] = React.useState<AutonomousExchangeControlRequestV1['control'] | null>(null);
     const pendingRef = React.useRef(false);
-    const request = React.useRef<AbortController | null>(null);
+    const refreshRef = React.useRef<() => Promise<void>>(() => Promise.resolve());
     const current = enabled && binding?.isCurrent() && observation?.accountId === binding.accountId
         && observation.address.serverId === address.serverId && observation.address.sessionId === address.sessionId
         && observation.originInputLocalId === originInputLocalId ? observation : null;
     const currentObservation = React.useRef(current);
     currentObservation.current = current;
 
-    const refresh = React.useCallback(async () => {
-        if (!enabled || !originInputLocalId || !binding?.isCurrent()) return;
-        request.current?.abort();
-        const controller = new AbortController();
-        request.current = controller;
-        setRefreshing(true);
-        const retirement = binding.onRetire(() => controller.abort());
-        let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
-        try {
-            account = await captureLazyActionAccountContext(address.serverId, controller.signal);
-            if (account.accountId !== binding.accountId || !binding.isCurrent()) return;
-            const status = await readSessionExchangeStatus(account, address.sessionId, originInputLocalId, controller.signal);
-            if (controller.signal.aborted || !binding.isCurrent()) return;
-            setObservation({ address: { serverId: address.serverId, sessionId: address.sessionId }, accountId: binding.accountId, originInputLocalId, status });
-            setError(null);
-        } catch (failure) {
-            if (!controller.signal.aborted && binding.isCurrent()) setError(failure instanceof Error ? failure.message : 'exchange_unavailable');
-        } finally {
-            retirement.dispose();
-            account?.dispose();
-            if (request.current === controller) { request.current = null; setRefreshing(false); }
-        }
-    }, [address.serverId, address.sessionId, binding, enabled, originInputLocalId]);
+    const refresh = React.useCallback(() => refreshRef.current(), []);
 
     React.useEffect(() => {
-        void refresh();
-        const unsubscribe = subscribeHomeAccountChange(event => {
-            if (areServerProfileIdentifiersEquivalent(event.serverId, address.serverId)) void refresh();
+        if (!enabled || !originInputLocalId || !binding?.isCurrent()) { setRefreshing(false); return; }
+        const controller = new AbortController();
+        const isCurrent = () => !controller.signal.aborted && binding.isCurrent();
+        let running: Promise<void> | null = null;
+        let dirty = false;
+        const retirement = binding.onRetire(() => {
+            controller.abort();
+            setObservation(null);
+            setRefreshing(false);
         });
-        return () => { request.current?.abort(); unsubscribe(); };
-    }, [address.serverId, refresh]);
+        const read = (): Promise<void> => {
+            if (!isCurrent()) return Promise.resolve();
+            if (running) { dirty = true; return running; }
+            setRefreshing(true);
+            running = (async () => {
+                try {
+                    do {
+                        dirty = false;
+                        let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
+                        try {
+                            account = await captureLazyActionAccountContext(address.serverId, controller.signal);
+                            if (account.accountId !== binding.accountId || !isCurrent()) return;
+                            const status = await readSessionExchangeStatus(account, address.sessionId, originInputLocalId, controller.signal);
+                            if (!isCurrent()) return;
+                            setObservation({ address: { serverId: address.serverId, sessionId: address.sessionId }, accountId: binding.accountId, originInputLocalId, status });
+                            setError(null);
+                        } catch (failure) {
+                            if (isCurrent()) setError(failure instanceof Error ? failure.message : 'exchange_unavailable');
+                        } finally { account?.dispose(); }
+                    } while (dirty && isCurrent());
+                } finally {
+                    running = null;
+                    if (isCurrent()) setRefreshing(false);
+                }
+            })();
+            return running;
+        };
+        refreshRef.current = read;
+        const unsubscribe = subscribeHomeAccountChange(event => {
+            if (!isCurrent() || !areServerProfileIdentifiersEquivalent(event.serverId, address.serverId)) return;
+            if (event.changeKinds && !event.changeKinds.some(kind => kind === 'session' || kind === 'share')) return;
+            if (event.entityIds && !event.entityIds.includes(address.sessionId)) return;
+            void read();
+        });
+        void read();
+        return () => { controller.abort(); retirement.dispose(); unsubscribe(); refreshRef.current = () => Promise.resolve(); };
+    }, [address.serverId, address.sessionId, binding, enabled, originInputLocalId]);
 
     const control = React.useCallback(async (kind: AutonomousExchangeControlRequestV1['control']): Promise<ActionExecuteResult> => {
         if (!current || !binding?.isCurrent() || pendingRef.current) return { ok: false, errorCode: 'exchange_unavailable', error: 'Exchange unavailable' };

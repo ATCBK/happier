@@ -20,6 +20,7 @@ function createBaseRuntimeParams(
     serviceLabel: undefined,
     transferRuntimeStatePublisher: null,
     spawnSession: vi.fn(),
+    spawnSessionForInternalResume: vi.fn(),
     stopSession: vi.fn(),
     awaitAgentSessionOpen: vi.fn(),
     isSessionAlreadyRunning: vi.fn(),

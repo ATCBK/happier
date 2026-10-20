@@ -5,15 +5,84 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { buildSessionFromListRenderable } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { getSessionStatus } from '@/utils/sessions/sessionUtils';
 
 import { resolveWorkStatusTone } from './resolveWorkStatusTone';
-import { readSessionWorkStalled, readSessionWorkStatusFacts, withOutstandingReports } from './sessionWorkStatusFacts';
+import { readSessionWorkStalled, readSessionWorkStatusFacts, sessionWorkStatusFactsFromStatus, withOutstandingReports } from './sessionWorkStatusFacts';
 
 const NOW = 1_000_000;
 
 describe('readSessionWorkStatusFacts', () => {
+    it('reads layout-1 stopped evidence from authorized owner metadata, leaving recipients offline', () => {
+        const metadata = { path: '/repo', host: 'devbox', lifecycleState: 'stopped', lifecycleStateSince: NOW };
+        const owner = createSessionOwnerMetadataV1({ metadata });
+        if (!owner.ok) throw new Error('Expected valid owner metadata');
+        const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+        const source = createSessionFixture({ metadataLayoutVersion: 1, active: false, presence: undefined,
+            metadata: parseDecryptedSessionMetadata(sharedMetadata, 1),
+            ownerMetadataView: parseDecryptedSessionMetadata(projectSessionOwnerCompatibilityViewV1({
+                sharedMetadata, ownerMetadata: owner.ownerMetadata,
+            })) });
+        const row = buildSessionListRenderableFromSession(source);
+        for (const session of [source, row, buildSessionFromListRenderable(row)]) {
+            expect(getSessionStatus(session, NOW).statusText).toBe('sessionWork.states.stopped');
+            expect(readSessionWorkStatusFacts(session, NOW).word).toBe('sessionWork.states.stopped');
+        }
+        // Recipient access cannot borrow an old owner-only view still held on the object.
+        const recipient = { ...source, access: createSessionAccessFixture('view'), accessLevel: 'view' as const };
+        for (const session of [recipient, buildSessionListRenderableFromSession(recipient)]) {
+            expect(readSessionWorkStatusFacts(session, NOW).word).toBe('status.offline');
+        }
+    });
+
+    it('presents a confirmed stopped process consistently through hydrated, list and preprojected status paths', () => {
+        const stopped = createSessionFixture({ active: false, activeAt: NOW - 3_600_000, presence: undefined,
+            metadata: { path: '/repo', host: 'devbox', lifecycleState: 'stopped', lifecycleStateSince: NOW - 1_000 } });
+        const row = buildSessionListRenderableFromSession(stopped);
+        for (const session of [stopped, row, buildSessionFromListRenderable(row)]) {
+            const facts = readSessionWorkStatusFacts(session, NOW);
+            expect(resolveWorkStatusTone({ kind: 'session', facts }))
+                .toEqual({ bucket: 'offline', tone: 'neutral', word: 'sessionWork.states.stopped' });
+            const status = getSessionStatus(session, NOW, { workingTextMode: 'static' });
+            expect(status).toMatchObject({ state: 'disconnected', isConnected: false, isPulsing: false,
+                statusText: 'sessionWork.states.stopped' });
+            expect(sessionWorkStatusFactsFromStatus(session, status).word).toBe(facts.word);
+        }
+
+        // Startup can publish running before presence reconnects; equal-version row projection
+        // must replace the old terminal word rather than retain a stale metadata reference.
+        const restarting = buildSessionListRenderableFromSession({ ...stopped,
+            metadata: { ...stopped.metadata!, lifecycleState: 'running' } }, row);
+        expect(readSessionWorkStatusFacts(restarting, NOW).word).toBe('status.offline');
+        const stoppedAgain = buildSessionListRenderableFromSession(stopped, restarting);
+        expect(readSessionWorkStatusFacts(stoppedAgain, NOW).word).toBe('sessionWork.states.stopped');
+
+        const running = { ...stopped, active: true, activeAt: NOW, presence: 'online' as const,
+            thinking: true, thinkingAt: NOW, latestTurnStatus: 'in_progress' as const,
+            metadata: { ...stopped.metadata!, lifecycleState: 'running', lifecycleStateSince: NOW } };
+        const resumedRow = buildSessionListRenderableFromSession(running, row);
+        expect(readSessionWorkStatusFacts(resumedRow, NOW).word).toBe('status.working');
+        expect(getSessionStatus(resumedRow, NOW, { workingTextMode: 'static' }).statusText).toBe('status.working');
+        // Presence and explicit resume still win if the prior stopped marker is briefly retained.
+        expect(readSessionWorkStatusFacts({ ...running, metadata: stopped.metadata }, NOW).word).toBe('status.working');
+        expect(readSessionWorkStatusFacts({ ...stopped, resumingAt: NOW }, NOW).word).toBe('session.resuming');
+    });
+
+    it.each([undefined, 'running', 'crashed', 'unknown', 'STOPPED', 'stopped '])(
+        'keeps disconnected lifecycle %s offline instead of inferring a process stop', (lifecycleState) => {
+            const source = createSessionFixture({ active: false, presence: undefined, activeAt: NOW - 3_600_000,
+                metadata: { path: '/repo', host: 'devbox', lifecycleState } });
+            const row = buildSessionListRenderableFromSession(source);
+            expect(readSessionWorkStatusFacts(row, NOW).word).toBe('status.offline');
+            expect(getSessionStatus(row, NOW).statusText).toMatch(/^status\.lastSeen\(/);
+        },
+    );
+
     it('keeps an HTTP-loaded inactive row offline before and after unchanged details hydrate', () => {
         const row = createSessionListRenderableSessionFixture({
             encryptionMode: 'e2ee', encryptedContentAvailability: undefined, metadata: null,
@@ -39,12 +108,33 @@ describe('readSessionWorkStatusFacts', () => {
         expect(status).toEqual({ bucket: 'idle', tone: 'neutral', word: 'status.unknownState' });
     });
 
-    it('says a detached Session is offline once, leaving when it was last seen to the row time', () => {
+    it('keeps observer loss offline, including an idle runtime after a cancelled turn', () => {
         // A hydrated row the Home marked inactive, with no device-observed presence.
         const detached = createSessionListRenderableSessionFixture({ active: false, presence: undefined, activeAt: NOW - 3_600_000 });
         const facts = readSessionWorkStatusFacts(detached, NOW);
         expect(facts.word).toBe('status.offline');
         expect(resolveWorkStatusTone({ kind: 'session', facts }).bucket).toBe('offline');
+
+        const lost = createSessionListRenderableSessionFixture({ active: false, activeAt: NOW, presence: 0,
+            latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: NOW });
+        expect(readSessionWorkStalled(lost, NOW)).toBe(true);
+        expect(readSessionWorkStatusFacts(lost, NOW).word).toBe('status.offline');
+
+        const cancelled = createSessionListRenderableSessionFixture({ active: true, activeAt: NOW, presence: 'online',
+            latestTurnStatus: 'cancelled', latestTurnStatusObservedAt: NOW - 1 });
+        expect(readSessionWorkStatusFacts(cancelled, NOW).awareness.runtime).toBe('idle');
+        expect(readSessionWorkStatusFacts({ ...cancelled, active: false, presence: undefined }, NOW + 3_600_000).word)
+            .toBe('status.offline');
+    });
+
+    it('does not turn an idle runtime heartbeat expiry into a confirmed stop', () => {
+        const idle = createSessionListRenderableSessionFixture({ active: true, activeAt: NOW, presence: 'online' });
+        expect(readSessionWorkStatusFacts(idle, NOW).awareness.runtime).toBe('idle');
+        // The Home expires the publisher heartbeat; it has not observed a process exit or cancellation.
+        const expired = { ...idle, active: false, presence: undefined };
+        const facts = readSessionWorkStatusFacts(expired, NOW + 3_600_000);
+        expect(facts.awareness.runtime).toBe('offline');
+        expect(facts.word).toBe('status.offline');
     });
 
     it('reads a list row the way the Session owner does: a pending permission needs you, a turn in flight is not settled', () => {

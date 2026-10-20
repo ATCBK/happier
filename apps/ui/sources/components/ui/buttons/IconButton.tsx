@@ -298,11 +298,32 @@ export function IconButton(props: Readonly<{
         onPressIn?.(event);
     }, [onPressIn]);
     const onHoverChange = React.useCallback((hovered: boolean) => {
-        if (!hovered) setPressedSinceHover(false);
+        if (!hovered) {
+            setPressedSinceHover(false);
+            setReasonRevealed(false);
+        }
     }, []);
     const tooltipQuiet = props.tooltipHidden === true || props.expanded === true || pressedSinceHover;
     const descriptionId = React.useId();
     const disabledReason = props.disabled === true ? props.disabledReason : undefined;
+    // A disabled button with a reason stays reachable. A pointer already gets the reason on hover and
+    // the keyboard on focus; a finger can only press, so a touch press shows it. Leaving or blurring
+    // the button puts it away again.
+    const [reasonRevealed, setReasonRevealed] = React.useState(false);
+    const revealReason = React.useCallback((event?: unknown) => {
+        const pointerType = (event as { nativeEvent?: { pointerType?: unknown } } | undefined)?.nativeEvent?.pointerType;
+        if (Platform.OS === 'web' && pointerType !== 'touch') return;
+        setReasonRevealed(true);
+    }, []);
+    React.useEffect(() => {
+        if (!disabledReason) setReasonRevealed(false);
+    }, [disabledReason]);
+    const onFocusChange = props.onFocusChange;
+    const handleFocusChange = React.useCallback((focused: boolean) => {
+        if (!focused) setReasonRevealed(false);
+        onFocusChange?.(focused);
+    }, [onFocusChange]);
+    const showReason = reasonRevealed && disabledReason !== undefined && props.tooltipHidden !== true;
 
     return (
         <HappierPressable
@@ -312,6 +333,7 @@ export function IconButton(props: Readonly<{
             accessibilityHint={props.disabled === true && props.disabledReason ? props.disabledReason : props.accessibilityHint}
             describedById={disabledReason ? descriptionId : undefined}
             disabled={props.disabled}
+            onDisabledPress={disabledReason ? revealReason : undefined}
             busy={props.busy}
             selected={props.selected}
             checked={props.checked}
@@ -326,7 +348,7 @@ export function IconButton(props: Readonly<{
             onPressIn={handlePressIn}
             onHoverChange={onHoverChange}
             onPressOut={props.onPressOut}
-            onFocusChange={props.onFocusChange}
+            onFocusChange={handleFocusChange}
             onContextMenu={props.onContextMenu}
             style={(state) => [
                 styles.pressFrame,
@@ -334,10 +356,10 @@ export function IconButton(props: Readonly<{
                 chrome(state).frame,
             ]}
             overlay={hasTooltip ? (state) => (
-                (state.hovered || state.focused) && !tooltipQuiet ? (Platform.OS === 'web' ? (
+                showReason || ((state.hovered || state.focused) && !tooltipQuiet) ? (Platform.OS === 'web' ? (
                     <>
                         <View ref={tooltipAnchorRef} style={{ pointerEvents: 'none', position: 'absolute', top: drawnOffsetTop, left: drawnOffsetLeft, width: size, height: size }} />
-                        <DeferredAnchoredTooltip activationKey={`${state.hovered}:${state.focused}`} anchorRef={tooltipAnchorRef} placement={props.tooltipPlacement} label={tooltipContent ?? props.accessibilityLabel} content={richTooltipContent} testID={props.testID ? `${props.testID}-tooltip` : undefined} />
+                        <DeferredAnchoredTooltip activationKey={`${state.hovered}:${state.focused}:${showReason}`} anchorRef={tooltipAnchorRef} placement={props.tooltipPlacement} label={tooltipContent ?? props.accessibilityLabel} content={richTooltipContent} testID={props.testID ? `${props.testID}-tooltip` : undefined} />
                     </>
                 ) : (
                     <View style={styles.tooltipWrap}>

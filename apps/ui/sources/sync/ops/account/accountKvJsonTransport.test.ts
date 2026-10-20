@@ -5,6 +5,7 @@ import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64S
 import { createAccountKvJsonTransport } from './accountKvJsonTransport';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
+import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
 import {
     createAccountScopedCryptoMaterialSnapshotV1,
     convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
@@ -48,9 +49,28 @@ describe('Account KV JSON transport', () => {
             .mockResolvedValueOnce(json({ success: true, results: [{ key, version: 5 }] }));
         const transport = createAccountKvJsonTransport({ key, credentials: account.credentials, request, shouldContinue: () => true });
         await expect(transport.read()).resolves.toEqual({ value: { tabs: ['remote'] }, version: 4 });
-        await expect(transport.compareAndSet({ tabs: ['local'] }, 4)).resolves.toEqual({ success: true, version: 5 });
+        await expect(transport.compareAndSet({ tabs: ['local', 'é🚀'], future: [null, false, 0, ''] }, 4)).resolves.toEqual({ success: true, version: 5 });
         const body = JSON.parse(String(request.mock.calls.at(-1)?.[1]?.body));
-        await expect(account.encryption.decryptRaw(body.mutations[0].value)).resolves.toEqual({ tabs: ['local'] });
+        await expect(account.encryption.decryptRaw(body.mutations[0].value)).resolves.toEqual({ tabs: ['local', 'é🚀'], future: [null, false, 0, ''] });
+    });
+
+    it('re-seals a pinned predecessor row once through the real Account JSON transport', async () => {
+        const account = await encryptedAccount();
+        const fixture = legacyAccountKvVectors[0];
+        let row = { key: fixture.key, value: fixture.encoded as string, version: 6 };
+        const request: ServerFetch = async (path, init) => {
+            if (path.endsWith('/currentness')) return json(account.currentness);
+            if (init?.method !== 'POST') return json(row);
+            const body = JSON.parse(String(init.body));
+            expect(body.mutations[0].version).toBe(row.version);
+            row = { ...row, value: body.mutations[0].value, version: row.version + 1 };
+            return json({ success: true, results: [{ key: row.key, version: row.version }] });
+        };
+        const transport = createAccountKvJsonTransport({ key: fixture.key, credentials: account.credentials, request, shouldContinue: () => true });
+        await expect(transport.read()).resolves.toEqual({ value: fixture.value, version: 7 });
+        const reader = await Encryption.createFromContentKeyPair({ machineKey: account.encryption.getContentPrivateKey(), publicKey: account.encryption.contentDataKey });
+        await expect(reader.decryptRaw(row.value)).resolves.toEqual(fixture.value);
+        await expect(transport.read()).resolves.toEqual({ value: fixture.value, version: 7 });
     });
 
     it('uses the explicitly captured E2EE Account cipher while another Home is mounted', async () => {

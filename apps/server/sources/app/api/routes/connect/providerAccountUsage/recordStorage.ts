@@ -77,7 +77,7 @@ function parseHistoryRecord(payload: unknown): StoredProviderAccountUsageRecord 
 export async function hasProviderAccountUsageHistory(params: Readonly<{ accountId: string; recordId: string }>, client: ProviderAccountUsageRecordClient): Promise<boolean> {
     const row = await client.providerAccountUsageRecord.findUnique({
         where: { accountId_recordId: params },
-        select: { history: { take: 1, select: { id: true } } },
+        select: { history: { orderBy: [{ observedAt: 'asc' }, { id: 'asc' }], take: 1, select: { id: true } } },
     });
     return (row?.history.length ?? 0) > 0;
 }

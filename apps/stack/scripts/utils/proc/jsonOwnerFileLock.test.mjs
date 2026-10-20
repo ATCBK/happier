@@ -52,6 +52,50 @@ test('owner creation and heartbeat never expose an incomplete owner record', asy
   await assert.rejects(readFile(lockPath), { code: 'ENOENT' });
 });
 
+test('stale reclaim preserves a fresh replacement even when restoration is interrupted', async t => {
+  for (const interrupted of [false, true]) await t.test(interrupted ? 'interrupted restoration' : 'complete restoration', async t => {
+    const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-reclaim-' });
+    const lockPath = fixture.path('owner.lock');
+    const staleRaw = JSON.stringify({ pid: 99999999, createdAtMs: 1, updatedAtMs: 1 });
+    const freshRaw = JSON.stringify({ pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() });
+    const rename = fs.renameSync;
+    const write = fs.writeFileSync;
+    const open = fs.openSync;
+    let reclaimPath;
+    await writeFile(lockPath, staleRaw);
+    // Replace the stale snapshot at the real rename boundary, as a competing
+    // reclaimer followed by a fresh holder can do between read and quarantine.
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      if (from === lockPath && String(to).includes('.reclaim-') && !reclaimPath) {
+        reclaimPath = to;
+        rename(lockPath, fixture.path('previous-owner'));
+        write(fixture.path('fresh-owner'), freshRaw);
+        fs.linkSync(fixture.path('fresh-owner'), lockPath);
+      }
+      return rename(from, to);
+    });
+    t.mock.method(fs, 'writeFileSync', (path, raw, options) => {
+      // An interruption after opening the public path must never be possible:
+      // the complete-record publisher writes privately before exclusive link.
+      if (interrupted && path === lockPath && raw === freshRaw) {
+        const fd = open(path, 'wx');
+        fs.closeSync(fd);
+        throw Object.assign(new Error('interrupted owner restoration'), { code: 'EIO' });
+      }
+      return write(path, raw, options);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    await assert.rejects(withJsonOwnerFileLock(() => assert.fail('fresh owner excludes contender'), {
+      lockPath, wait: false,
+    }), { code: 'EJSONOWNERFILELOCKBUSY' });
+    assert.ok(reclaimPath, 'the stale-read/fresh-replacement race was reached');
+    const snapshot = readJsonOwnerLockSnapshot(lockPath);
+    assert.equal(snapshot.raw, freshRaw, 'restoration never publishes an ownerless record');
+    await assert.rejects(readFile(reclaimPath), { code: 'ENOENT' });
+  });
+});
+
 test('queued-owner heartbeats and unrelated files do not rescan the waiter population', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-queue-noise-' });
   const lockPath = fixture.path('owner.lock');

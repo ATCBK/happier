@@ -43,6 +43,61 @@ vi.mock('@tiptap/react', async (importOriginal) => {
 });
 
 describe('rich markdown ready-panel boundary (web)', () => {
+    it('keeps the surface focus handle safe after its real editor is destroyed and focuses the replacement', async () => {
+        engine.ready = true;
+        engine.deferCreation = true;
+        // jsdom has no Range layout API; keep real ranges/selection while
+        // supplying only the browser geometry boundary used by focus scrolling.
+        const createRange = document.createRange.bind(document);
+        const rangeGeometry = vi.spyOn(document, 'createRange').mockImplementation(() => {
+            const range = createRange();
+            range.getClientRects = () => Object.assign([], { item: () => null });
+            range.getBoundingClientRect = () => new DOMRect();
+            return range;
+        });
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const editorRef: React.MutableRefObject<CodeEditorHandle | null> = { current: null };
+        const onChange = vi.fn();
+        const render = (resetKey: string) => <RichMarkdownEditorPanel
+            resetKey={resetKey} value="**Seed**" editorRef={editorRef} onChange={onChange} presentation="canvas"
+        />;
+        try {
+            await act(async () => root.render(render('first')));
+            await act(async () => { await vi.dynamicImportSettled(); });
+            const first = engine.current;
+            const handle = editorRef.current;
+            if (!first || !handle?.focus) throw new Error('The real editor focus handle was not published');
+            await act(async () => {
+                handle.focus!();
+                await vi.waitFor(() => expect(document.activeElement).toBe(first.view.dom));
+            });
+            await act(async () => {
+                // The real SDK nulls commandManager on destroy. The surface can
+                // still hold that instance until its replacement effect commits.
+                first.destroy();
+                expect(first.isDestroyed).toBe(true);
+                expect(() => handle.focus!()).not.toThrow();
+            });
+            await act(async () => root.render(render('replacement')));
+            const replacement = engine.current;
+            if (!replacement || replacement === first) throw new Error('The editor was not replaced');
+            expect(replacement.isDestroyed).toBe(false);
+            await act(async () => {
+                editorRef.current?.focus?.();
+                await vi.waitFor(() => expect(document.activeElement).toBe(replacement.view.dom));
+            });
+            expect(editorRef.current?.getValue()).toContain('**Seed**');
+            expect(onChange).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            engine.deferCreation = false;
+            rangeGeometry.mockRestore();
+        }
+    });
+
     it('mounts the footer before the editor exists and receives its first selection', async () => {
         engine.ready = true;
         engine.deferCreation = true;

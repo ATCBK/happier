@@ -313,6 +313,42 @@ describe('Discord Gateway receive-progress owner', () => {
     expect(permitted.snapshot().sessionStartLimit).toMatchObject({ remaining: 0, maxConcurrency: 2 });
   });
 
+  it('spends only the authoritative remaining starts when reset_after is zero', () => {
+    const session = createDiscordGatewaySession({
+      token: 'bot-token',
+      intents: 4_608,
+      sessionStartLimit: gatewayBotLimit({ remaining: 1, resetAfterMs: 0 }),
+      initialHeartbeatDelayMs: 0,
+    });
+    const hello = { op: 10, d: { heartbeat_interval: 45_000 } };
+
+    expect(session.onFrame(hello, NOW + 1)).toContainEqual({
+      kind: 'send',
+      payload: {
+        op: 2,
+        d: {
+          token: 'bot-token',
+          intents: 4_608,
+          properties: { os: 'happier', browser: 'happier', device: 'happier' },
+        },
+      },
+    });
+    expect(session.snapshot().sessionStartLimit.remaining).toBe(0);
+
+    // A reconnect carries the consumed snapshot; time cannot renew its budget.
+    const exhausted = createDiscordGatewaySession({
+      token: 'bot-token',
+      intents: 4_608,
+      sessionStartLimit: session.snapshot().sessionStartLimit,
+      initialHeartbeatDelayMs: 0,
+    });
+    expect(exhausted.onFrame(hello, NOW + 60_000)).toEqual([
+      { kind: 'scheduleHeartbeat', afterMs: 0 },
+      { kind: 'blocked', reason: 'identifyLimit', retryAtMs: NOW },
+    ]);
+    expect(exhausted.snapshot().sessionStartLimit.remaining).toBe(0);
+  });
+
   it('reconnects with the current Resume state after a missed heartbeat acknowledgement', () => {
     const session = createDiscordGatewaySession({
       token: 'bot-token',

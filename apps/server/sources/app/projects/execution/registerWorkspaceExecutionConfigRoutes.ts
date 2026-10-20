@@ -11,7 +11,7 @@ import {
 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { inTx } from '@/storage/inTx';
-import { listWorkspaceExecutionConfigRowsInTx, mutateWorkspaceExecutionConfigRowInTx, readWorkspaceExecutionConfigRowInTx } from './workspaceExecutionConfigRowService';
+import { listWorkspaceExecutionConfigRowsInTx, mutateWorkspaceExecutionConfigRow, readWorkspaceExecutionConfigRowInTx } from './workspaceExecutionConfigRowService';
 
 const failureResponses = {
     400: z.strictObject({ error: z.literal('invalid-params') }),
@@ -34,7 +34,7 @@ export function registerWorkspaceExecutionConfigRoutes(app: Fastify): void {
         preHandler: app.authenticate,
         schema: { body: asServerProtocolZod(WorkspaceExecutionConfigMutationRequestV1Schema), response: { 200: asServerProtocolZod(WorkspaceExecutionConfigMutationResponseV1Schema), ...failureResponses } },
     }, async (request, reply) => {
-        const result = await inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, { accountId: request.userId, ...request.body }));
+        const result = await mutateWorkspaceExecutionConfigRow({ accountId: request.userId, ...request.body });
         if (result.status === 'updated' || result.status === 'conflict') return reply.send(result);
         return reply.code(503).send(unavailable);
     });

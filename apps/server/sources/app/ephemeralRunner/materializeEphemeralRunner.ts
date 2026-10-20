@@ -18,11 +18,13 @@ import { z } from "zod/mini";
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { readSessionDraftInTx } from "@/app/account/sessionDrafts/sessionDraftService";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { acquireRunnerActivationLockInTx } from './activationLock';
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { validateMachineInstallationProof } from "@/app/machines/installationProof";
 import { createMachineWithInstallationIdentityInTx } from "@/app/machines/machineMutations";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { classifyLayout1SessionCreateThrow, createFreshBoundLayout1SessionInTx } from "@/app/session/create/createFreshBoundLayout1Session";
+import { prepareLayout1SessionCreatePublicationAdmission } from '@/app/session/create/sessionCreationPublicationAudience';
 import {
     prepareLayout1SessionCreate,
     type FreshBoundLayout1SessionCreateRejection,
@@ -127,7 +129,8 @@ export async function materializeEphemeralRunner(params: Readonly<{
     const bootstrap = storedRunnerBootstrap(request);
     try {
         return await inTx(async (tx): Promise<MaterializeEphemeralRunnerResult> => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId, "content");
+            await acquireRunnerActivationLockInTx(tx, request.activationId);
             const initial = await tx.ephemeralRunnerActivation.findFirst({
                 where: { id: request.activationId, creatorAccountId: params.creatorAccountId },
             });
@@ -340,6 +343,14 @@ export async function materializeEphemeralRunner(params: Readonly<{
             }
             return { status: "materialized", result: exactResult(row) };
         }, {
+            // Session creation may publish initial grants to other Accounts.
+            // Admit that complete audience before touching the activation row.
+            prepare: () => prepareLayout1SessionCreatePublicationAdmission({
+                accountId: params.creatorAccountId,
+                tag: request.session.tag,
+                initialAccess: request.session.initialAccess,
+                primaryTeamId: request.session.primaryTeamId,
+            }),
             // Materialization revalidates foreign Team/resource/broker facts outside the creator fence.
             isolationLevel: "Serializable",
         });

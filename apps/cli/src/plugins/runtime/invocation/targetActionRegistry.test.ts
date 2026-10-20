@@ -419,6 +419,7 @@ describe('target action invocation registry', () => {
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `parser-${surface}` };
                 },
+                update: async () => ({ ok: true }),
                 read: async () => stored ? { ...stored, status: 'approved',
                     decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
             });
@@ -471,6 +472,7 @@ describe('target action invocation registry', () => {
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `confidential-egress-${surface}` };
                 },
+                update: async () => ({ ok: true }),
                 read: async () => stored ? {
                     ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs },
                 } : null,
@@ -581,6 +583,7 @@ describe('target action invocation registry', () => {
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-rotation-${surface}` };
             },
+            update: async () => ({ ok: true }),
             read: async () => {
                 const request = requests.at(-1);
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
@@ -624,6 +627,7 @@ describe('target action invocation registry', () => {
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-release-${surface}` };
             },
+            update: async () => ({ ok: true }),
             read: async () => {
                 const request = requests.at(-1);
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;

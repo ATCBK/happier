@@ -35,8 +35,13 @@ import { useArtifactBody } from './useArtifactBody';
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
 import { ArtifactWidgetBody } from './ArtifactWidgetBody';
-import { ArtifactPassageSelection } from './ArtifactPassageSelection';
+import { ArtifactPassageSelection, type ArtifactPassageMargin } from './ArtifactPassageSelection';
+import { showArtifactPassageRefineSheet } from './ArtifactPassageRefineSheet';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useDocCollaboration, type DocCollaboration } from './useDocCollaboration';
+import { clearDocReturn, peekDocReturn, trackDocScroll } from './docThreadReturn';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import type { ScrollView, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
 function bodyMarkdown(artifact: DecryptedArtifact): string | null {
     const body = artifact.body;
@@ -70,7 +75,36 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     const { artifact } = props;
     const body = useArtifactBody(props.artifactId, artifact);
     const collaboration = useDocCollaboration(body.state === 'failed' || body.state === 'loading' ? null : (body.result?.artifact ?? artifact));
+    const scope = useActiveServerAccountScope();
+    const menuKey = collaboration && scope ? JSON.stringify([scope.serverId, scope.accountId, props.artifactId]) : null;
+    const [threadMenu, setThreadMenu] = React.useState<Readonly<{ key: string | null; open: boolean }>>({ key: null, open: false });
+    const onThreadMenuOpenChange = React.useCallback((open: boolean) => setThreadMenu({ key: menuKey, open }), [menuKey]);
+    const openThreadList = React.useCallback(() => onThreadMenuOpenChange(true), [onThreadMenuOpenChange]);
+    const threadMenuOpen = menuKey !== null && threadMenu.key === menuKey && threadMenu.open;
+    // Preserve the former conditional menu's unmount lifetime after lifting its
+    // single open state to the Doc owner; a later Doc must not inherit it.
+    React.useEffect(() => {
+        setThreadMenu(current => current.key === menuKey ? current : { key: menuKey, open: false });
+    }, [menuKey]);
+    const margin = React.useMemo(() => collaboration ? { ...collaboration.margin, onOpenThreadList: openThreadList } : undefined,
+        [collaboration?.margin, openThreadList]);
     const styles = stylesheet;
+    // Back from a passage's thread lands where the reader was (lab K1-Ap/Rp).
+    const scroller = React.useRef<ScrollView>(null);
+    const [restoreTo] = React.useState(() => peekDocReturn(props.artifactId));
+    const restored = React.useRef(restoreTo === null);
+    React.useEffect(() => clearDocReturn(props.artifactId), [props.artifactId]);
+    const onScroll = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        trackDocScroll(props.artifactId, event.nativeEvent.contentOffset.y);
+    }, [props.artifactId]);
+    const onContentSizeChange = React.useCallback((_width: number, height: number) => {
+        if (restored.current || restoreTo === null || height < restoreTo) return;
+        restored.current = true;
+        scroller.current?.scrollTo({ y: restoreTo, animated: false });
+    }, [restoreTo]);
+    // While a Doc has threads its page takes the wide column: the body keeps its reading measure on the
+    // left and the threads sit in a margin beside it (lab K1-A/R).
+    const withThreads = (collaboration?.threads.length ?? 0) > 0;
 
     if (artifact === null) {
         return (
@@ -105,7 +139,7 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     ) : body.state === 'loading' ? (
         <View style={styles.bodyPlaceholder} testID="artifact:bodyLoading" />
     ) : (
-        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} collaboration={collaboration} />
+        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} margin={margin} />
     );
 
     if (props.presentation === 'pane') {
@@ -113,7 +147,8 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
             <ItemList testID="artifact:pane">
                 <View style={styles.paneColumn}>
                     <ArtifactFacts artifact={artifact} collaboration={collaboration} />
-                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} collaboration={collaboration} />
+                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} collaboration={collaboration}
+                        threadMenuOpen={threadMenuOpen} onThreadMenuOpenChange={onThreadMenuOpenChange} />
                     <View style={styles.paneRule} />
                     {content}
                 </View>
@@ -121,11 +156,13 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
         );
     }
     return (
-        <ItemList testID="artifact:page">
+        <ItemList testID="artifact:page" ref={scroller} pageColumn={withThreads ? 'wide' : 'reading'}
+            onScroll={onScroll} scrollEventThrottle={64} onContentSizeChange={onContentSizeChange}>
             <ArtifactPageHeader artifact={artifact} collaboration={collaboration} />
             <ItemGroup surface="none">
                 {/* The title keeps the whole column; the artifact's operations sit under its facts, as in the pane. */}
-                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} collaboration={collaboration} />
+                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} collaboration={collaboration}
+                    threadMenuOpen={threadMenuOpen} onThreadMenuOpenChange={onThreadMenuOpenChange} />
                 <View style={styles.paneRule} />
                 {content}
             </ItemGroup>
@@ -133,7 +170,7 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     );
 }
 
-function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void; collaboration: DocCollaboration | null }>) {
+function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void; margin?: ArtifactPassageMargin }>) {
     if (isArtifactHtmlHeaderV1(props.artifact.rawHeader ?? props.artifact.header)) return <ArtifactHtmlBody
         artifactId={props.artifact.id} headerVersion={props.artifact.headerVersion} bodyVersion={props.artifact.bodyVersion}
         body={props.artifact.body} name={props.artifact.title || t('artifacts.untitled')} readPreview={sync.fetchArtifactHtmlPreview}
@@ -151,19 +188,45 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
     if (readArtifactCodeLanguage(props.artifact) || props.artifact.bodyVersion === undefined) return body;
     return <ArtifactPassageSelection artifactId={props.artifact.id} markdown={markdown}
         revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}
-        margin={props.collaboration?.margin}>{body}</ArtifactPassageSelection>;
+        margin={props.margin} onRequestNativeSelection={showArtifactPassageRefineSheet} />;
 }
 
 function readFacts(artifact: DecryptedArtifact, collaboration: DocCollaboration | null): readonly PageHeaderMetaFact[] {
     const kind = artifactKindFact(classifyArtifactBrowserKind(artifact) ?? 'document', readArtifactCodeLanguage(artifact));
     // A Doc names the edit that made this version (lab K1-R) instead of a bare edit age.
     const accepted = collaboration?.accepted ?? null;
+    const audience = collaboration?.audience ?? null;
+    // A Doc with collaboration leads with the version being read and ends with who it reaches (K1-R);
+    // a fact that is not known yet is left out rather than guessed.
+    const lead: PageHeaderMetaFact = collaboration && collaboration.version !== null
+        ? { key: 'version', text: t('artifacts.browser.facts.version', { n: collaboration.version }), icon: kind.icon }
+        : { key: 'kind', text: kind.label, icon: kind.icon };
     return [
-        { key: 'kind', text: kind.label, icon: kind.icon },
+        lead,
         accepted
             ? { key: 'accepted', text: t('artifacts.browser.facts.acceptedEdit', { who: accepted.label, age: formatRelativeTimeShort(accepted.atMs, Date.now()) }) }
             : { key: 'edited', text: t('artifacts.browser.facts.edited', { age: formatRelativeTimeShort(artifact.updatedAt, Date.now()) }) },
+        ...(audience === null ? [] : [audience.shared
+            ? { key: 'audience', icon: 'users' as const, text: audience.team
+                ? t('artifacts.browser.facts.sharedWithTeam', { team: audience.team })
+                : t('artifacts.browser.facts.shared') }
+            : { key: 'audience', icon: 'lock' as const, text: t('artifacts.browser.facts.onlyYou') }]),
     ];
+}
+
+/** Where it came from: a real source, or (outside a Doc's audience line) who saved it. */
+function ArtifactProvenanceChip(props: Readonly<{ artifact: DecryptedArtifact; collaboration: DocCollaboration | null }>) {
+    const provenance = readArtifactProvenance(props.artifact);
+    // A Doc's audience line already says whose it is and who has it; the fallback chip would repeat it.
+    if (provenance === null && props.collaboration) return null;
+    return (
+        <ArtifactProvenanceLabel
+            provenance={provenance}
+            fallback={props.artifact.access && props.artifact.access !== 'owner' ? t('artifacts.browser.provenance.sharedWithYou') : t('artifacts.browser.provenance.savedByYou')}
+            presentation="chip"
+            testID="artifact:provenance"
+        />
+    );
 }
 
 /** The pane's identity line: where it came from, then its kind and age (the pane band holds the title). */
@@ -172,12 +235,7 @@ function ArtifactFacts(props: Readonly<{ artifact: DecryptedArtifact; collaborat
     const facts = readFacts(props.artifact, props.collaboration);
     return (
         <View style={styles.facts}>
-            <ArtifactProvenanceLabel
-                provenance={readArtifactProvenance(props.artifact)}
-                fallback={props.artifact.access && props.artifact.access !== 'owner' ? t('artifacts.browser.provenance.sharedWithYou') : t('artifacts.browser.provenance.savedByYou')}
-                presentation="chip"
-                testID="artifact:provenance"
-            />
+            <ArtifactProvenanceChip artifact={props.artifact} collaboration={props.collaboration} />
             <Text style={styles.factLine}>{facts.map((fact) => fact.text).join(' · ')}</Text>
         </View>
     );
@@ -190,14 +248,9 @@ function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; colla
             title={props.artifact.title || t('artifacts.untitled')}
             alwaysShowTitle
             meta={readFacts(props.artifact, props.collaboration)}
-            details={(
+            details={readArtifactProvenance(props.artifact) === null && props.collaboration ? undefined : (
                 <View style={stylesheet.headerDetails}>
-                    <ArtifactProvenanceLabel
-                        provenance={readArtifactProvenance(props.artifact)}
-                        fallback={props.artifact.access && props.artifact.access !== 'owner' ? t('artifacts.browser.provenance.sharedWithYou') : t('artifacts.browser.provenance.savedByYou')}
-                        presentation="chip"
-                        testID="artifact:provenance"
-                    />
+                    <ArtifactProvenanceChip artifact={props.artifact} collaboration={props.collaboration} />
                 </View>
             )}
         />
@@ -205,7 +258,8 @@ function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; colla
 }
 
 /** Edit and History quiet, Share bordered, rare operations (Delete) behind ⋯ — in the pane and on the page. */
-function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void; collaboration: DocCollaboration | null }>) {
+function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void; collaboration: DocCollaboration | null;
+    threadMenuOpen: boolean; onThreadMenuOpenChange: (open: boolean) => void }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const styles = stylesheet;
@@ -228,22 +282,7 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
                     onPress={() => router.push(`/artifacts/edit/${encodeURIComponent(artifact.id)}` as never)}
                 />
             ) : null}
-            {props.collaboration ? (
-                <RoundButton
-                    testID="artifact:comments"
-                    size="small"
-                    display="inverted"
-                    // Unknown stays unknown (an em dash with its cause), never a zero.
-                    title={props.collaboration.openCommentCount === null ? '—' : String(props.collaboration.openCommentCount)}
-                    accessibilityLabel={props.collaboration.openCommentCount === null
-                        ? t('artifacts.browser.passage.countUnavailable')
-                        : t('artifacts.browser.passage.count', { count: props.collaboration.openCommentCount })}
-                    leading={<Icon name="chat-circle" size={14} color={theme.colors.text.secondary} />}
-                    textStyle={{ color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] }}
-                    disabled={props.collaboration.firstThreadId === null}
-                    onPress={props.collaboration.openFirstThread}
-                />
-            ) : null}
+            {props.collaboration ? <ArtifactThreadsMenu collaboration={props.collaboration} open={props.threadMenuOpen} onOpenChange={props.onThreadMenuOpenChange} /> : null}
             <RoundButton
                 testID="artifact:history"
                 size="small"
@@ -265,6 +304,64 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
             ) : null}
             {menu.length > 0 ? <PageHeaderMenu testID="artifact:more" actions={menu} /> : null}
         </View>
+    );
+}
+
+/**
+ * The comment count, and the Doc's threads behind it: each names its passage and who started it; a
+ * thread whose passage changed says so. Choosing one shows it beside its passage, or opens it.
+ */
+function ArtifactThreadsMenu(props: Readonly<{ collaboration: DocCollaboration; open: boolean; onOpenChange: (open: boolean) => void }>) {
+    const { theme } = useUnistyles();
+    const { collaboration, open, onOpenChange: setOpen } = props;
+    const items = React.useMemo(() => collaboration.threads.map((thread) => ({
+        id: thread.id,
+        testID: `artifact:comments.thread:${thread.id}`,
+        title: thread.quote,
+        subtitle: t('artifacts.browser.passage.threadDetail', { who: thread.author, n: thread.replies }),
+        ...(thread.changed ? { rightElement: (
+            <Text variant="meta" emphasis="medium" style={{ color: theme.colors.state.warning.textForeground }}>
+                {t('artifacts.browser.passage.changed')}
+            </Text>
+        ) } : {}),
+    })), [collaboration.threads, theme.colors.state.warning.textForeground]);
+    const count = collaboration.openCommentCount;
+    return (
+        <DropdownMenu
+            testID="artifact:comments.menu"
+            open={open}
+            onOpenChange={setOpen}
+            items={items}
+            allowEmptySelection
+            onSelect={(id) => {
+                setOpen(false);
+                collaboration.selectThread(id);
+            }}
+            placement="bottom"
+            // A body tap far down the Doc opens this list too: a phone shows it as a sheet, never anchored off-screen.
+            popoverPhonePresentation="sheet"
+            popoverAccessibilityLabel={t('artifacts.browser.passage.threadsTitle')}
+            popoverAnchorAlign="start"
+            matchTriggerWidth={false}
+            showCategoryTitles={false}
+            popoverPortalWebTarget="body"
+            trigger={({ toggle }) => (
+                <RoundButton
+                    testID="artifact:comments"
+                    size="small"
+                    display="inverted"
+                    // Unknown stays unknown (an em dash with its cause), never a zero.
+                    title={count === null ? '—' : String(count)}
+                    accessibilityLabel={count === null
+                        ? t('artifacts.browser.passage.countUnavailable')
+                        : t('artifacts.browser.passage.count', { count })}
+                    leading={<Icon name="chat-circle" size={14} color={theme.colors.text.secondary} />}
+                    textStyle={{ color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] }}
+                    disabled={items.length === 0}
+                    onPress={toggle}
+                />
+            )}
+        />
     );
 }
 

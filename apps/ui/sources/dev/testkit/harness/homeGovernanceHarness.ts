@@ -1,5 +1,4 @@
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
-import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { vi } from 'vitest';
 import type { ActionSurfaceKey } from '@happier-dev/protocol/actions/actionSettings';
@@ -49,9 +48,13 @@ export function answerDiscussionThreadForTests(homes: HomeGovernanceHarness, ser
     homes.answer(serverId, 'GET /v1/discussions', { select: (_input, request) => {
         if (loseFirstRejoin) { loseFirstRejoin = false; return { dispatchThenFail: true }; }
         const url = new URL(request.url);
+        const docArtifactId = url.searchParams.get('anchorDocArtifactId');
         return { body: { discussions: stored && url.searchParams.get('state') !== 'archived'
             && (!url.searchParams.get('creationLocalId') || url.searchParams.get('creationLocalId') === stored.discussion.creationLocalId)
-            ? [stored.discussion] : [], nextCursor: null } };
+            && (!docArtifactId || (stored.discussion.anchor?.kind === 'doc'
+                && stored.discussion.anchor.doc.ref.artifactId === docArtifactId))
+            ? [docArtifactId ? { ...stored.discussion, firstMessage: stored.firstMessage } : stored.discussion]
+            : [], nextCursor: null } };
     } });
     homes.answer(serverId, 'POST /v1/discussions', { select: input => {
         const request = DiscussionCreateRequestV1Schema.parse(input);
@@ -388,9 +391,8 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             record.answers.set(ACCOUNT_SETTINGS_V2_PATH, { body: { content: null, version: 0 } });
             record.answers.set('/health', { body: {} });
             record.answers.set('/v1/auth/ping', { body: {} });
-            // The real managed Socket transport probes this authenticated
-            // endpoint before constructing its external SDK connection.
-            record.answers.set('/v2/cursor', { body: CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }) });
+            // Artifact persistence also answers the Account cursor/change feed,
+            // including the managed Socket's authenticated cursor probe.
             if ((options.accountEncryptionMode ?? 'plain') === 'plain') {
                 record.answers.set('/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
             }

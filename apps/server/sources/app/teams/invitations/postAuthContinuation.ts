@@ -2,6 +2,8 @@ import { z } from "zod/mini";
 import { TeamInvitationPostAuthContinuationV1Schema, type TeamInvitationAcceptResultV1, type TeamInvitationPostAuthContinuationV1 } from '@happier-dev/protocol/teams/invitation';
 
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { acceptTeamInvitationAdmissionReferenceInTx } from "./accept";
@@ -40,6 +42,7 @@ export async function createTeamInvitationPostAuthContinuationInTx(
         expiresAt: Date;
     }>,
 ): Promise<TeamInvitationPostAuthContinuationV1> {
+    await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
     const storedValue = JSON.stringify(storedPostAuthContinuationSchema.parse({
         v: 1,
         kind: "team_invitation_post_auth",
@@ -81,6 +84,7 @@ export async function claimTeamInvitationPostAuthContinuationInTx(
         invitation: Readonly<{ teamId: string; invitationId: string; tokenHash: string }>;
     }>,
 ): Promise<ClaimedTeamInvitationPostAuthContinuation | null> {
+    await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
     const continuation = TeamInvitationPostAuthContinuationV1Schema.parse({
         v: 1,
         kind: "post_auth_invitation",
@@ -164,6 +168,7 @@ export async function acceptTeamInvitationPostAuthContinuationInTx(
         accountId: string;
     }>,
 ): Promise<TeamInvitationAcceptResultV1> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.continuation.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: input.continuation.teamId } });
     const row = await readTeamInvitationPostAuthContinuationInTx(tx, input);
     if (!row) return { outcome: "not_found" };
     const consumed = await tx.repeatKey.deleteMany({

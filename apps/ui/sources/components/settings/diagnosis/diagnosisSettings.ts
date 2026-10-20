@@ -8,6 +8,7 @@ export const DIAGNOSIS_SETTINGS = defineSettingsPage({
             titleKey: 'diagnosis.sections.overview',
             settings: {
                 activeServer: {},
+                debugMode: {},
             },
         },
         page: {

@@ -86,7 +86,7 @@
     "migrate:inline-mocks:verify": "tsx tools/migrations/verify-inline-mock-families.ts",
     "migrate:renderers": "tsx tools/migrations/rewrite-renderer-create-to-renderScreen.ts",
     "migrate:cleanup": "tsx tools/migrations/rewrite-standard-cleanup.ts",
-    "patch:enriched-markdown": "patch-package react-native-enriched-markdown --exclude '(^|/)package\\.json$|web/wasm/md4c\\.js$'",
+    "patch:enriched-markdown": "patch-package react-native-enriched-markdown --exclude '(^|/)package\\.json$|(^|/)\\.yarn-[^/]*$|web/wasm/md4c\\.js$'",
     "postinstall:real": "node ./tools/postinstall.mjs",
     "eas-build-pre-install": "node ../../packages/iroh-native/scripts/ensure-rust-toolchain.mjs",
     "eas-build-post-install": "yarn -s postinstall:real",
@@ -334,6 +334,8 @@
     "@happier-dev/plugins-codex": "0.0.0",
     "@happier-dev/plugins-elevenlabs": "0.0.0",
     "@happier-dev/plugins-google": "0.0.0",
+    "@happier-dev/plugins-jira": "0.0.0",
+    "@happier-dev/plugins-linear": "0.0.0",
     "@happier-dev/plugins-openai": "0.0.0",
     "@happier-dev/plugins-openai-compat": "0.0.0",
     "@happier-dev/plugins-xai": "0.0.0"

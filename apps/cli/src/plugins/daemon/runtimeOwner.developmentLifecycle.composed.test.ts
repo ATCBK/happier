@@ -308,7 +308,98 @@ it.each([false, true])('publishes new dynamic Resources with their Actions, reta
   }
 });
 
-it('does not persist installation authority for an unregistered development candidate that cannot be adopted', async () => {
+it('registers a direct development install and rejoins its exact review before publishing the approved source', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-direct-install-')));
+  const pluginId = 'acme.direct-development';
+  const entryPath = join(root, 'plugin.ts');
+  const runtime = createRuntime(root, pluginId);
+  const store = createPluginRegistryStateStore({ happyHomeDir: root });
+  try {
+    await writeFile(entryPath, [
+      `export const manifest = ${JSON.stringify(createPluginManifestV2Fixture({ id: pluginId, entrypoints: undefined,
+        contributes: { actions: [{ id: 'identity', title: 'Identity', scopes: ['global'], surfaces: ['cli'],
+          execution: { target: 'daemon' }, dangerLevel: 'safe' }] },
+      }))};`,
+      "export function activate(api) { api.actions.register('identity', () => ({ installed: true })); }",
+    ].join('\n'));
+    const lease = await runtime.reloadController.acquireRuntimeRegistry();
+    await lease.release();
+    const request = { kind: 'development' as const, sourceRootPath: entryPath };
+    const pending = await runtime.owner.changeService.requestPluginChange(request);
+    expect(pending.kind).toBe('reviewRequired');
+    if (pending.kind !== 'reviewRequired') throw new Error('Expected installation review');
+    await expect(runtime.owner.changeService.requestPluginChange(request)).resolves.toEqual(pending);
+    expect((await store.read()).plugins[pluginId]).toBeUndefined();
+    expect(runtime.reloadController.readCurrentPluginOccurrenceId?.(pluginId)).toBeNull();
+    const approved = await runtime.owner.changeService.decidePluginChange({
+      pendingChangeId: pending.pendingChangeId, decision: 'installAndTrust',
+    });
+    expect(approved, JSON.stringify(approved)).toMatchObject({ kind: 'committed', pluginId });
+    expect((await store.read()).plugins[pluginId]?.source).toMatchObject({ kind: 'path', locator: entryPath, devWatch: true });
+    expect((await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'status' })).status.plugins)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ pluginId, sourceRootPath: entryPath, phase: 'active' })]));
+    await expect(runtime.reloadController.getState().activeRegistry!.targetActionInvocations.invoke({
+      pluginId, localId: 'identity', input: {}, surface: 'cli',
+    })).resolves.toMatchObject({ status: 'executed', value: { installed: true } });
+  } finally {
+    await runtime.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('refuses a direct development install without registering its source during handoff', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-handoff-')));
+  const entryPath = join(root, 'plugin.ts');
+  const runtime = createRuntime(root, 'acme.handoff-development');
+  try {
+    await writeFile(entryPath, [
+      `export const manifest = ${JSON.stringify(createPluginManifestV2Fixture({ id: 'acme.handoff-development', entrypoints: undefined }))};`,
+      'export function activate() {}',
+    ].join('\n'));
+    const handoff = await runtime.owner.changeService.quiesceForHandoff();
+    try {
+      const refused = await runtime.owner.changeService.requestPluginChange({ kind: 'development', sourceRootPath: entryPath });
+      expect(refused, JSON.stringify(refused)).toMatchObject({ kind: 'unavailable', code: 'daemon_shutting_down' });
+      const status = await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'status' });
+      expect(status.status.roots).toEqual([]);
+      expect(status.status.plugins).toEqual([]);
+      expect((await runtime.owner.changeService.listPendingPluginChanges()).changes).toEqual([]);
+    } finally {
+      handoff.resume();
+    }
+  } finally {
+    await runtime.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('does not register a direct development source cancelled while its path is resolving', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-cancelled-')));
+  const entryPath = join(root, 'plugin.ts');
+  const runtime = createRuntime(root, 'acme.cancelled-development');
+  try {
+    await writeFile(entryPath, [
+      `export const manifest = ${JSON.stringify(createPluginManifestV2Fixture({ id: 'acme.cancelled-development', entrypoints: undefined }))};`,
+      'export function activate() {}',
+    ].join('\n'));
+    const controller = new AbortController();
+    const request = runtime.owner.changeService.requestPluginChange({ kind: 'development', sourceRootPath: entryPath }, {
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(request).resolves.toMatchObject({ kind: 'cancelled' });
+    const status = await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'status' });
+    expect(status.status.roots).toEqual([]);
+    expect(status.status.plugins).toEqual([]);
+    expect((await runtime.owner.changeService.listPendingPluginChanges()).changes).toEqual([]);
+  } finally {
+    await runtime.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(['unregistered', 'staleRevision', 'unregisteredAfterReview'] as const)(
+  'does not persist installation authority for a development candidate with %s custody', async (custody) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-unregistered-')));
   const pluginId = 'acme.unregistered-development';
   const entryPath = join(root, 'plugin.ts');
@@ -320,14 +411,40 @@ it('does not persist installation authority for an unregistered development cand
     ].join('\n'));
     const lease = await runtime.reloadController.acquireRuntimeRegistry();
     await lease.release();
-    const request = await runtime.owner.changeService.requestPluginChange({ kind: 'development', sourceRootPath: entryPath });
+    if (custody !== 'unregistered') {
+      await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'registerExplicit', rootPath: entryPath });
+      if (custody === 'staleRevision') {
+        const pending = (await runtime.owner.changeService.listPendingPluginChanges()).changes[0]!;
+        await runtime.owner.changeService.decidePluginChange({ pendingChangeId: pending.pendingChangeId, decision: 'cancel' });
+      }
+    }
+    const request = await runtime.owner.changeService.requestPluginChange({
+      kind: 'development', sourceRootPath: entryPath,
+      // Revision-bearing submissions are observations, never a grant to register a source.
+      ...(custody !== 'unregisteredAfterReview' ? { observedRevision: 0 } : {}),
+    });
     expect(request.kind).toBe('reviewRequired');
     if (request.kind !== 'reviewRequired') throw new Error('Expected installation review');
+    if (custody === 'unregisteredAfterReview') {
+      await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'unregisterExplicit', rootPath: entryPath });
+    }
     await expect(runtime.owner.changeService.decidePluginChange({
       pendingChangeId: request.pendingChangeId, decision: 'installAndTrust',
-    })).resolves.toMatchObject({ kind: 'failed' });
+    })).resolves.toMatchObject({ kind: 'failed', code: 'plugin_change_failed',
+      message: expect.stringContaining('superseded before preparation') });
     expect((await createPluginRegistryStateStore({ happyHomeDir: root }).read()).plugins[pluginId]).toBeUndefined();
     expect(runtime.reloadController.readCurrentPluginOccurrenceId?.(pluginId)).toBeNull();
+    if (custody === 'unregistered') {
+      // A settled failed observation cannot trap a later ordinary install in
+      // its revision-zero custody; the new install gets the registered review.
+      const retry = await runtime.owner.changeService.requestPluginChange({ kind: 'development', sourceRootPath: entryPath });
+      expect(retry.kind).toBe('reviewRequired');
+      if (retry.kind !== 'reviewRequired') throw new Error('Expected a fresh installation review');
+      expect(retry.pendingChangeId).not.toBe(request.pendingChangeId);
+      await expect(runtime.owner.changeService.decidePluginChange({
+        pendingChangeId: retry.pendingChangeId, decision: 'installAndTrust',
+      })).resolves.toMatchObject({ kind: 'committed', pluginId });
+    }
   } finally {
     await runtime.dispose();
     await rm(root, { recursive: true, force: true });

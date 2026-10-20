@@ -9,6 +9,7 @@ import {
     type PluginProjectedComposerAttachmentEntryV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import * as jsonSchemaValidation from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 
 import { buildStructuredInputMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
 import type { ComposerStructuredInputMention } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
@@ -133,14 +134,9 @@ describe('composer scope adapters', () => {
         })).toEqual({ pluginUnavailable: false, attachmentNeedsAttention: true });
     });
 
-    it('compiles one current attachment schema once across repeated snapshot projections, then recompiles once for a replacement catalog', async () => {
-        vi.resetModules();
-        const protocol = await import('@happier-dev/protocol/plugins/actions/json-schema-validation');
-        const compile = vi.spyOn(protocol, 'compilePluginJsonSchema');
-        const [{ composerAttachmentDraftToView: projectAttachment }, { normalizePluginUiProjection }] = await Promise.all([
-            import('./composerScopeAdapters'),
-            import('@/sync/domains/plugins/ui/projection'),
-        ]);
+    it('compiles one current attachment schema once across repeated snapshot projections, then recompiles once for a replacement catalog', () => {
+        const compile = vi.spyOn(jsonSchemaValidation, 'compilePluginJsonSchema');
+        const projectAttachment = composerAttachmentDraftToView;
         const draft: ComposerAttachmentDraftV1 = {
             v: 1,
             instanceId: 'issue-42',

@@ -32,14 +32,34 @@ export const en = {
         wokenBy: ({ count }: { count: number }) => (count === 1 ? 'Woken by an update' : `Woken by ${count} updates`),
         notFromYou: 'not a message from you',
     },
+    workerFollow: {
+        manager: 'Your worker',
+        follower: 'You follow it',
+        rule: 'Your rule',
+        queued: 'Queued',
+        nextTurn: 'Next turn',
+        woke: 'Woke it',
+        answered: 'Answered',
+        held: 'Held for you',
+        offline: 'Machine offline',
+        archived: 'Archived',
+        locked: 'Machine locked',
+        muted: 'Muted',
+        unavailable: 'Couldn’t deliver',
+        checkIn: 'Waits for your check-in',
+        exchangeStopped: 'Exchange stopped',
+    },
     title: 'Work',
     subtitle: {
         sessions: ({ count }: { count: number }) => (count === 1 ? '1 session' : `${count} sessions`),
         runs: ({ count }: { count: number }) => (count === 1 ? '1 run' : `${count} runs`),
         nothingStarted: 'Nothing started',
+        archived: ({ count }: { count: number }) => `${count} archived`,
     },
     states: {
         recent: 'Recent',
+        archived: 'Archived',
+        stopped: 'Stopped',
     },
     view: {
         a11y: 'Work view',
@@ -54,6 +74,7 @@ export const en = {
     },
     actions: {
         showInTranscript: 'Show in transcript',
+        unarchive: 'Unarchive',
     },
     putUnder: {
         title: "Put under…",

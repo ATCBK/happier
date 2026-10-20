@@ -52,7 +52,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     const { mutateConnectedAccountPurposeDefaultsInContext } = await import('@/sync/ops/connectedAccounts/connectedAccountPurposeDefaults');
                     await mutateConnectedAccountPurposeDefaultsInContext(account, mutate, signal);
                 },
-                admitResourcePurposeTarget: async input => {
+                admitPurposeTarget: async input => {
                     const [{ loadDaemonMergedProjectionCacheEntry }, { normalizePluginUiProjection, resolvePluginUiProjectionPlatform },
                         { readConnectedAccountDescriptorProjection }, { getMachineContributionRegistryProjectionRevision },
                         { isConnectedAccountPurposeSetupTargetCurrent }, { getActiveServerAccountScope }, { storage }] = await Promise.all([
@@ -66,7 +66,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     ]);
                     const target = { machineId: input.machineId, serverId: account.serverId };
                     const revision = getMachineContributionRegistryProjectionRevision(target);
-                    // A retained/offline presentation is not Resource declaration authority.
+                    // A retained/offline presentation is not consumer declaration authority.
                     const entry = await loadDaemonMergedProjectionCacheEntry({ ...target,
                         accountLifetime: account.accountLifetime, reuseFreshReady: false, signal });
                     assertCurrent();

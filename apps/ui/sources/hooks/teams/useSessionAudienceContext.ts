@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol';
 
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { buildSessionContextFacts } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';

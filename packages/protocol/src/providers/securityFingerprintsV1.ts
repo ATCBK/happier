@@ -3,8 +3,8 @@ import {
   type EncryptedStringV1,
 } from '../crypto/settingsSecretStringSchemasV1.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposes.js';
-import {
-  type ConnectedAccountRequestAuthUseV1,
+import type {
+  ConnectedAccountRequestAuthUseV1,
 } from '../connect/connectedAccountRequestAuth.js';
 import {
   QualifiedConnectedAccountPurposeBindingsV1Schema,

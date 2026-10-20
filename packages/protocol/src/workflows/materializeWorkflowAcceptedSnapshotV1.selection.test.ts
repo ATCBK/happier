@@ -23,6 +23,27 @@ function materialize(overrides: Partial<MaterializeWorkflowAcceptedSnapshotV1Inp
 }
 
 describe('accepted Workflow selection bindings', () => {
+  it.each(['direct', 'engine_binding', 'child'] as const)('refuses unsupported Discussion delivery to a detached %s Agent before target effects', async topology => {
+    const detached = { ...definition, blocks: [{ ...definition.blocks[0], execution: {
+      executionTarget: { kind: 'detached_run' }, conversation: { kind: 'fresh' } } }] };
+    const authored = topology === 'child' ? { ...definition, blocks: [{ kind: 'workflow', id: 'nested',
+      workflowRef: 'plugin:external.workflow/detached', input: {} }] }
+      : topology === 'engine_binding' ? { ...definition, inputs: [{ name: 'engine', valueType: 'json', required: true }],
+        roles: [{ roleId: 'detached', name: 'Detached', instructions: 'Work', runsAs: { kind: 'background_run', intent: 'task' },
+          engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }], blocks: [{ ...definition.blocks[0],
+          execution: { engine: { kind: 'input', name: 'engine' }, conversation: { kind: 'fresh' } } }] } : detached;
+    let observedTargets = 0;
+    const effects = { resolveTargetAvailability: async () => { observedTargets += 1; return true; },
+      readWorkflowDefinition: async () => ({ definition: detached, sourceKey: 'plugin:external.workflow/detached' }) };
+    const inputs = topology === 'engine_binding' ? { engine: { role: 'detached' } } : {};
+    expect(await materialize({ definition: authored, context: { ...context, inputs }, effects })).toMatchObject({ ok: true });
+    observedTargets = 0;
+    const discussion = { discussion: { serverId: 'home', discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 };
+    expect(await materialize({ definition: authored, context: { ...context, inputs,
+      origin: { kind: 'direct', discussion }, resultDelivery: { kind: 'originating_discussion', ...discussion } }, effects }))
+      .toMatchObject({ ok: false, error: { code: 'target_unavailable', reason: 'selection_unavailable' } });
+    expect(observedTargets).toBe(0);
+  });
   it('freezes an input-selected existing participant on its own Home and Machine', async () => {
     const session = { serverId: 'home-b', sessionId: 'reviewer' };
     const participant = { kind: 'session', session };

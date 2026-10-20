@@ -19,6 +19,7 @@ import {
 import type { Tx } from "@/storage/inTx";
 import { applyTeamSessionAuthenticationContextEffectsInTx } from "../memberships/sessionAccessEffects";
 import { isExactGitHubIdentityInstallationBinding } from "./githubIdentityInstallationBinding";
+import { acquireTeamIdentityConnectionMutationAdmissionInTx } from "./teamIdentityAdministrationAuthority";
 
 export type TeamIdentityConnectionState =
     | "unavailable"
@@ -341,6 +342,9 @@ export async function createTeamIdentityConnectionInTx<TeamId extends string | n
     settings: unknown;
     createdByAccountId: string | null;
 }>): Promise<CreateTeamIdentityConnectionResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, {
+        ...input, actorAccountId: input.createdByAccountId ?? undefined,
+    });
     const provider = await readAvailableProviderInTx(tx, input);
     if (!provider) return { status: "provider_not_available" };
     const documents = parseTeamIdentityConnectionDocuments({
@@ -359,6 +363,7 @@ export async function createTeamIdentityConnectionInTx<TeamId extends string | n
     if (input.teamId === null || provider.kind === "workos_sso") {
         await tx.identityProviderInstance.update({ where: { id: provider.id }, data: { updatedAt: provider.updatedAt }, select: { id: true } });
     }
+    await recheckAdmission();
     if (documents.value.externalReference.kind === "workos_sso") {
         const conflicts = await findConflictingWorkosProviderIdsInTx(tx, {
             providerInstanceIds: [provider.id],
@@ -435,6 +440,7 @@ export async function updateTeamIdentityConnectionInTx<TeamId extends string | n
     externalReference?: unknown;
     settings?: unknown;
 }>): Promise<TeamIdentityConnectionMutationResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -455,6 +461,7 @@ export async function updateTeamIdentityConnectionInTx<TeamId extends string | n
 
     if (input.externalReference !== undefined && nextDocuments.value.externalReference.kind === "workos_sso") {
         await tx.identityProviderInstance.update({ where: { id: current.provider.id }, data: { updatedAt: current.provider.updatedAt }, select: { id: true } });
+        await recheckAdmission();
         const conflicts = await findConflictingWorkosProviderIdsInTx(tx, {
             providerInstanceIds: [current.provider.id],
             proposed: { id: input.id, providerInstanceId: current.provider.id, externalReference: nextDocuments.value.externalReference },
@@ -480,6 +487,7 @@ export async function updateTeamIdentityConnectionInTx<TeamId extends string | n
             settings: nextDocuments.value.settings,
         },
     });
+    await recheckAdmission();
     if (input.teamId !== null && updated.count > 0 && policyUse !== "not_in_use") {
         await applyTeamSessionAuthenticationContextEffectsInTx(tx, { teamIds: [input.teamId] });
     }
@@ -493,6 +501,7 @@ export async function setTeamIdentityConnectionEnabledInTx<TeamId extends string
     enabled: boolean;
     now?: Date;
 }>): Promise<TeamIdentityConnectionMutationResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -518,6 +527,7 @@ export async function setTeamIdentityConnectionEnabledInTx<TeamId extends string
                 : {}),
         },
     });
+    await recheckAdmission();
     if (input.teamId !== null && updated.count > 0 && policyUse !== "not_in_use") {
         await applyTeamSessionAuthenticationContextEffectsInTx(tx, { teamIds: [input.teamId] });
     }
@@ -537,6 +547,7 @@ export async function recordTeamIdentityConnectionTestInTx<TeamId extends string
     runtimeFingerprint: string;
     testedAt: Date;
 }>): Promise<TeamIdentityConnectionMutationResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -555,6 +566,7 @@ export async function recordTeamIdentityConnectionTestInTx<TeamId extends string
         where: { id: input.id, teamId: input.teamId, revision: input.expectedRevision },
         data: { lastObservation: nextObservation, lastSuccessfulTestAt: input.testedAt },
     });
+    await recheckAdmission();
     if (input.teamId !== null && updated.count > 0 && policyUse !== "not_in_use") {
         await applyTeamSessionAuthenticationContextEffectsInTx(tx, { teamIds: [input.teamId] });
     }
@@ -572,6 +584,7 @@ export async function recordTeamIdentityConnectionWorkosObservationInTx<TeamId e
         lastCheckedAt: Date;
     }> | null;
 }>): Promise<TeamIdentityConnectionMutationResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -597,6 +610,7 @@ export async function recordTeamIdentityConnectionWorkosObservationInTx<TeamId e
         where: { id: input.id, teamId: input.teamId, revision: input.expectedRevision },
         data: { lastObservation: nextObservation },
     });
+    await recheckAdmission();
     if (input.teamId !== null && updated.count > 0 && policyUse !== "not_in_use") {
         await applyTeamSessionAuthenticationContextEffectsInTx(tx, { teamIds: [input.teamId] });
     }
@@ -630,6 +644,7 @@ export async function deleteTeamIdentityConnectionInTx<TeamId extends string | n
     teamId: TeamId;
     expectedRevision: number;
 }>): Promise<DeleteTeamIdentityConnectionResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -649,6 +664,7 @@ export async function deleteTeamIdentityConnectionInTx<TeamId extends string | n
     const deleted = await tx.teamIdentityConnection.deleteMany({
         where: { id: input.id, teamId: input.teamId, revision: input.expectedRevision },
     });
+    await recheckAdmission();
     if (deleted.count === 1) return { status: "deleted" };
     const latest = await readCurrentInTx(tx, input);
     return latest
@@ -673,6 +689,7 @@ export async function removeTeamWorkosSsoConfigurationInTx<TeamId extends string
     organizationId: string | null;
     connectionId: string | null;
 }>): Promise<RemoveTeamWorkosSsoConfigurationResult<TeamId>> {
+    const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, { teamId: input.teamId, connectionId: input.id });
     const current = await readCurrentInTx(tx, input);
     if (!current) return { status: "not_found" };
     if (current.row.revision !== input.expectedRevision) {
@@ -720,6 +737,7 @@ export async function removeTeamWorkosSsoConfigurationInTx<TeamId extends string
             const latest = await readCurrentInTx(tx, input);
             return { status: "revision_conflict", connection: latest?.view ?? null };
         }
+        await recheckAdmission();
         await removeIdentitiesForProviderInTx(tx, current.provider.id);
         return { status: "removed", retainedCarrier: true };
     }
@@ -738,6 +756,7 @@ export async function removeTeamWorkosSsoConfigurationInTx<TeamId extends string
             ? { status: "revision_conflict", connection: latest.view }
             : { status: "not_found" };
     }
+    await recheckAdmission();
     await removeIdentitiesForProviderInTx(tx, current.provider.id);
     const providerDeletion = await deleteIdentityProviderInstanceInTx(tx, {
         id: current.provider.id,

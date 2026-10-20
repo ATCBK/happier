@@ -8,9 +8,9 @@ import {
 } from "@/app/session/metadata/sessionMetadataRecipientProjection";
 import { parsePersistedSessionOwnerMetadataEnvelopeV1 } from "@/app/session/metadata/sessionOwnerMetadataPersistence";
 import { readSessionOrganizationPlacementInTx } from "@/app/session/organization/organizationMutations";
-import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
-import { db, isPrismaErrorCode } from "@/storage/db";
-import { prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
+import { isPrismaErrorCode } from "@/storage/db";
+import { acquireLayout1SessionCreatePublicationAdmissionInTx, prepareLayout1SessionCreatePublicationAdmission } from "./sessionCreationPublicationAudience";
 
 import {
     ensureLayout1SessionCreateInvariantsInTx,
@@ -54,13 +54,12 @@ function isExistingSessionStorageCompatibleWithCreateRequest(params: Readonly<{
         || params.existingStorageState === "server_partial"
         || params.existingStorageState === "snapshot_complete";
 }
-
 async function resolveExistingLayout1SessionInTx(
     tx: Tx,
     prepared: PreparedLayout1SessionCreate,
     accountEncryptionMode: "e2ee" | "plain",
     authentication?: SessionAccessAuthentication,
-): Promise<Layout1SessionCreateOutcome | null> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome> | null> {
     const existing = await tx.session.findUnique({
         where: {
             accountId_tag: {
@@ -135,16 +134,17 @@ async function resolveExistingLayout1SessionInTx(
         });
         if (!bound.ok) throw new SessionCreationOriginError();
     }
-    return {
+    const organizationPlacement = await readSessionOrganizationPlacementInTx(tx, {
+        accountId: prepared.accountId,
+        sessionId: existing.id,
+    });
+    return transactionResult<Layout1SessionCreateOutcome>(() => ({
         kind: "rejoined",
         session: restored.session,
         ownerAccountMode: accountEncryptionMode,
-        organizationPlacement: await readSessionOrganizationPlacementInTx(tx, {
-            accountId: prepared.accountId,
-            sessionId: existing.id,
-        }),
-        publication: restored.publication,
-    };
+        organizationPlacement,
+        publication: restored.resolveResult().publication,
+    }));
 }
 
 /**
@@ -157,7 +157,8 @@ export async function createOrRejoinLayout1SessionByTagInTx(
     prepared: PreparedLayout1SessionCreate,
     authentication: SessionAccessAuthentication,
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
-): Promise<Layout1SessionCreateOutcome> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome>> {
+    await acquireLayout1SessionCreatePublicationAdmissionInTx(tx, prepared);
     // Both fresh creation and the released tag-rejoin mutation consume the
     // same already-verified invocation inside this transaction.
     await readSessionCreationApiTokenIdInTx(tx, prepared.accountId, sessionCreationAuthorization);
@@ -263,11 +264,12 @@ export async function rejoinLayout1SessionByTagInTx(
     prepared: PreparedLayout1SessionCreate,
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
     authentication?: SessionAccessAuthentication,
-): Promise<Layout1SessionCreateOutcome | null> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome> | null> {
+    await acquireLayout1SessionCreatePublicationAdmissionInTx(tx, prepared);
     // The unique-insert loser starts a fresh transaction: its original
     // invocation must still be current before restoring the winner's row.
     await readSessionCreationApiTokenIdInTx(tx, prepared.accountId, sessionCreationAuthorization);
-    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId);
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId, "content");
     const currentness = await readSessionCreatorCurrentness(tx, prepared.accountId);
     if (currentness?.status === "inactive") {
         return { kind: "rejected", rejection: { reason: "account-disabled" } };
@@ -309,7 +311,7 @@ export async function createOrRejoinLayout1SessionByTag(
         const outcome = fresh ?? await inTx(async (tx) => createOrRejoinLayout1SessionByTagInTx(tx, prepared, authentication, sessionCreationAuthorization), {
             isolationLevel,
             transactionClass: "session.create-or-rejoin",
-            prepare: () => prepareTagSessionCursorLocks(prepared),
+            prepare: () => prepareLayout1SessionCreatePublicationAdmission(prepared),
         });
         if (outcome.kind === "rejoined" && outcome.publication) {
             await publishSessionArchiveTransition(outcome.publication);
@@ -331,7 +333,7 @@ export async function createOrRejoinLayout1SessionByTag(
         const rejoined = await inTx(async (tx) => rejoinLayout1SessionByTagInTx(tx, prepared, sessionCreationAuthorization, authentication), {
             isolationLevel,
             transactionClass: "session.rejoin-after-create-race",
-            prepare: () => prepareTagSessionCursorLocks(prepared),
+            prepare: () => prepareLayout1SessionCreatePublicationAdmission(prepared),
         });
         if (rejoined === null) throw error;
         if (rejoined.kind === "rejoined" && rejoined.publication) {
@@ -339,24 +341,4 @@ export async function createOrRejoinLayout1SessionByTag(
         }
         return rejoined;
     }
-}
-
-/** Resolve tag identity before the snapshot; the incumbent owner fences its audience. */
-async function prepareTagSessionCursorLocks(prepared: PreparedLayout1SessionCreate): Promise<(tx: Tx) => Promise<void>> {
-    const where = { accountId_tag: { accountId: prepared.accountId, tag: prepared.tag } };
-    const existing = await db.session.findUnique({ where, select: { id: true } });
-    const fence = await prepareSessionAccountCursorLocks([
-        ...(existing ? [existing.id] : []),
-        ...(prepared.manager ? [prepared.manager.sessionId] : []),
-        ...(prepared.originSessionId ? [prepared.originSessionId] : []),
-    ], [prepared.accountId]);
-    return async tx => {
-        await fence(tx);
-        // A concurrent creator can publish a new tag between discovery and the
-        // Account fence. Refresh preparation before rejoining its full audience.
-        const current = await tx.session.findUnique({ where, select: { id: true } });
-        if ((current?.id ?? null) !== (existing?.id ?? null)) {
-            throw new TransactionReplayRequiredError("session-account-audience-changed");
-        }
-    };
 }

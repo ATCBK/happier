@@ -8,7 +8,7 @@ import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/p
 import { ManagedExecutableRefSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
 import { AgentSessionTeamProviderBindingV1Schema } from '@happier-dev/protocol/providers/sessions/agentSessionProviderBindingV1';
 import { SessionEnvOverlayV1Schema } from '@happier-dev/protocol/spawn/envOverlay';
-import { SessionInputAdmissionResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputEnqueueResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { SessionPendingExecutionRunEnqueueByMachineRequestV2Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { ProviderBrokerConsumerV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
@@ -348,7 +348,7 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
         z.strictObject({
           kind: z.literal('session.input.admission'),
           status: z.literal('resolved'),
-          admission: SessionInputAdmissionResultV1Schema,
+          admission: SessionInputEnqueueResultV1Schema,
         }),
         z.strictObject({
           kind: z.literal('model_transition'),

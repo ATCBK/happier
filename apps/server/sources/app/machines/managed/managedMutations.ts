@@ -20,6 +20,7 @@ import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { applyMachineReplacement } from "@/app/machines/applyMachineReplacement";
 import { assertManagedWakeOriginCurrentInTx } from './managedWake';
+import { doesManagedNativeObservationSettleIntent } from './managedNativeObservation';
 import {
     ManagedMachineError, requireCurrentManagedMachineInTx, resolveManagedDeclarationInTx,
     projectManagedMachine, invalidateManagedMachineInTx, sameManagedInput,
@@ -343,11 +344,8 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 data.nativeOperationRef = getActivePrismaRuntime().DbNull;
             }
         }
-        const observedSettlement = pending.intent !== 'rebuild' && currentObservation && (pending.intent === 'delete'
-            ? currentObservation.availability === 'absent'
-            : currentObservation.availability === 'present' && currentObservation.power === (
-                pending.intent === 'stop' ? 'stopped' : pending.intent === 'suspend' ? 'suspended'
-                    : pending.intent === 'start' || pending.intent === 'resume' ? 'running' : undefined));
+        const observedSettlement = doesManagedNativeObservationSettleIntent(pending.intent, currentObservation,
+            previousObservation.success ? previousObservation.data : undefined);
         if (canonical.result.kind !== "refused" && !observedSettlement) {
             // Retire transfers cleanup to the user; an unresolved native
             // effect retains its fact without reclaiming that responsibility.

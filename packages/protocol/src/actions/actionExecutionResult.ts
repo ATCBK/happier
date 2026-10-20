@@ -1,6 +1,38 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
+import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+
+/** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
+export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  kind: z.enum(['connected_account', 'team_resource']),
+  label: z.nullable(z.string().check(z.minLength(1))),
+  owner: z.nullable(z.union([
+    z.strictObject({ kind: z.literal('account'), accountId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)) }),
+  ])),
+  service: asProtocolZod(PluginContributionIdentityV1Schema),
+  why: z.strictObject({
+    kind: z.literal('purpose_binding'),
+    purpose: QualifiedConnectedAccountPurposeV1Schema,
+    target: z.enum(['account', 'group', 'listed_account']),
+  }),
+  currentness: z.strictObject({
+    kind: z.literal('current_at_materialization'),
+    resourceRevision: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }),
+}).check(z.superRefine((value, ctx) => {
+  if (value.owner && (value.kind === 'team_resource') !== (value.owner.kind === 'team')) {
+    ctx.addIssue({ code: 'custom', path: ['owner'], message: 'Owner must describe the admitted credential kind' });
+  }
+  if (value.kind !== 'team_resource' && value.currentness.resourceRevision !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['currentness'], message: 'Resource revision requires a Team resource' });
+  }
+})));
+export type ActionOperationCredentialUseV1 = z.infer<typeof ActionOperationCredentialUseV1Schema>;
 
 /** A policy-deferred Action has not failed or executed; the present user owns the next step. */
 export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.strictObject({
@@ -38,9 +70,12 @@ export const ActionExecuteFailureSchema = lazyZodSchema(() => z.strictObject({
 
 export type ActionExecuteFailure = Readonly<z.infer<typeof ActionExecuteFailureSchema>>;
 
-export type ActionExecuteResult =
+export type ActionExecuteResult = Readonly<{
+  /** Host-only settlement annotation; public failure envelopes remain unchanged. Never Action input. */
+  operationCredentialUses?: readonly ActionOperationCredentialUseV1[];
+}> & (
   | Readonly<{ ok: true; result: unknown }>
-  | ActionExecuteFailure;
+  | ActionExecuteFailure);
 
 /** Failure of confirmation is not proof that an admitted effect did not happen. */
 export const UNEXPECTED_ACTION_FAILURE_CODES_V1 = ['action_not_admitted', 'action_outcome_unknown'] as const;
@@ -61,10 +96,12 @@ export function projectUnexpectedActionFailureV1(admissionCommitted: boolean | n
 export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<{
   errorClass: string;
   errorCode: string | null;
+  httpStatus: number | null;
   stackFrames: readonly Readonly<{ file: string; line: number; column: number }>[];
 }> {
   let errorClass = 'UnknownThrownValue';
   let errorCode: string | null = null;
+  let httpStatus: number | null = null;
   const stackFrames: Array<{ file: string; line: number; column: number }> = [];
   try {
     errorClass = error instanceof TypeError ? 'TypeError' : error instanceof RangeError ? 'RangeError'
@@ -72,17 +109,28 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
     if (error && typeof error === 'object') {
       const name = 'name' in error ? error.name : undefined;
       if (typeof name === 'string' && ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
-        'AxiosError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
+        'AxiosError', 'HttpStatusError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
         'PrismaClientValidationError', 'PrismaClientInitializationError', 'TransactionConflictExhaustedError',
-        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError'].includes(name)) errorClass = name;
+        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError',
+        'JsonRpcApplicationError'].includes(name)) errorClass = name;
       const code = 'code' in error ? error.code : undefined;
-      // Only platform/database code vocabularies; arbitrary exception fields may be private content.
+      // Only known platform/database/Session codes; arbitrary fields may be private content.
       if (typeof code === 'string' && (/^P\d{4}$/u.test(code) || [
         'EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'EIO', 'ENOSPC', 'EMFILE', 'ENFILE', 'EBUSY', 'EINVAL',
         'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN',
         'SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_IOERR', 'SQLITE_FULL', 'SQLITE_CONSTRAINT', 'SQLITE_ERROR',
         'SQLITE_CANTOPEN', 'SQLITE_CORRUPT',
+        'session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required',
       ].includes(code))) errorCode = code;
+      // JSON-RPC reserves these protocol/server codes. Preserve only that
+      // bounded vocabulary, never native application data or message text.
+      if (name === 'JsonRpcApplicationError' && typeof code === 'number' && Number.isInteger(code)
+        && ([-32700, -32600, -32601, -32602, -32603].includes(code)
+          || (code >= -32099 && code <= -32000))) errorCode = String(code);
+      const response = 'response' in error ? error.response : undefined;
+      const status = response && typeof response === 'object' && 'status' in response ? response.status
+        : 'status' in error ? error.status : undefined;
+      if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) httpStatus = status;
       const stack = 'stack' in error ? error.stack : undefined;
       const message = 'message' in error ? error.message : undefined;
       // V8 renders the entire (possibly multiline) message before its frames.
@@ -98,7 +146,7 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
       }
     }
   } catch { /* Hostile Error accessors cannot replace the original failure. */ }
-  return { errorClass, errorCode, stackFrames };
+  return { errorClass, errorCode, httpStatus, stackFrames };
 }
 
 

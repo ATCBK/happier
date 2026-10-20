@@ -47,8 +47,7 @@ function resolveLegendWebContentStyle(style: ViewStyle): React.CSSProperties | u
 }
 
 /**
- * Legend List backend — the long-term default the abstraction is migrating
- * toward and now the `auto` default on every platform.
+ * Legend List backend — the one list runtime on every platform.
  * `clearMeasurementCache` maps to Legend's `clearCaches`; Legend's imperative
  * scroll methods are async (`Promise<void>`), surfaced as-is through the ref.
  */

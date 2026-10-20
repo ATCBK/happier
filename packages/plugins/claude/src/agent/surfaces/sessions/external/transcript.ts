@@ -191,6 +191,8 @@ function selectClaudeExternalBranchLine(value: unknown, parentUuid: string | nul
 export async function readClaudeExternalTranscriptBranch(params: Readonly<{
     filePath: string;
     maxBytes: number;
+    /** Only retain ancestry decisions for this forward page; newer rows still choose its branch. */
+    range?: Readonly<{ startOffsetBytes: number; endOffsetBytes: number }>;
     signal?: AbortSignal;
     fileSystem?: JsonlScannerFileSystem;
     checkWork?: () => void;
@@ -199,6 +201,7 @@ export async function readClaudeExternalTranscriptBranch(params: Readonly<{
     let parentUuid: string | null | undefined;
     let endOffsetBytes = await readClaudeJsonlFileSize(params.filePath, params.signal);
     let partial = false;
+    let reachedStart = false;
     while (true) {
         throwIfAborted(params.signal);
         // The source byte bound also bounds the number of nonempty JSONL rows.
@@ -210,15 +213,19 @@ export async function readClaudeExternalTranscriptBranch(params: Readonly<{
         for (let index = page.items.length - 1; index >= 0; index -= 1) {
             params.checkWork?.();
             const line = page.items[index]!;
+            if (params.range && line.startOffsetBytes < params.range.startOffsetBytes) break;
             const selected = selectClaudeExternalBranchLine(line.value, parentUuid);
             parentUuid = selected.parentUuid;
-            if (selected.selected) offsets.add(line.startOffsetBytes);
+            if (selected.selected && (!params.range || line.startOffsetBytes < params.range.endOffsetBytes)) {
+                offsets.add(line.startOffsetBytes);
+            }
         }
-        if (page.reachedStart) break;
+        if (page.reachedStart) { reachedStart = true; break; }
+        if (params.range && page.nextEndOffsetBytes <= params.range.startOffsetBytes) break;
         if (page.nextEndOffsetBytes >= endOffsetBytes) { partial = true; break; }
         endOffsetBytes = page.nextEndOffsetBytes;
     }
-    return { offsets: parentUuid === undefined ? null : offsets, partial: partial || typeof parentUuid === 'string' };
+    return { offsets: parentUuid === undefined ? null : offsets, partial: partial || (reachedStart && typeof parentUuid === 'string') };
 }
 
 const ClaudeContentSearchRowSchema = z.strictObject({
@@ -1207,8 +1214,13 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
         };
     }
 
-    const branch = params.projection === 'terminal' ? { offsets: null, partial: false }
-        : await readClaudeExternalTranscriptBranch({ filePath: resolved.filePath, maxBytes: params.maxBytes, signal: params.signal });
+    // The forward read and cursor validation already establish an unchanged or
+    // incomplete tail. It needs no historical branch walk. For new records,
+    // walk from the current leaf only as far as this page and retain no prefix
+    // decisions: already acknowledged ancestors cannot change its selection.
+    const branch = params.projection === 'terminal' || read.items.length === 0 ? { offsets: null, partial: false }
+        : await readClaudeExternalTranscriptBranch({ filePath: resolved.filePath, maxBytes: params.maxBytes, signal: params.signal,
+            range: { startOffsetBytes: read.items[0]!.startOffsetBytes, endOffsetBytes: read.nextOffsetBytes } });
     if (params.resultBudget || params.projection === 'terminal') {
         // The budget is measured against the cursor this page would actually
         // return, so the probe carries the file's real generation rather than a

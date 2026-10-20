@@ -23,7 +23,7 @@ import {
   mcpSignInGrantView,
 } from '@/components/settings/mcpServers/signIn/mcpSignInGrantView';
 import { useMcpSignInGrantDiagnostics } from '@/components/settings/mcpServers/signIn/useMcpSignInGrantDiagnostics';
-import { mcpServerStatus } from '@/components/settings/mcpServers/status/mcpServerStatus';
+import { mcpServerAttentionStatus } from '@/components/settings/mcpServers/status/mcpServerStatus';
 import { useMcpServersSettings } from '@/components/settings/mcpServers/useMcpServersSettings';
 import {
   SKILLS_FOUND_ROUTE,
@@ -36,7 +36,7 @@ import {
 } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -76,6 +76,8 @@ export type CapabilityScopeData = Readonly<{
   machines: readonly ScopeMachine[];
   /** Covered machines that cannot be reached right now, by name. */
   offlineNames: readonly string[];
+  /** The name of a covered machine that cannot be reached now (its checkout banner may already say so): the lists wait for it. */
+  unreachableMachineName: string | null;
   names: WhereItsOnNames;
   skills: ScopeListData;
   mcp: ScopeListData;
@@ -199,6 +201,11 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     [announcedMachineId, coveredMachines, names],
   );
 
+  const unreachableMachineName = React.useMemo(() => {
+    const offline = coveredMachines.find((machine) => machine.offline === true);
+    return offline ? names.machineName(offline.machineId) : null;
+  }, [coveredMachines, names]);
+
   const open = React.useCallback(
     (href: string) => {
       const result = runGuardedNavigation(() => router.push(href as never));
@@ -283,33 +290,19 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     const catalog = settings.servers.map((server): ScopeRowData => {
       const rules = bindingsOf(server.id);
       const openServer = () => open(mcpServerRoute(server.id));
-      const status = needsPerson(
-        pickMostBlockingCapabilityStatus(
-          mcpServerStatus({
-            entry: server,
-            signIn: mcpSignInFact(
-              mcpSignInGrantView(
-                server,
-                findMcpSignInGrant(grants, server.id),
-                anyOnline,
-                diagnostics[server.id],
-              ),
-            ),
-            tests: {},
-            machines: [],
-            savedSecretCatalog,
-            fixes: {
-              signIn: openServer,
-              reconnect: openServer,
-              grantAccess: openServer,
-              addKey: openServer,
-              howToFix: openServer,
-              tryAgain: openServer,
-            },
-          }),
-          'row',
+      const status = mcpServerAttentionStatus({
+        entry: server,
+        signIn: mcpSignInFact(
+          mcpSignInGrantView(
+            server,
+            findMcpSignInGrant(grants, server.id),
+            anyOnline,
+            diagnostics[server.id],
+          ),
         ),
-      );
+        savedSecretCatalog,
+        open: openServer,
+      });
       return {
         id: server.id,
         kind: 'mcp_server',
@@ -350,7 +343,7 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
   ]);
   const orderedMcp = useStableScopeOrder(placeKey, mcpRows);
 
-  const [migrationSeenAt, setMigrationSeenAt] = useLocalSettingMutable(
+  const migrationSeenAt = useLocalSetting(
     'projectSkillsMigrationNoteSeenAt',
   );
   const migratedNames = React.useMemo(() => {
@@ -362,8 +355,8 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     ].map((row) => row.name);
   }, [mcpRows, migrationSeenAt, place, skillRows]);
   const dismiss = React.useCallback(
-    () => setMigrationSeenAt(Date.now()),
-    [setMigrationSeenAt],
+    () => getStorage().getState().applyLocalSettings({ projectSkillsMigrationNoteSeenAt: Date.now() }, { source: 'ui' }),
+    [],
   );
 
   const skills = React.useMemo<ScopeListData>(
@@ -406,13 +399,14 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     () => ({
       machines,
       offlineNames,
+      unreachableMachineName,
       names,
       skills,
       mcp,
       migrated: { names: migratedNames, dismiss },
       open,
     }),
-    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills],
+    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills, unreachableMachineName],
   );
 }
 

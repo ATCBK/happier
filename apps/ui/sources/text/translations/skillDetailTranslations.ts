@@ -38,7 +38,6 @@ export type SkillDetailTranslation = Readonly<{
     lintMissingName: string;
     lintMissingDescription: string;
     lintNoFrontmatter: string;
-    readOnly: string;
     readOnlyPlugin: string;
   }>;
   files: Readonly<{
@@ -65,7 +64,6 @@ export type SkillDetailTranslation = Readonly<{
     descriptionAuto: string;
     descriptionPinned: string;
     descriptionOwn: string;
-    descriptionFirstParty: string;
     writtenByYou: string;
     writtenByYouBody: string;
     uploadedByYou: string;
@@ -167,7 +165,6 @@ const en: SkillDetailTranslation = {
     lintMissingName: 'Add a name to the frontmatter',
     lintMissingDescription: 'Add a description, so agents know when to use it',
     lintNoFrontmatter: 'Start with a frontmatter block: name and description',
-    readOnly: 'Ships with Happier and follows its version.',
     readOnlyPlugin: 'Ships with its plugin and follows its version.',
   },
   files: {
@@ -196,7 +193,6 @@ const en: SkillDetailTranslation = {
     descriptionPinned:
       'Pinned to a version. Changes from the source wait until you unpin.',
     descriptionOwn: 'Yours to change. Nothing updates it but you.',
-    descriptionFirstParty: 'It updates with Happier.',
     writtenByYou: 'Written by you',
     writtenByYouBody: 'Edit it here; every machine gets the change.',
     uploadedByYou: 'Uploaded by you',
@@ -302,7 +298,6 @@ const ca: SkillDetailTranslation = {
     lintMissingDescription:
       'Afegeix una descripció perquè els agents sàpiguen quan fer-la servir',
     lintNoFrontmatter: 'Comença amb un bloc frontmatter: nom i descripció',
-    readOnly: 'Ve amb Happier i en segueix la versió.',
     readOnlyPlugin: 'Ve amb el seu connector i en segueix la versió.',
   },
   files: {
@@ -331,7 +326,6 @@ const ca: SkillDetailTranslation = {
     descriptionPinned:
       'Fixada a una versió. Els canvis de l’origen esperen fins que la desfixis.',
     descriptionOwn: 'És teva. Només tu la canvies.',
-    descriptionFirstParty: 'S’actualitza amb Happier.',
     writtenByYou: 'Escrita per tu',
     writtenByYouBody: 'Edita-la aquí; totes les màquines reben el canvi.',
     uploadedByYou: 'Pujada per tu',
@@ -440,7 +434,6 @@ const de: SkillDetailTranslation = {
     lintMissingDescription:
       'Füge eine Beschreibung hinzu, damit Agenten wissen, wann sie ihn nutzen',
     lintNoFrontmatter: 'Beginne mit einem Frontmatter-Block: Name und Beschreibung',
-    readOnly: 'Wird mit Happier geliefert und folgt dessen Version.',
     readOnlyPlugin: 'Wird mit seinem Plugin geliefert und folgt dessen Version.',
   },
   files: {
@@ -470,7 +463,6 @@ const de: SkillDetailTranslation = {
     descriptionPinned:
       'An eine Version angeheftet. Änderungen aus der Quelle warten, bis du ihn löst.',
     descriptionOwn: 'Gehört dir. Nur du änderst ihn.',
-    descriptionFirstParty: 'Wird mit Happier aktualisiert.',
     writtenByYou: 'Von dir geschrieben',
     writtenByYouBody: 'Bearbeite ihn hier; jede Maschine bekommt die Änderung.',
     uploadedByYou: 'Von dir hochgeladen',
@@ -580,7 +572,6 @@ const es: SkillDetailTranslation = {
     lintMissingDescription:
       'Añade una descripción para que los agentes sepan cuándo usarla',
     lintNoFrontmatter: 'Empieza con un bloque frontmatter: nombre y descripción',
-    readOnly: 'Viene con Happier y sigue su versión.',
     readOnlyPlugin: 'Viene con su plugin y sigue su versión.',
   },
   files: {
@@ -609,7 +600,6 @@ const es: SkillDetailTranslation = {
     descriptionPinned:
       'Fijada a una versión. Los cambios del origen esperan hasta que la desfijes.',
     descriptionOwn: 'Es tuya. Solo tú la cambias.',
-    descriptionFirstParty: 'Se actualiza con Happier.',
     writtenByYou: 'Escrita por ti',
     writtenByYouBody: 'Edítala aquí; todas las máquinas reciben el cambio.',
     uploadedByYou: 'Subida por ti',
@@ -718,7 +708,6 @@ const fr: SkillDetailTranslation = {
     lintMissingDescription:
       'Ajoutez une description pour que les agents sachent quand l’utiliser',
     lintNoFrontmatter: 'Commencez par un bloc frontmatter : nom et description',
-    readOnly: 'Fourni avec Happier, il suit sa version.',
     readOnlyPlugin: 'Fourni avec son plugin, il suit sa version.',
   },
   files: {
@@ -748,7 +737,6 @@ const fr: SkillDetailTranslation = {
     descriptionPinned:
       'Épinglé sur une version. Les changements de la source attendent que vous le désépingliez.',
     descriptionOwn: 'À vous de le modifier. Rien ne le met à jour que vous.',
-    descriptionFirstParty: 'Il se met à jour avec Happier.',
     writtenByYou: 'Écrit par vous',
     writtenByYouBody: 'Modifiez-le ici ; chaque machine reçoit le changement.',
     uploadedByYou: 'Importé par vous',
@@ -857,7 +845,6 @@ const it: SkillDetailTranslation = {
     lintMissingDescription:
       'Aggiungi una descrizione, così gli agenti sanno quando usarla',
     lintNoFrontmatter: 'Inizia con un blocco frontmatter: nome e descrizione',
-    readOnly: 'Inclusa in Happier, ne segue la versione.',
     readOnlyPlugin: 'Inclusa nel suo plugin, ne segue la versione.',
   },
   files: {
@@ -886,7 +873,6 @@ const it: SkillDetailTranslation = {
     descriptionPinned:
       'Bloccata su una versione. Le modifiche dalla fonte aspettano finché non la sblocchi.',
     descriptionOwn: 'È tua. Solo tu la modifichi.',
-    descriptionFirstParty: 'Si aggiorna con Happier.',
     writtenByYou: 'Scritta da te',
     writtenByYouBody: 'Modificala qui; ogni macchina riceve la modifica.',
     uploadedByYou: 'Caricata da te',
@@ -995,7 +981,6 @@ const ja: SkillDetailTranslation = {
     lintMissingDescription:
       'エージェントが使うタイミングを判断できるよう、説明を追加してください',
     lintNoFrontmatter: 'frontmatter ブロックで始めてください：名前と説明',
-    readOnly: 'Happier に付属し、そのバージョンに従います。',
     readOnlyPlugin: 'プラグインに付属し、そのバージョンに従います。',
   },
   files: {
@@ -1024,7 +1009,6 @@ const ja: SkillDetailTranslation = {
     descriptionPinned:
       'バージョンを固定中です。固定を外すまで、ソースからの変更は待機します。',
     descriptionOwn: 'あなたのスキルです。あなた以外は更新しません。',
-    descriptionFirstParty: 'Happier と一緒に更新されます。',
     writtenByYou: 'あなたが作成',
     writtenByYouBody: 'ここで編集すると、すべてのマシンに反映されます。',
     uploadedByYou: 'あなたがアップロード',
@@ -1132,7 +1116,6 @@ const pl: SkillDetailTranslation = {
     lintMissingDescription:
       'Dodaj opis, żeby agenci wiedzieli, kiedy jej użyć',
     lintNoFrontmatter: 'Zacznij od bloku frontmatter: nazwa i opis',
-    readOnly: 'Jest częścią Happier i podąża za jego wersją.',
     readOnlyPlugin: 'Jest częścią swojej wtyczki i podąża za jej wersją.',
   },
   files: {
@@ -1160,7 +1143,6 @@ const pl: SkillDetailTranslation = {
     descriptionPinned:
       'Przypięta do wersji. Zmiany ze źródła czekają, aż ją odepniesz.',
     descriptionOwn: 'Jest twoja. Nic jej nie zmienia poza tobą.',
-    descriptionFirstParty: 'Aktualizuje się razem z Happier.',
     writtenByYou: 'Napisana przez ciebie',
     writtenByYouBody: 'Edytuj ją tutaj; każda maszyna dostanie zmianę.',
     uploadedByYou: 'Przesłana przez ciebie',
@@ -1268,7 +1250,6 @@ const pt: SkillDetailTranslation = {
     lintMissingDescription:
       'Adicione uma descrição, para os agentes saberem quando a usar',
     lintNoFrontmatter: 'Comece com um bloco frontmatter: nome e descrição',
-    readOnly: 'Vem com o Happier e acompanha a sua versão.',
     readOnlyPlugin: 'Vem com o seu plug-in e acompanha a sua versão.',
   },
   files: {
@@ -1298,7 +1279,6 @@ const pt: SkillDetailTranslation = {
     descriptionPinned:
       'Fixada numa versão. As alterações da origem aguardam até a desafixar.',
     descriptionOwn: 'É sua. Só você a altera.',
-    descriptionFirstParty: 'Atualiza-se com o Happier.',
     writtenByYou: 'Escrita por si',
     writtenByYouBody: 'Edite-a aqui; todas as máquinas recebem a alteração.',
     uploadedByYou: 'Carregada por si',
@@ -1407,7 +1387,6 @@ const ru: SkillDetailTranslation = {
     lintMissingDescription:
       'Добавьте описание, чтобы агенты знали, когда его использовать',
     lintNoFrontmatter: 'Начните с блока frontmatter: имя и описание',
-    readOnly: 'Входит в Happier и следует его версии.',
     readOnlyPlugin: 'Входит в свой плагин и следует его версии.',
   },
   files: {
@@ -1435,7 +1414,6 @@ const ru: SkillDetailTranslation = {
     descriptionPinned:
       'Закреплён на версии. Изменения из источника ждут, пока вы не открепите.',
     descriptionOwn: 'Он ваш. Обновляете его только вы.',
-    descriptionFirstParty: 'Обновляется вместе с Happier.',
     writtenByYou: 'Написан вами',
     writtenByYouBody: 'Правьте его здесь — каждая машина получит изменение.',
     uploadedByYou: 'Загружен вами',
@@ -1541,7 +1519,6 @@ const zhHans: SkillDetailTranslation = {
     lintMissingName: '在 frontmatter 中添加名称',
     lintMissingDescription: '添加描述，让智能体知道何时使用',
     lintNoFrontmatter: '以 frontmatter 块开头：名称和描述',
-    readOnly: '随 Happier 提供，并跟随其版本。',
     readOnlyPlugin: '随其插件提供，并跟随插件版本。',
   },
   files: {
@@ -1568,7 +1545,6 @@ const zhHans: SkillDetailTranslation = {
     descriptionAuto: '来源的更改会自动到达，除非你改过它。',
     descriptionPinned: '已固定到某个版本。来源的更改会等到你取消固定。',
     descriptionOwn: '由你自己更改。除了你，没有谁会更新它。',
-    descriptionFirstParty: '随 Happier 更新。',
     writtenByYou: '由你编写',
     writtenByYouBody: '在这里编辑；每台机器都会收到更改。',
     uploadedByYou: '由你上传',
@@ -1669,7 +1645,6 @@ const zhHant: SkillDetailTranslation = {
     lintMissingName: '在 frontmatter 中新增名稱',
     lintMissingDescription: '新增說明，讓代理知道何時使用',
     lintNoFrontmatter: '以 frontmatter 區塊開頭：名稱和說明',
-    readOnly: '隨 Happier 提供，並跟隨其版本。',
     readOnlyPlugin: '隨其外掛提供，並跟隨外掛版本。',
   },
   files: {
@@ -1696,7 +1671,6 @@ const zhHant: SkillDetailTranslation = {
     descriptionAuto: '來源的變更會自動送達，除非你改過它。',
     descriptionPinned: '已固定在某個版本。來源的變更會等到你取消固定。',
     descriptionOwn: '由你自己變更。除了你，沒有誰會更新它。',
-    descriptionFirstParty: '隨 Happier 更新。',
     writtenByYou: '由你撰寫',
     writtenByYouBody: '在這裡編輯；每台機器都會收到變更。',
     uploadedByYou: '由你上傳',

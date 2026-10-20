@@ -7,12 +7,12 @@ import type { SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoic
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { resetDesktopActivityOverlayPosition } from '@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge';
 import {
     BUILT_IN_PET_IDS,
     resolveBuiltInPetPackage,
 } from '@/components/pets/builtIns/builtInPetRegistry';
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
+import { usePetSelectionAction } from '@/components/pets/source/usePetSelectionAction';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { t } from '@/text';
 import { storage, useLocalSettings, useSettingsSelector } from '@/sync/domains/state/storage';
@@ -27,6 +27,8 @@ import { normalizeLocalPetSourceMetadata } from '@/sync/domains/pets/normalizeLo
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { PETS_SETTINGS } from '@/components/settings/pets/petsSettings';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -95,6 +97,8 @@ export function PetsSettingsScreen() {
     const localPetSourcesBySourceKey = storage((state) => state.localPetSourcesBySourceKey);
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const writeSetting = useSettingActionWriter();
+    const selectPet = usePetSelectionAction();
     const companionEnabled = useFeatureEnabled('pets.companion');
     const syncEnabled = useFeatureEnabled('pets.sync');
     const [desktopOverlayVisibilityModeOpen, setDesktopOverlayVisibilityModeOpen] = React.useState(false);
@@ -301,12 +305,12 @@ export function PetsSettingsScreen() {
                 serverId: target.serverId,
                 machineId: target.machine.id,
             }));
-            applyLocalSettings({
-                petsSelectedPetOverride: {
+            await selectPet({
+                deviceOverride: {
                     kind: 'happierManagedLocal',
                     sourceKey: importedPet.sourceKey,
                 },
-            });
+            }, { signal: request.signal });
         } catch {
             if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             setLocalImportDiagnosticTargetKey(targetKey);
@@ -314,7 +318,7 @@ export function PetsSettingsScreen() {
         } finally {
             finishRequest('localImport', request);
         }
-    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, beginRequest, finishRequest, isExecutionTargetCurrent]);
+    }, [administrationTargetSelection.resolveExecutionTarget, selectPet, beginRequest, finishRequest, isExecutionTargetCurrent]);
 
     const importAccountPet = React.useCallback(async (candidate: PetImportCandidate) => {
         if (!syncEnabled) return;
@@ -341,36 +345,32 @@ export function PetsSettingsScreen() {
             const pet = parsed.account.pet;
             storage.getState().upsertAccountPet(pet);
             setImportedAccountPets((pets) => upsertByKey(pets, pet, (entry) => entry.accountPetId));
-            applySettings({
-                petsSelectedPetRef: { kind: 'accountPet', accountPetId: pet.accountPetId },
-            });
-            if (localSettings.petsSelectedPetOverride.kind !== 'inherit') {
-                applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
-            }
+            await selectPet({ petRef: { kind: 'accountPet', accountPetId: pet.accountPetId } }, { signal: request.signal });
         } catch {
             if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
         } finally {
             finishRequest('accountImport', request);
         }
-    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, applySettings, beginRequest, finishRequest, isExecutionTargetCurrent, localSettings.petsSelectedPetOverride.kind, syncEnabled]);
+    }, [administrationTargetSelection.resolveExecutionTarget, selectPet, beginRequest, finishRequest, isExecutionTargetCurrent, syncEnabled]);
 
     const removeLocalPet = React.useCallback(async (pet: LocalDevicePetRow) => {
         const requestKey = `remove:${pet.sourceKey}`;
         if (requestsRef.current.has(requestKey)) return;
         const request = beginRequest(requestKey);
 
-        // Device removal is local intent; the daemon cleanup below is best effort.
-        forgottenLocalPetSourceKeysRef.current.add(pet.sourceKey);
-        storage.getState().removeLocalPetSource(pet.sourceKey);
-        setImportedLocalPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
-        setDiscoveredPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
-        if (
-            localSettings.petsSelectedPetOverride.kind === 'happierManagedLocal'
-            && localSettings.petsSelectedPetOverride.sourceKey === pet.sourceKey
-        ) {
-            applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
-        }
         try {
+            if (
+                localSettings.petsSelectedPetOverride.kind === 'happierManagedLocal'
+                && localSettings.petsSelectedPetOverride.sourceKey === pet.sourceKey
+            ) {
+                const selected = await selectPet({ deviceOverride: { kind: 'inherit' } }, { signal: request.signal });
+                if (!selected.ok) return;
+            }
+            // Device removal is local intent; the daemon cleanup below is best effort.
+            forgottenLocalPetSourceKeysRef.current.add(pet.sourceKey);
+            storage.getState().removeLocalPetSource(pet.sourceKey);
+            setImportedLocalPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
+            setDiscoveredPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
             // The persisted local-source record owns cleanup routing. Administration
             // selection only authorizes new discovery/import work, never relocation.
             const payload: DaemonPetForgetLocalPackageRequestV1 = { sourceKey: pet.sourceKey };
@@ -387,38 +387,26 @@ export function PetsSettingsScreen() {
         } finally {
             finishRequest(requestKey, request);
         }
-    }, [applyLocalSettings, beginRequest, finishRequest, localSettings.petsSelectedPetOverride]);
+    }, [selectPet, beginRequest, finishRequest, localSettings.petsSelectedPetOverride]);
 
     const handleSelectBuiltInPet = React.useCallback((petId: string) => {
-        applySettings({ petsSelectedPetRef: { kind: 'builtIn', petId } });
-        if (localSettings.petsSelectedPetOverride.kind !== 'inherit') {
-            applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
-        }
-    }, [applyLocalSettings, applySettings, localSettings.petsSelectedPetOverride.kind]);
+        fireAndForget(selectPet({ petRef: { kind: 'builtIn', petId } }), { tag: 'PetsSettingsScreen.selectBuiltInPet' });
+    }, [selectPet]);
 
     const handleSelectAccountPet = React.useCallback((accountPetId: string) => {
-        applySettings({
-            petsSelectedPetRef: {
+        fireAndForget(selectPet({
+            petRef: {
                 kind: 'accountPet',
                 accountPetId,
             },
-        });
-        if (localSettings.petsSelectedPetOverride.kind !== 'inherit') {
-            applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
-        }
-    }, [applyLocalSettings, applySettings, localSettings.petsSelectedPetOverride.kind]);
+        }), { tag: 'PetsSettingsScreen.selectAccountPet' });
+    }, [selectPet]);
 
     const handleResetDesktopOverlayPosition = React.useCallback(() => {
-        applyLocalSettings({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        fireAndForget(resetDesktopActivityOverlayPosition(), {
+        fireAndForget(writeSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored'), {
             tag: 'PetsSettingsScreen.resetDesktopActivityOverlayPosition',
         });
-    }, [applyLocalSettings]);
+    }, [writeSetting]);
 
     const selectedBuiltInPetId =
         localSettings.petsSelectedPetOverride.kind === 'inherit'
@@ -427,7 +415,7 @@ export function PetsSettingsScreen() {
             : null;
 
     const { detectedPetTileRows, localSelectorRows } = usePetSourceActionRows({
-        applyLocalSettings,
+        selectPet,
         detectedPetRows,
         importAccountPet,
         importLocalPet,

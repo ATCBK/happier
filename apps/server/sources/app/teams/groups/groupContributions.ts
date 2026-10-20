@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import {
     withTeamSessionAccessEffectsInTx,
     type TeamSessionAccessImpacts,
@@ -84,6 +85,8 @@ export async function applyTeamGroupContributionInTx(
         sessionAccessImpacts?: TeamSessionAccessImpacts;
     }>,
 ): Promise<TeamGroupContributionResult> {
+    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [], membershipIds: [input.teamMembershipId],
+        membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.teamGroupId] } });
     const key = { teamGroupId: input.teamGroupId, teamMembershipId: input.teamMembershipId };
     const existing = await readContributionStateInTx(tx, key);
     const member = await tx.teamMembership.findUnique({ where: { id: input.teamMembershipId }, select: { accountId: true } });

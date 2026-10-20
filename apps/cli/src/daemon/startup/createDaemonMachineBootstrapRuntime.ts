@@ -57,6 +57,7 @@ import { readInstallationIdentityIfExistsSync } from '../identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import type { prepareRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 /** The installed host's passive source Action composition; it never reads a remote OS path. */
@@ -199,6 +200,7 @@ export function createDaemonMachineBootstrapRuntime(
       attachApiMachine: (connectedApiMachine: NonNullable<MachineSyncRuntime['apiMachine']>) => Promise<void>;
     }> | null;
     spawnSession: BootstrapRuntime['spawnSession'];
+    spawnSessionForInternalResume: BootstrapRuntime['spawnSessionForInternalResume'];
     onActivationRejected?: BootstrapRuntime['onActivationRejected'];
     stopSession: BootstrapRuntime['stopSession'];
     sessionRunnerStatus?: BootstrapRuntime['sessionRunnerStatus'];
@@ -246,6 +248,7 @@ export function createDaemonMachineBootstrapRuntime(
     localServiceSummary?: Pick<LocalServicesDaemonRuntime, 'getSummary' | 'subscribeSummary' | 'refreshInventoryNow'>;
     machineResourceSummary?: MachineResourceSummary;
     resolveManagedPurposeBindingIntent?: BootstrapRuntime['resolveManagedPurposeBindingIntent'];
+    resolveManagedPurposeBindingIntentSelection?: BootstrapRuntime['resolveManagedPurposeBindingIntentSelection'];
     mcpServers?: BootstrapRuntime['mcpServers'];
     openTeamDirect?: BootstrapRuntime['openTeamDirect'];
     prepareRunTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
@@ -621,9 +624,9 @@ export function createDaemonMachineBootstrapRuntime(
                   || stamp.machineId !== runtimeMachineId || stamp.installationId !== automationInstallationId
                   || !await isCurrent()) return unavailable;
                 const { prepareRequesterSessionBootstrap } = await import('../sessionEncryption/requesterSessionCredentials');
-                requester ??= prepareRequesterSessionBootstrap({ credentials: params.credentials, attribution: requesterWorkAttributionV1,
+                requester ??= readRequesterHomeWithinActionLifetime(() => prepareRequesterSessionBootstrap({ credentials: params.credentials, attribution: requesterWorkAttributionV1,
                   boundary: { serverId: automationHomeId, serverHttpBaseUrl: machineSkillHomeUrl, happyHomeDir: configuration.happyHomeDir },
-                  verifyMachineAdmissionCurrent: isCurrent, ...(claim.signal ? { signal: claim.signal } : {}) });
+                  verifyMachineAdmissionCurrent: isCurrent, ...(claim.signal ? { signal: claim.signal } : {}) }), claim.signal);
                 const prepared = await requester;
                 if (!prepared || !await prepared.admitted.isCurrent()) return unavailable;
                 return await automationApiMachine.invokeLocalMachineAction(method, request, { ...options,
@@ -711,6 +714,7 @@ export function createDaemonMachineBootstrapRuntime(
       }
     },
     spawnSession: params.spawnSession,
+    spawnSessionForInternalResume: params.spawnSessionForInternalResume,
     ...(params.onActivationRejected ? { onActivationRejected: params.onActivationRejected } : {}),
     stopSession: params.stopSession,
     ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),
@@ -796,6 +800,9 @@ export function createDaemonMachineBootstrapRuntime(
           resolveManagedPurposeBindingIntent:
             params.resolveManagedPurposeBindingIntent,
         }
+      : {}),
+    ...(params.resolveManagedPurposeBindingIntentSelection
+      ? { resolveManagedPurposeBindingIntentSelection: params.resolveManagedPurposeBindingIntentSelection }
       : {}),
     ...(params.createAgentCatalogObservation
       ? { createAgentCatalogObservation: params.createAgentCatalogObservation }

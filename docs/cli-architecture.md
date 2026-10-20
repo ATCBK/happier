@@ -69,6 +69,17 @@ admission: the default and its slot intents are resolved together before Session
 creation, and explicit slot choices win. These are 0.3 development semantics;
 the wire retains its existing distinction between omitted and explicit bindings.
 
+## Requester native home retention (0.3 development)
+
+Foreign requester Sessions keep their materialized Agent homes beneath
+`daemon/connected-services/materialized/requester-accounts/account-<encoded Account id>`.
+The retained Session materialization identity selects the same home on initial
+launch and inactive Pending resume. The daemon's custodian Account sweep excludes
+the `requester-accounts` namespace: its own Session inventory cannot prove that
+another Account's homes are unreferenced. Restarting before requester recovery
+therefore does not authorize deleting that namespace. Ordinary custodian identity
+and staging-attempt cleanup retain their existing retention rules.
+
 ## Compose service prerequisites (0.3 development)
 
 Declared Compose Services use the native Compose lifecycle under the daemon's
@@ -222,6 +233,23 @@ owner. Capability validation, activation and retirement use that root, while the
 retained `materializedRoot` continues to identify the native home. A durable
 native home is never used as a substitute capability root or removed on release.
 
+Run rematerialization reads its native conversation identity from the existing
+sealed Run record, including after Stop and Session resume. If isolated home
+preparation detaches a borrowed state link, the catalog verifier selects only
+the authorized retained conversations before detachment and the existing
+importer retains their exact files in the prepared home. The sealed records
+must belong to the same Session or requester scope, and recorded Connected
+Account selections must resolve to this native home. Another Account's records
+cannot authorize importing its history. An incomplete retained-record read
+refuses preparation before detaching the source. Agents that
+declare a local resume verifier are checked against the prepared home before
+native launch; Agents without that declaration retain their native continuation
+contract. A definite missing conversation retains the typed continuity cause
+through the daemon transport and becomes the existing permanent
+`execution_run_provider_state_missing` outcome, with restoration or a new
+conversation from the saved result as recovery. Other materialization failures
+remain indeterminate. Credential-failure recovery uses the same preparation path.
+
 A `linked` entry whose native source is missing remains local. The descriptor
 must explicitly declare `createIfMissing: 'directory'` to create a native
 directory. Shared mode imports declared private history before establishing
@@ -230,7 +258,16 @@ resume roots feed the same import owner, and adoption does not authorize deletin
 the previous root. Agent declarations own the state inventory and configuration
 inheritance separately; no refresh-specific copier or migration registry exists.
 
-If isolated-to-shared import finds different bytes at the same destination path,
+Home preparation also reimports declared state directories displaced under the
+owner's `.local-<timestamp>` names. A native process can keep appending through an
+open file descriptor after that move; neither turn completion nor process exit
+performs a sync-back. Replacement preparation adopts those writes before normal
+resume verification, retaining the displaced directories and skipping symlinks.
+Codex's existing state codec appends an exact complete-line rollout extension at
+the canonical path, or keeps the existing rollout when the incoming file is its
+prefix.
+
+If isolated-to-shared import finds divergent bytes at the same destination path,
 the existing importer retains that destination and preserves the incoming file
 under a `.happier-import-*` name. Both versions survive, but no conversation merge
 or conflict-resolution decision is made. Antigravity's shared view therefore does
@@ -266,6 +303,14 @@ returns access material only for the exact settled credential revision after
 current-target and materialization checks; the plugin does not reread a previous
 account's launch home after a switch. This proof carries no refresh token. These
 development-source contracts do not establish successful provider token rotation.
+
+In 0.3 development, the Codex plugin's shared Unix app-server waits for native
+socket readiness until Session cancellation or native process termination.
+The initialize RPC budget does not bound this phase: a new connected home can
+backfill its linked history before publishing the socket. Stopping that work at
+the RPC deadline can leave Codex's native backfill lease running and make a
+subsequent native start fail. Native exit diagnostics remain sanitized; this
+wait does not repair native databases or change Codex's own backfill policy.
 
 ### Exact Session creation targets (0.3 development)
 
@@ -872,6 +917,14 @@ uses the existing completion subscription for a later result; startup success
 alone cannot complete the step. Interrupted uncertainty remains in the recovery
 index until exact terminal evidence resolves the child. This observation leaves
 the interrupted parent and its explicit recovery controls unchanged.
+
+Cancellation recovery keeps an exact-Machine parent with pending custody in its
+index after the root becomes cancelled, even when every child has already
+settled. Invocation facts and parent settlement are separate writes; a later
+startup or reconnect pass can finish the parent after a failed settlement write.
+A cancelled child alone does not establish whole-Run cancellation. The existing
+recovery reader verifies the root and current child custody before committing
+the terminal parent state, after which ordinary history deletion is available.
 
 Environment-only setup uses the same environment body without inventing a
 command. The plugin request's launch is optional; an adapter that returns a

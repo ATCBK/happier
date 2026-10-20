@@ -55,6 +55,12 @@ function resolveGoalCommand(input: string): Extract<SessionComposerSendResolutio
     return null;
 }
 
+/** Only a leading `/token` can invoke a prompt template; anything else never reads the catalog. */
+export function canInvokePromptTemplate(input: string): boolean {
+    const trimmed = input.trim();
+    return trimmed.startsWith('/') && !trimmed.startsWith('//');
+}
+
 export function resolveSessionComposerSend(args: {
     input: string;
     executionRunsEnabled: boolean;
@@ -122,7 +128,7 @@ export function resolveSessionComposerSend(args: {
     const invocations = args.promptInvocationsV1?.entries;
     if (Array.isArray(invocations) && invocations.length > 0) {
         const trimmed = args.input.trim();
-        if (trimmed.startsWith('/')) {
+        if (canInvokePromptTemplate(args.input)) {
             const firstSpace = trimmed.search(/\s/);
             const rawToken = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
             const normalizedToken = normalizePromptInvocationTokenV1(rawToken);

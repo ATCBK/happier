@@ -561,7 +561,7 @@ describe('native connected-service Action adapter', () => {
       connectedServicesAdditionalDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} } });
   });
 
-  it('admits Resource purpose preferences only from the exact target daemon and active captured Account profile', async () => {
+  it.each(['resource', 'action'] as const)('admits %s purpose preferences only from the exact target daemon and active captured Account profile', async consumerKind => {
     const credentials: StoredCredentials = { token: 'resource-purpose', encryption: null };
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const purpose = { consumer: { pluginId: 'example.resource', localId: 'models' }, purpose: 'model' };
@@ -582,8 +582,12 @@ describe('native connected-service Action adapter', () => {
       projection: { v: 2, generation: 1, familiesById: {},
         installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled: true,
           source: { kind: 'builtin', locator: 'example.resource' } } },
-        resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
-          connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+        ...(consumerKind === 'resource' ? {
+          resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
+            connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+        } : { actionsById: { models: { id: 'models', pluginId: 'example.resource', occurrenceId: 'source-occurrence', title: 'Discover',
+          scopes: ['global'], surfaces: ['ui', 'agent', 'cli', 'mcp'], execution: { target: 'daemon' }, dangerLevel: 'safe',
+          connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } } }),
       } });
     // HTTP and machine RPC are the only substituted boundaries; declaration, profile and catalog admission are real.
     vi.spyOn(axios, 'request').mockImplementation(async request => {

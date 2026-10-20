@@ -34,6 +34,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { HappierDataMetric, HappierDataRows } from '@happier-dev/plugin-ui/presentation';
 
 const accounting: UsageAnalyticsQueryResponse = {
   v: 1,
@@ -94,6 +95,72 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('keeps a Project setup preview out of the mounted Account page batch', async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-preview-isolation.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined });
+    const serverId = home.homes.a!.id;
+    publishAppliedActiveServerSnapshot({ serverId, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const { WidgetSetupPreview } = await import('@/components/widgets/surface/WidgetSetupPreview');
+    const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
+    const candidate = readWidgetDescriptor(null, { kind: 'builtin', id: 'usage_daily' })!;
+    const seen = new Map<string, UsageWidgetBodyModel>();
+    let slices: ReturnType<typeof useUsageWidgetBatchSlices> = [];
+    function Probe() { slices = useUsageWidgetBatchSlices(); return <Body name="account" metric="tokens" seen={seen} />; }
+    const input = { ...scope, projects: ['destination-project'], metric: 'tokens' };
+    const runtime = { pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current' as const, interactionEnabled: true,
+      machineId: null, serverId, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+      reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {} };
+    const view = (preview: boolean) => <InjectedAuthProvider credentials={credentials}><AppShellPluginUiProjectionValueProvider value={runtime}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}><Probe />{preview ? <WidgetSetupPreview candidate={candidate}
+        scope={{ serverId, accountId: 'account-a', owner: { kind: 'project', projectId: 'destination-project' } }}
+        providedContext={{ projects: [['destination-project']] }} draft={{ bindings: {
+          ...Object.fromEntries(Object.entries(input).map(([path, value]) => [path, { kind: 'value' as const, value }])),
+          projects: { kind: 'context', slot: 'projects' },
+        } }} testID="project-preview" /> : null}</UsageWidgetBatchProvider>
+    </CoreCollectionScope></AppShellPluginUiProjectionValueProvider></InjectedAuthProvider>;
+    const screen = await renderScreen(view(false));
+    try {
+      await expect.poll(() => seen.get('account')?.slice?.accounting?.totals.eventCount).toBe(1);
+      const entry = seen.get('account')!.slice!.key;
+      await screen.update(view(true));
+      await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').some(request =>
+        UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.projectKeys?.includes('destination-project'))).toBe(true);
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+      expect(slices[0]?.requestedQuery.projects).toEqual([]);
+      await screen.update(view(false));
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+    } finally { await screen.unmount(); }
+  });
+  it('feeds Sources panels from one admitted accounting Resource through their real builtin dispatch', async () => {
+    const value: UsageAnalyticsQueryResponse = { ...accounting,
+      totals: { ...accounting.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
+      contributions: [{ id: 'unpriced', sessionId: null, turnId: null, observedAtMs: 1, eventCount: 1,
+        agentId: 'codex', modelId: null, machineId: null, projectKey: null, workspaceId: null,
+        source: 'codex-native-accounting', sourceContext: { path: 'native', execution: 'outside' },
+        tokens: accounting.totals.tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } }],
+      coverage: { status: 'partial', reasons: ['unpriced_tokens'], missingDimensions: [], range: { complete: false }, ranked: [],
+        sources: [{ source: 'codex-native-accounting', path: 'native', status: 'partial', eventCount: 1, captureKind: 'from_logs' }] } };
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-source-panels.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(value) : undefined });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}>{(['usage_source_coverage', 'usage_unpriced'] as const).map(id =>
+        <UsageWidgetBody key={id} id={id} input={{ ...scope, period: { startMs: 0, endMs: 1000 } }} serverId={home!.homes.a!.id} testID={id} />)}
+      </UsageWidgetBatchProvider></CoreCollectionScope></InjectedAuthProvider>);
+    await expect.poll(() => screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'usage_unpriced.tokens')?.props.value).toBe(15);
+    expect(screen.findByType(HappierDataRows).props.rows).toHaveLength(1);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch'
+      || request.path.endsWith('/messages') || request.path.endsWith('/turns'))).toEqual([]);
+    await screen.unmount();
+  });
   it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
     const now = Date.now();
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
@@ -188,7 +255,7 @@ describe('Usage page batch', () => {
     await screen.update(<CoverageProbe />);
     expect(seen.at(-1)).toBe(false);
   });
-  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
+  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint', 'usage_source_coverage', 'usage_unpriced'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
     const sessionReads = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json(accounting);
         if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,

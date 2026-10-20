@@ -16,6 +16,7 @@ import {
   parseTeamCredentialDirectMaterialStoredV1,
   sealTeamCredentialDirectMaterialV1,
   TeamCredentialDirectMaterialOpenRequestV1Schema,
+  TeamCredentialDirectMaterialMineResponseV1Schema,
   type TeamCredentialDirectMaterialPayloadV1,
 } from './directMaterialV1.js';
 
@@ -56,6 +57,28 @@ function payload(): TeamCredentialDirectMaterialPayloadV1 {
 }
 
 describe('Team credential direct material v1', () => {
+  it('accepts an omitted admission label while validating bounded metadata when present', () => {
+    const value = payload();
+    const response = {
+      status: 'ready' as const,
+      recipientMode: 'plain' as const,
+      stored: createTeamCredentialDirectMaterialStoredV1({ payload: value, recipientMode: 'plain' }),
+      expected: {
+        homeServerIdentityId: value.homeServerIdentityId, teamId: value.teamId,
+        resourceId: value.resourceId, resourceRevision: value.resourceRevision,
+        recipientAccountId: value.recipientAccountId, sourceVersion: value.sourceVersion,
+        sourceMemberKey: computeTeamCredentialSourceMemberKeyV1(value.sourceMember),
+      },
+    };
+    expect(TeamCredentialDirectMaterialMineResponseV1Schema.parse(response)).toEqual(response);
+    const admittedResource = { displayName: 'Acme service', teamId: value.teamId };
+    expect(TeamCredentialDirectMaterialMineResponseV1Schema.parse({ ...response, admittedResource }))
+      .toEqual({ ...response, admittedResource });
+    expect(TeamCredentialDirectMaterialMineResponseV1Schema.safeParse({
+      ...response, admittedResource: { ...admittedResource, displayName: '' },
+    }).success).toBe(false);
+  });
+
   it('projects retired stored fields in plain and encrypted material without weakening recipient binding', () => {
     const original = payload();
     const retained = { ...original, retired: true, sourceMember: { ...original.sourceMember, retired: true } };

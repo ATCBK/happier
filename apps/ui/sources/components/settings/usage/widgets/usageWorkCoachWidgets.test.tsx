@@ -5,7 +5,7 @@ import { renderHook, renderScreen } from '@/dev/testkit';
 import { useUsageWork } from './useUsageWork';
 import { router } from 'expo-router';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
-import { HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataMetric, HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_USAGE_COACH_PREFERENCES_V1 } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import {
   getUsageQueryKey,
@@ -31,6 +31,7 @@ import { UsageParallelWidget } from './UsageParallelWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
 import { UsageCoachWidget } from './UsageCoachWidget';
 import { storage } from '@/sync/domains/state/storage';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UsagePlanFitWidget } from './UsagePlanFitWidget';
@@ -176,6 +177,38 @@ describe('Work and Coach widget bodies', () => {
       await hook.unmount();
     }
   });
+  it('tells apart Sessions that share a title and folders that share a name by where and when they ran', async () => {
+    const rows: UsageWorkContribution[] = [
+      { ...contribution('u1', 'untitled-1', 't1'), machineId: 'machine-a', observedAtMs: 1_700_000_000_000 },
+      { ...contribution('u2', 'untitled-2', 't1'), machineId: 'machine-b', observedAtMs: 1_700_000_900_000 },
+      { ...contribution('u3', 'lone-session', 't1'), machineId: 'machine-a' },
+    ];
+    const projection = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [] }));
+    const hook = await renderHook(() => useUsageWork({ ...slice, work: projection }, query, 'home'));
+    const { sessionLabel } = hook.getCurrent();
+    const [first, second] = [sessionLabel('untitled-1'), sessionLabel('untitled-2')];
+    expect(first).not.toBe(second);
+    expect(first.startsWith(t('session.untitled'))).toBe(true);
+    expect(first.length).toBeGreaterThan(t('session.untitled').length);
+    await hook.unmount();
+  });
+  it('keeps a shared Project name whole and tells twins apart by the machine they ran on', async () => {
+    const rows: UsageWorkContribution[] = [
+      { ...contribution('t1', 'twin-1', 't1'), projectKey: 'tmp-a', machineId: 'machine-a' },
+      { ...contribution('t2', 'twin-2', 't1'), projectKey: 'tmp-b', machineId: 'machine-b' },
+      { ...contribution('t3', 'lone-1', 't1'), projectKey: 'lone-key', machineId: 'machine-a' },
+    ];
+    const projection = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [] }));
+    const project = (key: string, label: string) => ({ ...slice.accounting!.breakdowns!.project![0]!, key, label });
+    const accounting = { ...slice.accounting!, breakdowns: { project: [project('tmp-a', 'tmp'), project('tmp-b', 'tmp'), project('lone-key', 'solo')] } };
+    const hook = await renderHook(() => useUsageWork({ ...slice, work: projection, accounting }, query, 'home'));
+    const { projectLabel, projectPlace } = hook.getCurrent();
+    expect([projectLabel('tmp-a'), projectLabel('tmp-b'), projectLabel('lone-key')]).toEqual(['tmp', 'tmp', 'solo']);
+    expect(projectPlace('tmp-a')).not.toBe('');
+    expect(projectPlace('tmp-a')).not.toBe(projectPlace('tmp-b'));
+    expect(projectPlace('lone-key')).toBe('');
+    await hook.unmount();
+  });
   it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
       accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
@@ -201,6 +234,26 @@ describe('Work and Coach widget bodies', () => {
     await screen.update(<UsageCoachWidget {...props} slice={settledSlice}
       model={{ ...model, slice: settledSlice }} id="usage_coach" testID="first-coach" />);
     expect(screen.findHostByTestId('first-coach.empty')).not.toBeNull();
+  });
+  it('shows admitted Sessions checked from the canonical result and recovers after retry', async () => {
+    const project = (admitted: number) => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
+      howYouWork: [{ query, asOfMs: 1000, sessionCoverage: { selected: 5, admitted },
+        detail: { status: admitted < 5 ? 'partial' : 'available', facts: [] } }], nowMs: 1000 }).results[0]!;
+    const partial = project(3);
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={partial} id="usage_coach" testID="coverage-coach" />);
+    const metric = (key: string) => screen.findAllByType(HappierDataMetric).find(node => node.props.testID === `coverage-coach.summary.${key}`)?.props.value;
+    expect(metric('sessions')).toBe(3);
+    expect(metric('insufficient')).toBeGreaterThan(0);
+    const recovered = project(5);
+    await screen.update(<UsageCoachWidget {...props} slice={recovered} id="usage_coach" testID="coverage-coach" />);
+    expect(metric('sessions')).toBe(5);
+    expect(screen.findHostByTestId('coverage-coach.summary.sessions')?.props.accessibilityLabel)
+      .toContain(`${t('usage.board.coach.summarySessions')}: 5`);
+    await screen.update(<UsageCoachWidget {...props} slice={slice} id="usage_coach" testID="coverage-coach" />);
+    expect(metric('sessions')).toBe('—');
+    expect(screen.findHostByTestId('coverage-coach.summary.sessions')?.props.accessibilityLabel)
+      .toContain(`${t('usage.board.coach.summarySessions')}: —`);
   });
   it('holds one finding row of room while a phone-width Coach reads, so its findings land without moving the page', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
@@ -317,6 +370,8 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findHostByTestId('coach.finding.context_bloat.trend')).toBeTruthy();
     // The spark's caption says it is the latest sample, not the finding's headline figure.
     expect(screen.getTextContent()).toContain(t('usage.board.coach.latestSample', { value: '' }).trim());
+    // ...and says when that sample was taken, so a latest 0 beside a larger headline reads as a later moment.
+    expect(screen.getTextContent()).toContain(formatUsageObservedAt(50));
   });
   it('does not open digest scheduling without a captured Account', async () => {
     const digestSlice = resolveUsagePageAggregation({ queries: [query],
@@ -477,8 +532,8 @@ describe('Work and Coach widget bodies', () => {
         modelId: 'third-party/model-snapshot', machineId: 'unknown-machine-uuid' }], evidence: [] }));
       await screen.update(<UsageSessionValueWidget {...props} query={sessionQuery}
         slice={{ ...slice, shownQuery: sessionQuery, work: unknownWork }} id="usage_session_value" testID="value" />);
-      expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
-      expect(screen.getTextContent()).not.toContain('third-party/model-snapshot');
+      expect(screen.getTextContent()).toContain('third-party/model-snapshot');
+      expect(screen.getTextContent()).not.toContain('Third Party Model Snapshot');
       expect(screen.getTextContent()).not.toContain('unknown-machine-uuid');
     } finally { await act(async () => { storage.setState({ machineDisplayById: previous }); }); }
   });
@@ -668,6 +723,15 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.getTextContent()).toContain('2493');
   });
 
+  it('outcomes with no PR evidence says so once instead of drawing a funnel that stops at its first step', async () => {
+    const bare = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions, evidence: [] }));
+    const screen = await renderScreen(
+      <UsageOutcomesWidget {...props} slice={{ ...slice, work: bare }} id="usage_outcomes" testID="outcomes" />,
+    );
+    expect(screen.findByTestId('outcomes.funnel')).toBeFalsy();
+    expect(screen.findByTestId('outcomes.noPrs')).toBeTruthy();
+  });
+
   it('coach on Overview is the findings alone: no facts band, checks, digest or preferences', async () => {
     const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'full',
       footprint: { columns: 2, columnSpan: 2, rowSpan: 2, width: 'full', height: 'tall' }, geometry: { width: 900, height: 300 } }}>
@@ -694,6 +758,27 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.getTextContent()).not.toContain(evidenceLine);
     await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
     expect(screen.getTextContent()).toContain(evidenceLine);
+    await screen.update(<UsageCoachWidget {...props} id="usage_coach" testID="coach"
+      model={{ ...props.model, pending: true, refreshing: true, freshness: 'stale' }}
+      slice={{ ...slice, pending: true, coach: { ...coach, currentness: 'stale', asOfMs: 1100 } }} />);
+    expect(screen.findByTestId('coach.finding.compaction_storms.evidence')).toBeTruthy();
+    expect(screen.getTextContent()).toContain(evidenceLine);
+  });
+
+  it('lists a finding\'s many observations behind Why as a led list with Show all, not a wall of lines', async () => {
+    const first = coach.findings[0]!;
+    const observation = first.evidence[0]!;
+    const many = { ...coach, findings: [{ ...first,
+      evidence: Array.from({ length: 40 }, (_, index) => ({ ...observation, id: `obs-${index}`, observedAtMs: observation.observedAtMs + index * 60_000 })) },
+      ...coach.findings.slice(1)] };
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={{ ...slice, coach: many }} id="usage_coach" testID="coach" />);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
+    const listed = () => new Set(screen.findAll(node => String(node.props.testID ?? '').startsWith('coach.finding.compaction_storms.evidence.obs-'))
+      .map(node => node.props.testID)).size;
+    expect(listed()).toBeLessThan(10);
+    expect(listed()).toBeGreaterThan(0);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.evidence.showAll.toggle');
+    expect(listed()).toBe(40);
   });
 
   it('coach shows the evidence-backed finding, hides a dismissed one and keeps insufficient checks visible', async () => {

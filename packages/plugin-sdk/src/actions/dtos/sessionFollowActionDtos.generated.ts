@@ -83,6 +83,19 @@ export type SessionFollowActionInputById = {
         source: {
             kind: 'session';
             sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
+            kind: 'execution_run';
+            sessionId: string;
+            runId: string;
+        } | {
+            kind: 'workflow_run';
+            runId: string;
+        } | {
+            kind: 'rule';
+            ruleId: string;
         };
         policy?: FollowPolicyV1<true> | undefined;
         once?: {
@@ -114,6 +127,19 @@ export type SessionFollowActionInputById = {
         source: {
             kind: 'session';
             sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
+            kind: 'execution_run';
+            sessionId: string;
+            runId: string;
+        } | {
+            kind: 'workflow_run';
+            runId: string;
+        } | {
+            kind: 'rule';
+            ruleId: string;
         };
     };
     readonly "follow.preferences.get": Record<string, never>;
@@ -134,6 +160,8 @@ export type SessionFollowActionInputById = {
             kind: 'session';
             sessionId: SessionTargetV1<true>;
         };
+        cursor?: string | undefined;
+        limit?: number | undefined;
     } | {
         direction: 'followers';
         source: {
@@ -153,6 +181,8 @@ export type SessionFollowActionInputById = {
             kind: 'rule';
             ruleId: string;
         };
+        cursor?: string | undefined;
+        limit?: number | undefined;
     };
     readonly "follow.preview": {
         receiver: {
@@ -290,7 +320,54 @@ export type SessionFollowActionResultById = {
         };
         voiceInitialSnapshotPending: boolean;
     } | {
+        follow: {
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            following: boolean;
+            persistent: boolean;
+            policy: FollowPolicyV1;
+        } | null;
+    } | {
         source: {
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            destinationSessionId: string;
+            policy: FollowPolicyV1;
+            deliveryState: 'eligible' | 'paused_archived';
+            sourceAvailability: 'available' | 'unavailable';
+            hasPendingUpdates: boolean | null;
+            relation: 'follower';
+        } | {
             sourceSessionId: string;
             destinationSessionId: string;
             policy: FollowPolicyV1;
@@ -385,7 +462,55 @@ export type SessionFollowActionResultById = {
         voiceInitialSnapshotPending: boolean;
     } | {
         changed: boolean;
+        follow: {
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            following: boolean;
+            persistent: boolean;
+            policy: FollowPolicyV1;
+        };
+    } | {
+        changed: boolean;
         source: {
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            destinationSessionId: string;
+            policy: FollowPolicyV1;
+            deliveryState: 'eligible' | 'paused_archived';
+            sourceAvailability: 'available' | 'unavailable';
+            hasPendingUpdates: boolean | null;
+            relation: 'follower';
+        } | {
             sourceSessionId: string;
             destinationSessionId: string;
             policy: FollowPolicyV1;
@@ -478,7 +603,28 @@ export type SessionFollowActionResultById = {
         discussionReceivePolicy?: FollowPolicyV1 | undefined;
     };
     readonly "follow.list": {
-        follows: {
+        follows: ({
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            following: boolean;
+            persistent: boolean;
+            policy: FollowPolicyV1;
+        } | {
             sessionId: string;
             following: boolean;
             notificationLevel: 'none' | 'important' | 'all_messages';
@@ -499,15 +645,39 @@ export type SessionFollowActionResultById = {
                 requestId?: string | undefined;
                 transcriptSeq?: number | undefined;
             } | undefined;
-        }[];
-        sources: {
+        })[];
+        sources: ({
+            source: {
+                kind: 'session';
+                sessionId: string;
+            } | {
+                kind: 'discussion';
+                discussionId: string;
+            } | {
+                kind: 'execution_run';
+                sessionId: string;
+                runId: string;
+            } | {
+                kind: 'workflow_run';
+                runId: string;
+            } | {
+                kind: 'rule';
+                ruleId: string;
+            };
+            destinationSessionId: string;
+            policy: FollowPolicyV1;
+            deliveryState: 'eligible' | 'paused_archived';
+            sourceAvailability: 'available' | 'unavailable';
+            hasPendingUpdates: boolean | null;
+            relation: 'follower';
+        } | {
             sourceSessionId: string;
             destinationSessionId: string;
             policy: FollowPolicyV1;
             deliveryState: 'eligible' | 'paused_archived';
             hasPendingUpdates: boolean;
             relation?: 'manager' | 'follower' | undefined;
-        }[];
+        })[];
         rules: {
             ruleId: string;
             receiver: {
@@ -566,11 +736,12 @@ export type SessionFollowActionResultById = {
                 accountChangeCursor?: number | undefined;
             } | undefined;
         }[];
-        coverage: 'complete' | 'partial' | 'unavailable';
+        coverage: 'unavailable' | 'complete' | 'partial';
+        continuation?: string | undefined;
         peopleCount?: number | undefined;
     };
     readonly "follow.preview": {
-        coverage: 'complete' | 'partial' | 'unavailable';
+        coverage: 'unavailable' | 'complete' | 'partial';
         matchCount: number;
         matches: {
             serverId: string;

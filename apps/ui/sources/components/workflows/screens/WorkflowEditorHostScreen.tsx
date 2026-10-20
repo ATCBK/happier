@@ -4,7 +4,7 @@ import { SessionDraftHydrationBoundary } from '@/components/sessions/drafts/Sess
 import '../library/workflowLibraryReads';
 import * as React from 'react';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
-import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createWorkflowDefinitionRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { Platform, ScrollView, View } from 'react-native';
 import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -905,8 +905,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             setTestRun({ runId: admitted.run.id, definition: testSource.definition });
             return;
         }
-        router.pushRetainingCurrent({ pathname: '/workflows/runs/[runId]', params: { runId: admitted.run.id,
-            ...(props.accountLifetime ? { serverId: props.accountLifetime.scope.serverId } : {}) } } as never);
+        router.pushRetainingCurrent(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
     }, [accountLifetime, captureSourceGeneration, draft, executionTarget, projectTarget, router, runAsTargets, runNow, planReview, reviewedRunSeed, ownedPlanOriginId, reportBack, saved?.definitionId, testSource]);
 
     const handleRunNow = React.useCallback(() => {
@@ -1770,8 +1769,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                     ),
                     onBackToRun: () => {
                         if (!reviewedRunSeedState.lifetime?.isCurrent()) return;
-                        router.push({ pathname: '/workflows/runs/[runId]', params: { runId: reviewedRunSeed.sourceRunId,
-                            ...(props.accountLifetime ? { serverId: props.accountLifetime.scope.serverId } : {}) } } as never);
+                        router.push(createWorkflowRunRoute(reviewedRunSeed.sourceRunId, reviewedRunSeedState.lifetime.scope.serverId) as never);
                     },
                 })}
                 authoringFacts={authoringHost.authoringFacts}

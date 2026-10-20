@@ -12,6 +12,15 @@ Import detail helpers such as `useTriageDetailRequest` from
 `@happier-dev/triage-sources/ui` and runtime helpers from
 `@happier-dev/triage-sources/runtime`.
 
+Bind `createTriageSourceSettingsSurface` to the source's discovery Action, Connected
+Account service and `connectedAccountPurpose` (the discovery Action's HostAccess
+request id). Its Connect/Manage link opens Happier's existing purpose setup for
+that exact Action. Choosing an existing account or pool saves the host default;
+return and Refresh to discover source candidates. Connecting an account without
+selecting this purpose does not authorize discovery. Agent callers select the
+same default through `connectedServices.purposes.default.set`, then invoke the
+ordinary discovery and source-administration Actions.
+
 ## Evolving the ABI
 
 This package follows the Developer Preview support policy of the public Triage

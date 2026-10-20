@@ -96,6 +96,12 @@ export type SessionBoardItemBoardViewFacts = Readonly<{
      * that draws the item keeps its one live body, otherwise the reply runs it.
      */
     inlineTranscriptDemanded?: boolean;
+    /**
+     * The person asked this item to run in its transcript reply ("Show here"). While a reply that
+     * draws it is on screen, that is the one live body and every Board host previews it; opening it
+     * on a Board host releases the request.
+     */
+    inlineTranscriptPreferred?: boolean;
 }>;
 
 /** Publishes physical body-window facts, never a primary-host decision. */
@@ -246,12 +252,13 @@ export function resolveSessionBoardItemPrimaryMountHost(input: Readonly<{
         && visibleHosts.includes(input.visibility.focusedHost)
         ? input.visibility.focusedHost
         : null;
+    const inlineTranscriptDemanded = input.boardView?.inlineTranscriptDemanded === true;
+    const inlineTranscriptPreferred = inlineTranscriptDemanded
+        && input.boardView?.inlineTranscriptPreferred === true;
     const host = resolveSessionBoardPrimaryMountHost({
         foreground: input.visibility.foreground,
-        visibleHosts: input.boardView?.inlineTranscriptDemanded === true
-            ? [...visibleHosts, 'inlineTranscript']
-            : visibleHosts,
-        focusedHost,
+        visibleHosts: inlineTranscriptDemanded ? [...visibleHosts, 'inlineTranscript'] : visibleHosts,
+        focusedHost: inlineTranscriptPreferred ? 'inlineTranscript' : focusedHost,
     });
     if (host !== 'details' && host !== 'focusedDetails') return host;
     const destination = input.detailsDestination;

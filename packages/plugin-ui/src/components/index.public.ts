@@ -81,6 +81,13 @@ export {
   type PluginTranslationValues,
 } from './PluginUiProvider.js';
 export * from './SelectionTiles.js';
+export {
+  ExecutableParticipantPicker,
+  type ExecutableParticipantPickerOption,
+  type ExecutableParticipantPickerSection,
+  type ExecutableParticipantPickerSelection,
+  type ExecutableParticipantPickerProps,
+} from './ExecutableParticipantPicker.js';
 export * from './Session.js';
 export * from './Spinner.js';
 export * from './State.js';
@@ -94,7 +101,54 @@ export { Timeline, type TimelineProps, type TimelineItemContent } from './Timeli
 export { ThreadMessage, type ThreadMessageProps } from './ThreadMessage.js';
 export { ReplyQuote, type ReplyQuoteProps } from './ReplyQuote.js';
 export { HappierReplyQuote, type HappierReplyQuoteProps, type HappierReplyQuoteSource, type HappierReplyQuoteTextProps } from '../presentation/content/ReplyQuote.js';
+export { ReturnedAnswerQuote, type ReturnedAnswerOutcome, type ReturnedAnswerQuestion, type ReturnedAnswerQuoteProps } from './ReturnedAnswerQuote.js';
+export {
+  HappierReturnedAnswerQuote,
+  type HappierReturnedAnswerOutcome,
+  type HappierReturnedAnswerQuestion,
+  type HappierReturnedAnswerQuoteActionProps,
+  type HappierReturnedAnswerQuoteLabels,
+  type HappierReturnedAnswerQuoteProps,
+  type HappierReturnedAnswerQuoteTextProps,
+} from '../presentation/content/ReturnedAnswerQuote.js';
 export { HappierThreadMessage, type HappierThreadMessageProps } from '../presentation/content/ThreadMessage.js';
+export {
+  MemoryDuplicateChoice,
+  type MemoryDuplicateCandidate,
+  type MemoryDuplicateChoiceKind,
+  type MemoryDuplicateChoiceProps,
+} from './MemoryDuplicateChoice.js';
+export {
+  HappierMemoryDuplicateChoice,
+  type HappierMemoryDuplicateCandidate,
+  type HappierMemoryDuplicateChoiceControlProps,
+  type HappierMemoryDuplicateChoiceKind,
+  type HappierMemoryDuplicateChoiceLabels,
+  type HappierMemoryDuplicateChoiceProps,
+  type HappierMemoryDuplicateChoiceTextProps,
+} from '../presentation/content/MemoryDuplicateChoice.js';
+export {
+  DocEditProposal,
+  type DocEditProposalAction,
+  type DocEditProposalFooter,
+  type DocEditProposalLine,
+  type DocEditProposalProps,
+  type DocEditProposalState,
+} from './DocEditProposal.js';
+export {
+  HappierDocEditProposal,
+  type HappierDocEditProposalAction,
+  type HappierDocEditProposalButtonProps,
+  type HappierDocEditProposalDiffProps,
+  type HappierDocEditProposalFooter,
+  type HappierDocEditProposalLine,
+  type HappierDocEditProposalMark,
+  type HappierDocEditProposalMarkProps,
+  type HappierDocEditProposalProps,
+  type HappierDocEditProposalState,
+  type HappierDocEditProposalTextProps,
+  type HappierDocEditProposalTone,
+} from '../presentation/content/DocEditProposal.js';
 export * from './Text.js';
 export * from './TargetedSurface.js';
 export { WidgetSurface, type WidgetSurfaceProps } from './WidgetSurface.js';

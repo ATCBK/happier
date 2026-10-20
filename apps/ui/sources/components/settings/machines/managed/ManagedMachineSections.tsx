@@ -509,6 +509,7 @@ export function ManagedMachineSections(props: SectionProps) {
             machineId: enrolledMachine.id, installationId: enrolledMachine.installationId,
             online: describeMachinePresenceLine(enrolledMachine, presenceNowMs, undefined, reachabilityScope).online,
             serviceManaged: enrolledDaemonState.success && enrolledDaemonState.data.serviceManaged === true,
+            activeAt: enrolledMachine.activeAt,
         } } : {}),
         providerAvailable: requiredController && provisionerPresentation.projectionReady ? provisionerPresentation.title !== null : undefined,
         ...(controller && controllerPresence ? { controller: { name: controllerName, online: controllerPresence.online } } : {}) };

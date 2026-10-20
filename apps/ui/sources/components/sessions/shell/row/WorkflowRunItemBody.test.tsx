@@ -36,7 +36,8 @@ let singleton: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: routerPush } }).module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 afterEach(async () => {
@@ -46,6 +47,7 @@ afterEach(async () => {
     singleton = undefined;
     resetWorkflowLibraryReadsForTests();
     storage.setState(previous, true);
+    routerPush.mockClear();
     publishAppliedActiveServerSnapshot(previousSnapshot);
 });
 
@@ -129,6 +131,12 @@ describe('opened habit History result', () => {
         await act(async () => storage.setState({ machines: { [machine.id]: { ...machine, active: true, activeAt: Date.now() } } }));
         expect(screen.getTextContent()).toContain('workflows.run.stopping');
         expect(screen.getTextContent()).not.toContain('workflows.run.stopWhenMachineReconnects');
+    });
+    it.each(['work', 'list'] as const)('retains the Run source Home when opening its %s row', async (presentation) => {
+        const { home } = await initializeRun();
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} presentation={presentation} />);
+        await screen.pressByTestIdAsync('workflow-run-row:habit-run');
+        expect(routerPush).toHaveBeenCalledWith(`/workflows/runs/habit-run?serverId=${encodeURIComponent(home.id)}`);
     });
     it('shows pending physical Stop custody and then the settled outcome despite retained attention membership', async () => {
         const { home } = await initializeRun();

@@ -139,23 +139,36 @@ function copyResumeState(value: DiscordGatewayResumeState | undefined): DiscordG
   };
 }
 
-function copySessionStartLimit(value: DiscordGatewaySessionStartLimit): DiscordGatewaySessionStartLimit {
+/** Shared validity rule for API decoding and Gateway session construction. */
+export function parseDiscordGatewaySessionStartLimit(
+  value: unknown,
+): Omit<DiscordGatewaySessionStartLimit, 'observedAtMs'> | null {
+  if (!isRecord(value)) return null;
+  const total = readNonNegativeInteger(value.total);
+  const remaining = readNonNegativeInteger(value.remaining);
+  const resetAfterMs = readNonNegativeInteger(value.resetAfterMs);
+  const maxConcurrency = readNonNegativeInteger(value.maxConcurrency);
   if (
-    !Number.isSafeInteger(value.total)
-    || value.total <= 0
-    || !Number.isSafeInteger(value.remaining)
-    || value.remaining < 0
-    || value.remaining > value.total
-    || !Number.isSafeInteger(value.resetAfterMs)
-    || value.resetAfterMs <= 0
-    || !Number.isSafeInteger(value.maxConcurrency)
-    || value.maxConcurrency <= 0
+    total === null || total === 0
+    || remaining === null || remaining > total
+    || resetAfterMs === null
+    || maxConcurrency === null || maxConcurrency === 0
+  ) {
+    return null;
+  }
+  return { total, remaining, resetAfterMs, maxConcurrency };
+}
+
+function copySessionStartLimit(value: DiscordGatewaySessionStartLimit): DiscordGatewaySessionStartLimit {
+  const limit = parseDiscordGatewaySessionStartLimit(value);
+  if (
+    !limit
     || !Number.isSafeInteger(value.observedAtMs)
-    || !Number.isSafeInteger(value.observedAtMs + value.resetAfterMs)
+    || !Number.isSafeInteger(value.observedAtMs + limit.resetAfterMs)
   ) {
     throw new Error('Discord Gateway session_start_limit is invalid.');
   }
-  return { ...value };
+  return { ...limit, observedAtMs: value.observedAtMs };
 }
 
 function copySnapshot(input: Readonly<{
@@ -234,7 +247,11 @@ export function createDiscordGatewaySession(input: Readonly<{
     }
 
     const resetAtMs = sessionStartLimit.observedAtMs + sessionStartLimit.resetAfterMs;
-    if (nowMs >= resetAtMs) {
+    // Discord documents reset_after as a duration and remaining as the allowed
+    // starts: https://docs.discord.com/developers/events/gateway#session-start-limit-object
+    // A zero reset has no future window to expire; spend only the reported
+    // remaining starts, and still require a fresh snapshot when they run out.
+    if (sessionStartLimit.resetAfterMs > 0 && nowMs >= resetAtMs) {
       return [{ kind: 'blocked', reason: 'sessionStartLimitRefreshRequired', retryAtMs: resetAtMs }];
     }
     if (sessionStartLimit.remaining === 0) {

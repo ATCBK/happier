@@ -49,10 +49,10 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
-test('tracker source-resolving Vitest uses source preparation in both dispatchers', async t => {
+test('plugin source-resolving Vitest uses source preparation in both dispatchers', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const args = ['corepack', 'yarn', '-s', 'vitest', 'run', 'src/source.test.ts'];
-  for (const tracker of ['linear', 'jira', 'sentry', 'posthog']) {
+  for (const tracker of ['linear', 'jira', 'sentry', 'posthog', 'claude']) {
     const cwd = join(root, `packages/plugins/${tracker}`);
     assert.equal(resolveRemoteCommandPolicy(args, { cwd }).kind, 'source-test');
     if (process.platform === 'win32') continue;
@@ -2279,6 +2279,7 @@ test('remote Stack server uses the stable outer public URL and projects only sup
         HAPPIER_SERVER_RETENTION__SESSIONS__MODE: 'delete_inactive',
         HAPPIER_SQLITE_BUSY_TIMEOUT_MS: '45000',
         HAPPIER_SQLITE_CONNECTION_LIMIT: '6',
+        HAPPIER_DB_CONNECTION_LIMIT: '30',
         HAPPIER_STACK_SERVER_LOG_LEVEL: 'debug',
         HAPPIER_SERVER_LOG_LEVEL: 'info',
         HAPPIER_WEB_LATENCY_TRACE: '1',
@@ -2301,6 +2302,8 @@ test('remote Stack server uses the stable outer public URL and projects only sup
   assert.match(command, /HAPPIER_SERVER_RETENTION__SESSIONS__MODE=delete_inactive/);
   assert.match(command, /HAPPIER_SQLITE_BUSY_TIMEOUT_MS=45000/);
   assert.match(command, /HAPPIER_SQLITE_CONNECTION_LIMIT=6/);
+  // The Postgres pool budget is the same server-owned choice as the SQLite one.
+  assert.match(command, /HAPPIER_DB_CONNECTION_LIMIT=30/);
   // A Stack's own server log level must reach its server wherever it is placed.
   assert.match(command, /HAPPIER_STACK_SERVER_LOG_LEVEL=debug/);
   assert.match(command, /HAPPIER_SERVER_LOG_LEVEL=info/);

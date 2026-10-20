@@ -6,6 +6,7 @@ import {
     defineProtocolString,
     defineProtocolUnion,
 } from '@happier-dev/plugin-sdk/protocol';
+import { PluginContributionIdentityV1Schema } from '@happier-dev/plugin-sdk/manifest';
 import {
     MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
@@ -13,7 +14,9 @@ import {
     TriageEntryLocatorV1Schema,
     TriageEntryRefV1Schema,
     TriageSourceInstanceIdV1Schema,
+    TriageSourceFailureV1Schema,
 } from '@happier-dev/triage-protocol/v1';
+import { TriageListInvocationErrorV1Schema } from './listEntriesProtocol.js';
 
 /**
  * The strict contract of the one `session-links` writer Action.
@@ -92,12 +95,27 @@ export const TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1 = 'sessions/rea
 export const TriageReadSourceSessionLinksInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1), sessionId: triageSessionId,
 }, { policy: 'closed' });
+export const TriageSourceSessionLinksLaneV1Schema = defineProtocolObject({
+    source: PluginContributionIdentityV1Schema,
+    sourceInstanceId: TriageSourceInstanceIdV1Schema,
+    displayLabel: triageText,
+    health: defineProtocolUnion([
+        defineProtocolObject({ kind: defineProtocolLiteral('complete') }, { policy: 'closed' }),
+        defineProtocolObject({ kind: defineProtocolLiteral('unavailable') }, { policy: 'closed' }),
+        defineProtocolObject({ kind: defineProtocolLiteral('failed'), failure: TriageSourceFailureV1Schema,
+            invocationError: TriageListInvocationErrorV1Schema.optional(),
+        }, { policy: 'closed' }),
+    ]),
+}, { policy: 'closed' });
+export type TriageSourceSessionLinksLaneV1 = ReturnType<typeof TriageSourceSessionLinksLaneV1Schema.parse>;
 export const TriageReadSourceSessionLinksResultV1Schema = defineProtocolObject({
-    kind: defineProtocolUnion([defineProtocolLiteral('complete'), defineProtocolLiteral('failed')]),
+    kind: defineProtocolUnion([defineProtocolLiteral('complete'), defineProtocolLiteral('partial'), defineProtocolLiteral('failed')]),
     links: defineProtocolArray(defineProtocolObject({
         entryRef: TriageEntryRefV1Schema, sessionId: triageSessionId,
         linkedAtMs: defineProtocolNumber({ integer: true }), displayPath: triageText,
     }, { policy: 'closed' })),
+    /** Optional so a newly loaded surface can still read a prior daemon reply. */
+    lanes: defineProtocolArray(TriageSourceSessionLinksLaneV1Schema).optional(),
 }, { policy: 'closed' });
 export type TriageReadSourceSessionLinksInputV1 = ReturnType<typeof TriageReadSourceSessionLinksInputV1Schema.parse>;
 export type TriageReadSourceSessionLinksResultV1 = ReturnType<typeof TriageReadSourceSessionLinksResultV1Schema.parse>;

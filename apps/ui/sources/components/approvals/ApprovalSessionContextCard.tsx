@@ -27,7 +27,7 @@ import type { ApprovalSessionReadingStatus } from './useApprovalSessionReading';
 import {
     describeApprovalAgent,
     describeApprovalOrigin,
-    describeUnnamedApprovalSession,
+    describeUnnamedApprovalRequester,
     resolveApprovalHomeSentenceName,
 } from './approvalRequesterLabels';
 
@@ -81,7 +81,7 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
     // A session this device cannot name is never shown by its id: it reads by where it lives.
     const sentenceHome = homeName ?? resolveApprovalHomeSentenceName(props.serverId);
     const sessionTitle = namedSession
-        ?? (props.requesterSessionId?.trim() && props.requesterStatus !== 'resolving' ? describeUnnamedApprovalSession(sentenceHome) : null);
+        ?? (props.requesterSessionId?.trim() && props.requesterStatus !== 'resolving' ? describeUnnamedApprovalRequester(props.requesterSurface, sentenceHome) : null);
     const agentLabel = describeApprovalAgent(props.requesterAgentId);
     const originLabel = describeApprovalOrigin(props.requesterSurface);
     const endpointLabels = readApprovalSessionEndpointLabels({

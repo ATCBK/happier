@@ -602,7 +602,7 @@ export function buildActivityOverviewSummaryFromSource(params: Readonly<{
 
     forEachActivitySummaryCandidate(params, ({ entry, candidate, messages }) => {
         if (candidate.hasAttention) totalAttentionCount += 1;
-        if (classifyInboxSessionCandidate(candidate) !== null) inboxContentCount += 1;
+        if (classifyInboxSessionCandidate(candidate).section !== null) inboxContentCount += 1;
         if (candidate.reasons.isThinking) workingCount += 1;
         if (isActivityCandidateAwaitingPerson(candidate)) needsYouCount += 1;
         for (const expiresAtMs of readSessionPersonalAttentionExpirationsForViewer(

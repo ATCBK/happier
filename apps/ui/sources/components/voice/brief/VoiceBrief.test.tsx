@@ -36,7 +36,7 @@ import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindi
 import { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@/voice/persistence/voiceTranscriptHistorySession';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import { VoiceBriefBlock, VoiceBriefList } from './VoiceBrief';
+import { VoiceBriefBlock, VoiceBriefButton, VoiceBriefList } from './VoiceBrief';
 import { buildVoiceBrief } from '@/voice/context/buildVoiceBrief';
 import { buildActivityOverviewSnapshot } from '@/activity/attention/buildActivityOverviewSnapshot';
 import { buildInboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
@@ -54,6 +54,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { disconnectActiveServerConnectionIfCurrent } from '@/sync/runtime/orchestration/connectionManager';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -70,6 +71,10 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 
 const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.declaration.id === 'realtime-openai')!;
 const historyId = 'brief-history';
@@ -152,6 +157,17 @@ let unsubscribe: (() => void) | null = null;
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let restorePopoverGlobals: (() => void) | null = null;
 const initialState = storage.getState();
+function setActionPolicy(value: Parameters<typeof normalizeActionsSettingsV1>[0]) {
+    storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1(value) } });
+}
+async function pressBriefControl(testID: string) {
+    await vi.waitFor(() => {
+        const control = screen?.findByTestId(testID);
+        expect(control).toBeTruthy();
+        expect(control?.props.disabled).not.toBe(true);
+    });
+    await screen?.pressByTestIdAsync(testID);
+}
 beforeEach(async () => {
     await loadSyncSingletonForTests();
     resetVoiceSessionStoreForTests();
@@ -237,13 +253,16 @@ async function installTransport() {
 const render = () => <React.StrictMode><AuthProvider initialCredentials={account!.credentials}>
     <VoiceBriefBlock onClose={() => {}} />
 </AuthProvider></React.StrictMode>;
-function BriefHome(props: Readonly<{ available: boolean }>) {
+function BriefHome(props: Readonly<{ available: boolean; mountBrief?: boolean }>) {
     const [open, setOpen] = React.useState(false);
     useVoiceBriefHomeRequest({ available: props.available, onOpen: () => setOpen(true) });
-    return open ? <VoiceBriefBlock onClose={() => setOpen(false)} /> : null;
+    return <>
+        <VoiceBriefButton open={open} />
+        {open && props.mountBrief !== false ? <VoiceBriefBlock onClose={() => setOpen(false)} /> : null}
+    </>;
 }
-const renderHome = (available = true) => <React.StrictMode><AuthProvider initialCredentials={account!.credentials}>
-    <BriefHome available={available} />
+const renderHome = (available = true, mountBrief = true) => <React.StrictMode><AuthProvider initialCredentials={account!.credentials}>
+    <BriefHome available={available} mountBrief={mountBrief} />
 </AuthProvider></React.StrictMode>;
 function Presentation() {
     const voice = useVoiceAttemptControl(VOICE_ATTEMPT_IDLE_TARGET_GLOBAL);
@@ -264,6 +283,75 @@ async function selectService() {
 }
 
 describe('mounted Voice Brief request', () => {
+    it('admits Home Brief me through the Action before mounting Inbox or opening the microphone', async () => {
+        const speech = await installTransport();
+        await selectService();
+        setActionPolicy({ v: 1, actions: {
+            'ui.voice_global.brief.request': { disabledSurfaces: ['ui'] },
+        } });
+        screen = await renderScreen(renderHome());
+        await pressBriefControl('home-brief-me');
+        expect(screen.findByTestId('voice-brief')).toBeNull();
+        expect(speech.starts).toHaveLength(0);
+        await act(async () => setActionPolicy({}));
+        await pressBriefControl('home-brief-me');
+        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief')).toBeTruthy());
+        await speech.waitForStarts(1);
+        await act(async () => speech.connect());
+        expect(speech.spoken).toHaveLength(1);
+    });
+
+    it('admits the initial request and Retry through the real UI Action policy before starting audio', async () => {
+        const speech = await installTransport();
+        await selectService();
+        setActionPolicy({ v: 1, actions: {
+            'ui.voice_global.brief.request': { disabledSurfaces: ['ui'] },
+            'ui.voice_global.brief.retry': { disabledSurfaces: ['ui'] },
+        } });
+        screen = await renderScreen(render());
+        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        expect(speech.starts).toHaveLength(0);
+        await pressBriefControl('voice-brief.retry');
+        expect(speech.starts).toHaveLength(0);
+        await act(async () => setActionPolicy({ v: 1, actions: {
+            'ui.voice_global.start': { disabledSurfaces: ['ui'] },
+        } }));
+        await pressBriefControl('voice-brief.retry');
+        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        expect(speech.starts).toHaveLength(0);
+        await act(async () => setActionPolicy({}));
+        await pressBriefControl('voice-brief.retry');
+        await speech.waitForStarts(1);
+        await act(async () => speech.connect());
+        expect(speech.spoken).toHaveLength(1);
+    });
+
+    it('keeps the live Brief and reply when UI Stop or Close is disabled by Action policy', async () => {
+        const speech = await installTransport();
+        await selectService();
+        void lifecycle?.toggle(null);
+        await speech.connect();
+        screen = await renderScreen(renderHome());
+        await act(async () => { executeVoiceBriefOperation('request'); });
+        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
+        await act(async () => speech.startOutput());
+        setActionPolicy({ v: 1, actions: {
+            'ui.voice_global.brief.stop': { disabledSurfaces: ['ui'] },
+            'ui.voice_global.brief.close': { disabledSurfaces: ['ui'] },
+        } });
+        await pressBriefControl('voice-brief.stop');
+        expect(speech.interrupted).toHaveLength(0);
+        await pressBriefControl('voice-brief.close');
+        expect(screen.findByTestId('voice-brief')).toBeTruthy();
+        await act(async () => setActionPolicy({}));
+        await pressBriefControl('voice-brief.stop');
+        await vi.waitFor(() => expect(speech.interrupted).toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]));
+        expect(lifecycle?.getSnapshot().status).toBe('connected');
+        await pressBriefControl('voice-brief.close');
+        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief')).toBeNull());
+        expect(lifecycle?.getSnapshot().status).toBe('connected');
+    });
+
     it('renders real Inbox identities through the Brief projection and opens their exact Home destinations', async () => {
         const sessions = (['permission_required', 'failed', 'ready_after_read'] as const).map((reason, index) => createSessionFixture({
             id: `work-${index}`, serverId: account!.home.id, metadata: { path: '/repo', host: 'test', summary: { text: `Release captain ${index}`, updatedAt: 1 } },
@@ -340,7 +428,7 @@ describe('mounted Voice Brief request', () => {
         await act(async () => { outcome = executeVoiceBriefOperation('request'); });
         await speech.waitForStarts(2);
         expect(speech.starts).toHaveLength(2);
-        await screen.pressByTestIdAsync('voice-brief.close');
+        await pressBriefControl('voice-brief.close');
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(1);
         expect(lifecycle?.getSnapshot().status).toBe('connected');
@@ -353,7 +441,7 @@ describe('mounted Voice Brief request', () => {
         await speech.connect();
         screen = await renderScreen(render());
         const attemptId = getVoiceSessionAttemptId();
-        expect(speech.spoken).toHaveLength(1);
+        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
         let outcome;
         await act(async () => { outcome = executeVoiceBriefOperation('request', { expectedAttemptId: attemptId! }); });
         expect(outcome).toEqual({ ok: true, result: { status: 'sent', attemptId } });
@@ -361,8 +449,8 @@ describe('mounted Voice Brief request', () => {
         expect(speech.spoken[1]).toContain('"approval":"tap_only"');
         await act(async () => speech.startOutput());
         await act(async () => { outcome = executeVoiceBriefOperation('stop', { expectedAttemptId: attemptId! }); });
-        expect(outcome).toEqual({ ok: true, result: { status: 'stopped', attemptId } });
-        expect(speech.interrupted).toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]);
+        expect(outcome).toEqual({ ok: true, result: { status: 'waiting', attemptId } });
+        await vi.waitFor(() => expect(speech.interrupted).toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]));
         expect(lifecycle?.getSnapshot().status).toBe('connected');
         expect(executeVoiceBriefOperation('retry')).toEqual({ ok: false, errorCode: 'voice_brief_not_retryable' });
         await screen.unmount(); screen = null;
@@ -408,9 +496,27 @@ describe('mounted Voice Brief request', () => {
         expect(speech.spoken).toHaveLength(0);
     });
 
+    it('retires the admitted Home request if its Account lifetime changes before the Inbox mounts', async () => {
+        const speech = await installTransport();
+        await selectService();
+        screen = await renderScreen(renderHome(true, false));
+        await act(async () => {
+            expect(executeVoiceBriefOperation('request')).toEqual({ ok: true, result: { status: 'waiting', attemptId: null } });
+        });
+        expect(screen.findByTestId('voice-brief')).toBeNull();
+        expect(speech.starts).toHaveLength(0);
+        retireActiveServerAccountScopeLifetime();
+        expect(captureActiveServerAccountScopeCurrentness().isCurrent()).toBe(true);
+        await screen.update(renderHome());
+        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        expect(speech.starts).toHaveLength(0);
+        expect(speech.spoken).toHaveLength(0);
+    });
+
     it('retries through the mounted recovery owner and never starts on a settings repair alone', async () => {
         const speech = await installTransport();
         screen = await renderScreen(render());
+        await act(async () => { expect(executeVoiceBriefOperation('request').ok).toBe(true); });
         await selectService();
         expect(speech.starts).toHaveLength(0);
         await act(async () => {
@@ -445,7 +551,7 @@ describe('mounted Voice Brief request', () => {
         expect(lifecycle?.getSnapshot().status).toBe('disconnected');
         expect(speech.spoken).toHaveLength(0);
         expect(screen.findByTestId('voice-brief.retry')).toBeTruthy();
-        await screen.pressByTestIdAsync('voice-brief.retry');
+        await pressBriefControl('voice-brief.retry');
         await speech.waitForStarts(2);
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(1);
@@ -464,11 +570,11 @@ describe('mounted Voice Brief request', () => {
         expect(recover.props.accessibilityHint).toBeTruthy();
         expect(screen.getTextContent()).not.toContain(recover.props.accessibilityHint);
         expect(speech.starts).toHaveLength(0);
-        await screen.pressByTestIdAsync('voice-brief.recover');
-        expect(navigation.push).toHaveBeenCalled();
+        await pressBriefControl('voice-brief.recover');
+        await vi.waitFor(() => expect(navigation.push).toHaveBeenCalled());
         await selectService();
         expect(speech.starts).toHaveLength(0);
-        await screen.pressByTestIdAsync('voice-brief.retry');
+        await pressBriefControl('voice-brief.retry');
         await speech.waitForStarts(1);
         expect(speech.starts).toHaveLength(1);
         expect(speech.starts[0]?.requestedTargetSessionAddress).toBeNull();
@@ -488,7 +594,7 @@ describe('mounted Voice Brief request', () => {
         await speech.fail();
         screen = await renderScreen(render());
         expect(screen.findByTestId('voice-brief.unavailable')).toBeTruthy();
-        await screen.pressByTestIdAsync('voice-brief.recover');
+        await pressBriefControl('voice-brief.recover');
         await speech.waitForStarts(2);
         // The lifecycle owns terminal recovery: it restarts the retained global
         // binding, rather than asking a detached transport to retry itself.
@@ -505,7 +611,7 @@ describe('mounted Voice Brief request', () => {
         void lifecycle?.toggle(null);
         await speech.connect();
         screen = await renderScreen(render());
-        expect(speech.spoken).toHaveLength(1);
+        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
         await act(async () => lifecycle?.stop(VOICE_AGENT_GLOBAL_SESSION_ID));
         expect(speech.starts).toHaveLength(1);
         expect(speech.spoken).toHaveLength(1);

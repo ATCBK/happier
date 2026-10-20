@@ -19,8 +19,9 @@ export const TRIAGE_TASKS_OPEN_CREATE_ACTION_LOCAL_ID_V1 = 'tasks/open-create-v1
 export const TriageTaskDraftV1Schema = defineProtocolObject({
     title: defineProtocolString().optional(), body: defineProtocolString().optional(),
 }, { policy: 'closed' });
+export type TriageTaskDraftV1 = ReturnType<typeof TriageTaskDraftV1Schema.parse>;
 export const TriageTaskDraftLaunchV1Schema = defineProtocolObject({
-    v: defineProtocolLiteral(1), kind: defineProtocolLiteral('createTask'), fields: TriageTaskDraftV1Schema,
+    v: defineProtocolLiteral(1), kind: defineProtocolLiteral('createTask'), draftId: defineProtocolString(),
 }, { policy: 'closed' });
 
 /** Callers name a configured address; only the Account owner supplies its configuration. */

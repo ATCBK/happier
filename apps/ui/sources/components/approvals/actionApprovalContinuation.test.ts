@@ -24,6 +24,10 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { SessionBoardItemUpsertInputV1Schema, SessionBoardMutationActionResultV1Schema } from '@happier-dev/protocol/sessions/board/actions';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+
+await initializeRealAppRuntimeForTests();
 
 const actionId = 'teams.identity.connections.test.start' as const;
 const actionInput = {
@@ -266,78 +270,129 @@ describe('createHomeActionApprovalContinuation', () => {
         expect(onFailed).not.toHaveBeenCalled();
     });
 
-    it('delivers the real ACP approval receipt and private review when transport omits native optional authoring members', async () => {
-        // The mounted ACP editor explicitly sets auth to undefined for an agent without login.
-        // The Home's JSON Artifact transport omits that optional native object member.
-        const input = { backend: {
-            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] },
-            env: {}, auth: undefined,
-        }, expectedRevision: 1 };
-        let catalog: AcpCatalogSettingsV1 = { v: 2, backends: [] };
-        let storedRequest: ApprovalRequest | null = null;
-        // The Artifact and catalog are persistence ports. Admission, review
-        // projection, replay, mutation and receipt production remain real.
-        const { StoredApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
-        const persist = (request: ApprovalRequest) => {
-            storedRequest = StoredApprovalRequestSchema.parse(JSON.parse(JSON.stringify(request)));
-        };
-        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
-            approvalsCreate: async ({ request }) => { persist(request); return { artifactId: 'approval-1' }; },
-            approvalsGet: async () => storedRequest,
-            approvalsUpdate: async ({ request }) => { persist(request); return { ok: true }; },
-            updateAccountAcpCatalogSettings: async ({ mutate, expectedRevision }) => {
-                expect(expectedRevision).toBe(1);
-                catalog = AcpCatalogSettingsV1Schema.parse(mutate(catalog));
-                return { ok: true, revision: 2 };
-            },
-        }));
-        const context = { surface: 'ui' as const, authority: 'present_user' as const,
-            actionCaller: { kind: 'host' as const }, serverId: 'home-1', runtimeAccountId: 'account-1',
-            actionRequestId: 'request-1', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
-                actions: { 'agents.acp.backends.upsert': { approvalRequiredSurfaces: ['ui'] } },
-            }),
-        };
-        await expect(executor.execute('agents.acp.backends.upsert', input, context)).resolves.toMatchObject({
-            ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1' },
+    it.each(['current', 'account_changed', 'home_changed'] as const)('delivers the real ACP approval receipt and private review only for its current Account/Home (%s)', async admission => {
+        const home = await createPlainArtifactHomeFixture('https://acp-continuation.test', {
+            accountId: 'account-1', currentAccount: true,
         });
-        expect(catalog.backends).toEqual([]);
-        await expect(executor.execute('approval.request.decide', { artifactId: 'approval-1', decision: 'approve' }, context))
-            .resolves.toMatchObject({ ok: true });
-        const request = StoredApprovalRequestSchema.parse(storedRequest);
-        const artifact: ReadableArtifact = { id: 'approval-1', title: null,
-            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
-            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2, isDecrypted: true,
-        };
-        const terminal = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
-        expect(terminal).toMatchObject({ family: 'built_in', request: { status: 'executed', execution: { ok: true } } });
-        if (terminal?.family !== 'built_in') throw new Error('Invalid stored approval fixture');
-        const result = AgentsAcpBackendsUpsertOutputV1Schema.parse(terminal.request.execution?.result);
-        expect(result).toMatchObject({ backend: { id: input.backend.id }, revision: 2 });
-        expect(catalog.backends).toEqual([result.backend]);
-        expect(terminal.request.actionArgs).toEqual({ backend: {
-            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: [],
-        }, expectedRevision: 1 });
-        expect(terminal.request.preview).toMatchObject({ actionId: 'agents.acp.backends.upsert', actionArgs: {
-            backend: { env: [] }, expectedRevision: 1,
-        } });
+        const [{ captureLazyActionAccountContext }, { isApprovalExecutionOriginCurrentForAccountContext }] = await Promise.all([
+            import('@/sync/ops/actions/actionAccountContext'),
+            import('@/sync/ops/actions/defaultActionExecutor'),
+        ]);
+        const account = await captureLazyActionAccountContext(home.home.id);
+        try {
+            // The mounted ACP editor explicitly sets auth to undefined for an agent without login.
+            // The Home's JSON Artifact transport omits that optional native object member.
+            const input = { backend: {
+                id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] },
+                env: {}, auth: undefined,
+            }, expectedRevision: 1 };
+            let catalog: AcpCatalogSettingsV1 = { v: 2, backends: [] };
+            let storedRequest: ApprovalRequest | null = null;
+            let catalogMutations = 0;
+            // The Artifact and catalog are persistence ports. Admission, review
+            // projection, replay, mutation and receipt production remain real.
+            const { StoredApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+            const persist = (request: ApprovalRequest) => {
+                storedRequest = StoredApprovalRequestSchema.parse(JSON.parse(JSON.stringify(request)));
+            };
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+                isApprovalExecutionOriginCurrent: async ({ origin, reportStale }) => {
+                    account.assertCurrent();
+                    return isApprovalExecutionOriginCurrentForAccountContext({ origin,
+                        accountServerId: account.serverId, accountId: account.accountId, reportStale });
+                },
+                approvalsCreate: async ({ request }) => { persist(request); return { artifactId: 'approval-1' }; },
+                approvalsGet: async () => storedRequest,
+                approvalsUpdate: async ({ request }) => { persist(request); return { ok: true }; },
+                updateAccountAcpCatalogSettings: async ({ mutate, expectedRevision }) => {
+                    catalogMutations += 1;
+                    expect(expectedRevision).toBe(1);
+                    catalog = AcpCatalogSettingsV1Schema.parse(mutate(catalog));
+                    return { ok: true, revision: 2 };
+                },
+            }));
+            const context = { surface: 'ui' as const, authority: 'present_user' as const,
+                actionCaller: { kind: 'host' as const }, serverId: account.serverId, runtimeAccountId: account.accountId,
+                actionRequestId: 'request-1', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+                    actions: { 'agents.acp.backends.upsert': { approvalRequiredSurfaces: ['ui'] } },
+                }),
+            };
+            await expect(executor.execute('agents.acp.backends.upsert', input, context)).resolves.toMatchObject({
+                ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1' },
+            });
+            expect(catalog.backends).toEqual([]);
+            if (admission !== 'current') {
+                const request = StoredApprovalRequestSchema.parse(storedRequest);
+                if (request.v !== 2) throw new Error('Expected a current approval origin');
+                persist({ ...request, executionOriginV1: { ...request.executionOriginV1,
+                    ...(admission === 'account_changed' ? { accountId: 'another-account' } : { serverId: 'another-home' }),
+                } });
+            }
+            await expect(executor.execute('approval.request.decide', { artifactId: 'approval-1', decision: 'approve' }, context))
+                .resolves.toMatchObject({ ok: true });
+            const request = StoredApprovalRequestSchema.parse(storedRequest);
+            const artifact: ReadableArtifact = { id: 'approval-1', title: null,
+                header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2, isDecrypted: true,
+            };
+            const terminal = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
+            if (admission !== 'current') {
+                expect(terminal).toMatchObject({ family: 'built_in', request: { status: 'failed', execution: {
+                    ok: false, errorCode: 'approval_stale', effectAttempted: false, details: { reason: admission },
+                } } });
+                expect(catalogMutations).toBe(0);
+                expect(catalog.backends).toEqual([]);
+                return;
+            }
+            expect(terminal).toMatchObject({ family: 'built_in', request: { status: 'executed', execution: { ok: true } } });
+            if (terminal?.family !== 'built_in') throw new Error('Invalid stored approval fixture');
+            const result = AgentsAcpBackendsUpsertOutputV1Schema.parse(terminal.request.execution?.result);
+            expect(result).toMatchObject({ backend: { id: input.backend.id }, revision: 2 });
+            expect(catalog.backends).toEqual([result.backend]);
+            expect(terminal.request.actionArgs).toEqual({ backend: {
+                id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: [],
+            }, expectedRevision: 1 });
+            expect(terminal.request.preview).toMatchObject({ actionId: 'agents.acp.backends.upsert', actionArgs: {
+                backend: { env: [] }, expectedRevision: 1,
+            } });
 
-        const onSucceeded = vi.fn();
-        const onFailed = vi.fn();
-        const continuation = createActionApprovalContinuation({
-            artifactId: artifact.id, actionId: 'agents.acp.backends.upsert',
-            scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput: input, onSucceeded, onFailed,
-        });
-        expect(await continuation.onExecuted(artifact)).toBe('consumed');
-        expect(onFailed).not.toHaveBeenCalled();
-        expect(onSucceeded).toHaveBeenCalledWith(result);
-        for (const expectedInput of [{ ...input, expectedRevision: 2 },
-            { ...input, backend: { ...input.backend, name: 'other-agent' } }]) {
-            onSucceeded.mockClear();
-            onFailed.mockClear();
-            await createActionApprovalContinuation({ artifactId: artifact.id, actionId: 'agents.acp.backends.upsert',
-                scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
-            expect(onSucceeded).not.toHaveBeenCalled();
-            expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+            const onSucceeded = vi.fn();
+            const onFailed = vi.fn();
+            const continuation = createActionApprovalContinuation({
+                artifactId: artifact.id, actionId: 'agents.acp.backends.upsert',
+                scope: { serverId: account.serverId, accountId: account.accountId }, expectedInput: input, onSucceeded, onFailed,
+            });
+            expect(await continuation.onExecuted(artifact)).toBe('consumed');
+            expect(onFailed).not.toHaveBeenCalled();
+            expect(onSucceeded).toHaveBeenCalledWith(result);
+            for (const expectedInput of [{ ...input, expectedRevision: 2 },
+                { ...input, backend: { ...input.backend, name: 'other-agent' } },
+                { ...input, backend: { ...input.backend, launch: { ...input.backend.launch, command: 'other-agent' } } }]) {
+                onSucceeded.mockClear();
+                onFailed.mockClear();
+                await createActionApprovalContinuation({ artifactId: artifact.id, actionId: 'agents.acp.backends.upsert',
+                    scope: { serverId: account.serverId, accountId: account.accountId }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
+                expect(onSucceeded).not.toHaveBeenCalled();
+                expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+            }
+            for (const backend of [
+                { ...input.backend, env: [], name: 'other-agent' },
+                { ...input.backend, env: {}, unexpected: 'unvalidated-review' },
+            ]) {
+                onSucceeded.mockClear();
+                onFailed.mockClear();
+                const alteredArtifact = { ...artifact, body: JSON.stringify({ ...request,
+                    preview: { actionId: 'agents.acp.backends.upsert', actionArgs: { backend, expectedRevision: 1 } },
+                }) };
+                expect(approvalArtifactBodyMatchesHeaderV1(alteredArtifact.header ?? {}, alteredArtifact.body))
+                    .toMatchObject({ family: 'built_in' });
+                await continuation.onExecuted(alteredArtifact);
+                expect(onSucceeded).not.toHaveBeenCalled();
+                expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+            }
+        } finally {
+            account.dispose();
+            await home.dispose();
         }
     });
     it('delivers an exact immutable Agent terminal receipt and rejects altered origin facts', async () => {

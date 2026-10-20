@@ -128,7 +128,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")(
             const held = new Promise<void>((resolve) => { signalFence = resolve; });
             const release = new Promise<void>((resolve) => { releaseFence = resolve; });
             const disabling = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
                 await setAccountStatusInTx(tx, {
                     actorAccountId: account.id,
                     targetAccountId: account.id,

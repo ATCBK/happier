@@ -13,8 +13,15 @@ type RenderedAlignment = Readonly<{
  * Block breaks and whitespace may differ, and glyphs the renderer adds (list bullets, list numbers)
  * are stepped over; nothing is ever searched for, so repeated phrases keep their own positions.
  */
-function alignRenderedToMarkdown(markdown: string, rendered: string, through = rendered.length): RenderedAlignment {
-    const display = projectMarkdownFindText(markdown);
+function alignRenderedToMarkdown(markdown: string, rendered: string, through = rendered.length,
+    sourceRange?: Readonly<{ start: number; end: number }>): RenderedAlignment {
+    const projected = projectMarkdownFindText(markdown);
+    // Native text belongs to one source block, but reference definitions still
+    // belong to the full Doc grammar. Window its existing projection, not its parser.
+    const indices = sourceRange ? projected.sourceOffsets.map((_, index) => index).filter(index =>
+        projected.sourceOffsets[index]! >= sourceRange.start && projected.sourceEnds[index]! <= sourceRange.end) : null;
+    const display = indices ? { ...projected, text: indices.map(index => projected.text[index]!).join(''),
+        sourceOffsets: indices.map(index => projected.sourceOffsets[index]!), sourceEnds: indices.map(index => projected.sourceEnds[index]!) } : projected;
     const displayIndex: number[] = [];
     let cursor = 0;
     for (let index = 0; index < through; index++) {
@@ -27,7 +34,6 @@ function alignRenderedToMarkdown(markdown: string, rendered: string, through = r
     }
     return { display, displayIndex };
 }
-
 /**
  * Where a selection the reader made in rendered Markdown sits in the Markdown source.
  *
@@ -40,10 +46,14 @@ export function mapRenderedSelectionToMarkdownSource(input: Readonly<{
     rendered: string;
     start: number;
     end: number;
+    /** A native block's admitted window in the full Markdown source. Offsets returned stay absolute. */
+    sourceRange?: Readonly<{ start: number; end: number }>;
 }>): Readonly<{ start: number; end: number }> | null {
     const { rendered } = input;
     if (input.start < 0 || input.end > rendered.length || input.start >= input.end) return null;
-    const { display, displayIndex } = alignRenderedToMarkdown(input.markdown, rendered, input.end);
+    if (input.sourceRange && (!Number.isInteger(input.sourceRange.start) || !Number.isInteger(input.sourceRange.end)
+        || input.sourceRange.start < 0 || input.sourceRange.start >= input.sourceRange.end || input.sourceRange.end > input.markdown.length)) return null;
+    const { display, displayIndex } = alignRenderedToMarkdown(input.markdown, rendered, input.end, input.sourceRange);
     let first: number | null = null;
     let last: number | null = null;
     for (let index = input.start; index < input.end; index++) {

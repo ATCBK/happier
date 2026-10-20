@@ -5,6 +5,7 @@ import { CORPUS_SESSION_LINKS_FIELD } from '../../corpus/collections/ids.js';
 import { triageEntryRowKey, type TriageListRowV1 } from '../../projection/listWindow.js';
 import { projectTriageSessionLinkedEntrySummary, type TriageSessionLinkedEntrySummaryV1 } from './linkedEntrySummary.js';
 import type { TriageSourceSessionLinkV1 } from '../sourceSessionRelations.js';
+import type { TriageSourceSessionLinksLaneV1 } from '../../actions/sessionLinksProtocol.js';
 export type { TriageSessionLinkedEntrySummaryV1 } from './linkedEntrySummary.js';
 
 /**
@@ -172,14 +173,20 @@ export function projectTriageSessionLinkedEntries(input: Readonly<{
     entries?: readonly TriageListRowV1[];
     workflowSubject?: (entryRef: TriageEntryRefV1) => TriageSourceWorkflowSubjectV1 | null;
     sourceLinks?: readonly TriageSourceSessionLinkV1[];
-    sourceLinksStatus?: 'loading' | 'ready' | 'failed';
+    sourceLinksStatus?: 'loading' | 'ready' | 'partial' | 'failed';
+    sourceLanes?: readonly TriageSourceSessionLinksLaneV1[];
 }>): TriageSessionLinkedEntriesViewV1 {
     const { query, hydration } = input;
-    const failed = query.status === 'unavailable' || query.status === 'error' || input.sourceLinksStatus === 'failed';
+    const queryFailed = query.status === 'unavailable' || query.status === 'error';
+    const sourceFailed = input.sourceLinksStatus === 'failed' || input.sourceLinksStatus === 'partial';
+    const unavailableSources = [...new Set((input.sourceLanes ?? []).filter((lane) => lane.health.kind !== 'complete').map((lane) => lane.displayLabel))];
+    const message = queryFailed || unavailableSources.length === 0 ? describeFailure(query.failure)
+        : `Some linked entries could not be read: ${unavailableSources.join(', ')}.`;
+    const failed = queryFailed || sourceFailed;
 
     if (query.rows.length === 0 && (input.sourceLinks?.length ?? 0) === 0) {
         // Absence is only authoritative from a settled page.
-        if (failed) return { kind: 'unavailable', message: describeFailure(query.failure) };
+        if (failed) return { kind: 'unavailable', message };
         return query.status === 'ready' && input.sourceLinksStatus !== 'loading' ? { kind: 'empty' } : { kind: 'loading' };
     }
 
@@ -209,7 +216,7 @@ export function projectTriageSessionLinkedEntries(input: Readonly<{
         more: query.hasMore,
         // Last-known-good rows stay on screen; the reason they may be stale is
         // said out loud rather than implied by their silence.
-        notice: failed ? describeFailure(query.failure) : null,
+        notice: failed ? message : null,
     });
 }
 

@@ -1,20 +1,39 @@
 import { Typography } from '@/constants/Typography';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { ToolView } from '@/components/tools/shell/views/ToolView';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { StyleSheet } from 'react-native-unistyles';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { useDemoMessages } from '@/hooks/session/useDemoMessages';
+import type { SessionTranscriptActions } from '@/components/sessions/transcript/source/types';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { HappyError } from '@/utils/errors/errors';
 
 // Tool views render inside a transcript source; this specimen has no messages of its own.
 const NO_MESSAGES: never[] = [];
+const ANSWERING_METADATA = { path: '/dev', host: 'dev', flavor: 'claude' } as const;
+const ANSWERING_INTERACTION = { canSendMessages: true, canApprovePermissions: true } as const;
+const ANSWERING_AGENT_STATE = { requests: { 'perm-ask-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 1 } } } as const;
 
 export default function Tools2Screen() {
     const [selectedExample, setSelectedExample] = useState<string>('all');
-    const transcriptSource = useDemoMessages(NO_MESSAGES);
+    const demoSource = useDemoMessages(NO_MESSAGES);
+    // `?answer=unknown` lets the pending permission and question cards answer, and every answer is lost: the unconfirmed state, specimen-only.
+    const { answer } = useLocalSearchParams<{ answer?: string }>();
+    const transcriptSource = useMemo(() => {
+        if (answer !== 'unknown') return demoSource;
+        const actions: SessionTranscriptActions = {
+            respondToPermission: async () => { throw new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }); },
+            answerUserAction: async () => { throw new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }); },
+            abort: async () => {},
+            submitMessage: async () => {},
+            readRequestOutcome: () => new Promise((resolve) => { setTimeout(() => resolve('pending'), 600); }),
+        };
+        return { ...demoSource, useInteraction: () => ANSWERING_INTERACTION, useAgentState: () => ANSWERING_AGENT_STATE, actions };
+    }, [answer, demoSource]);
 
     // Example tool calls data - matching ToolCall interface
     const examples = {
@@ -405,8 +424,10 @@ export function formatTime(date: Date): string {
             <View key={key} testID={`dev-tools2-example:${key}`} style={styles.exampleContainer}>
                 <Text style={styles.exampleTitle}>{key}</Text>
                 <ToolView 
-                    tool={example} 
-                    metadata={null}
+                    tool={example}
+                    sessionId={answer === 'unknown' ? transcriptSource.sessionId : undefined}
+                    forcePermissionPromptsInTranscript={answer === 'unknown'}
+                    metadata={answer === 'unknown' ? ANSWERING_METADATA : null}
                     interaction={interaction}
                     onPress={() => console.log(`Pressed tool: ${key}`)}
                 />

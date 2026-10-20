@@ -7,6 +7,8 @@ import type { Tx } from '@/storage/inTx';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 import { enqueuePendingMessageByAuthenticatedMachine } from './pendingMessageService';
 import { mutateSessionBoard } from '@/app/session/board/service';
+import { controlAutonomousExchange } from './autonomousExchangeControl';
+import { setSessionAttentionStanding, setSessionFolderAssignment, upsertSessionOrganizationFolder } from '@/app/session/organization/organizationMutations';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import {
     initializeSessionSystemRecordsProtocolV1Activation,
@@ -23,6 +25,152 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         expect(await initializeSessionSystemRecordsProtocolV1Activation(db)).toBe(true);
     });
     afterAll(async () => { resetSessionSystemRecordsProtocolV1ActivationForTests(); await db.$disconnect(); });
+
+    it('waits for every autonomous control Session before mutating its root or dependent Pending child', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const [source, destination] = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', currentStorageState: 'hosted',
+        } })));
+        const originLocalId = `origin-${randomUUID()}`;
+        const root = await db.sessionMessage.create({ data: {
+            sessionId: source.id, localId: originLocalId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'original' } } },
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: account.id, sessionRelationship: 'owner' },
+            autonomousExchangeState: { v: 1, observedStarts: 1, pauseAtStarts: 1, afterTurns: 1, stopped: false },
+        } });
+        const pending = await db.sessionPendingMessage.create({ data: {
+            sessionId: destination.id, localId: `dependent-${randomUUID()}`, position: 1,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'dependent' } } },
+            requestedAction: { v: 1, kind: 'enqueue' }, status: 'queued',
+            deliveryState: 'blocked', deliveryBlockedReason: 'autonomous_check_in',
+            autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: originLocalId,
+            autonomousExchangeCause: 'agent_session',
+        } });
+        await db.session.update({ where: { id: destination.id }, data: { pendingCount: 1, pendingBlockedCount: 1 } });
+        let writer: ReturnType<typeof controlAutonomousExchange> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${destination.id} FOR UPDATE`;
+                let finished = false;
+                writer = controlAutonomousExchange({ actorUserId: account.id, sessionId: source.id,
+                    originInputLocalId: originLocalId,
+                    request: { control: 'continue', observedRevision: `session-message-row-revision:v1:${root.rowRevision}` },
+                }).finally(() => { finished = true; });
+                void writer.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                await tx.$queryRaw`SELECT "id" FROM "SessionPendingMessage" WHERE "id" = ${pending.id} FOR UPDATE NOWAIT`;
+                await tx.$queryRaw`SELECT "id" FROM "SessionMessage" WHERE "id" = ${root.id} FOR UPDATE NOWAIT`;
+                expect(await tx.sessionPendingMessage.findUniqueOrThrow({ where: { id: pending.id } }))
+                    .toMatchObject({ deliveryState: 'blocked', deliveryBlockedReason: 'autonomous_check_in' });
+            });
+            expect(await writer).toMatchObject({ ok: true, state: { pauseAtStarts: 2 } });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { id: pending.id } }))
+                .toMatchObject({ deliveryState: null, deliveryBlockedReason: null });
+        } finally {
+            await writer;
+            await db.sessionMessage.deleteMany({ where: { sessionId: { in: [source.id, destination.id] } } });
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('waits for the assigned Session before deleting its existing folder-assignment child', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', currentStorageState: 'hosted',
+        } });
+        const folder = await upsertSessionOrganizationFolder({ accountId: account.id, request: {
+            folderKey: randomUUID(), parentFolderId: null, parentFolderKey: null, sortKey: null, display: null,
+        } });
+        if ('error' in folder) throw new Error(`Unexpected folder setup refusal: ${folder.error}`);
+        const authentication = createPresentUserSessionAccessAuthentication();
+        await db.sessionFolderAssignment.create({ data: {
+            accountId: account.id, sessionId: session.id, folderId: folder.folder.folderId,
+        } });
+        let writer: ReturnType<typeof setSessionFolderAssignment> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${session.id} FOR UPDATE`;
+                let finished = false;
+                writer = setSessionFolderAssignment({ accountId: account.id, sessionId: session.id,
+                    folderId: null, authentication }).finally(() => { finished = true; });
+                void writer.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                await tx.$queryRaw`SELECT "sessionId" FROM "SessionFolderAssignment"
+                    WHERE "accountId" = ${account.id} AND "sessionId" = ${session.id} FOR UPDATE NOWAIT`;
+            });
+            expect(await writer).toEqual({ sessionId: session.id, folderId: null });
+            expect(await db.sessionFolderAssignment.count({ where: { accountId: account.id, sessionId: session.id } })).toBe(0);
+        } finally {
+            await writer;
+            await db.session.delete({ where: { id: session.id } });
+            await db.sessionOrganizationFolder.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('waits for a reminder Session before moving its existing viewer-read child', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', currentStorageState: 'hosted', seq: 1,
+        } });
+        await db.accountSessionReadState.create({ data: {
+            accountId: account.id, sessionId: session.id, lastViewedSessionSeq: 0, unreadSince: new Date(),
+        } });
+        let writer: ReturnType<typeof setSessionAttentionStanding> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${session.id} FOR UPDATE`;
+                let finished = false;
+                writer = setSessionAttentionStanding({ accountId: account.id, sessionId: session.id,
+                    request: { remindAt: Date.now() + 60_000 },
+                    authentication: createPresentUserSessionAccessAuthentication(),
+                }).finally(() => { finished = true; });
+                void writer.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                await tx.$queryRaw`SELECT "sessionId" FROM "AccountSessionReadState"
+                    WHERE "accountId" = ${account.id} AND "sessionId" = ${session.id} FOR UPDATE NOWAIT`;
+                expect(await tx.accountSessionReadState.findUniqueOrThrow({
+                    where: { accountId_sessionId: { accountId: account.id, sessionId: session.id } },
+                })).toMatchObject({ lastViewedSessionSeq: 0 });
+            });
+            expect(await writer).toMatchObject({ standing: { sessionId: session.id, standing: false } });
+            expect(await db.accountSessionReadState.findUniqueOrThrow({
+                where: { accountId_sessionId: { accountId: account.id, sessionId: session.id } },
+            })).toMatchObject({ lastViewedSessionSeq: 1, unreadSince: null });
+        } finally {
+            await writer;
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
 
     it('commits two concurrent Board writes on one Account under ReadCommitted', async () => {
         const account = await db.account.create({ data: { publicKey: `contention-board-${randomUUID()}`, encryptionMode: 'plain' } });

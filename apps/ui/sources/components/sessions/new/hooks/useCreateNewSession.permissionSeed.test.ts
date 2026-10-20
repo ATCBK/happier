@@ -1137,7 +1137,7 @@ describe('useCreateNewSession permission seeding', () => {
         }
     });
 
-    it('runs local slash actions for the created session without sending the slash text as the first message', async () => {
+    it.each(['/h.runs', '/pet'])('runs %s for the created session without sending the slash text as the first message', async (command) => {
         const {
             useCreateNewSession,
             captured,
@@ -1146,6 +1146,7 @@ describe('useCreateNewSession permission seeding', () => {
         } = await setupUseCreateNewSessionHarness();
 
         mockSessionSpawnSuccess('sess_runs');
+        const replace = vi.fn();
 
         let handleCreateSession: null | (() => Promise<void>) = null;
         const settings = { experiments: false, featureToggles: { 'execution.runs': true } } as unknown as Settings;
@@ -1161,7 +1162,7 @@ describe('useCreateNewSession permission seeding', () => {
         function Test() {
             const hook = useCreateNewSession({
         launchIntentSignature: 'test-launch-intent',
-                router: { push: vi.fn(), replace: vi.fn() },
+                router: { push: vi.fn(), replace },
                 selectedMachineId: 'm1',
                 selectedPath: '/tmp',
                 selectedMachine: createMachineFixture({ id: 'm1' }),
@@ -1174,7 +1175,7 @@ describe('useCreateNewSession permission seeding', () => {
                 agentType: 'codex' as any,
                 permissionMode: 'default' as PermissionMode,
                 modelMode: 'default' as ModelMode,
-                promptStore: createNewSessionPromptStore('/h.runs'),
+                promptStore: createNewSessionPromptStore(command),
                 resumeSessionId: '',
                 agentNewSessionOptions: null,
                 machineEnvPresence,
@@ -1199,6 +1200,7 @@ describe('useCreateNewSession permission seeding', () => {
 
         expect(captured.value?.initialInput).toBeUndefined();
         expect(syncSendMessageSpy).not.toHaveBeenCalled();
+        if (command === '/pet') expect(replace.mock.calls.map(([href]) => href)).toContain('/settings/pets');
     });
 
     it('passes connectedServices bindings into the strict Action request when provided', async () => {

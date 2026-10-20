@@ -17,7 +17,6 @@ import { voiceSurfaceHaptics } from '@/components/voice/surface/voiceSurfaceHapt
 import { useProjectedConnectedServicesRegistry, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -26,7 +25,6 @@ import { readVoiceProviderSettingsConfig, voiceSettingsParse } from '@/sync/doma
 import { useSessionStatus } from '@/utils/sessions/sessionUtils';
 import {
     canDismissVoiceSessionFailedAttempt,
-    dismissVoiceSessionEndedAttempt,
     getVoiceSessionAttemptStartedAt,
     getVoiceSessionPresentedAttemptId,
     getVoiceSessionFirstSuccessAttemptId,
@@ -61,6 +59,9 @@ import { useFocusedSessionAddress } from '@/sync/domains/session/sessionSurfaceV
 import { resolveVoiceIdleTarget, useVoiceTargetStore, type VoiceStartIntent } from '@/voice/runtime/voiceTargetStore';
 import { isVoiceMachineErrorKind } from '@/voice/runtime/machine/voiceMachineError';
 import { resolveVoiceMachineErrorTranslationKey } from '@/voice/runtime/machine/voiceMachineErrorCopy';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { VoiceConversationActionOutputSchemas, type VoiceConversationActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import { createFrontDoorUiActionExecutor, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import {
     resolveVoiceAttemptControl,
@@ -143,14 +144,14 @@ export type VoiceAttemptControlProjection = VoiceAttemptControl & Readonly<{
     pendingRequestSessionAddress?: SessionAddress | null;
     /** Applied voice from the current admitted attempt; never the next saved preference. */
     inUseVoice?: import('@happier-dev/protocol/actions/voiceConversationActionFamily').VoiceConversationInUseVoice | null;
-    onPrimaryAction: () => void;
+    onPrimaryAction: () => void | Promise<boolean>;
     /** Starts the caller's idle target when idle; ends the running attempt otherwise. Never re-targets. */
     onToggle: () => void;
     onToggleMute: () => void;
     commitInputLabel?: string | null;
     onCommitInput?: () => void;
     /** The canonical recovery dispatch shared by every container and glance. */
-    onRecover: () => void;
+    onRecover: () => void | Promise<boolean>;
     /**
      * The exact session destination read from the canonical binding. A targetless runtime
      * attempt opens Voice History instead, so its address/id are null but canOpenConversation is true.
@@ -175,6 +176,7 @@ export type VoiceAttemptControlProjection = VoiceAttemptControl & Readonly<{
  */
 export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): VoiceAttemptControlProjection {
     const router = useRouter();
+    const navigateWithFocusReturn = useNavigationFocusReturn();
     const snap = useVoiceSessionSnapshot();
     const expectedAttempt = getVoiceSessionPresentedAttemptId();
     const inputSourceActive = useVoiceInputSourceActive();
@@ -196,6 +198,24 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     );
     const presentedEnded = snap.status === 'disconnected' ? ended : null;
     const currentAccountScope = useActiveServerAccountScope();
+    const { executeValue } = useMountedActionExecution(currentAccountScope, { openOnRequest: true });
+    const executeControl = React.useCallback(async (
+        actionId: VoiceConversationActionId, input: unknown, tag: string, operation?: UiActionOperation,
+    ) => {
+        try {
+            // Approval can await: retain the originating tab and focus-return target, not the then-focused destination.
+            const navigation = actionId === 'ui.voice_global.recover' || actionId === 'ui.voice_global.open_conversation'
+                ? navigateWithFocusReturn.capture() : null;
+            const result = await executeValue(actionId, input, {
+                ...operation,
+                ...(navigation ? { openRoute: (route: string) => navigation.navigate(() => router.push(route as never)) } : {}),
+            });
+            return VoiceConversationActionOutputSchemas[actionId].parse(result).status === 'completed';
+        } catch (error) {
+            fireAndForget(Promise.reject(error), { tag });
+            return false;
+        }
+    }, [executeValue, navigateWithFocusReturn, router]);
     const surfaceState = resolveVoiceSurfaceState({
         status: snap.status,
         mode: snap.mode,
@@ -283,7 +303,6 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     const activeServerSnapshot = useActiveServerSnapshot();
     const voiceExecutionMachine = useVoiceExecutionMachinePresentation();
     const connectedServicesRegistry = useProjectedConnectedServicesRegistry();
-    const navigateWithFocusReturn = useNavigationFocusReturn();
     const agentRuntime = capabilities?.agentRuntime ?? null;
     /*
      * `resolveVoiceAdapterSurfaceCapabilities` freezes a new capability object on every call, so a
@@ -491,17 +510,9 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     );
 
     const onOpenConversation = React.useCallback(() => {
-        if (!openConversationTarget) return;
-        if (presentedEnded && !areServerAccountScopesEqual(presentedEnded.accountScope, storage.getState().profileScope)) return;
-        if (!openConversationTarget.address) {
-            router.push(SETTINGS_ROUTES.voiceHistory as never);
-            return;
-        }
-        router.push(buildScopedSessionRouteHref({
-            sessionId: openConversationTarget.address.sessionId,
-            serverId: openConversationTarget.address.serverId,
-        }) as never);
-    }, [openConversationTarget, presentedEnded, router]);
+        if (!openConversationTarget || !expectedAttempt) return;
+        return executeControl('ui.voice_global.open_conversation', { expectedAttempt }, 'VoiceAttemptControl.openConversation');
+    }, [executeControl, expectedAttempt, openConversationTarget]);
 
 
     const presentedSession = useSession(pendingRequestSessionAddress?.sessionId ?? openConversationSessionId ?? snapSessionId ?? '',
@@ -511,9 +522,27 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     // Hold is not inferred from commitInput or mute: the capture-input owner must admit the gesture.
     const canHoldToTalk = snap.status === 'connected' && snap.canHoldToTalk === true;
     const beginHoldToTalk = React.useCallback(() => {
-        if (!canHoldToTalk || !snapSessionId || !voiceSessionManager.matchesAttempt(expectedAttempt)) return null;
-        return voiceSessionManager.beginHoldToTalk(snapSessionId);
-    }, [canHoldToTalk, expectedAttempt, snapSessionId]);
+        if (!canHoldToTalk || !snapSessionId || !expectedAttempt || !voiceSessionManager.matchesAttempt(expectedAttempt)) return null;
+        const admission = new AbortController();
+        const finishAction = createFrontDoorUiActionExecutor(undefined, currentAccountScope
+            ? { serverId: currentAccountScope.serverId, expectedAccountId: currentAccountScope.accountId } : undefined);
+        let admitted = false;
+        let finishing: Promise<void> | null = null;
+        const ready = executeControl('ui.voice_global.hold_begin', { expectedAttempt }, 'VoiceAttemptControl.holdBegin',
+            { signal: admission.signal }).then(result => { admitted = result; return result; });
+        const finish = (outcome: 'release' | 'cancel'): Promise<void> => {
+            if (finishing) return finishing;
+            // Releasing before admission must never open capture later, including while Ask first is pending.
+            if (!admitted) admission.abort();
+            finishing = (async () => {
+                if (!await ready) return;
+                // The admitted gesture must release capture even when its presenter just unmounted.
+                await finishAction(outcome === 'release' ? 'ui.voice_global.hold_release' : 'ui.voice_global.hold_cancel', { expectedAttempt });
+            })();
+            return finishing;
+        };
+        return { ready, release: () => finish('release'), cancel: () => finish('cancel') } satisfies VoiceHeldInput;
+    }, [canHoldToTalk, currentAccountScope, executeControl, expectedAttempt, snapSessionId]);
     const control = React.useMemo(() => resolveVoiceAttemptControl({
         surfaceState,
         tone: resolveVoiceSurfaceStatusPresentation(surfaceState).tone,
@@ -572,8 +601,8 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     const canMute = control.canMute;
     const muted = control.muted;
 
-    const onToggle = React.useCallback(() => {
-        if (!voiceSessionManager.matchesAttempt(expectedAttempt)) return;
+    const onToggle = React.useCallback(async () => {
+        if (!voiceSessionManager.matchesAttempt(expectedAttempt)) return false;
         if (canStop) {
             /*
              * The **running attempt's** session, never the idle target: a surface that stopped its
@@ -581,44 +610,46 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
              * second one that never started.
              */
             const sessionId = snapSessionId?.trim() ?? '';
-            if (!sessionId) return;
+            if (!sessionId || !expectedAttempt) return false;
             voiceSurfaceHaptics.notify('start_stop');
-            fireAndForget(voiceSessionManager.stop(sessionId), { tag: 'VoiceAttemptControl.stop' });
-            return;
+            return await executeControl('ui.voice_global.end', { expectedAttempt }, 'VoiceAttemptControl.stop');
         }
-        if (!canStart) return;
+        if (!canStart) return false;
         // The caller's stated target. The empty session id is the canonical global/hidden-owner start.
         voiceSurfaceHaptics.notify('start_stop');
-        fireAndForget(voiceSessionManager.toggle(startSessionAddress), { tag: 'VoiceAttemptControl.toggle' });
-    }, [canStart, canStop, expectedAttempt, snapSessionId, startSessionAddress]);
+        return await executeControl('ui.voice_global.start', { target: resolvedIdleTarget, expectedAttempt: null }, 'VoiceAttemptControl.toggle');
+    }, [canStart, canStop, executeControl, expectedAttempt, resolvedIdleTarget, snapSessionId]);
 
     const onToggleMute = React.useCallback(() => {
         const sessionId = snapSessionId?.trim() ?? '';
         if (!canMute || !sessionId || !voiceSessionManager.matchesAttempt(expectedAttempt)) return;
-        fireAndForget(voiceSessionManager.setMuted(sessionId, !muted), { tag: 'VoiceAttemptControl.mute' });
-    }, [canMute, expectedAttempt, muted, snapSessionId]);
+        return executeControl('ui.voice_global.set_muted', { expectedAttempt, muted: !muted }, 'VoiceAttemptControl.mute');
+    }, [canMute, executeControl, expectedAttempt, muted, snapSessionId]);
 
     const onDismissFailedAttempt = React.useCallback(() => {
         if (control.canDismissFailedAttempt !== true || !voiceSessionManager.matchesAttempt(expectedAttempt)) return;
-        fireAndForget(voiceSessionManager.dismissFailedAttempt(snapSessionId), { tag: 'VoiceAttemptControl.dismissFailedAttempt' });
-    }, [control.canDismissFailedAttempt, expectedAttempt, snapSessionId]);
+        return executeControl('ui.voice_global.dismiss', { expectedAttempt, kind: 'failed' }, 'VoiceAttemptControl.dismissFailedAttempt');
+    }, [control.canDismissFailedAttempt, executeControl, expectedAttempt]);
 
     const onCommitInput = React.useCallback(() => {
         if (control.canCommitInput !== true || !snapSessionId || !voiceSessionManager.matchesAttempt(expectedAttempt)) return;
-        fireAndForget(voiceSessionManager.commitInput(snapSessionId), { tag: 'VoiceAttemptControl.commitInput' });
-    }, [control.canCommitInput, expectedAttempt, snapSessionId]);
+        return executeControl('ui.voice_global.turn_control', { expectedAttempt, control: 'commit_input' }, 'VoiceAttemptControl.commitInput');
+    }, [control.canCommitInput, executeControl, expectedAttempt, snapSessionId]);
     const commitInputLabel = control.canCommitInput === true ? t('common.send') : null;
 
-    const onRecover = React.useMemo(() => createVoiceAttemptRecoveryDispatch({
+    const recoverBeforeAttempt = React.useMemo(() => createVoiceAttemptRecoveryDispatch({
         expectedAttempt,
         recoveryAction,
         setupIncomplete,
         context: recoveryContext,
         navigate: (href: unknown) => navigateWithFocusReturn(() => router.push(href as never)),
     }), [expectedAttempt, navigateWithFocusReturn, recoveryAction, recoveryContext, router, setupIncomplete]);
+    const onRecover = React.useCallback(() => expectedAttempt
+        ? executeControl('ui.voice_global.recover', { expectedAttempt }, 'VoiceAttemptControl.recover')
+        : recoverBeforeAttempt(), [executeControl, expectedAttempt, recoverBeforeAttempt]);
     const onDismissEnded = React.useCallback(() => {
-        if (voiceSessionManager.matchesAttempt(expectedAttempt)) dismissVoiceSessionEndedAttempt();
-    }, [expectedAttempt]);
+        if (expectedAttempt) return executeControl('ui.voice_global.dismiss', { expectedAttempt, kind: 'ended' }, 'VoiceAttemptControl.dismissEnded');
+    }, [executeControl, expectedAttempt]);
 
     /*
      * One label per recovery action for every placement (R12b), owned by the recovery resolver. A
@@ -674,14 +705,13 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
                     : null;
     const onPrimaryAction = React.useCallback(() => {
         if (control.primaryAction === 'recover') {
-            onRecover();
-            return;
+            return onRecover();
         }
         if (control.primaryAction === 'setup') {
             navigateWithFocusReturn(() => router.push(SETTINGS_ROUTES.voice as never));
             return;
         }
-        if (control.primaryAction === 'start' || control.primaryAction === 'end') onToggle();
+        if (control.primaryAction === 'start' || control.primaryAction === 'end') return onToggle();
     }, [control.primaryAction, navigateWithFocusReturn, onRecover, onToggle, router]);
 
     return React.useMemo(

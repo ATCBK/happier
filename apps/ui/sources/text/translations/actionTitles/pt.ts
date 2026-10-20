@@ -578,7 +578,7 @@ export const pt = {
     connectedServices_accounts_revoke: "Revogar conta conectada",
     connectedServices_accounts_default_set: "Definir conta conectada padrão",
     connectedServices_accounts_purposeDefault_set: "Escolher login padrão do agente",
-    connectedServices_purposes_default_set: "Escolher conta conectada padrão do recurso",
+    connectedServices_purposes_default_set: "Escolher conta conectada padrão",
     connectedServices_pools_create: "Criar pool de serviços conectados",
     connectedServices_pools_patch: "Editar pool de serviços conectados",
     connectedServices_pools_delete: "Excluir pool de serviços conectados",

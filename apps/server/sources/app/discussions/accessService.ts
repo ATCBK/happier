@@ -26,9 +26,9 @@ import { RECIPIENT_READINESS_SELECT } from "@/app/session/encryption/sessionData
 import { applyResourceRecipientKeyEnvelopesInTx, mayManageResourceGrants, projectResourceRecipientCensus,
     projectResourceRecipientEnvelope, validateResourceGrantPrincipalInTx, validateResourceRecipientEnvelopeCommit,
     type ResourceRecipientEnvelopeStorageAdapter } from "@/app/teams/resourceGrantAccess";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
-import { discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
+import { acquireDiscussionMutationAccountsInTx, discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
     resolveDiscussionContextInTx, type DiscussionStorageMode } from "./access";
 import { discussionFailure, discussionSuccess, type DiscussionResult } from "./serviceTypes";
 import { initializeDiscussionCursorsOnGrantEntryInTx } from "./trackingEntry";
@@ -62,7 +62,7 @@ export async function validateInitialDiscussionGrantsInTx(tx: Tx, input: Readonl
     if (!owner) return discussionFailure("discussion_not_found");
     const mode = resolveEffectiveAccountEncryptionModeFromAccountRow(owner);
     if (mode.status !== "ready") return discussionFailure("discussion_encryption_mode_mismatch");
-    const participantAccountIds = (input.request.participants ?? []).map(participant => participant.accountId);
+    const participantAccountIds = (input.request.participants ?? []).flatMap(participant => participant.kind === 'account' ? [participant.accountId] : []);
     if (new Set(participantAccountIds).size !== participantAccountIds.length) return discussionFailure("discussion_subject_ineligible");
     for (const accountId of participantAccountIds) {
         const error = await validateResourceGrantPrincipalInTx(tx, input.actorAccountId, { kind: "account", accountId });
@@ -151,6 +151,8 @@ async function mutationResultInTx(tx: Tx, input: DiscussionActorInput, ownerAcco
 
 /** Only shared resource policy decides management authority and eligible principals. */
 export async function setDiscussionGrantInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionAccessGrantSetRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalGrantPrincipal: input.request.principal });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access, input.request.accessLevel)) return discussionFailure("discussion_access_forbidden");
@@ -190,6 +192,8 @@ async function deleteDiscussionGrantInTx(tx: Tx, discussionId: string, principal
 
 /** A revoked caller receives no roster; grants and private key/cursor retirement commit together. */
 export async function removeDiscussionGrantInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionAccessGrantRemoveRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalAccountIds: input.request.principal.kind === 'account' ? [input.request.principal.accountId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -211,6 +215,8 @@ export async function inviteDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (request.participant.kind === "account") {
         return setDiscussionGrantInTx(tx, { ...input, request: { principal: request.participant, accessLevel: "edit" } });
     }
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: request.participant.kind === 'session' ? [request.participant.sessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -257,10 +263,16 @@ export async function inviteDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (!runtime?.keyReadiness) return discussionFailure("discussion_content_unavailable");
     const where = { discussionId_sessionId: { discussionId: input.discussionId, sessionId: request.participant.sessionId } };
     const existing = await tx.discussionParticipant.findUnique({ where, select: { answerPolicy: true, removedAt: true } });
-    if (existing?.removedAt) return discussionFailure("discussion_subject_ineligible");
-    const answerPolicy = requestedAnswerPolicy ?? existing?.answerPolicy ?? "when_addressed";
-    const changed = existing?.answerPolicy !== answerPolicy;
-    if (existing && changed && requestedAnswerPolicy !== undefined) {
+    const readmitting = existing?.removedAt != null;
+    // An explicit, currently authorized Session invitation may readmit its
+    // retained model binding without changing ownership or launch identity.
+    // Like a new independent binding, it never inherits retired watch policy.
+    const answerPolicy = requestedAnswerPolicy ?? (readmitting ? undefined : existing?.answerPolicy) ?? "when_addressed";
+    const changed = readmitting || existing?.answerPolicy !== answerPolicy;
+    if (readmitting) {
+        await tx.discussionParticipant.update({ where, data: { removedAt: null, answerPolicy } });
+        await markDiscussionReadersChangedInTx({ tx, discussionId: input.discussionId, accessChanged: true });
+    } else if (existing && changed && requestedAnswerPolicy !== undefined) {
         const updated = await setDiscussionParticipantPolicyInTx(tx, { ...input, request: { participant: request.participant, answerPolicy: requestedAnswerPolicy } });
         if (!updated.ok) return updated;
     } else if (!existing) {
@@ -278,6 +290,8 @@ export async function setDiscussionParticipantPolicyInTx(tx: Tx, input: Discussi
 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
     const parsed = DiscussionParticipantPolicySetRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure("discussion_invalid_content");
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: parsed.data.participant.kind === 'session' ? [parsed.data.participant.sessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
         accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
@@ -304,6 +318,13 @@ export async function removeDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (!parsed.success) return discussionFailure("discussion_invalid_content");
     const participant = parsed.data.participant;
     if (participant.kind === "account") return removeDiscussionGrantInTx(tx, { ...input, request: { principal: participant } });
+    const capturedModelSessionId = participant.kind === "model"
+        ? (await tx.discussionParticipant.findUnique({ where: { discussionId_participantSlotId: {
+            discussionId: input.discussionId, participantSlotId: participant.participantSlotId,
+        } }, select: { sessionId: true } }))?.sessionId ?? null : null;
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: participant.kind === 'session' ? [participant.sessionId]
+            : capturedModelSessionId ? [capturedModelSessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -311,15 +332,25 @@ export async function removeDiscussionParticipantInTx(tx: Tx, input: DiscussionA
         ...(participant.kind === "model" ? { participantSlotId: participant.participantSlotId }
             : { sessionId: participant.sessionId }) } });
     if (row && participant.kind === "model" && row.modelLaunch == null) return discussionFailure("discussion_subject_ineligible");
+    if (participant.kind === "model" && (row?.sessionId ?? null) !== capturedModelSessionId) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
     const changed = Boolean(row && !row.removedAt);
     if (row && changed) {
+        if (row.modelLaunch != null) {
+            // Retire the nullable binding before touching its Follow/reply
+            // children. The birth owner's matching CAS cannot bind a new
+            // Session after this attempt captured an unbound model slot.
+            const retired = await tx.discussionParticipant.updateMany({ where: { discussionId: input.discussionId,
+                participantSlotId: row.participantSlotId, removedAt: null, sessionId: row.sessionId },
+                data: { removedAt: new Date() } });
+            if (retired.count !== 1) throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
         if (row.sessionId) {
             await withdrawDiscussionInputRepliesInTx(tx, { discussionId: input.discussionId, participantSessionId: row.sessionId });
             await detachDiscussionFollowSourceInTx(tx, { discussionId: input.discussionId, destinationSessionId: row.sessionId });
         }
-        if (row.modelLaunch != null) await tx.discussionParticipant.update({ where: { discussionId_participantSlotId: {
-            discussionId: input.discussionId, participantSlotId: row.participantSlotId } }, data: { removedAt: new Date() } });
-        else await tx.discussionParticipant.delete({ where: { discussionId_participantSlotId: {
+        if (row.modelLaunch == null) await tx.discussionParticipant.delete({ where: { discussionId_participantSlotId: {
             discussionId: input.discussionId, participantSlotId: row.participantSlotId } } });
         await markDiscussionReadersChangedInTx({ tx, discussionId: input.discussionId, accessChanged: true });
     }
@@ -382,6 +413,7 @@ export interface ValidatedDiscussionParticipantBirth {
 /** Ordinary Session birth consumes the reserved setup; the public ref alone grants no authority. */
 export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: DiscussionParticipantBirthInput): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
     const { discussionId, participantSlotId } = input.discussionParticipant;
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId, actorAccountId: input.accountId });
     const context = await resolveDiscussionContextInTx(tx, { discussionId, accountId: input.accountId,
         authentication: input.authentication ?? backgroundDeliveryAuthentication() });
     if (!context) return discussionFailure("discussion_not_found");
@@ -401,6 +433,8 @@ export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: Disc
 
 /** Bind inside the creator's transaction, after live runtime/disclosure admission and before commit. */
 export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: DiscussionParticipantBirthInput & Readonly<{ sessionId: string }>): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.discussionParticipant.discussionId,
+        actorAccountId: input.accountId, additionalSessionIds: [input.sessionId] });
     const admitted = await validateDiscussionParticipantBirthInTx(tx, input);
     if (!admitted.ok) return admitted;
     if (admitted.value.sessionId && admitted.value.sessionId !== input.sessionId) return discussionFailure("discussion_idempotency_conflict");
@@ -429,6 +463,7 @@ export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: Discus
 
 /** Own-row removal is idempotent and never discloses a resource owner or roster to an outsider. */
 export async function leaveDiscussionInTx(tx: Tx, input: DiscussionActorInput): Promise<DiscussionResult<DiscussionLeaveResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, input);
     if (input.authentication.authority !== "present_user" || input.authentication.sessionRuntimePrincipal) return discussionFailure("discussion_access_forbidden");
     if (!await isDiscussionAccountCredentialAdmittedInTx(tx, { accountId: input.actorAccountId, authentication: input.authentication })) return discussionFailure("discussion_not_found");
     const row = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true } });
@@ -442,6 +477,7 @@ export async function leaveDiscussionInTx(tx: Tx, input: DiscussionActorInput): 
 
 /** Transfer reuses an already entitled recipient's current envelope, without changing the content key. */
 export async function transferDiscussionOwnerInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionOwnerTransferRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input, additionalAccountIds: [input.request.accountId] });
     if (input.authentication.authority !== "present_user" || input.authentication.sessionRuntimePrincipal) return discussionFailure("discussion_access_forbidden");
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
@@ -512,6 +548,8 @@ export async function readDiscussionRecipientCensusInTx(tx: Tx, input: Discussio
 
 /** Key commits use the shared owner-key fence and recipient-currentness admission. */
 export async function commitDiscussionRecipientKeyEnvelopesInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionRecipientKeyEnvelopeCommitInputV1 }>): Promise<DiscussionResult<DiscussionRecipientKeyEnvelopeCommitResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalAccountIds: input.request.recipientKeyEnvelopes.map(envelope => envelope.recipientAccountId) });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (context.storageMode === "plain") return discussionFailure("data_key_not_required");
@@ -523,15 +561,34 @@ export async function commitDiscussionRecipientKeyEnvelopesInTx(tx: Tx, input: D
         { resourceId: input.discussionId, recipientKeyEnvelopes: input.request.recipientKeyEnvelopes }));
 }
 
+async function readDiscussionGrantAudienceRowsForTeamsInTx(tx: Tx, teamIds: readonly string[]) {
+    if (teamIds.length === 0) return [];
+    return await tx.discussion.findMany({ where: { OR: [
+        { teamGrants: { some: { teamId: { in: [...teamIds] } } } },
+        { groupGrants: { some: { teamGroup: { teamId: { in: [...teamIds] } } } } },
+    ] }, select: { id: true, readStates: { select: { accountId: true } }, keyEnvelopes: { select: { recipientAccountId: true } } } });
+}
+
+/** Read the complete current and retained publication audience without mutating grants. */
+export async function readDiscussionGrantAudienceForTeamsInTx(tx: Tx, input: Readonly<{
+    teamIds: readonly string[]; additionalAccountIds?: readonly string[];
+}>): Promise<readonly string[]> {
+    const rows = await readDiscussionGrantAudienceRowsForTeamsInTx(tx, input.teamIds);
+    const accountIds = new Set<string>();
+    for (const row of rows) {
+        for (const accountId of await resolveDiscussionAudienceInTx(tx, row.id)) accountIds.add(accountId);
+        for (const state of row.readStates) accountIds.add(state.accountId);
+        for (const envelope of row.keyEnvelopes) accountIds.add(envelope.recipientAccountId);
+        for (const accountId of input.additionalAccountIds ?? []) accountIds.add(accountId);
+    }
+    return [...accountIds].sort();
+}
+
 /** Existing Team/Group lifecycle publication consumes this resource-owned audience transition. */
 export async function reconcileDiscussionGrantAudienceForTeamsInTx(tx: Tx, input: Readonly<{
     teamIds: readonly string[]; additionalAccountIds?: readonly string[];
 }>): Promise<void> {
-    if (input.teamIds.length === 0) return;
-    const rows = await tx.discussion.findMany({ where: { OR: [
-        { teamGrants: { some: { teamId: { in: [...input.teamIds] } } } },
-        { groupGrants: { some: { teamGroup: { teamId: { in: [...input.teamIds] } } } } },
-    ] }, select: { id: true, readStates: { select: { accountId: true } }, keyEnvelopes: { select: { recipientAccountId: true } } } });
+    const rows = await readDiscussionGrantAudienceRowsForTeamsInTx(tx, input.teamIds);
     for (const row of rows) {
         const previous = [...new Set([...row.readStates.map(state => state.accountId), ...row.keyEnvelopes.map(envelope => envelope.recipientAccountId),
             ...input.additionalAccountIds ?? []])];
@@ -539,12 +596,17 @@ export async function reconcileDiscussionGrantAudienceForTeamsInTx(tx: Tx, input
     }
 }
 
+/** Discovery and physical cleanup consume the same retained grant predicates. */
+export function readDiscussionAccessGrantsForAccountErasureInTx(tx: Tx, accountId: string) {
+    return tx.discussion.findMany({ where: { OR: [
+        { ownerAccountId: accountId }, { accountGrants: { some: { OR: [{ accountId }, { createdByAccountId: accountId }] } } },
+        { teamGrants: { some: { createdByAccountId: accountId } } }, { groupGrants: { some: { createdByAccountId: accountId } } },
+    ] }, select: { id: true, ownerAccountId: true } });
+}
+
 /** Account erasure preserves other people's grants while retiring its own authority and private state. */
 export async function eraseDiscussionAccessGrantsForAccountInTx(tx: Tx, input: Readonly<{ accountId: string }>): Promise<void> {
-    const rows = await tx.discussion.findMany({ where: { OR: [
-        { ownerAccountId: input.accountId }, { accountGrants: { some: { OR: [{ accountId: input.accountId }, { createdByAccountId: input.accountId }] } } },
-        { teamGrants: { some: { createdByAccountId: input.accountId } } }, { groupGrants: { some: { createdByAccountId: input.accountId } } },
-    ] }, select: { id: true, ownerAccountId: true } });
+    const rows = await readDiscussionAccessGrantsForAccountErasureInTx(tx, input.accountId);
     for (const row of rows) {
         const previousAudience = await resolveDiscussionAudienceInTx(tx, row.id);
         if (row.ownerAccountId === input.accountId) {

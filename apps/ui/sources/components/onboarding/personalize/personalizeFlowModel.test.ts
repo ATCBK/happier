@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { applySettings, settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { applyLocalSettings, localSettingsDefaults } from '@/sync/domains/settings/localSettings';
-import { readGlassPreset } from '@/components/ui/glass/glassMaterial';
 
 import {
     applyStartingStyle,
@@ -49,21 +48,20 @@ describe('Personalize choices', () => {
 
     it('writes only what a step changed, through each owner', () => {
         const choices = readPersonalizeChoices(account, local);
-        expect(resolvePersonalizeStepWrite('conversation', choices, account, local)).toEqual({ account: null, local: null, theme: null });
+        expect(resolvePersonalizeStepWrite('conversation', choices, account, local)).toEqual({ settings: [], theme: null });
 
-        expect(resolvePersonalizeStepWrite('conversation', { ...choices, transcriptLayout: 'linear', thinking: 'inline_full' }, account, local).account)
-            .toEqual({ transcriptGroupingMode: 'linear', sessionThinkingDisplayMode: 'inline', sessionThinkingInlinePresentation: 'full' });
-        expect(resolvePersonalizeStepWrite('work', { ...choices, listLayout: 'recent_activity', listDensity: 'cozy' }, account, local).account)
-            .toEqual({ sessionListSectionModeV1: 'single', sessionListActiveGroupingV1: 'date', sessionListDensity: 'cozy' });
-        expect(resolvePersonalizeStepWrite('attention', { ...choices, attention: 'withinGroups' }, account, local).account)
-            .toEqual({ sessionListAttentionPromotionModeV1: 'withinGroups' });
-        expect(resolvePersonalizeStepWrite('tools', { ...choices, toolChrome: 'cards', toolTap: 'open' }, account, local).account)
-            .toEqual({ toolViewTimelineChromeMode: 'cards', toolViewTapAction: 'open' });
+        expect(resolvePersonalizeStepWrite('conversation', { ...choices, transcriptLayout: 'linear', thinking: 'inline_full' }, account, local).settings)
+            .toEqual([{ anchor: 'transcript.layoutPicker', value: 'linear' }, { anchor: 'transcript.displayMode', value: 'inline_full' }]);
+        expect(resolvePersonalizeStepWrite('work', { ...choices, listLayout: 'recent_activity', listDensity: 'cozy' }, account, local).settings)
+            .toEqual([{ anchor: 'session.layout', value: 'recent_activity' }, { anchor: 'session.listDensity', value: 'cozy' }]);
+        expect(resolvePersonalizeStepWrite('attention', { ...choices, attention: 'withinGroups' }, account, local).settings)
+            .toEqual([{ anchor: 'session.attentionPromotion', value: 'withinGroups' }]);
+        expect(resolvePersonalizeStepWrite('tools', { ...choices, toolChrome: 'cards', toolTap: 'open' }, account, local).settings)
+            .toEqual([{ anchor: 'transcript.timelineChrome', value: 'cards' }, { anchor: 'transcript.cardTapAction', value: 'open' }]);
 
         const look = resolvePersonalizeStepWrite('look', { ...choices, theme: 'dark', glass: 'solid' }, account, local);
         expect(look.theme).toBe('dark');
-        // The glass owner's own delta: reading it back gives the picked preset.
-        expect(readGlassPreset(applySettings(account, look.account!))).toBe('solid');
+        expect(look.settings).toEqual([{ anchor: 'appearance.glassPreset', value: 'solid' }]);
     });
 
     it('keeps a custom glass table unless a preset is picked', () => {
@@ -71,7 +69,7 @@ describe('Personalize choices', () => {
         const choices = readPersonalizeChoices(custom, local);
         expect(choices.glass).toBe('custom');
         expect(choices).toMatchObject({ glassSettings: { glassSurfaceMaterials: custom.glassSurfaceMaterials } });
-        expect(resolvePersonalizeStepWrite('look', choices, custom, local).account).toBeNull();
+        expect(resolvePersonalizeStepWrite('look', choices, custom, local).settings).toEqual([]);
     });
 
     it('writes this device\'s notifications as a whole and turns them on when an event is chosen', () => {
@@ -80,14 +78,12 @@ describe('Personalize choices', () => {
         expect(choices.notifyNeedsYou).toBe(false);
         expect(choices.notifyFinished).toBe(false);
         const write = resolvePersonalizeStepWrite('notifications', { ...choices, notifyNeedsYou: true, notifyFinished: false, notifyPreview: false }, account, off);
-        expect(write.account).toBeNull();
-        expect(write.local?.attentionDeviceOverridesV1?.localNotifications).toEqual({
-            ...off.attentionDeviceOverridesV1.localNotifications,
-            enabled: true,
-            events: { ready: false, permission_request: true, user_action_request: true },
-            previewBehavior: 'status_only',
-            requestPreviewBehavior: 'status_only',
-        });
+        expect(write.settings).toEqual([
+            { anchor: 'notifications.ready', value: false },
+            { anchor: 'notifications.readyPreview', value: false },
+            { anchor: 'notifications.requestPreview', value: false },
+            { anchor: 'notifications.localEnabled', value: true },
+        ]);
     });
 });
 

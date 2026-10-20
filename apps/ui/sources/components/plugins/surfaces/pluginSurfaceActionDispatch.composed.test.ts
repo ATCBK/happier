@@ -4131,7 +4131,7 @@ describe('external author Doc collaboration through physical SDK carriers', () =
                 expect(wire).not.toContain(target.quote);
                 expect(wire).not.toContain(proposalInput.after);
             }
-            expect((await readExternalDoc(carrier.api, { ref }))).toEqual(read);
+            expect((await readExternalDoc(carrier.api, { ref }))).toEqual({ ...read, openCommentCount: 1 });
             const beforeDecision = homes.requests.length;
             const proposalRef = proposal.message.messageRef;
             for (const decide of [() => requestExternalDocAcceptance(carrier.api, { proposalRef, expectedRevision: created.revision }),

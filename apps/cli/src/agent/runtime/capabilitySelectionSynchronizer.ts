@@ -59,8 +59,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     return JSON.stringify(resolved.skills.items.filter(item => item.selected).map(item => item.id).sort());
   };
   const initialRules = input.initialSkillRules ?? input.readSkillRules?.();
-  // A preserved-process attach cannot infer native application from today's rules.
-  let appliedSkillRules = initialRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'skills') ? ruleSelection(initialRules, applied) : null;
+  // Explicit launch resolution is positive evidence even if an earlier runner's
+  // pending status survives. A preserved-process attach reading today's rules
+  // still cannot infer native application from that observation alone.
+  const appliedRuleBaseline = (kind: 'mcp' | 'skills', launch: string | null, observed: string | null = null) =>
+    launch ?? (readPendingCapabilityRuleApplyV1(initialMetadata, kind) ? null : observed);
+  let appliedSkillRules = appliedRuleBaseline('skills',
+    input.initialSkillRules ? ruleSelection(input.initialSkillRules, applied) : null,
+    initialRules ? ruleSelection(initialRules, applied) : null);
   let desiredSkillRules = initialRules ? ruleSelection(initialRules, desired) : appliedSkillRules;
   let skillRulesAvailable = initialRules != null;
   const mcpRuleSelection = (observation: RunnerMcpRuleObservation, selection: SessionCapabilitySelectionV1) => {
@@ -73,8 +79,9 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const initialMcpRules = input.initialMcpRules;
   // Only the launch resolver establishes the applied server set. In particular,
   // an unavailable launch or preserved-process refusal is not today's empty set.
-  const appliedMcpRules = initialMcpRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'mcp')
-    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null;
+  // A retained pending status cannot invalidate that positive launch evidence.
+  const appliedMcpRules = appliedRuleBaseline('mcp', initialMcpRules
+    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null);
   let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
   let mcpRulesAvailable = initialMcpRules != null;
 
@@ -137,6 +144,12 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;
     const kinds = pending();
+    const changes = {
+      mcpSelection: !areSessionCapabilitySelectionsEquivalentV1({ mcp: applied.mcp }, { mcp: captured.mcp }),
+      skillsSelection: !areSessionCapabilitySelectionsEquivalentV1({ skills: applied.skills }, { skills: captured.skills }),
+      mcpRules: mcpRulesAvailable && desiredMcpRules !== appliedMcpRules,
+      skillRules: skillRulesAvailable && desiredSkillRules !== appliedSkillRules,
+    };
     // Restoration can withdraw a refusal while a busy request awaits its next
     // settlement. It never acknowledges an unavailable observation.
     for (const kind of ['mcp', 'skills'] as const) {
@@ -189,7 +202,12 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     }
     // The daemon rechecks active turns and approvals immediately before signaling.
     const requestRestart = input.requestRestart ?? (await import('@/daemon/controlClient')).requestDaemonSessionRunnerRestart;
-    if (lifetime.signal.aborted) return;
+    if (lifetime.signal.aborted || !input.isSettled()) return;
+    logger.infoFile('[CapabilitySelection] Requesting runner refresh', {
+      sessionId: input.session.sessionId,
+      changes: { mcpSelection: kinds.mcp && changes.mcpSelection, skillsSelection: kinds.skills && changes.skillsSelection,
+        mcpRules: kinds.mcp && changes.mcpRules, skillRules: kinds.skills && changes.skillRules },
+    });
     const result = await requestRestart({
       sessionId: input.session.sessionId, mode: 'force_current_cli', reason: 'capability_selection_change',
     }, { signal: lifetime.signal });

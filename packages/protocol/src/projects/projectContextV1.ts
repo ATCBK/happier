@@ -9,6 +9,7 @@ import { resolveProjectContextSourceV1 } from './projectListProjectionV1.js';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../workspaces/workspaceRefV1.js';
 import { ProjectSourcesReadOutputV1Schema, ProjectSourcesUpdateOutputV1Schema,
   type ProjectSourcesReadInputV1, type ProjectSourcesUpdateInputV1 } from './sources/projectSourceV1.js';
+import { ActionExecuteFailureSchema } from '../actions/actionExecutionResult.js';
 
 export const ProjectContextTargetV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: ProjectAccountOrganizationKeyV1Schema.shape.serverId,
@@ -186,10 +187,16 @@ export async function readProjectContextAttachmentTargetV1(deps: ProjectContextR
       if (!current.success || !current.data.ok || current.data.source.id !== source.id) return refuse('project_context_unavailable');
       if (!current.data.canManage) return refuse('project_context_access_denied');
       if (current.data.source.revision !== source.revision) return false;
-      const written = ProjectSourcesUpdateOutputV1Schema.safeParse(await deps.updateSource({ serverId: target.serverId,
+      const rawWritten = await deps.updateSource({ serverId: target.serverId,
         sourceId: source.id, expectedRevision: source.revision, patch: { attachment: { kind: 'attach',
-          attachment: { purpose: 'context', entry: authored.data } } } }));
-      if (!written.success) return refuse('project_context_unavailable');
+          attachment: { purpose: 'context', entry: authored.data } } } });
+      const written = ProjectSourcesUpdateOutputV1Schema.safeParse(rawWritten);
+      if (!written.success) {
+        const failure = ActionExecuteFailureSchema.safeParse(rawWritten);
+        const code = failure.success ? failure.data.errorCode : undefined;
+        if (code === 'outcome_unknown' || code === 'home_unreachable' || code === 'cancelled' || code === 'action_account_scope_changed') return refuse(code);
+        return refuse('project_context_unavailable');
+      }
       if (!written.data.ok) { if (written.data.error === 'source_conflict') return false; return refuse(written.data.error); }
       if (written.data.source.id !== source.id) return refuse('project_context_unavailable');
       return true;

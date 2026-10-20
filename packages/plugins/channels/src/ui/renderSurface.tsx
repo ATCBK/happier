@@ -11602,26 +11602,30 @@ function ProviderSetupButton(props: Readonly<{
 }
 
 /**
- * A selected provider Action must be executed with its exact host-issued
- * Action object. The mounted client associates that object with the selected
- * Connected Account/currentness carrier; rebuilding a reference here would
- * lose that association and create a second authority path.
+ * The public Channels intent retains the exact host-issued provider selection
+ * carrier, just like prepare. The core resolves the current remediation role
+ * and the host reconstructs its selected Connected Account input.
  */
 function ProviderSetupRemediationExecution(props: Readonly<{
   selection: SelectedProviderSetupRemediationActionInput;
   signal: AbortSignal;
   onSettled: (settled: PluginActionExecution) => Promise<void>;
 }>): React.ReactElement | null {
-  const action = useExecutePluginAction(props.selection.result.action);
+  const action = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate);
   const startedRef = React.useRef(false);
 
   React.useEffect(() => {
     if (startedRef.current || props.signal.aborted) return;
     startedRef.current = true;
-    void action.execute(props.selection.result.input, { signal: props.signal }).then((settled) => {
+    const { result } = props.selection;
+    void action.execute({
+      providerSelection: result.selection,
+      providerRemediationInput: result.input,
+      credentialRef: result.connectedAccount.kind === 'selected' ? result.connectedAccount.ref : null,
+    }, { signal: props.signal, selectedActionInput: props.selection }).then((settled) => {
       void props.onSettled(settled);
     });
-  }, [action.execute, props.onSettled, props.selection.result.input, props.signal]);
+  }, [action.execute, props.onSettled, props.selection, props.signal]);
 
   return null;
 }

@@ -89,6 +89,60 @@ afterEach(async () => {
 });
 
 describe('workspace tabs production composition', () => {
+    it.each(['web', 'ios'] as const)('opens a Project file from full Search through the workspace owner on %s', async platform => {
+        route.platform = platform; route.pathname = '/search'; route.params = {};
+        window.history.replaceState(null, '', '/search');
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-search-file.test', serverIdentityId: 'srv_workspace_search',
+            accountId: 'alice', currentAccount: true }], route: () => undefined });
+        disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
+        const [{ storage }, { useOpenProject }, { activateUniversalSearchResult }, { applyProjectAccountRowsFixture },
+            { useAppPaneContext }] = await Promise.all([
+            import('@/sync/domains/state/storage'), import('@/components/projects/useOpenProject'),
+            import('@/components/appShell/search/activateUniversalSearchResult'), import('@/dev/testkit/fixtures/projectAccountRows'),
+            import('../panes/AppPaneProvider'),
+        ]);
+        const initial = storage.getState();
+        const scope = storage.getState().profileScope!;
+        storage.setState({ isDataReady: true });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'riverside', serverId: scope.serverId,
+            machineId: 'studio', rootPath: '/repo', label: null, createdAtMs: 1 }] });
+        const [{ WorkspaceProvider }, , , , , , { AppPaneProvider }, , catalogModule] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let openProject!: ReturnType<typeof useOpenProject>;
+        let pane!: ReturnType<typeof useAppPaneContext>;
+        let navigation!: WorkspaceNavigationContextValue;
+        function SearchActivation() { openProject = useOpenProject(); pane = useAppPaneContext(); return null; }
+        const screen = await renderScreen(<AppPaneProvider><WorkspaceProvider enabled={platform === 'web'} phone={platform === 'ios'} catalog={catalog}>
+            {owner => { navigation = owner; return <SearchActivation />; }}
+        </WorkspaceProvider></AppPaneProvider>);
+        const find = { query: '🦦', options: { matchCase: false, regex: false },
+            target: { kind: 'file' as const, path: 'riverside.txt', anchor: { kind: 'fileLine' as const, startLine: 2 } } };
+        try {
+            // Capture the real typed refusal before the search adapter reduces it to unavailable.
+            const { invokeWorkspaceAction } = await import('./workspaceActionRuntime');
+            expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true });
+            await vi.waitFor(async () => { await act(async () => {});
+                expect(pane.fileFindSeedAccountBindings.get(scope.serverId)?.isCurrent()).toBe(true); });
+            let result: Awaited<ReturnType<typeof activateUniversalSearchResult>> | undefined;
+            await act(async () => { result = await activateUniversalSearchResult({ kind: 'workspaceFile', path: 'riverside.txt',
+                serverId: scope.serverId, accountId: scope.accountId, sessionId: null,
+                workspaceRefId: 'riverside', scope: { serverId: scope.serverId, machineId: 'studio', rootPath: '/repo' },
+                anchor: { kind: 'fileLine', startLine: 2 }, find }, { openProject,
+                navigateToSession: () => { throw new Error('A Project hit must not open a Session'); },
+                push: () => { throw new Error('A Project hit must use its canonical owner'); } }); });
+            expect(result).toEqual({ ok: true });
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            expect(tab.target).toMatchObject({ kind: 'project', params: { workspaceRefId: 'riverside', initialFile: 'riverside.txt',
+                anchor: 'fileLine', startLine: '2' } });
+            expect(JSON.stringify(tab.target)).not.toContain(find.query);
+            expect(pane.fileFindSeedHandoff.peekCurrent({ host: 'project', id: 'riverside',
+                scope: { serverId: scope.serverId, machineId: 'studio', rootPath: '/repo' }, path: 'riverside.txt' })).toEqual(find);
+        } finally { await screen.unmount(); storage.setState(initial, true); }
+    });
+
     it.each(['phone close', 'unavailable phone tab', 'pane keyboard'] as const)('routes %s through disabled, required and waived Action policy while retaining dirty work', async entry => {
         const phone = entry !== 'pane keyboard';
         route.platform = phone ? 'ios' : 'web'; route.pathname = phone ? '/all-tabs' : '/settings'; route.params = {};
@@ -308,7 +362,11 @@ describe('workspace tabs production composition', () => {
         const geometry = geometryModule.createWorkspaceBarGeometry();
         geometry.setGroupFrame('group:1', { x: 220, width: 1000 });
         let navigation!: WorkspaceNavigationContextValue;
-        const element = () => <KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+        const [{ InjectedAuthProvider }, { TokenStorage }] = await Promise.all([
+            import('@/auth/context/AuthContext'), import('@/auth/storage/tokenStorage'),
+        ]);
+        const credentials = await TokenStorage.getCredentialsForServerUrl(homes.homes.home!.serverUrl);
+        const element = () => <InjectedAuthProvider credentials={credentials}><KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
             <WorkspaceProvider enabled catalog={catalog}>{owner => {
                 navigation = owner;
                 const detail = Object.values(owner.state.tabs).find(tab => tab.target.params.id === 'named' && tab.target.kind !== 'session');
@@ -319,7 +377,7 @@ describe('workspace tabs production composition', () => {
                         focused={detailActive} visible={detailActive} navigation={owner.navigationForTab(detail.id)}><SessionInfoRoute /></DestinationInstanceHost> : null}
                 </geometryModule.WorkspaceBarGeometryContext.Provider>;
             }}</WorkspaceProvider>
-        </AppPaneProvider></KeyboardShortcutProvider>;
+        </AppPaneProvider></KeyboardShortcutProvider></InjectedAuthProvider>;
         const renderOptions: RenderWithAppProvidersOptions = {
             createNodeMock: element => element.props.testID === 'workspace-title-bar'
                 ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 1440, 800) } : null,

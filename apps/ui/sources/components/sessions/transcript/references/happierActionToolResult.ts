@@ -2,8 +2,10 @@ import { getActionSpec } from '@happier-dev/protocol/actions';
 import { ACTION_IDS, type ActionId } from '@happier-dev/protocol/actions/actionIds';
 import {
     createHappierActionToolNameIndex as createBindingIndex,
+    isRecord,
     readHappierActionExecuteActionId,
     readHappierActionId,
+    readHappierActionToolPayload,
 } from '@happier-dev/protocol/actions/happierActionToolResult';
 
 /** Existing authenticated host consumers project bindings from the complete catalog. */
@@ -20,6 +22,14 @@ export function readHappierActionCallId(toolName: string, input: unknown): Actio
     if (executed) return executed;
     actionToolNames ??= createHappierActionToolNameIndex<ActionId>(ACTION_IDS as readonly ActionId[]);
     return readHappierActionId(toolName, actionToolNames);
+}
+
+/** The operands the call hands its Action: `action_execute`'s `input`, else the Action's own tool payload. */
+export function readHappierActionCallInput(toolName: string, input: unknown): unknown {
+    const payload = readHappierActionToolPayload(input);
+    return readHappierActionExecuteActionId(toolName, input, (id): id is ActionId => KNOWN_ACTION_IDS.has(id))
+        ? (isRecord(payload) ? payload.input : undefined)
+        : payload;
 }
 
 export {

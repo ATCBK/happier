@@ -26,8 +26,12 @@ export function createPromptLibraryCatalogBoundary(options: Readonly<{
             if (path === root && (init?.method ?? 'GET') === 'GET') return Response.json({ status: 'listed',
                 rows: [...records.values()].map(record => ({ key: record.key, revision: revisions.get(record.key),
                     content: tombstones.has(record.key) ? null : { t: 'plain', v: record } })) });
-            if (!path.startsWith(`${root}/`) || init?.method !== 'POST') return null;
+            if (!path.startsWith(`${root}/`)) return null;
             const key = PromptLibraryCatalogKeyV1Schema.parse(decodeURIComponent(path.slice(root.length + 1)));
+            if ((init?.method ?? 'GET') === 'GET') return Response.json(tombstones.has(key)
+                ? { status: 'deleted', revision: revisions.get(key) }
+                : { status: 'present', revision: revisions.get(key), content: { t: 'plain', v: records.get(key) } });
+            if (init?.method !== 'POST') return null;
             const mutation = PromptLibraryRowMutationV1Schema.parse(JSON.parse(String(init.body)));
             requests.push({ key, expectedRevision: mutation.expectedRevision });
             if (options.mutationOutcome === 'conflict' || mutation.expectedRevision !== revisions.get(key))

@@ -405,20 +405,29 @@ describe('createDaemonPathPluginChangePreparer', () => {
     })).rejects.toMatchObject({ code: 'plugin_dev_dependency_preparation_failed' });
   });
 
-  it.each([false, true])('builds code-defined development UI from the evaluated manifest (hosted UI: %s)', async (hostedUi) => {
+  it.each([
+    { hostedUi: false, sourceEntry: 'src/index.ts' },
+    { hostedUi: true, sourceEntry: 'src/index.ts' },
+    { hostedUi: true, sourceEntry: 'src/author.mjs' },
+  ])('builds code-defined development UI from the evaluated manifest ($sourceEntry, hosted UI: $hostedUi)', async ({ hostedUi, sourceEntry }) => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-code-ui-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-code-ui-root-'));
     roots.push(happyHomeDir, pluginRoot);
     await mkdir(join(pluginRoot, 'src'));
-    await writeFile(join(pluginRoot, 'package.json'), '{"name":"code-defined-plugin","type":"module"}', 'utf8');
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'code-defined-plugin', type: 'module',
+      main: sourceEntry.endsWith('.mjs') ? `./${sourceEntry}` : './dist/index.js',
+    }), 'utf8');
     const manifest = createPluginManifestV2Fixture({
       id: 'acme.code-ui',
-      entrypoints: { development: './src/index.ts' },
+      entrypoints: sourceEntry.endsWith('.mjs')
+        ? { daemon: `./${sourceEntry}` }
+        : { development: `./${sourceEntry}` },
       ...(hostedUi ? { contributes: { ui: { views: [], translations: [], renderers: [{
         id: 'panel', kind: 'hostedWeb', source: { kind: 'artifact', artifact: 'panel' }, requiredHostMethods: ['context'],
       }] } } } : {}),
     });
-    await writeFile(join(pluginRoot, 'src/index.ts'), `export const manifest = ${JSON.stringify(manifest)};\nexport function activate() {}\n`, 'utf8');
+    await writeFile(join(pluginRoot, sourceEntry), `export const manifest = ${JSON.stringify(manifest)};\nexport function activate() {}\n`, 'utf8');
     if (hostedUi) {
       await mkdir(join(pluginRoot, '.happier-plugin/ui/hosted-web/panel'), { recursive: true });
       await writeFile(join(pluginRoot, '.happier-plugin/ui/hosted-web/panel/index.html'), '<p>Current code-defined panel</p>', 'utf8');
@@ -431,14 +440,17 @@ describe('createDaemonPathPluginChangePreparer', () => {
     });
     const candidate = await prepare({ kind: 'development', sourceRootPath: pluginRoot, observedRevision: 1 });
     expect(candidate).toMatchObject({ kind: 'preparedDevelopmentCandidate', pluginId: 'acme.code-ui' });
+    expect(candidate.review?.uiArtifacts).toEqual({
+      status: hostedUi ? 'verified' : 'none', contributionIds: hostedUi ? ['panel'] : [],
+    });
     const inventory = JSON.parse(await readFile(join(pluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')) as { entries: { artifactId: string }[] };
     expect(inventory.entries.map((entry) => entry.artifactId)).toEqual(hostedUi ? ['panel'] : []);
     await expect(readFile(join(pluginRoot, '.happier-plugin/plugin.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     await candidate.cleanup();
     if (hostedUi) {
       const nextManifest = { ...manifest, contributes: {} };
-      await writeFile(join(pluginRoot, 'src/index.ts'), `export const manifest = ${JSON.stringify(nextManifest)};\nexport function activate() {}\n`, 'utf8');
-      const next = await prepare({ kind: 'development', sourceRootPath: pluginRoot, pluginId: 'acme.code-ui', observedRevision: 2, changedPaths: ['src/index.ts'] });
+      await writeFile(join(pluginRoot, sourceEntry), `export const manifest = ${JSON.stringify(nextManifest)};\nexport function activate() {}\n`, 'utf8');
+      const next = await prepare({ kind: 'development', sourceRootPath: pluginRoot, pluginId: 'acme.code-ui', observedRevision: 2, changedPaths: [sourceEntry] });
       const nextInventory = JSON.parse(await readFile(join(pluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')) as { entries: unknown[] };
       expect(nextInventory.entries).toEqual([]);
       await expect(readFile(join(pluginRoot, 'dist/happier-plugin-ui/hosted-web/panel/index.html'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -1332,7 +1344,7 @@ describe('createDaemonPathPluginChangePreparer', () => {
         signalFirstSourceOnlyBuild();
         await firstSourceOnlyBuildBlocked;
       }
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return await buildUiWithManagedProcessBoundary(input);
     });
     const service = createDaemonPluginChangeService({
       prepare: createDaemonPathPluginChangePreparer({
@@ -1924,11 +1936,12 @@ describe('createDaemonPathPluginChangePreparer', () => {
     const uiBuildRoots: string[] = [];
     const runPluginUiArtifactBuild = vi.fn(async (input: Readonly<{ projectRoot: string }>) => {
       uiBuildRoots.push(input.projectRoot);
+      const built = await buildUiWithManagedProcessBoundary(input);
       const uiByte = await readFile(join(input.projectRoot, 'src', 'ui-byte.txt'), 'utf8');
       const artifactRoot = join(input.projectRoot, 'dist', 'happier-plugin-ui');
       await mkdir(artifactRoot, { recursive: true });
       await writeFile(join(artifactRoot, 'ui-byte.txt'), uiByte, 'utf8');
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return built;
     });
     const runtimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),

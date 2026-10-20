@@ -154,6 +154,9 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
     if (!isConnectedServiceQuotaObservationAtOrBeforeNow({ observedAtMs: params.fetchedAt, nowMs })) {
         throw new ProviderAccountUsagePayloadInvariantError("Provider account usage observation time must not be in the future");
     }
+    // The passed-client path may be ReadCommitted. Stabilize Account authority
+    // before the mode read, then let the usage owner enforce its row CAS.
+    await acquireAccountChangePublicationLocksInTx(params.client, [params.accountId], { includeSingleAccount: true, intent: "content" });
     const account = await params.client.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -176,13 +179,6 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
     const incomingFingerprint = normalizeFingerprint(params.materialFingerprint);
     const incomingLegacyQuotaProjection =
         buildIncomingLegacyQuotaProjection(params);
-    const beforeWrite = async () => {
-        // Account-fenced credential lifecycle writers also mutate usage rows.
-        // Acquire their publication fence before taking a usage tuple lock;
-        // otherwise each can hold the row needed by the other until rollback.
-        await acquireAccountChangePublicationLocksInTx(params.client, [params.accountId], { includeSingleAccount: true });
-        await params.beforeWrite?.();
-    };
     // Concurrent material writes retry within the containing transaction's
     // existing deadline; this phase must not fail valid work after five CAS misses.
     for (;;) {
@@ -193,7 +189,7 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
 
         if (!captured) {
             try {
-                await beforeWrite();
+                await params.beforeWrite?.();
                 const initialWrite = buildWriteParams(
                     params,
                     {
@@ -335,7 +331,7 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
 
         if (existing.metadata?.pageProjection) nextWrite = { ...nextWrite,
             metadata: { ...nextWrite.metadata, pageProjection: existing.metadata.pageProjection } };
-        await beforeWrite();
+        await params.beforeWrite?.();
         const updated = await updateProviderAccountUsageRecordIfCurrent(nextWrite, captured.guard, params.client);
         if (updated) {
             const changedMaterial = nextWrite.snapshot && existing.snapshot

@@ -1,4 +1,5 @@
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
+import { getProviderExperimentalConfirmationSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
 import type { AgentProviderRequirementsV1, ProviderModelDescriptorV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 
 import type { ResolvedProviderConnectionRecord } from '../registry';
@@ -7,14 +8,17 @@ import { resolveProviderSourceFacts } from '../registry/sourceFacts';
 export function hasProviderExperimentalConfirmation(input: Readonly<{
   providerSettings: ProviderSettingsV1;
   connectionId: string;
+  connectedAccountTarget?: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectedAccountTarget'];
   agentTargetKey: string;
   modelId: string;
   compatibilityFingerprint: string;
   confirmationScope: Readonly<{ kind: 'connection' } | { kind: 'model'; modelId: string }>;
 }>): boolean {
   const expectedModelId = input.confirmationScope.kind === 'model' ? input.modelId : null;
+  const sourceKey = getProviderExperimentalConfirmationSourceKeyV1(input);
   return input.providerSettings.experimentalBindingConfirmations.some((confirmation) =>
     confirmation.connectionId === input.connectionId
+    && getProviderExperimentalConfirmationSourceKeyV1(confirmation) === sourceKey
     && confirmation.agentTargetKey === input.agentTargetKey
     && confirmation.modelId === expectedModelId
     && confirmation.compatibilityFingerprint === input.compatibilityFingerprint);

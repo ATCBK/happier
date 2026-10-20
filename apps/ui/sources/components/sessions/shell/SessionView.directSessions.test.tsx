@@ -35,8 +35,9 @@ import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@hap
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema,
   type SessionModelTransitionRequestV1, type SessionModelTransitionResultV1,
 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
+import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import type { connectedServiceQuotaRecoveryCreditConsume } from '@/sync/ops/connectedServiceQuotaRecoveryCredits';
@@ -102,6 +103,10 @@ let modelTransitionReply: ((request: Extract<SessionModelTransitionRequestV1, { 
 
 // These scenarios start from the runtime's published restart-required receipt.
 function requireModelRestartAtSocketBoundary() {
+  // Applying on Send addresses the persisted running Session. A direct external
+  // Session must first pass its own takeover flow, which this scenario does not test.
+  const { directSessionV1: _direct, ...metadata } = storageState.sessions.s1.metadata;
+  storageState.sessions.s1 = { ...storageState.sessions.s1, metadata };
   modelTransitionReply = request => SessionModelTransitionResultV1Schema.parse({
     ok: false, status: 'restart_required',
     activeSelection: {
@@ -121,6 +126,7 @@ const readyAgentInventory = createReadyMachineAgentInventoryFixture([
 let goalRpcFailure: Readonly<{ ok: false; error: string; errorCode?: string }> | null = null;
 let pendingGoalReceipt: ReturnType<typeof createDeferred<unknown>> | null = null;
 let pendingRestartReceipt: ReturnType<typeof createDeferred<unknown>> | null = null;
+let confirmedRestartUnsupported = false;
 let postUpdateRpcResponse: unknown;
 const syncSubmitMessageSpy = vi.hoisted(() => vi.fn(async (...args: unknown[]): Promise<unknown> => {
   const payload = args[0] as Readonly<{ localId: string }>;
@@ -196,12 +202,12 @@ const connectedServiceQuotaRecoveryCreditConsumeSpy = vi.hoisted(() =>
   >(async () => ({ ok: false, errorCode: 'no_recovery_credit_available', error: 'no_recovery_credit_available' })),
 );
 const restartStaleSessionRunnerSpy = vi.hoisted(() =>
-  vi.fn<(_request: unknown) => Promise<RestartStaleSessionRunnerResult>>(
+  vi.fn<(_request: unknown) => Promise<RestartStaleSessionRunnerResult | null>>(
     async (_request: unknown) => ({ ok: true, status: 'restarted', sessionId: 's1' }),
   ),
 );
 const restartProviderBindingSessionRunnerSpy = vi.hoisted(() =>
-  vi.fn<(_request: unknown) => Promise<RestartStaleSessionRunnerResult>>(
+  vi.fn<(_request: unknown) => Promise<RestartStaleSessionRunnerResult | null>>(
     async (_request: unknown) => ({ ok: true, status: 'restarted', sessionId: 's1' }),
   ),
 );
@@ -210,6 +216,7 @@ const getSessionRunnerRuntimeStatusSpy = vi.hoisted(() =>
 );
 const actionExecuteSpy = vi.hoisted(() => vi.fn<(...input: unknown[]) => void>());
 const modalAlertSpy = vi.hoisted(() => vi.fn());
+const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => true));
 const chatListPropsSpy = vi.hoisted(() => vi.fn());
 const chatHeaderPropsSpy = vi.hoisted(() => vi.fn());
 const voiceSurfacePropsSpy = vi.hoisted(() => vi.fn());
@@ -403,6 +410,7 @@ installSessionShellCommonModuleMocks({
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     const modalMock = createModalModuleMock();
     modalMock.spies.alert.mockImplementation((...args) => modalAlertSpy(...args));
+    modalMock.spies.confirm.mockImplementation(() => modalConfirmSpy());
     return modalMock.module;
   },
 });
@@ -728,8 +736,12 @@ installDisconnectedServerSocketBoundary((socket: Socket, serverUrl) => {
       const method = rpc.method.slice(separator + 1);
       externalRpcRequests.push({ serverUrl, targetId: rpc.method.slice(0, separator), method, payload: rpc.params });
       let result: unknown;
+      if (confirmedRestartUnsupported && method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND) {
+        return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+      }
       if (pendingRestartReceipt && (method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
-        || method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2)) {
+        || method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2
+        || method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND)) {
         const { socketRpcCodec } = await import('@happier-dev/sync-client');
         const request = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, rpc.params, rpc.method);
         return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' },
@@ -903,7 +915,7 @@ installDisconnectedServerSocketBoundary((socket: Socket, serverUrl) => {
             : { ok: false, checkedAt: 1, error: { code: 'unknown-capability', message: 'Unknown capability' } },
         } };
       } else {
-        return { ok: false, error: 'RPC method not found', errorCode: 'METHOD_NOT_FOUND' };
+        return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
       }
       return { ok: true, result };
     }
@@ -1426,7 +1438,8 @@ describe('SessionView (direct sessions)', () => {
       for (const path of [`/v2/sessions/${session.id}`, `/v2/sessions/${session.id}?accessProjectionVersion=1`]) {
         homes.answer(serverId, path, { select: () => ({ body: { session: wireSession } }) });
         homes.answer(serverId, `PATCH ${path}`, { select: (input) => {
-          const patch = SessionMetadataTuplePatchV1Schema.parse(input);
+          const teamPatch = SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input);
+          const patch = teamPatch.success ? teamPatch.data : SessionMetadataTuplePatchV1Schema.parse(input);
           const expectedTupleMatches = patch.mode === 'owner_migration'
             ? wireSession.metadataLayoutVersion === 0
               && patch.source.metadata.version === wireSession.metadataVersion
@@ -1940,6 +1953,7 @@ describe('SessionView (direct sessions)', () => {
     goalRpcFailure = null;
     pendingGoalReceipt = null;
     pendingRestartReceipt = null;
+    confirmedRestartUnsupported = false;
     await homes.reset();
     await homes.addHome({ name: 'Active Home', serverUrl: 'https://server-1', accountId: 'account-route-1', active: false });
     for (const serverId of ['server-a', 'server-b', 'server-route-2', 'server-route-1-cleared', 'server-runtime-refresh', 'server-route-polled']) {
@@ -1981,6 +1995,8 @@ describe('SessionView (direct sessions)', () => {
     settingsState.current = {};
     settingByKeyState.current = {};
     modalAlertSpy.mockReset();
+    modalConfirmSpy.mockReset();
+    modalConfirmSpy.mockResolvedValue(true);
     actionExecuteSpy.mockReset();
     modelTransitionReply = undefined;
     syncSubmitMessageSpy.mockReset();
@@ -2273,6 +2289,7 @@ describe('SessionView (direct sessions)', () => {
     await settleDirectSessionView();
 
     expect(getSessionRunnerRuntimeStatusSpy).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
       sessionId: 's1',
       machineId: 'machine-1',
       serverId: 'server-route-1',
@@ -2415,7 +2432,8 @@ describe('SessionView (direct sessions)', () => {
     restartStaleSessionRunnerSpy.mockResolvedValueOnce({ ok: true, status: 'restarted', sessionId: 's1' });
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    expect(getSessionRunnerRuntimeStatusSpy).toHaveBeenCalledTimes(1);
+    expect(getSessionRunnerRuntimeStatusSpy).toHaveBeenCalled();
+    const statusReadsBeforeRestart = getSessionRunnerRuntimeStatusSpy.mock.calls.length;
     await pressTestInstanceAsync(screen.findByTestId('session-staleRunner-restart'));
     await settleDirectSessionView();
 
@@ -2432,15 +2450,77 @@ describe('SessionView (direct sessions)', () => {
         }),
       }),
     });
-    expect(getSessionRunnerRuntimeStatusSpy).toHaveBeenCalledTimes(2);
+    expect(getSessionRunnerRuntimeStatusSpy.mock.calls.length).toBeGreaterThan(statusReadsBeforeRestart);
     expect(screen.findByTestId('session-staleRunner-version')).toBeNull();
+  });
+
+  it.each([
+    ['native background work', false, true, true, false],
+    ['foreground plus native background work', true, true, true, false],
+    ['cancelled background restart', false, true, false, false],
+    ['no background work', false, false, true, false],
+    ['older daemon', false, true, true, true],
+  ] as const)('confirms the banner restart through real RPC for %s', async (_name, foreground, active, accepted, olderDaemon) => {
+    installStaleSessionRunnerStatus();
+    storageState.sessions.s1 = { ...storageState.sessions.s1,
+      latestTurnStatus: foreground ? 'in_progress' : null,
+      runtimeActivityState: active ? 'active' : 'idle', runtimeActivityActiveCount: active ? 1 : 0,
+      runtimeActivityObservedAt: Date.now(), runtimeActivityRevision: 1,
+    };
+    const real = await vi.importActual<typeof import('@/sync/ops/sessionRunnerRestart')>('@/sync/ops/sessionRunnerRestart');
+    restartStaleSessionRunnerSpy.mockImplementation(request => real.restartSessionRunnerOnCurrentRuntime(
+      request as Parameters<typeof real.restartSessionRunnerOnCurrentRuntime>[0],
+    ));
+    modalConfirmSpy.mockResolvedValue(accepted);
+    confirmedRestartUnsupported = olderDaemon;
+    pendingRestartReceipt = createDeferred<unknown>();
+    pendingRestartReceipt.resolve({ ok: true, status: 'restarted', sessionId: 's1' });
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-staleRunner-restart'));
+    await settleDirectSessionView();
+    expect(modalConfirmSpy).toHaveBeenCalledTimes(active ? 1 : 0);
+    const requests = externalRpcRequests.filter(request => request.method.startsWith('daemon.sessionRunner.restart'));
+    expect(requests.map(request => request.method)).toEqual(!accepted ? [] : olderDaemon
+      ? [RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND, RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]
+      : [active ? RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND : RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);
+    if (!accepted) expect(screen.findByTestId('session-staleRunner-restart')).not.toBeNull();
+  });
+
+  it('preserves the armed model and draft when background-work restart consent is cancelled', async () => {
+    requireModelRestartAtSocketBoundary();
+    featureEnabledState.providers = true;
+    storageState.sessions.s1 = { ...storageState.sessions.s1,
+      runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+      runtimeActivityObservedAt: Date.now(), runtimeActivityRevision: 1,
+    };
+    const real = await vi.importActual<typeof import('@/sync/ops/sessionRunnerRestart')>('@/sync/ops/sessionRunnerRestart');
+    restartProviderBindingSessionRunnerSpy.mockImplementation(request => real.restartSessionRunnerForProviderBindingChange(
+      request as Parameters<typeof real.restartSessionRunnerForProviderBindingChange>[0],
+    ));
+    getSessionRunnerRuntimeStatusSpy.mockResolvedValue({
+      state: buildSessionRunnerRuntimeStatus({ sessionId: 's1', machineId: 'machine-1', versionState: 'stale' }),
+      runnerProcessIdentity: { pid: 123, processStartTimeMs: 1_000 },
+    });
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    const picker = await mountSessionModelPicker(screen);
+    await act(async () => picker.props.onSelect({ agentTargetKey: 'agent:happier.agent.codex/codex',
+      providerConnectionId: ProviderConnectionIdSchema.parse('pc_work'), modelId: 'provider-model' }));
+    await settleDirectSessionView();
+    await act(async () => { findAgentInput(screen).props.onChangeText('Keep this draft'); });
+    modalConfirmSpy.mockResolvedValue(false);
+    await act(async () => { await findAgentInput(screen).props.onSend(); });
+    expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+    expect(externalRpcRequests.filter(request => request.method.startsWith('daemon.sessionRunner.restart'))).toEqual([]);
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findAgentInput(screen).props.value).toBe('Keep this draft');
+    expect(modalAlertSpy).not.toHaveBeenCalled();
   });
 
   it.each(['stale runner', 'provider binding'] as const)('retires a deferred %s restart observation when leaving the screen', async (kind) => {
     installStaleSessionRunnerStatus();
     const real = await vi.importActual<typeof import('@/sync/ops/sessionRunnerRestart')>('@/sync/ops/sessionRunnerRestart');
     let settled = false;
-    let observation: Promise<RestartStaleSessionRunnerResult> | undefined;
+    let observation: Promise<RestartStaleSessionRunnerResult | null> | undefined;
     restartStaleSessionRunnerSpy.mockImplementation(request => observation = real.restartSessionRunnerOnCurrentRuntime(
       request as Parameters<typeof real.restartSessionRunnerOnCurrentRuntime>[0],
     ).finally(() => { settled = true; }));
@@ -2466,6 +2546,7 @@ describe('SessionView (direct sessions)', () => {
       await act(async () => picker.props.onSelect({ agentTargetKey: 'agent:happier.agent.codex/codex',
         providerConnectionId: ProviderConnectionIdSchema.parse('pc_work'), modelId: 'provider-model' }));
       await settleDirectSessionView();
+      await act(async () => { findAgentInput(screen).props.onChangeText('Continue on this route'); });
     }
     let failure: unknown;
     const method = kind === 'stale runner' ? RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART : RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2;
@@ -2473,7 +2554,7 @@ describe('SessionView (direct sessions)', () => {
     await act(async () => {
       pending = Promise.resolve(kind === 'stale runner'
         ? screen.findByTestId('session-staleRunner-restart')!.props.onPress()
-        : findProviderBindingLine(screen)!.action!.onPress()).catch(error => { failure = error; });
+        : findAgentInput(screen).props.onSend()).catch(error => { failure = error; });
     });
     try {
       await vi.waitFor(() => expect(externalRpcRequests.filter(request => request.method === method)).toHaveLength(1));
@@ -4802,7 +4883,7 @@ describe('SessionView (direct sessions)', () => {
     expect(homes.requests.filter(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input).success)).toEqual([]);
   });
 
-  it('offers the explicit restart for a Team resource selection the Home committed', async () => {
+  it('arms a Team resource selection the Home committed', async () => {
     const teamCredentialModel = {
       kind: 'team_credential_provider_model' as const,
       teamId: 'team-1',
@@ -4814,7 +4895,13 @@ describe('SessionView (direct sessions)', () => {
     };
 
 
+    storageState.sessions.s1 = { ...storageState.sessions.s1, accessLevel: 'owner', access: createSessionAccessFixture('owner') };
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    // Existing Team bindings require an owner tuple. Use its real migration,
+    // rather than simulating a committed selection inside the Action.
+    await act(async () => {
+      await sync.migrateSessionMetadataOwnerLayout('s1', { serverId: canonicalDraftScope.serverId });
+    });
     const modelContentOverride = await mountSessionModelPicker(screen);
     await act(async () => {
       const onSelect = modelContentOverride.props.onSelectTeamCredentialModel;
@@ -4825,10 +4912,19 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
-    // The Home accepted this selection; only the process already running has
-    // not adopted it. Restarting stays the person's explicit choice, and the
-    // committed selection is never reported as an unavailable connection.
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    const committed = homes.requests.map(({ input }) => SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input))
+      .find((result) => result.success)?.data;
+    expect(committed).toMatchObject({
+      mode: 'owner_team_credential_binding', operation: 'session.model.set',
+      teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, teamId: 'team-1',
+        resourceId: 'resource-1', expectedResourceRevision: 7, deliveryMode: 'brokered' }],
+      ownerMetadata: { t: 'plain', v: { runtime: { modelSelectionIntentV2: {
+        v: 2, ref: { source: 'team_resource', teamId: 'team-1', resourceId: 'resource-1', modelId: 'team-model' },
+      } } } },
+    });
+    // The committed selection awaits the next message through the single arm.
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
     expect(modalAlertSpy).not.toHaveBeenCalled();
   });
 
@@ -4844,7 +4940,18 @@ describe('SessionView (direct sessions)', () => {
     };
 
 
+    storageState.sessions.s1 = { ...storageState.sessions.s1, accessLevel: 'owner', access: createSessionAccessFixture('owner') };
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await act(async () => {
+      await sync.migrateSessionMetadataOwnerLayout('s1', { serverId: canonicalDraftScope.serverId });
+      // The projected inactive read loses to activation at the real Home boundary.
+      storage.getState().applySessions([{ ...storage.getState().sessions.s1, active: false }]);
+    });
+    homes.answer(canonicalDraftScope.serverId, 'PATCH /v2/sessions/s1', { select: (input) => {
+      const patch = SessionTeamCredentialBindingMetadataPatchV1Schema.parse(input);
+      expect(patch.sessionExpectation).toEqual({ kind: 'inactive_model_intent' });
+      return { status: 409, body: { code: 'session_active' } };
+    } });
     const modelContentOverride = await mountSessionModelPicker(screen);
     await act(async () => {
       const onSelect = modelContentOverride.props.onSelectTeamCredentialModel;
@@ -4856,6 +4963,7 @@ describe('SessionView (direct sessions)', () => {
     await settleDirectSessionView();
 
     // Nothing was saved, so there is nothing to restart into.
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeFalsy();
     expect(findProviderBindingLine(screen)).toBeNull();
     expect(modalAlertSpy).toHaveBeenCalledWith(
       'common.error',
@@ -4902,7 +5010,7 @@ describe('SessionView (direct sessions)', () => {
     },
   );
 
-  it('restores restart-to-apply UX after remount from the durable V2 Team model intent', async () => {
+  it('restores the arm after remount from the durable V2 Team model intent', async () => {
     const state = (await import('@/sync/domains/state/storage')).storage.getState();
     const session = state.sessions.s1;
     if (!session) throw new Error('expected session fixture');
@@ -4913,7 +5021,7 @@ describe('SessionView (direct sessions)', () => {
         ...session.metadata,
         modelSelectionIntentV2: {
           v: 2,
-          updatedAt: 11,
+          updatedAt: Date.now(),
           ref: {
             source: 'team_resource',
             teamId: 'team-1',
@@ -4928,11 +5036,13 @@ describe('SessionView (direct sessions)', () => {
     };
 
     const firstScreen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    expect(findProviderBindingLine(firstScreen)).toBeTruthy();
+    expect(findAgentInput(firstScreen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(firstScreen)).toBeNull();
     await firstScreen.unmount();
 
     const remountedScreen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    expect(findProviderBindingLine(remountedScreen)).toBeTruthy();
+    expect(findAgentInput(remountedScreen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(remountedScreen)).toBeNull();
     expect(
       (await mountSessionModelPicker(remountedScreen)).props.selectedTeamCredentialModel,
     ).toEqual({
@@ -4967,10 +5077,28 @@ describe('SessionView (direct sessions)', () => {
     expect(homes.requests.filter(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input).success)).toEqual([]);
   });
 
+  it('reports a native model transition refusal through its typed Action failure', async () => {
+    modelTransitionReply = request => SessionModelTransitionResultV1Schema.parse({
+      ok: false, status: 'owner_unavailable', activeSelection: null,
+      requestedSelection: request.selection, reason: 'native_owner_unavailable',
+    });
+    const screen = await renderSessionViewAndSettle();
+    const picker = await mountSessionModelPicker(screen);
+    await act(async () => {
+      picker.props.onSelect({ agentTargetKey: 'agent:happier.agent.codex/codex',
+        providerConnectionId: null, modelId: 'default' });
+    });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalled());
+    expect(modalAlertSpy).toHaveBeenLastCalledWith('common.error', 'owner_unavailable');
+    expect(modalAlertSpy).not.toHaveBeenCalledWith('common.error', 'settingsProviders.models.connectionUnavailable');
+  });
+
   it.each([
     'restart_required',
     'reconciliation_required',
-  ] as const)('surfaces %s and restarts through the existing Provider runner recovery', async (status) => {
+  ] as const)('arms %s and applies on send through the existing Provider runner recovery', async (status) => {
+    const { directSessionV1: _direct, ...metadata } = storageState.sessions.s1.metadata;
+    storageState.sessions.s1 = { ...storageState.sessions.s1, metadata };
     featureEnabledState.providers = true;
     const requestedSelection = {
       agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -5029,8 +5157,10 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
-    await act(async () => { await findProviderBindingLine(screen)?.action?.onPress(); });
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
+    await act(async () => { findAgentInput(screen).props.onChangeText('Continue on this route'); });
+    await act(async () => { await findAgentInput(screen).props.onSend(); });
     expect(restartProviderBindingSessionRunnerSpy).toHaveBeenCalledWith({
       signal: expect.any(AbortSignal),
       runtimeState: expect.objectContaining({
@@ -5120,7 +5250,8 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
 
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -5137,11 +5268,11 @@ describe('SessionView (direct sessions)', () => {
       sessionId: 's1',
       machineId: 'machine-2',
       serverId: 'server-route-1',
+      signal: expect.any(AbortSignal),
     });
 
-    const restartAction = findProviderBindingLine(screen)?.action;
-    if (!restartAction) throw new Error('expected provider binding restart action');
-    const restartPromise = restartAction.onPress() as Promise<void>;
+    await act(async () => { findAgentInput(screen).props.onChangeText('Continue on this route'); });
+    const restartPromise = findAgentInput(screen).props.onSend() as Promise<void>;
     await Promise.resolve();
     expect(restartProviderBindingSessionRunnerSpy).not.toHaveBeenCalled();
 
@@ -5160,7 +5291,7 @@ describe('SessionView (direct sessions)', () => {
     });
   });
 
-  it('does not clear local restart UX from another Agent model snapshot', async () => {
+  it('does not clear the arm from another Agent model snapshot', async () => {
     requireModelRestartAtSocketBoundary();
     const requestedSelection = {
       agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -5192,10 +5323,11 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
-  it('restores restart-to-apply UX after remount from durable native intent versus active runtime facts', async () => {
+  it('restores the single armed continuation after remount from durable native intent versus active runtime facts', async () => {
     const runtimeState = buildSessionRunnerRuntimeStatus({
       sessionId: 's1',
       machineId: 'machine-1',
@@ -5247,7 +5379,8 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toEqual({ modelLabel: 'Native next' });
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('projects a matching exact runner witness as running active model truth after remount', async () => {
@@ -5441,7 +5574,7 @@ describe('SessionView (direct sessions)', () => {
     });
   });
 
-  it('keeps restart-to-apply visible when only fallback current-model metadata matches the proposal', async () => {
+  it('keeps the arm when only fallback current-model metadata matches the proposal', async () => {
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
       metadata: {
@@ -5480,7 +5613,8 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('does not label a fallback current-model projection as running without exact active proof', async () => {
@@ -5541,10 +5675,11 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
-  it('keeps restart-to-apply UX for supported older Provider bindings without an embedded model', async () => {
+  it('keeps the arm for supported older Provider bindings without an embedded model', async () => {
     featureEnabledState.providers = true;
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -5589,10 +5724,11 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
-  it('does not clear local restart presentation from fallback current-model metadata', async () => {
+  it('does not clear the local arm from fallback current-model metadata', async () => {
     requireModelRestartAtSocketBoundary();
     featureEnabledState.providers = true;
     const requestedSelection = {
@@ -5608,7 +5744,8 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
 
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -5632,10 +5769,11 @@ describe('SessionView (direct sessions)', () => {
     };
     await updateSessionViewAndSettle(screen, { jumpToSeq: 1 });
 
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
-  it('suppresses local Provider restart presentation when the Providers feature turns off', async () => {
+  it('suppresses the local Provider arm when the Providers feature turns off', async () => {
     requireModelRestartAtSocketBoundary();
     featureEnabledState.providers = true;
     const requestedSelection = {
@@ -5651,7 +5789,8 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(findProviderBindingLine(screen)).toBeTruthy();
+    expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeNull();
 
     featureEnabledState.providers = false;
     await updateSessionViewAndSettle(screen, { jumpToSeq: 1 });
@@ -7048,36 +7187,21 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     const agentInput = findAgentInput(screen);
-    // R5/Lane F-redo migrated the recipient chip from flat `options` to
-    // `presentation: 'list' + rootStep` with sections — walk the rootStep here.
-    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: {
-      key: string;
-      controlId?: string;
-      collapsedOptionsPopover?: {
-        presentation?: 'picker' | 'list';
-        rootStep?: { sections: ReadonlyArray<{ kind: 'static' | 'dynamic'; options?: ReadonlyArray<{ id: string }> }> };
-        selectedOptionId?: string | null;
-        onSelect?: (id: string) => void;
-      };
-    }) => chip.key === 'participants-recipient');
-
-    expect(recipientChip).toEqual(expect.objectContaining({
-      key: 'participants-recipient',
-      controlId: 'recipient',
-    }));
-    expect(recipientChip?.collapsedOptionsPopover?.presentation).toBe('list');
-    const recipientFirstSection = recipientChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
-    const recipientOptions = (recipientFirstSection && recipientFirstSection.kind === 'static'
-      ? recipientFirstSection.options ?? []
-      : []);
-    expect(recipientOptions.map((option: { id: string }) => option.id)).toEqual([
-      'lead',
+    // The To chip opens the session talk picker; the inside-Session roster (Team, Runs) is its
+    // "In this session" group, bound to the same canonical recipient state.
+    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: { key: string }) => chip.key === 'participants-recipient');
+    expect(recipientChip).toEqual(expect.objectContaining({ key: 'participants-recipient', controlId: 'recipient' }));
+    const picker = recipientChip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 400 });
+    if (!React.isValidElement<{ sessionId: string; participants: { targets: ReadonlyArray<{ key: string }>; recipient: unknown } | null }>(picker)) {
+      throw new Error('Expected the session talk picker');
+    }
+    expect(picker.props.sessionId).toBe('s1');
+    expect(picker.props.participants?.targets.map((target) => target.key)).toEqual([
       'agent_team_broadcast:team-1',
       'agent_team_member:team-1:member-1',
       'execution_run:run-1',
     ]);
-    expect(recipientChip?.collapsedOptionsPopover?.selectedOptionId).toBe('execution_run:run-1');
-    expect(typeof recipientChip?.collapsedOptionsPopover?.onSelect).toBe('function');
+    expect(picker.props.participants?.recipient).toEqual({ kind: 'execution_run', runId: 'run-1' });
     expect((agentInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).toContain('execution-run-requested-action');
   });
 

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
@@ -28,6 +29,8 @@ import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activity/dispatchPersonalFollowOccurrence';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 
 describe('released tracked-target compatibility', () => {
   it('qualifies bare ids to the fixed Home and preserves notification preferences', async () => {
@@ -79,6 +82,134 @@ describe('Follow HTTP family adapter', () => {
   let restore = () => {};
   beforeEach(() => { app = fastify(); restore = installAxiosFastifyAdapter({ app, origin: 'http://follow.test' }); });
   afterEach(async () => { restore(); await app.close(); });
+  it('qualifies portable tracked-target reads through the saved profile Home', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'tracked-portable-home-' }, async () => {
+      const profileId = 'stack_agent-qa-coord-n1__id_default';
+      const homeId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+      const serverUrl = 'https://follow.test';
+      restore();
+      restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+      await seedTestServerProfile({ id: profileId, homeId, serverUrl });
+      app.put(SESSION_FOLLOW_HTTP_PATHS_V1.voiceInclusions, async () => ({ changed: true, sessionIds: ['source'] }));
+      const follow = createSessionFollowActionDeps({ token: 'account-token', serverId: profileId, serverHttpBaseUrl: serverUrl });
+      const tracked = createSessionTrackedTargetCompatibilityDep({ serverId: profileId,
+        replaceSessionVoiceInclusions: follow.replaceSessionVoiceInclusions });
+      await expect(tracked.sessionTargetTrackedSet!({ context: {}, sessionAddresses: [{ serverId: homeId, sessionId: 'source' }] }))
+        .resolves.toMatchObject({ ok: true, sessionAddresses: [{ serverId: homeId, sessionId: 'source' }] });
+    });
+  });
+  it.each(['read', 'write'] as const)('keeps nested Follow %s authorization bound to its declared effect', async operation => {
+    const keyPair = tweetnacl.sign.keyPair();
+    const target = { kind: 'session' as const, sessionId: 'source' };
+    const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'execution-proof', binding: {
+      serverIdentityId: 'home', accountId: 'account-1', custodianAccountId: 'account-1', installationId: 'installation-1',
+      principalId: 'principal-1', credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1,
+      machineId: 'machine-1', actionId: 'session.status.get', requestId: 'request-1', requestEnvelopeDigest: 'd'.repeat(43), target,
+    } };
+    let effect: unknown;
+    app.get('/v2/sessions/:sourceSessionId/follows/followers', async request => {
+      effect = request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER];
+      expect(request.headers.authorization).toBeUndefined();
+      return { follows: [], sources: [], rules: [], coverage: 'complete', peopleCount: 0 };
+    });
+    app.put('/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId', async request => {
+      effect = request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER];
+      return { changed: true, source: { sourceSessionId: 'source', destinationSessionId: 'receiver',
+        policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false } };
+    });
+    const deps = createSessionFollowActionDeps({ token: 'daemon-token', serverId: 'home', serverIdentityId: 'home',
+      serverHttpBaseUrl: 'http://follow.test', externalActionMachineRequestPrivateKey: keyPair.secretKey,
+      externalActionMachineInstallationId: 'installation-1' });
+    const context = { externalActionExecutionAuthorization: authorization, externalActionTarget: target };
+    if (operation === 'read') await deps.sessionFollowAction!({ context, actionId: 'follow.list', serverId: 'home',
+      input: { direction: 'followers', source: { kind: 'session', sessionId: 'source' } } });
+    else await deps.sessionFollowAction!({ context, actionId: 'follow.set', serverId: 'home', input: {
+      source: { kind: 'session', sessionId: 'source' }, receiver: { kind: 'session', sessionId: 'receiver' }, policy: { preset: 'quiet' },
+    } });
+    expect(effect).toBe(operation === 'read' ? 'session.status.get' : 'follow.set');
+  });
+  it('preserves source continuation and emits private rules once across following pages', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'page-account' })).toString('base64url')}.signature`;
+    const receiver = { kind: 'account' as const };
+    const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
+    const rule = { ruleId: 'rule', receiver, version: 0, content: { t: 'plain' as const, v: definition } };
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain', contentKeyFingerprint: null }));
+    app.get('/v2/account/session-follow-rules', async () => ({ rules: [rule] }));
+    app.get('/v2/account/session-follows', async request => {
+      const query = request.query as { cursor?: string; limit?: string };
+      expect(query.limit).toBe('1');
+      return query.cursor ? { follows: [] } : { follows: [], continuation: 'next-source-page' };
+    });
+    const deps = createSessionFollowActionDeps({ token, credentials: { token, encryption: null },
+      serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    const first = await deps.sessionFollowAction!({ context: {}, actionId: 'follow.list',
+      input: { direction: 'following', receiver, limit: 1 } });
+    expect(first).toMatchObject({ rules: [{ ruleId: 'rule', definition }], coverage: 'partial', continuation: 'next-source-page' });
+    const second = await deps.sessionFollowAction!({ context: {}, actionId: 'follow.list',
+      input: { direction: 'following', receiver, limit: 1, cursor: 'next-source-page' } });
+    expect(second).toEqual({ follows: [], sources: [], rules: [], coverage: 'complete' });
+  });
+  it.each(['plain', 'e2ee'] as const)('reads the complete own-Account %s rule census without dropping route facts', async mode => {
+    const encryption = mode === 'e2ee' ? { type: 'legacy' as const, secret: new Uint8Array(32).fill(29) } : null;
+    const snapshot = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption });
+    const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
+    const rules = [{ ruleId: 'personal', receiver: { kind: 'account' as const }, version: 0 },
+      { ruleId: 'session-a', receiver: { kind: 'session' as const, sessionId: 'receiver-a' }, version: 1 },
+      { ruleId: 'session-b', receiver: { kind: 'session' as const, sessionId: 'receiver-b' }, version: 2 }]
+      .map(rule => ({ ...rule, inception: { createdAt: 7, accountChangeCursor: 4 }, sources: [] }));
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode,
+      contentKeyFingerprint: snapshot ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(snapshot.contentPublicKeyFingerprint) : null }));
+    app.get('/v2/account/session-follow-rules', async () => ({ rules: rules.map(rule => ({ ...rule,
+      content: sealSessionFollowRuleContentV1({ ...rule, definition, mode, material: encryption }) })) }));
+    const deps = createSessionFollowActionDeps({ token: 'token', credentials: { token: 'token', encryption },
+      serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect(deps.readSessionFollowRules!({ context: {}, serverId: 'home' }))
+      .resolves.toEqual({ kind: 'complete', rules: rules.map(rule => ({ ...rule, definition })) });
+  });
+  it.each(['mode', 'census'] as const)('withholds the entire rule census when the captured Account retires during %s', async stage => {
+    let current = true;
+    let censusReads = 0;
+    app.get('/v1/account/encryption/currentness', async () => {
+      if (stage === 'mode') current = false;
+      return createAccountEncryptionCurrentnessFixture();
+    });
+    app.get('/v2/account/session-follow-rules', async () => {
+      censusReads++;
+      if (stage === 'census') current = false;
+      return { rules: [] };
+    });
+    const deps = createSessionFollowActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      isCredentialCurrent: () => current, serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect(deps.readSessionFollowRules!({ context: {}, serverId: 'home' })).resolves.toEqual({ kind: 'unavailable' });
+    expect(censusReads).toBe(stage === 'mode' ? 0 : 1);
+  });
+  it.each(['home', 'credentials', 'requester', 'account'] as const)('refuses the private rule census before HTTP for a mismatched %s', async mismatch => {
+    let reads = 0;
+    app.setNotFoundHandler(async (_request, reply) => { reads++; return reply.code(404).send({}); });
+    const deps = createSessionFollowActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    const missingCredentials = createSessionFollowActionDeps({ token: 'token', serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect((mismatch === 'credentials' ? missingCredentials : deps).readSessionFollowRules!({
+      context: mismatch === 'requester' ? { externalActionCredential: { accountId: 'requester', principalId: 'principal',
+        credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } : mismatch === 'account' ? { runtimeAccountId: 'other' } : {},
+      serverId: mismatch === 'home' ? 'other' : 'home',
+    })).resolves.toEqual({ kind: 'unavailable' });
+    expect(reads).toBe(0);
+  });
+  it.each(['mode', 'refusal'] as const)('does not turn an unreadable private rule census into a partial set (%s)', async failure => {
+    const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
+    const rule = { ruleId: 'bad', receiver: { kind: 'account' as const }, version: 1 };
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture());
+    app.get('/v2/account/session-follow-rules', async (_request, reply) => failure === 'refusal'
+      ? reply.code(403).send({ error: 'credential_scope_denied' }) : { rules: [
+        { ...rule, ruleId: 'good', content: { t: 'plain', v: definition } },
+        { ...rule, content: sealSessionFollowRuleContentV1({ ...rule, definition, mode: 'e2ee',
+          material: { type: 'legacy', secret: new Uint8Array(32).fill(23) } }) },
+      ] });
+    const deps = createSessionFollowActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect(deps.readSessionFollowRules!({ context: {}, serverId: 'home' })).resolves.toEqual({ kind: 'unavailable' });
+  });
   it('reports the Home effective Voice set instead of claiming every requested inclusion', async () => {
     app.put(SESSION_FOLLOW_HTTP_PATHS_V1.voiceInclusions, async () => ({ changed: true, sessionIds: [] }));
     const deps = createSessionFollowActionDeps({ token: 'account-token', serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
@@ -103,7 +234,7 @@ describe('Follow HTTP family adapter', () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'personal-account' })).toString('base64url')}.signature`;
     const encryption = mode === 'e2ee' ? { type: 'legacy' as const, secret: new Uint8Array(32).fill(19) } : null;
     const credentials = { token, encryption };
-    const material = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: mode, material: encryption });
+    const material = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption });
     const policy = { preset: 'custom' as const, events: { goal_changed: { delivery: 'interrupt' as const } } };
     const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['home'],
       projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] } }), policy };
@@ -117,7 +248,7 @@ describe('Follow HTTP family adapter', () => {
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode,
       contentKeyFingerprint: material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint) : null }));
     app.get('/v2/account/settings', async () => ({ version: 3, content: encryption
-      ? { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material: encryption, payload: {} }) }
+      ? { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material: encryption, payload: {}, randomBytes }) }
       : { t: 'plain', v: {} } }));
     app.get('/v2/account/session-follows', async () => ({ follows: [] }));
     app.get('/v2/account/session-delivery-mutes', async () => ({ scopes: [] }));

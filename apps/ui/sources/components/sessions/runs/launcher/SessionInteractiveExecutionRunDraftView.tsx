@@ -4,9 +4,10 @@ import { resolveExecutionRunNotifyParentDefaultV1 } from '@happier-dev/protocol/
 import type { DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import * as React from 'react';
 import { useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
@@ -849,6 +850,24 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         />
     ), [actionInput, editable, intent, machine.name, options, selectBackend]);
 
+    // RT4: a new Run follows the session's route and model unless the draft chooses its own. On a
+    // phone the composer's rail scrolls and shows whole chips only, so a chip with a long label
+    // sits past its edge: there the chip keeps just its glyph and the words move beside "Starts
+    // when you send". A wide window has room for the labelled chip and says it once.
+    const { width: windowWidth } = useWindowDimensions();
+    const routeInFoot = isMobileLayoutWidth(windowWidth);
+    const routeFollowed = options.inheritedDraftRoutePresentation !== null;
+    const hasSelectedBackend = options.selectedBackendChoice !== null;
+    const routeChoice = React.useMemo(() => intent !== 'review' && hasSelectedBackend
+        ? resolveExecutionRunRouteChoice({
+            inherits: routeFollowed,
+            inheritedSelection: options.targetMatchesParent ? inheritedModelSelection ?? null : null,
+            inheritedRoutePresentation: options.targetMatchesParent ? inheritedRoutePresentation ?? null : null,
+            inheritedModelLabel: options.targetMatchesParent ? resolveInheritedModelLabel(inheritedModelSelection ?? null) : null,
+        })
+        : null,
+    [hasSelectedBackend, inheritedModelSelection, inheritedRoutePresentation, intent, options.targetMatchesParent, resolveInheritedModelLabel, routeFollowed]);
+
     const startChips = React.useMemo<ReadonlyArray<AgentInputExtraActionChip>>(() => {
         const chips: AgentInputExtraActionChip[] = [];
         const disabled = !editable;
@@ -904,15 +923,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 renderContent: () => renderOptions(['permissions']),
             }));
         }
-        // RT4: a new Run follows the session's route and model unless the draft chooses its own.
-        if (intent !== 'review' && options.selectedBackendChoice) {
-            const inherits = options.inheritedDraftRoutePresentation !== null;
-            const routeChoice = resolveExecutionRunRouteChoice({
-                inherits,
-                inheritedSelection: options.targetMatchesParent ? inheritedModelSelection ?? null : null,
-                inheritedRoutePresentation: options.targetMatchesParent ? inheritedRoutePresentation ?? null : null,
-                inheritedModelLabel: options.targetMatchesParent ? resolveInheritedModelLabel(inheritedModelSelection ?? null) : null,
-            });
+        if (routeChoice) {
+            const inherits = routeFollowed;
             const hasModelField = options.fields.some((field) => field.path === 'modelId' && field.visible !== false);
             chips.push(createExecutionRunStartContentChip({
                 key: 'execution-run-start-route',
@@ -920,6 +932,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 label: routeChoice.label,
                 title: t('agentInput.model.title'),
                 testID: 'execution-run-start-route-chip',
+                iconOnly: routeInFoot,
                 disabled,
                 revision: `${chipRevision}:${routeChoice.label}:${routeChoice.inheritDetail ?? ''}:${exactModelSubtitle}`,
                 renderContent: () => (
@@ -987,7 +1000,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             }));
         }
         return chips;
-    }, [actionInput.changeType, chipRevision, editable, inheritedModelSelection, resolveInheritedModelLabel, inheritedRoutePresentation, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, rolesStatus, options.backendChoices, options.fields, options.inheritedDraftRoutePresentation, options.profileChoices.length, options.selectedBackendChoice, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
+    }, [actionInput.changeType, chipRevision, editable, routeChoice, routeFollowed, routeInFoot, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, rolesStatus, options.backendChoices, options.fields, options.profileChoices.length, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
 
     // Why it can't start yet, said above the kept draft (lab `convo-ST` "Machine offline"): still
     // reading what the machine offers, or the reason agents can't start in this Session.
@@ -1012,6 +1025,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         ? options.backendChoices.filter((choice) => options.selectedBackendTargetKeys.includes(choice.targetKey)).map((choice) => choice.agentId)
         : selectedChoice ? [selectedChoice.agentId] : [];
     const startCount = intent === 'review' ? Math.max(1, options.selectedBackendTargetKeys.length) : 1;
+    const startsWhenYouSend = t('agentStart.startsWhenYouSend', { count: startCount });
 
     const childParentSelection = pendingChildChoice?.parentModelSelection ?? inheritedModelSelection ?? null;
     const childParentDetail = pendingChildChoice
@@ -1098,7 +1112,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 extraActionChips={startChips}
             />
             <Text testID="execution-run-start-foot" style={styles.foot}>
-                {t('agentStart.startsWhenYouSend', { count: startCount })}
+                {routeInFoot && routeChoice ? `${routeChoice.label} \u00B7 ${startsWhenYouSend}` : startsWhenYouSend}
             </Text>
             <ExecutionRunSecretReferenceOverlayField
                 profile={sessionLaunchProfile}

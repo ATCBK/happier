@@ -324,6 +324,9 @@ export function buildBrowserAdapterCapabilities(
     const desktopWebViewNavigation = primaryEngine === 'desktopWebView'
         ? input.desktopWebViewSupport
         : null;
+    // A relay preview's documents carry the cooperative navigation reporter, so its web iframe has
+    // history and stop truth. Any other framed page is cross-origin and uncontrollable beyond reload.
+    const relayPreviewNavigation = primaryEngine === 'webIframe' && input.adapterKind === 'localPreview';
     const diagnosticsFidelityByFamily = buildDiagnosticsFidelityByFamily(input, primaryEngine);
     return BrowserAdapterCapabilitiesV1Schema.parse({
         adapterKind: input.adapterKind,
@@ -338,11 +341,13 @@ export function buildBrowserAdapterCapabilities(
             ),
             canGoBack: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
             canGoForward: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
@@ -354,6 +359,7 @@ export function buildBrowserAdapterCapabilities(
             ),
             canStop: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.stop === true
             ),
@@ -370,4 +376,54 @@ export function buildBrowserAdapterCapabilities(
             : primaryEngine === 'nativeWebView' || primaryEngine === 'desktopWebView' ? 'native' : 'none',
         supportsStreamingDisplay: simulatorPreview || primaryEngine === 'streamedSurface',
     });
+}
+
+export type BrowserNavigationVerb = 'navigate' | 'goBack' | 'goForward' | 'reload' | 'stop';
+
+/**
+ * Why a navigation verb cannot act. `page_history_uncontrollable` is a third-party page in the web
+ * iframe engine (AMD-8): the browser keeps its history and loading opaque to the host, so Back,
+ * Forward and Stop are shown unavailable with that reason and the agent Action answers the same.
+ * Every other refusal is the adapter's plain unavailability (and the toolbar hides those controls).
+ */
+export type BrowserNavigationUnavailableReasonCode = 'page_history_uncontrollable' | 'adapter_unavailable';
+
+export type BrowserNavigationVerbAvailability =
+    | Readonly<{ available: true }>
+    | Readonly<{ available: false; reasonCode: BrowserNavigationUnavailableReasonCode }>;
+
+function readNavigationVerbCapability(
+    navigation: BrowserAdapterCapabilitiesV1['navigation'] | undefined,
+    verb: BrowserNavigationVerb,
+): boolean {
+    switch (verb) {
+        case 'navigate': return navigation?.canNavigate === true;
+        case 'goBack': return navigation?.canGoBack === true;
+        case 'goForward': return navigation?.canGoForward === true;
+        case 'reload': return navigation?.canReload === true;
+        case 'stop': return navigation?.canStop === true;
+    }
+}
+
+/**
+ * The one answer to "can this view perform this navigation verb, and if not, why", read from the
+ * capabilities {@link buildBrowserAdapterCapabilities} published. The toolbar and the agent-callable
+ * navigation Actions both ask here, so neither can claim a verb the other refuses.
+ */
+export function resolveBrowserNavigationVerbAvailability(
+    capabilities: Pick<BrowserAdapterCapabilitiesV1, 'adapterKind' | 'supportedRenderEngines' | 'navigation'> | null | undefined,
+    verb: BrowserNavigationVerb,
+): BrowserNavigationVerbAvailability {
+    if (capabilities && readNavigationVerbCapability(capabilities.navigation, verb)) {
+        return { available: true };
+    }
+    const thirdPartyFramedPage = capabilities?.adapterKind === 'externalUrl'
+        && capabilities.supportedRenderEngines[0] === 'webIframe'
+        && capabilities.navigation.canReload === true;
+    return {
+        available: false,
+        reasonCode: thirdPartyFramedPage && verb !== 'navigate' && verb !== 'reload'
+            ? 'page_history_uncontrollable'
+            : 'adapter_unavailable',
+    };
 }

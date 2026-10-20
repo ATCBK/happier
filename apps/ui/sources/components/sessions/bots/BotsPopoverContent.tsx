@@ -3,6 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import {
   RAIL_POPOVER_ROSTER_LIST_STYLE,
@@ -44,7 +45,7 @@ import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayNam
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
-import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
+import { storage, useLocalSetting, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
@@ -58,6 +59,7 @@ import {
 } from './useAskHappierOffer';
 import { classifyBotActivity, compareBotRosterOrder } from './botActivity';
 import { BOTS_GLYPH } from './botsGlyph';
+import { BotRosterReadiness } from './BotRosterReadiness';
 import { openNewBotDraft } from './newBotDraft';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -179,13 +181,13 @@ export function BotsPopoverContent(
 ) {
   const { theme } = useUnistyles();
   const styles = stylesheet;
-  const [collapsedPreference, setCollapsedPreference] = useLocalSettingMutable('collapsedGroupKeysV1');
+  const collapsedPreference = useLocalSetting('collapsedGroupKeysV1');
   const collapsed = collapsedPreference ?? NO_COLLAPSED_GROUPS;
   const collapsedRef = React.useRef(collapsed);
   collapsedRef.current = collapsed;
   const setCollapsed = React.useCallback((nodeId: string, value: boolean) => {
-    setCollapsedPreference({ ...collapsedRef.current, [nodeId]: value });
-  }, [setCollapsedPreference]);
+    storage.getState().applyLocalSettings({ collapsedGroupKeysV1: { ...collapsedRef.current, [nodeId]: value } }, { source: 'ui' });
+  }, []);
   const queryHomes = useBotsRosterQueryHomes();
   const pane = useVisibleSessionListPaneState('all', {
     botsRoster: true,
@@ -450,8 +452,13 @@ export function BotsPopoverContent(
         keyboardShouldPersistTaps="always"
         testID="bots-roster.list"
       >
-        {rows.map((row, index) =>
-          row.session ? (
+        {rows.map((row, index) => {
+          const isLast = index === rows.length - 1;
+          // A quiet top-level Bot carries its readiness under its row (lab K3-R); busy ones say what they do.
+          const readinessServerId = !items[index]!.reportsDepth
+            && classifyBotActivity(row.sessionStatus?.awareness) === 'quiet'
+            ? items[index]!.serverId ?? null : null;
+          return row.session ? (
             <React.Fragment key={row.sessionKey ?? items[index]!.sessionId}>
             <SessionItem
               rowViewModel={row}
@@ -459,23 +466,26 @@ export function BotsPopoverContent(
               serverId={items[index]!.serverId ?? undefined}
               compact
               embedded
-              embeddedIsLast={index === rows.length - 1}
+              embeddedIsLast={isLast || readinessServerId !== null}
               showTalkAction
               quietWhenOffline
               actionMenuSurface="botsRoster"
               reportsDepth={items[index]!.reportsDepth}
-              reportsDisclosure={(row.session.managedSessions?.total ?? 0) > 0
+              reportsDisclosure={readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0
                 ? (collapsed[buildSessionListIndexNodeId(items[index]!)] ?? (row.session.metadata?.bot?.kind === 'bot')) ? 'collapsed' : 'expanded'
                 : undefined}
               onSetReportsCollapsed={setCollapsed}
               onOpened={close}
             />
-            {(row.session.managedSessions?.total ?? 0) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
+            {readinessServerId ? (
+              <BotRosterReadiness serverId={readinessServerId} sessionId={row.session.id} separator={!isLast} />
+            ) : null}
+            {readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
               ? <BotRosterReports lead={row.session} item={items[index]!} />
               : null}
             </React.Fragment>
-          ) : null,
-        )}
+          ) : null;
+        })}
         {loading ? (
           <EmptyState
             layout="line"

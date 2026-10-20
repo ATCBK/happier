@@ -17,7 +17,7 @@ import { isEffectiveTeamGroupMembership } from '@/app/teams/groups/effectiveGrou
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from '@/app/encryption/accountRecipientEnvelopeReadiness';
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from '@/app/session/encryption/sessionDataKeyRecipientProjection';
 import { resolveAccountDisplayLabelV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from '@/app/account/profile/accountDisplayProfile';
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { captureMachineAccessImpactsInTx, applyMachineAccessImpactsInTx } from './machineAccessEffects';
 
@@ -322,8 +322,9 @@ async function publishMutationInTx(tx: Tx, impacts: Awaited<ReturnType<typeof mu
     await applyMachineAccessImpactsInTx(tx, { impacts: impacts.values(), grantRosterChanged: true, ...(changedAccountId ? { directGrantChangedAccountId: changedAccountId } : {}) });
 }
 /** Fence existing and prospective recipients before authority, key or grant reads. */
-async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
-    if (getDbProviderFromEnv(process.env, 'postgres') === 'sqlite') return;
+export async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
+    if (provider === 'sqlite') return;
     const readAudience = async () => {
         const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
         if (principal?.kind === 'account') accountIds.push(principal.accountId);
@@ -340,11 +341,20 @@ async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: strin
     };
     const captured = new Set(await readAudience());
     await acquireAccountChangePublicationLocksInTx(tx, [...captured], { includeSingleAccount: true });
+    if (provider === 'postgres') {
+        // Content Account admission permits peer Machine writes. Stabilize the
+        // expected content/key basis before grant and recipient-tuple work;
+        // MySQL's existing exclusive Account admission already excludes peers.
+        await tx.$queryRawUnsafe('SELECT "id" FROM "Machine" WHERE "id" = $1 FOR NO KEY UPDATE', machineId);
+    }
     // ReadCommitted can observe audience growth during the wait. Replay through
     // inTx rather than extending a sorted lock set with a lower-id recipient.
     if ((await readAudience()).some(accountId => !captured.has(accountId))) {
         throw new TransactionReplayRequiredError('transaction-account-audience-changed');
     }
+    beforeAccountChangePublication(tx, [...captured], async () => {
+        assertAccountChangePublicationAudienceInTx(tx, await readAudience());
+    });
 }
 /** Idempotent per-principal grants; Manage can delegate Manage without replacing custody. */
 export async function setMachineAccessGrantInTx(tx: Tx, input: MachineActor & Readonly<{ principal: PrincipalRefV1; level: 'view' | 'admin' }>): Promise<MachineAccessMutationResultV1> {

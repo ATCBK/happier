@@ -13,6 +13,8 @@ import {
   resolveMessageActionSnapshotFromCurrentMessageV1,
   resolveServerMessageActionReferenceV1,
 } from './messageActionReference';
+import { buildAcpAgentMessageEnvelope } from './acpMessageEnvelope';
+import { MessageActionAvailableSnapshotV1Schema } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 
 const reference = {
   v: 1,
@@ -97,6 +99,67 @@ describe('Message Action current-reference resolution', () => {
     })).toEqual({ status: 'stale' });
   });
 
+  it.each(['codex', 'acme.agent'])('discloses the complete committed %s ACP answer as transcript text', (provider) => {
+    const text = `  # Answer\n${'Long answer café 🦊\n'.repeat(700)}Final suffix\n  `;
+    const result = resolveMessageActionSnapshotFromCurrentMessageV1({
+      reference,
+      durableResolution: durableAvailable,
+      currentMessage: {
+        ...durableAvailable.message,
+        decryptedContent: buildAcpAgentMessageEnvelope({
+          provider,
+          body: { type: 'message', message: text },
+        }),
+      },
+    });
+    expect(result.status).toBe('available');
+    if (result.status !== 'available') throw new Error('Expected a committed answer');
+    expect(MessageActionAvailableSnapshotV1Schema.parse(result.snapshot)).toMatchObject({
+      role: 'agent', contentCategory: 'text', visibleText: text,
+      structuredPresentationSummary: null,
+    });
+  });
+
+  it('uses the transcript text from native output without exposing tools or thinking', () => {
+    const text = '  Native answer\nwith final suffix  ';
+    const result = resolveMessageActionSnapshotFromCurrentMessageV1({
+      reference,
+      durableResolution: durableAvailable,
+      currentMessage: {
+        ...durableAvailable.message,
+        decryptedContent: {
+          role: 'agent',
+          content: { type: 'output', data: { type: 'assistant', message: {
+            role: 'assistant', content: [
+              { type: 'thinking', thinking: 'must-not-reach-action' },
+              { type: 'text', text },
+              { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'must-not-reach-action' } },
+            ],
+          } } },
+        },
+      },
+    });
+    expect(result).toMatchObject({ status: 'available', snapshot: { visibleText: text } });
+    expect(JSON.stringify(result)).not.toContain('must-not-reach-action');
+  });
+
+  it.each([32_768, 32_769])('applies the existing disclosure boundary to a %i-byte native answer', (size) => {
+    const text = 'é'.repeat(16_384) + (size === 32_769 ? '!' : '');
+    const result = resolveMessageActionSnapshotFromCurrentMessageV1({
+      reference,
+      durableResolution: durableAvailable,
+      currentMessage: {
+        ...durableAvailable.message,
+        decryptedContent: buildAcpAgentMessageEnvelope({
+          provider: 'acme.agent', body: { type: 'message', message: text },
+        }),
+      },
+    });
+    expect(result).toEqual(size === 32_768
+      ? { status: 'available', snapshot: expect.objectContaining({ visibleText: text }) }
+      : { status: 'ineligible' });
+  });
+
   it('does not turn tool payloads or oversized text into a different eligible message', () => {
     const tool = resolveMessageActionSnapshotFromCurrentMessageV1({
       reference,
@@ -109,7 +172,7 @@ describe('Message Action current-reference resolution', () => {
         messageRole: 'agent',
         decryptedContent: {
           role: 'agent',
-          content: { type: 'codex', data: { type: 'tool-result', output: 'secret output' } },
+          content: { type: 'codex', data: { type: 'tool-result', callId: 'call-1', output: 'secret output' } },
         },
       },
     });

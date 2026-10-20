@@ -19,6 +19,11 @@ import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgent
 import { logger } from '@/ui/logger';
 import { reloadConfiguration } from '@/configuration';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
+import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import { resolveSessionResumeControlIntent } from './sessionExplicitStopIntent';
 
 const boundary = vi.hoisted(() => ({ socket: null as unknown, mode: 'timeout', connections: 0 }));
 vi.mock('socket.io-client', () => ({ io: () => { boundary.connections++; return boundary.socket; } }));
@@ -217,6 +222,8 @@ describe('requestSessionStop machine transport', () => {
             timers.add(timer);
           })
         : await get(url);
+      if (!result || typeof result !== 'object' || !('status' in result) || typeof result.status !== 'number'
+        || !('data' in result)) throw new Error('Stop fixture HTTP response is invalid');
       response.writeHead(result.status, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(result.data));
     });
@@ -276,30 +283,56 @@ describe('requestSessionStop machine transport', () => {
     expect(vi.mocked(axios.patch)).not.toHaveBeenCalled();
   });
 
-  it.each(['automatic', 'own-child', 'foreign-child', 'misbound-child'] as const)(
+  it.each(['automatic', 'own-child', 'grandchild', 'foreign-child', 'misbound-child', 'mismatched-child', 'self'] as const)(
     'retains physical cleanup but authors durable Stop only for an admitted lead on its own child (%s)', async caller => {
-      const refused = caller === 'foreign-child' || caller === 'misbound-child';
+      const refused = caller === 'foreign-child' || caller === 'misbound-child' || caller === 'mismatched-child' || caller === 'self';
       boundary.mode = refused ? 'action_refused' : 'stopped';
-      sessionMetadata.manager = { sessionId: 'lead-session' };
-      const callerId = caller === 'foreign-child' ? 'foreign-session' : 'lead-session';
+      sessionMetadata.manager = { sessionId: caller === 'grandchild' ? 'intermediate-session' : 'lead-session' };
+      const callerId = caller === 'self' ? sessionId : caller === 'foreign-child' ? 'foreign-session' : 'lead-session';
       const actionContext = {
         surface: 'agent' as const, authority: 'account_automation' as const,
+        defaultSessionId: callerId, sessionListAccess: 'led_subtree' as const, callerPermissionMode: 'default' as const,
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'session.stop': { disabledSurfaces: [] } } }),
         actionCaller: caller === 'automatic' ? { kind: 'host' as const }
           : { kind: 'session' as const, sessionId: callerId, starterDepth: 0, turnDepth: 1 },
         ...(caller !== 'automatic' && caller !== 'misbound-child' ? { agentStartContext: resolveCliAgentStartContextV1({
-          sessionId: callerId, machineId: 'owning-machine', directory: '/repo',
+          sessionId: caller === 'mismatched-child' ? 'different-caller' : callerId, machineId: 'owning-machine', directory: '/repo',
           backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
           metadata: {}, starterDepth: 0, turnDepth: 1, callerPermissionMode: 'default', settings: accountSettingsParse({}), roles: {},
         }) ?? undefined } : {}),
       };
-      const result = await requestSessionStop({ credentials, idOrPrefix: sessionId, actionContext });
-      if (caller === 'own-child') expect(readPersistedStop()).toMatchObject({ cause: 'explicit_stop', managerSessionId: 'lead-session' });
+      // Home list, metadata HTTP and Socket.IO are the boundaries. The real
+      // Action scope guard, Stop service, provenance write and physical port run.
+      const executor = createActionExecutor({ isActionApprovalRequired: () => false,
+        sessionList: async ({ query }) => markSessionListQueryResultV1({
+          sessions: query?.underSessionId === 'lead-session' ? [{ id: sessionId, active: false, presence: 'offline', updatedAt: 10 }] : [],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        }),
+        sessionStop: async ({ sessionId: target, context }) => requestSessionStop({ credentials, idOrPrefix: target, actionContext: context }),
+      });
+      const result = caller === 'automatic' ? await requestSessionStop({ credentials, idOrPrefix: sessionId, actionContext })
+        : await executor.execute('session.stop', { sessionId }, actionContext);
+      expect(result, JSON.stringify(result)).toMatchObject(refused ? { ok: false } : caller === 'automatic'
+        ? { ok: true, stopped: true } : { ok: true, result: { ok: true, stopped: true } });
+      if (caller === 'own-child' || caller === 'grandchild') expect(readPersistedStop()).toMatchObject({ cause: 'explicit_stop', managerSessionId: 'lead-session' });
       else {
         expect(readPersistedStop()).toBeNull();
         expect(vi.mocked(axios.patch)).not.toHaveBeenCalled();
       }
-      expect(result).toMatchObject(refused ? { ok: false } : { ok: true, stopped: true });
       expect(issuedMethods).toEqual(refused ? [] : ['owning-machine:stop-session']);
+      if (caller === 'own-child' || caller === 'grandchild') {
+        const rawSession = await fetchSessionByIdCompat({ token: credentials.token, sessionId });
+        expect(rawSession).not.toBeNull();
+        if (!rawSession) throw new Error('Expected the exact stopped Session');
+        const stop = readPersistedStop();
+        expect(resolveSessionResumeControlIntent({ rawSession, actionContext, metadata: { sessionExplicitStopV1: stop } }))
+          .toBe(caller === 'grandchild' ? 'authority_unavailable' : 'manager');
+        if (stop && !('status' in stop)) {
+          const { managerSessionId: _manager, ...personStop } = stop;
+          expect(resolveSessionResumeControlIntent({ rawSession, actionContext, metadata: { sessionExplicitStopV1: personStop } }))
+            .toBe(caller === 'grandchild' ? 'authority_unavailable' : 'held_by_person');
+        }
+      }
     });
 
   it('does not signal the receiver when explicit Stop custody cannot be persisted', async () => {

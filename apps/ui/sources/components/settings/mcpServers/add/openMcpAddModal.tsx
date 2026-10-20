@@ -61,7 +61,7 @@ export function openMcpAddModal(
   return openCapabilityAddModalHost(
     McpAddModal,
     { params },
-    { title: t('capabilities.mcpAdd.title'), testID: TEST_ID },
+    { title: t('capabilities.mcpAdd.title'), subtitle: t('capabilities.mcpAdd.subtitle'), testID: TEST_ID },
   );
 }
 
@@ -290,6 +290,7 @@ export function McpAddModal(
   const config = React.useMemo(
     (): CapabilityAddModalConfig<Row> => ({
       title: t('capabilities.mcpAdd.title'),
+      subtitle: t('capabilities.mcpAdd.subtitle'),
       testID: TEST_ID,
       initialModeKey:
         params.modeKey ?? (params.installLink ? 'paste' : 'catalog'),

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,12 +10,23 @@ const fsProbe = vi.hoisted(() => ({
   abortController: null as AbortController | null,
   advanceDeadlineAtStatCall: null as number | null,
   advanceDeadline: null as (() => void) | null,
+  readBytes: 0,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const read = handle.read.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        fsProbe.readBytes += result.bytesRead;
+        return result;
+      }) as typeof handle.read;
+      return handle;
+    },
     stat: async (...args: Parameters<typeof actual.stat>) => {
       fsProbe.statCalls += 1;
       if (fsProbe.statCalls === fsProbe.abortAtStatCall) {
@@ -93,9 +104,72 @@ afterEach(() => {
   fsProbe.abortController = null;
   fsProbe.advanceDeadlineAtStatCall = null;
   fsProbe.advanceDeadline = null;
+  fsProbe.readBytes = 0;
 });
 
+async function appendLargeRollout(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  const filePath = join(fixture.params.env.CODEX_HOME!, 'sessions', '2026', '07', '23',
+    `rollout-2026-07-23T08-00-00-${fixture.params.remoteSessionId}.jsonl`);
+  const body = Array.from({ length: 4096 }, (_, index) => jsonl({
+    type: 'response_item', timestamp: '2026-07-23T09:00:00.000Z',
+    payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `${index}-${'x'.repeat(1024)}` }] },
+  })).join('');
+  await appendFile(filePath, body);
+  return { filePath, sizeBytes: Buffer.byteLength(body) };
+}
+
 describe('Codex transcript invocation bounds', () => {
+  it('checks an unchanged large rollout tail without reading its transcript bodies', async () => {
+    const fixture = await createFixture();
+    try {
+      const { sizeBytes } = await appendLargeRollout(fixture);
+      const tail = await readAfterCodexExternalSessionTranscript({
+        ...fixture.params, cursor: 'tail', maxBytes: 64 * 1024, maxItems: 10,
+      });
+      if (!tail.nextCursor) throw new Error('Expected a transcript tail cursor');
+      fsProbe.readBytes = 0;
+      const current = await readAfterCodexExternalSessionTranscript({
+        ...fixture.params, cursor: tail.nextCursor, maxBytes: 64 * 1024, maxItems: 10,
+      });
+      expect(current).toMatchObject({ items: [], truncated: false, readAfterOutcome: 'already_current' });
+      // Discovery and continuity may sample the source. Reading the whole old
+      // body on an unchanged watermark makes every incremental index poll grow
+      // with the lifetime of the native conversation.
+      expect(fsProbe.readBytes).toBeLessThan(sizeBytes);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('continues a changed large rollout from semantic cursor facts without replaying its prefix', async () => {
+    const fixture = await createFixture();
+    try {
+      const { filePath, sizeBytes } = await appendLargeRollout(fixture);
+      const tail = await readAfterCodexExternalSessionTranscript({
+        ...fixture.params, cursor: 'tail', maxBytes: 64 * 1024, maxItems: 10,
+      });
+      if (!tail.nextCursor) throw new Error('Expected a transcript tail cursor');
+      const message = (text: string) => jsonl({ type: 'response_item', timestamp: '2026-07-23T10:00:00.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] } });
+      await appendFile(filePath, message('first appended text'));
+      const first = await readAfterCodexExternalSessionTranscript({
+        ...fixture.params, cursor: tail.nextCursor, maxBytes: 64 * 1024, maxItems: 10,
+      });
+      expect(first.items).toHaveLength(1);
+      if (!first.nextCursor) throw new Error('Expected semantic continuation');
+      await appendFile(filePath, message('first appended text') + message('second appended text'));
+      fsProbe.readBytes = 0;
+      const second = await readAfterCodexExternalSessionTranscript({
+        ...fixture.params, cursor: first.nextCursor, maxBytes: 64 * 1024, maxItems: 10,
+      });
+      expect(second.items).toHaveLength(1);
+      expect(JSON.stringify(second.items[0])).toContain('second appended text');
+      expect(fsProbe.readBytes).toBeLessThan(sizeBytes);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it('stops page filesystem effects after a mid-operation abort', async () => {
     const fixture = await createFixture();
     try {

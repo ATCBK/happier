@@ -29,6 +29,7 @@ export {
 export {
     applyActionSettingsTargetControlState,
     resolveActionSettingsTargetControlState,
+    resolveActionSettingsTargetPolicyInput,
     type ActionSettingsApprovalControlValue,
     type ActionSettingsBooleanControlValue,
     type ActionSettingsTargetControlKind,

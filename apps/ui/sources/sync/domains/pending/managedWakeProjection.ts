@@ -9,6 +9,7 @@ export type ManagedWakeProjectionInput = Readonly<{
     runtimeResuming: boolean;
     /** False while the Session's pending list has not been read: a missing row is then unread, not unconfirmed. */
     pendingLoaded?: boolean;
+    pendingReadState?: 'loading' | 'error';
     managedReadState?: 'loading' | 'read';
     machineInventoryState?: 'loading' | 'read';
 }>;
@@ -45,9 +46,9 @@ export function deriveManagedWakeProjection(input: ManagedWakeProjectionInput): 
         canResumeRuntime: false,
         ...(observation ? { observedAt: observation.observedAt } : {}),
     };
-    // Unread inputs cannot establish unknown state or a settled failure. A
-    // completed protected read may still return no row/observation: that is unknown.
-    if (input.pendingLoaded === false || input.managedReadState === 'loading' || input.machineInventoryState === 'loading') {
+    // Hold genuinely unread inputs, but a failed read has settled without
+    // proving custody. Retained snapshots remain useful during refresh failure.
+    if ((input.pendingLoaded === false && input.pendingReadState !== 'error') || input.managedReadState === 'loading' || input.machineInventoryState === 'loading') {
         return { ...base, kind: 'loading' };
     }
     if (!managed) return { ...base, kind: 'unknown' };

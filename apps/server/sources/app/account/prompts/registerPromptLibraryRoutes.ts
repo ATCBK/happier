@@ -8,6 +8,8 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import { inReadSnapshot, inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { listPromptLibraryRowsInTx, mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from './promptLibraryRows';
+import { readReservedAccountScopedKvRowMutationConflict } from '@/app/kv/reservedAccountScopedKvRow';
+import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
 
 const params = z.strictObject({ key: asServerProtocolZod(PromptLibraryCatalogKeyV1Schema) });
 const internal = z.strictObject({ error: z.literal('internal') });
@@ -28,7 +30,13 @@ export function registerPromptLibraryRoutes(app: Fastify): void {
     try { return reply.send(await inTx(tx => mutatePromptLibraryRowInTx(tx, {
       accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), key: request.params.key, ...request.body,
     }))); }
-    catch { return reply.code(500).send({ error: 'internal' }); }
+    catch (error) {
+      const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+      if (conflict) return reply.send(conflict);
+      if (error instanceof AccountSettingsPublicationConflict) return reply.send(error.result.status === 'version_mismatch'
+        ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' });
+      return reply.code(500).send({ error: 'internal' });
+    }
   });
   app.get(PROMPT_LIBRARY_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(PromptLibraryRowsListResponseV1Schema), 500: internal } },

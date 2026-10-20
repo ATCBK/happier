@@ -8,6 +8,7 @@ import { defineAccountCollection } from '@happier-dev/plugin-sdk/collections';
 import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
 import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { serializeCanonicalPluginManifest } from '@/plugins/manifest/serialize';
+import { classifyPluginAuthorDaemonBuild } from './toolchain';
 import { evaluatePluginDevelopmentCandidate, evaluatePluginAuthorStagingSource, evaluatePluginAuthorSource, projectEvaluatedPluginDevelopmentSource, projectPluginAuthorModule, resolvePluginAuthorStagingModule, resolvePluginAuthoringSource, resolvePluginAuthorSourceEntrypoint } from './sourceModule';
 
 function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
@@ -20,6 +21,19 @@ function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
 }
 
 describe('plugin author source module owner', () => {
+  it('admits the external Composer author manifest to the public daemon build path', async () => {
+    const fixtureRoot = fileURLToPath(new URL('../../../../../packages/tests/fixtures/plugin-platform/composer-external-dogfood/', import.meta.url));
+    const evaluated = await evaluatePluginAuthorSource({ locator: fixtureRoot });
+    const root = await mkdtemp(join(tmpdir(), 'happier-composer-author-manifest-'));
+    try {
+      await mkdir(join(root, '.happier-plugin'));
+      await writeFile(join(root, '.happier-plugin/plugin.json'), evaluated.canonicalManifestJson, 'utf8');
+      await expect(classifyPluginAuthorDaemonBuild(root)).resolves.toBe('required');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('diagnoses an executable protocol declaration spread into an Action through real source evaluation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-plugin-author-schema-diagnostic-'));
     const entryPath = join(root, 'plugin.ts');
@@ -276,6 +290,52 @@ describe('plugin author source module owner', () => {
     }
   });
 
+  it('resolves JavaScript package main at the directory boundary without requiring a development manifest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-plugin-author-js-package-'));
+    try {
+      await mkdir(join(root, 'src'));
+      await mkdir(join(root, '.happier-plugin'));
+      const entryPath = join(root, 'src', 'ledger.mjs');
+      await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module', main: './src/ledger.mjs' }));
+      await writeFile(entryPath, [
+        'export const manifest = {',
+        "  schemaVersion: 2, id: 'example.js-package', version: '0.1.0', displayName: 'JS package',",
+        "  engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },",
+        '  hostAccess: { required: [], optional: [] }, contributes: {},',
+        '};',
+        'export function activate() {}',
+      ].join('\n'));
+      // A generated descriptor must not divert a code author root into static discovery.
+      await writeFile(join(root, '.happier-plugin', 'plugin.json'), '{ stale projection');
+      await expect(resolvePluginAuthoringSource(root)).resolves.toMatchObject({
+        ok: true, kind: 'code', entry: {
+          kind: 'packageRoot', locator: await realpath(root),
+          packageRoot: await realpath(root), entryPath: await realpath(entryPath),
+        },
+      });
+      await expect(evaluatePluginAuthorSource({ locator: root })).resolves.toMatchObject({
+        manifest: { id: 'example.js-package' }, entry: { kind: 'packageRoot' },
+      });
+      // The scaffold's author source wins over a built package entry.
+      await writeFile(join(root, 'src', 'index.ts'), 'export {};');
+      await expect(resolvePluginAuthorSourceEntrypoint(root)).resolves.toMatchObject({
+        entryPath: await realpath(join(root, 'src', 'index.ts')),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the real external JavaScript fixture as a package-root author source', async () => {
+    const root = fileURLToPath(new URL('../../../../../packages/tests/fixtures/plugin-platform/out-of-tree-triage-source/', import.meta.url));
+    await expect(resolvePluginAuthoringSource(root)).resolves.toMatchObject({
+      ok: true, kind: 'code', entry: {
+        kind: 'packageRoot', packageRoot: await realpath(root),
+        entryPath: await realpath(join(root, 'src', 'index.mjs')),
+      },
+    });
+  });
+
   it('rejects ambiguous roots and unsupported daemon source extensions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-plugin-author-ambiguous-'));
     try {
@@ -302,6 +362,10 @@ describe('plugin author source module owner', () => {
       await mkdir(missingEntryRoot);
       await expect(resolvePluginAuthorSourceEntrypoint(missingEntryRoot)).rejects.toMatchObject({
         code: 'plugin_author_entry_missing',
+      });
+      await writeFile(join(missingEntryRoot, 'package.json'), JSON.stringify({ main: './missing.mjs' }));
+      await expect(resolvePluginAuthorSourceEntrypoint(missingEntryRoot)).rejects.toMatchObject({
+        code: 'plugin_author_entry_missing', message: expect.stringContaining('package.json main'),
       });
     } finally {
       await rm(root, { recursive: true, force: true });

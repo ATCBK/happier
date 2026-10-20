@@ -187,8 +187,11 @@ async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentia
     let admitted: AdmittedUsageProjection | undefined;
     const credentialScope = resolveAuthCredentialsScopeKey(credentials);
     const materialBytes = options.material?.type === 'legacy' ? options.material.secret : options.material?.machineKey;
+    // One instant per read: price, Pending and pacing revisions of this read keep its derived pace and
+    // unused capacity instead of re-deriving them from the whole history at each later wall-clock reading.
+    const readNowMs = options.nowMs ?? Date.now();
     const project = () => {
-        const nowMs = options.nowMs ?? Date.now();
+        const nowMs = readNowMs;
         const previous = admitted?.view;
         // The admitted record owns quota facts. Entered price is opened onto
         // current separately and does not change that history/pace basis.

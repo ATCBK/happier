@@ -43,8 +43,9 @@ import {
     type BoardWorkflowFacts,
 } from './boardCards';
 import { projectBoardMembership, type BoardMembership } from './boardMembership';
-import { fromBoardSessionFilter } from './boardSessionFilter';
-import { createBoardSessionSourceProjection, readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionHomeObservation, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
+import { fromStoredSessionListFilter } from '@/components/sessions/shell/search/storedSessionListFilter';
+import { isSessionListHomeOpening } from '@/sync/domains/session/listing/sessionListHomeObservation';
+import { createBoardSessionSourceProjection, readBoardMachineSourceState, readBoardPagedEntitySourceState, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 import { useBoardTaskItems } from './useBoardTaskItems';
 
 /**
@@ -69,15 +70,14 @@ export function useBoardAddSources(homes: BoardHomes) {
     const machineLists = useMachineListByServerId();
     const library = useWorkflowDefinitionLibrary();
     const runs = useWorkflowRunWindow('all');
-    const sessionPhases = getStorage()(useShallow(state => homes.mountedServerIds.map(serverId =>
-        readBoardSessionHomeObservation(state.concurrentSessionListCacheByServerId, serverId)?.phase)));
+    const sessionsOpening = getStorage()(state => homes.mountedServerIds.some(serverId => isSessionListHomeOpening(state, serverId)));
     const machinesLoading = getStorage()(state => homes.mountedServerIds.some(serverId => {
         const inventory = resolveServerScopedMachineInventory<Machine>({ serverId, activeServerId: '', activeMachines: [],
             machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId });
         return inventory.status === 'loading' || inventory.machines === null && inventory.status !== 'error' && inventory.status !== 'signedOut';
     }));
     return { rowsByServerId, machineLists, library, runs, loading: {
-        sessions: sessionPhases.some(phase => !phase || phase === 'loading' || phase === 'refreshing'),
+        sessions: sessionsOpening,
         workflows: homes.activeServerId !== null && (library.status === 'loading' || library.loadingMore),
         runs: homes.activeServerId !== null && (runs.status === 'loading' || runs.loadingMore),
         machines: machinesLoading,
@@ -192,13 +192,13 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
     complete: boolean;
 }> {
     const filter = React.useMemo(() => board.source.filter
-        ? fromBoardSessionFilter(board.source.filter, homes.mountedServerIds)
+        ? fromStoredSessionListFilter(board.source.filter, homes.mountedServerIds)
         : null, [board.source.filter, homes.mountedServerIds]);
     const includesSessions = filter !== null && filter.show !== 'runs';
     const includesRuns = filter !== null && canSessionListFilterIncludeRunsV1(filter);
     const readsRuns = includesRuns && homes.activeServerId !== null
         && filter.homeServerIds.some((home) => areServerProfileIdentifiersEquivalent(home, homes.activeServerId));
-    const window = useWorkflowRunWindow('all', { enabled: readsRuns });
+    const window = useWorkflowRunWindow(filter?.underSessionId ? `under:${filter.underSessionId}` : 'all', { enabled: readsRuns });
     const queryHomes = React.useMemo(() => {
         if (!filter || !includesSessions) return [];
         // An empty Home selection means every mounted Home, as in the Sessions list.
@@ -238,6 +238,7 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
             servedHomeServerId: readsRuns ? homes.activeServerId : null,
             filter,
             runs: window.rows.map(row => row.summary),
+            runUnderSessionId: readsRuns ? filter.underSessionId : undefined,
             viewerAccountId: runViewerAccountId,
         }).length > 0) complete = false;
         for (const home of queryHomes) {
@@ -259,7 +260,8 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
         if (readsRuns && homes.activeServerId) {
             for (const row of window.rows) {
                 if (!row.summary) continue;
-                const match = matchWorkflowRunSessionListFilter(row.summary, homes.activeServerId, filter, runViewerAccountId);
+                const match = matchWorkflowRunSessionListFilter(row.summary, homes.activeServerId, filter, runViewerAccountId,
+                    filter.underSessionId !== undefined);
                 if (match === 'unavailable') complete = false;
                 if (match === 'match') next.push(runRef(homes.activeServerId, row.id));
             }

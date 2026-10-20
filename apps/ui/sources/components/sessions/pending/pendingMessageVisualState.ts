@@ -86,6 +86,7 @@ const blockedReasonLabelKeys = {
     delivery_outcome_uncertain: 'session.pendingMessages.deliveryBlockedReasons.deliveryOutcomeUncertain',
     terminal_host_unreachable: 'session.pendingMessages.deliveryBlockedReasons.terminalHostUnreachable',
     runtime_disposed_before_delivery: 'session.pendingMessages.deliveryBlockedReasons.runtimeDisposedBeforeDelivery',
+    host_retired_before_dispatch: 'session.pendingMessages.deliveryBlockedReasons.runtimeDisposedBeforeDelivery',
     session_input_target_unavailable: 'session.pendingMessages.deliveryBlockedReasons.targetUnavailable',
     runtime_config_blocked: 'session.pendingMessages.deliveryBlockedReasons.runtimeConfigBlocked',
     invalid_prompt_text: 'session.pendingMessages.deliveryBlockedReasons.invalidPromptText',

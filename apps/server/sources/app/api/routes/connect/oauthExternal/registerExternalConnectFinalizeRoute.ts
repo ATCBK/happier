@@ -30,7 +30,7 @@ import {
     readOAuthAuthenticationEvidenceInTx,
 } from "@/app/auth/authenticationEvidence";
 import { auth } from "@/app/auth/auth";
-import { requireTeamOAuthAdmissionInTx } from "@/app/teams/memberships/teamOAuthAdmission";
+import { acquireTeamOAuthAdmissionAccountsInTx, requireTeamOAuthAdmissionInTx } from "@/app/teams/memberships/teamOAuthAdmission";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { PresentUserRequiredResponseSchema, requirePresentUser } from "../../../utils/requirePresentUser";
 
@@ -161,6 +161,11 @@ export function registerExternalConnectFinalizeRoute(app: Fastify) {
                 preferredUsername: username,
             });
             const token = await inTx(async (tx) => {
+                await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                    accountIds: [request.userId], provider: parsedValue.securityBinding?.provider,
+                    connection: parsedValue.securityBinding?.connection,
+                    admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                });
                 await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                 if (!isTeamOwnedConnectionAdmission(parsedValue.securityBinding)
                     && !await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {

@@ -12,6 +12,7 @@ import {
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { db } from "@/storage/db";
+import { acquireRunnerActivationLockInTx } from './activationLock';
 import { inTx } from "@/storage/inTx";
 import {
     readRunnerCreatorCurrentnessInTx,
@@ -83,7 +84,8 @@ export async function readEphemeralRunnerEndpointProjection(params: Readonly<{
     }
 
     return inTx(async (tx): Promise<RunnerEndpointProjectionResponseV1> => {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, preflight.creatorAccountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, preflight.creatorAccountId, "content");
+        await acquireRunnerActivationLockInTx(tx, params.activationId);
         const initial = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId } });
         if (!initial || initial.creatorAccountId !== preflight.creatorAccountId) {
             return { status: "conflict", reason: "proof_mismatch" };

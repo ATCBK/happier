@@ -10,9 +10,10 @@ import type { SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/m
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
-import { createRequesterSessionCredentialCustody, resolveRequesterSessionBootstrap,
+import { createRequesterSessionCredentialCustody, createRequesterSessionRuntimeContextResolver, resolveRequesterSessionBootstrap,
+  resolveRequesterSessionBootstrapFromCustody,
   listRequesterSessionCredentialBindings, type RequesterSessionMachineAdmissionBoundary } from '../sessionEncryption/requesterSessionCredentials';
-import { readRequesterPendingSessionActivation } from './pendingSessionActivationRecovery';
+import { activateRequesterPendingSession, readRequesterPendingSessionActivation } from './pendingSessionActivationRecovery';
 import { activatePendingInactiveSession } from './activatePendingInactiveSession';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
@@ -49,6 +50,11 @@ describe('requester pending reconnect through protected custody and the Home net
     let grant = true;
     let receiptTarget = target;
     let observedHomeId = target.homeId;
+    let sessionStatus = 200;
+    let invalidSessionResponse = false;
+    let nextSessionRead: (() => void) | undefined;
+    let acceptFailureReport = false;
+    const reports: unknown[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       expect(String(input)).toBe(`${origin}/v1/features`);
       return new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
@@ -80,12 +86,21 @@ describe('requester pending reconnect through protected custody and the Home net
     app.get('/v1/access-keys/bob-session/alice-machine', async () => ({ accessKey: { id: 'exact-existing-tuple' } }));
     app.get('/v2/sessions/bob-session/pending', async () => ({ pending: [{ localId: 'input-1', messageRole: 'user',
       status: 'queued', deliveryState: null, requestedAction: { v: 1, kind: 'send_now' } }] }));
-    app.get('/v2/sessions/bob-session', async () => ({ session: createSessionRecordFixture({ id: target.sessionId,
+    app.post('/v2/sessions/bob-session/pending/activation/fail', async request => {
+      reports.push(request.body);
+      return { ok: true, didFail: acceptFailureReport };
+    });
+    app.get('/v2/sessions/bob-session', async (_request, reply) => {
+      const status = sessionStatus;
+      const invalid = invalidSessionResponse;
+      const afterRead = nextSessionRead; nextSessionRead = undefined; afterRead?.();
+      return status !== 200 ? reply.code(status).send({ error: 'private-Session-refusal' })
+        : invalid ? { session: { id: target.sessionId } } : ({ session: createSessionRecordFixture({ id: target.sessionId,
       encryptionMode: 'plain', metadata: JSON.stringify({ machineId: attribution.machineId, path: '/workspace',
         flavor: 'codex', codexSessionId: 'native-bob-session', backendTarget: { kind: 'builtInAgent', agentId: 'codex' } }),
       dataEncryptionKey: null, share: null, pendingCount: 1, pendingVersion: 9,
       pendingActivationAuthorization: { status: 'waiting', requestId: 'input-1', requestedAt: 12, admittedTarget: receiptTarget },
-    }) }));
+    }) }); });
     await app.ready();
     restore = installAxiosFastifyAdapter({ app, origin });
     currentnessChannel = await createRequesterCurrentnessSocketHarness();
@@ -107,11 +122,74 @@ describe('requester pending reconnect through protected custody and the Home net
     const activation = { credentials, requester: bootstrap, expectedTarget: target, machineId: attribution.machineId,
       resolveCurrentMachineExecutionOriginContext,
       sessionId: target.sessionId, requestId: 'input-1', pendingVersion: 9,
-      spawnSession: async (options: SpawnSessionOptions) => { spawned.push(options); return { type: 'success' as const, sessionId: target.sessionId }; } };
+      spawnSessionForInternalResume: async (options: SpawnSessionOptions) => { spawned.push(options); return { type: 'success' as const, sessionId: target.sessionId }; } };
     expect(await activatePendingInactiveSession(activation)).toEqual({ status: 'activated' });
     expect(spawned).toHaveLength(1);
     expect(spawned[0]).toMatchObject({ existingSessionId: target.sessionId, machineId: attribution.machineId,
       requesterWorkAttributionV1: attribution, executionAuthorization: { requestId: 'input-1', requestedAt: 12 } });
+    const resolveRuntime = createRequesterSessionRuntimeContextResolver({ trackedSessions: new Map(),
+      // A refused cold preparation must never reach runtime/process construction.
+      getCreateRuntime: () => async () => { throw new Error('Refused preparation must not construct a runtime'); },
+      recoverBootstrap: input => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
+        sessionId: input.sessionId, expectedAttribution: input.attribution, serverId: attribution.serverId,
+        serverHttpBaseUrl: origin, machineAdmissionBoundary: boundary, signal: input.signal,
+        onSessionReadRefused: input.onSessionReadRefused }),
+    });
+    let hint = { sessionId: target.sessionId, requestId: 'input-1', requestedAt: 12, pendingVersion: 9, source: 'live' as const };
+    const rejected: unknown[] = [];
+    const settle = () => activateRequesterPendingSession({ machineId: attribution.machineId, binding: { sessionId: target.sessionId, attribution },
+      hint, resolveRequesterSessionRuntimeContext: resolveRuntime,
+      releaseRequesterSessionRuntimeContext: async context => { await context.dispose(); },
+      resolveCurrentMachineExecutionOriginContext, spawnSessionForInternalResume: activation.spawnSessionForInternalResume,
+      onActivationRejected: async event => { rejected.push(event); } });
+    const refuseOnce = () => { sessionStatus = 403; nextSessionRead = () => { sessionStatus = 200; }; };
+    refuseOnce();
+    await settle();
+    expect(reports).toEqual([{ requestId: 'input-1', requestedAt: 12, failureCode: 'runtime_start_failed' }]);
+    expect(spawned).toHaveLength(1);
+    expect(rejected).toEqual([]);
+    reports.length = 0; acceptFailureReport = true;
+    refuseOnce();
+    await settle();
+    expect(reports).toHaveLength(1);
+    expect(rejected).toEqual([{ sessionId: target.sessionId, reason: 'identity-unavailable', requester: attribution }]);
+    expect(spawned).toHaveLength(1);
+    reports.length = 0;
+    invalidSessionResponse = true;
+    nextSessionRead = () => { invalidSessionResponse = false; };
+    await settle();
+    expect(reports).toHaveLength(1);
+    expect(spawned).toHaveLength(1);
+    // Unavailable transport, cancellation, unreadable current authority,
+    // changed exact target and lost Machine admission all retain waiting custody.
+    reports.length = 0;
+    sessionStatus = 503;
+    await expect(settle()).rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+    sessionStatus = 403;
+    await settle();
+    sessionStatus = 200;
+    invalidSessionResponse = true;
+    await settle();
+    invalidSessionResponse = false;
+    expect(await resolveRuntime(target.sessionId, attribution, AbortSignal.abort(), async () => {
+      throw new Error('Cancellation must not settle');
+    })).toBeNull();
+    const cancelled = new AbortController();
+    sessionStatus = 403;
+    nextSessionRead = () => { sessionStatus = 200; cancelled.abort(); };
+    expect(await resolveRuntime(target.sessionId, attribution, cancelled.signal, async () => {
+      throw new Error('In-flight cancellation must not settle');
+    })).toBeNull();
+    receiptTarget = { ...target, installationId: 'stale-installation' };
+    refuseOnce(); await settle();
+    receiptTarget = target;
+    sessionStatus = 403; nextSessionRead = () => { sessionStatus = 200; grant = false; };
+    await settle();
+    grant = true;
+    hint = { ...hint, requestedAt: 11 };
+    refuseOnce(); await settle();
+    hint = { ...hint, requestedAt: 12 };
+    expect(reports).toEqual([]);
     observedHomeId = 'srv_replacement_home';
     expect(await readRequesterPendingSessionActivation(recovery)).toBeNull();
     expect(await activatePendingInactiveSession(activation)).toEqual({ status: 'not-needed', reason: 'authorization-stale' });

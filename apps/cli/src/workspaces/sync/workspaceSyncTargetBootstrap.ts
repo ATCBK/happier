@@ -12,6 +12,7 @@ import { normalizeSessionHandoffWorkspaceRootPath } from '@happier-dev/protocol/
 import type { HandoffTargetReplacementApprovalV1 } from '@happier-dev/protocol';
 import type { WorkspaceRootOwnershipHandle, WorkspaceRootOwnershipManager } from './workspaceSyncRootOwnership';
 import {
+  abortWorkspaceTargetMaterializationAfterFailure,
   beginWorkspaceTargetMaterialization,
   recoverInterruptedWorkspaceTargetMaterialization,
   rehydrateWorkspaceTargetMaterializationFromReceiptPath,
@@ -312,7 +313,7 @@ export async function prepareWorkspaceSyncGitTarget(input: Readonly<{
     }, { inspectWorkspaceLocation: dependencies.inspectWorkspaceLocation });
     return targetMaterialization.custody;
   } catch (error) {
-    await targetMaterialization.custody.abort();
+    await abortWorkspaceTargetMaterializationAfterFailure(targetMaterialization.custody, error);
     throw error;
   }
 }
@@ -364,6 +365,12 @@ export async function rehydrateWorkspaceSyncTargetBootstrap(input: Readonly<{
     deferRootIdentityBinding: true,
   });
   if ('kind' in ownership) {
+    // The relationship's own running sync already fences this root, directly or as the shared hub
+    // workspace of this endpoint, so there is no bootstrap custody left to rebuild; only a foreign
+    // operation is a conflict.
+    if (ownership.existing.operation === 'sync'
+      && (ownership.existing.ownerId === input.relationshipId
+        || ownership.existing.ownerId === input.targetWorkspaceRefId)) return null;
     throw bootstrapError('workspace_root_in_use', 'Workspace sync target root overlaps an active operation');
   }
   const materializationCustody = await (dependencies.rehydrateMaterializationFromReceiptPath

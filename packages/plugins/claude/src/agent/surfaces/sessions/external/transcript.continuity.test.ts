@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const inodeProbe = vi.hoisted(() => ({ reportZeroInode: false, duringAnchorRead: null as (() => Promise<void>) | null }));
+const inodeProbe = vi.hoisted(() => ({ reportZeroInode: false, duringAnchorRead: null as (() => Promise<void>) | null, bytesRead: 0 }));
 
 // The filesystem is the genuine system boundary, and the inode is the part of it
 // this suite has to vary: a Windows share or network mount reports zero, and the
@@ -37,12 +37,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
                         return patchStats(stats);
                     };
                 }
-                if (property === 'read' && anchorStarted && inodeProbe.duringAnchorRead) {
+                if (property === 'read') {
                     return async (...readArgs: unknown[]) => {
-                        const append = inodeProbe.duringAnchorRead;
-                        inodeProbe.duringAnchorRead = null;
-                        await append?.();
-                        return await (target.read as (...a: unknown[]) => Promise<unknown>).call(target, ...readArgs);
+                        if (anchorStarted && inodeProbe.duringAnchorRead) {
+                            const append = inodeProbe.duringAnchorRead;
+                            inodeProbe.duringAnchorRead = null;
+                            await append();
+                        }
+                        const result = await (target.read as (...a: unknown[]) => Promise<{ bytesRead: number }>).call(target, ...readArgs);
+                        inodeProbe.bytesRead += result.bytesRead;
+                        return result;
                     };
                 }
                 const value = Reflect.get(target, property, receiver) as unknown;
@@ -63,6 +67,7 @@ const roots: string[] = [];
 afterEach(async () => {
     inodeProbe.reportZeroInode = false;
     inodeProbe.duringAnchorRead = null;
+    inodeProbe.bytesRead = 0;
     while (roots.length > 0) {
         const root = roots.pop();
         if (root) await rm(root, { recursive: true, force: true });
@@ -145,6 +150,36 @@ async function rewriteInPlace(path: string, position: number, replacement: strin
 }
 
 describe('Claude external transcript continuity evidence', () => {
+    it('keeps current-tail and small append work bounded independently of native history size', async () => {
+        const fixture = await createTranscript(16_000, 1024);
+        const cursor = await mintTailCursor(fixture);
+        inodeProbe.bytesRead = 0;
+        const current = await readAfter(fixture, cursor);
+        expect(current).toMatchObject({ items: [], truncated: false, hasMore: false });
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(64 * 1024);
+
+        await appendFile(fixture.transcriptPath, [
+            { type: 'assistant', uuid: 'discarded', parentUuid: 'continuity-15999', message: { content: [{ type: 'text', text: 'discarded branch' }] } },
+            { type: 'assistant', uuid: 'active', parentUuid: 'continuity-15999', message: { content: [{ type: 'text', text: 'active branch' }] } },
+            { type: 'future-native-message' },
+        ].map(row => JSON.stringify(row) + '\n').join(''));
+        inodeProbe.bytesRead = 0;
+        const discarded = await readAfterClaudeExternalSessionTranscript({ source: fixture.source, env: fixture.env,
+            providerSessionId: fixture.remoteSessionId, cursor, maxBytes: 64 * 1024, maxItems: 1 });
+        expect(discarded).toMatchObject({ items: [], truncated: false, hasMore: true });
+        expect(discarded.diagnostics).toContainEqual(expect.objectContaining({ code: 'non_transcript_record_skipped', count: 1 }));
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(3 * 64 * 1024);
+        inodeProbe.bytesRead = 0;
+        const advanced = await readAfter(fixture, String(discarded.nextCursor));
+        expect(advanced).toMatchObject({ truncated: false, hasMore: false });
+        expect(advanced.items).toHaveLength(2);
+        expect(JSON.stringify(advanced.items)).toContain('active branch');
+        expect(JSON.stringify(advanced.items)).not.toContain('discarded branch');
+        expect(advanced.diagnostics).toContainEqual(expect.objectContaining({ code: 'unsupported_record_skipped', count: 1 }));
+        // One forward page, one backward branch page, and bounded cursor anchors.
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(3 * 64 * 1024);
+    });
+
     it('anchors the acknowledged prefix while a native writer appends during evidence capture', async () => {
         const fixture = await createTranscript(2, 40);
         inodeProbe.duringAnchorRead = () => appendFile(fixture.transcriptPath, transcriptLine(1000, 40));

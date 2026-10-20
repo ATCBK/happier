@@ -14,6 +14,7 @@ export const actionOperationInboxTranslations = {
             succeeded: 'Completed',
             failed: 'Failed',
             cancelled: 'Cancelled',
+            outcomeUncertain: 'Outcome not confirmed. Check the machine.',
         },
         observation: {
             reconnecting: 'Reconnecting',
@@ -71,6 +72,7 @@ export const actionOperationInboxTranslations = {
             notFound: 'This action is no longer available to cancel.',
             failed: 'Cancellation could not be requested. The action may still be running.',
         },
+        failureGeneric: 'The action did not finish.',
         unavailableTitle: 'Status unavailable',
         unavailableDescription: 'This action is no longer available in the current activity history.',
         detailAccessibilityLabel: 'Action details',

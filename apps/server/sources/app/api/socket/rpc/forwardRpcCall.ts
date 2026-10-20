@@ -141,6 +141,8 @@ export async function forwardRpcCall(params: Readonly<{
         requestId: string;
     }>) => Promise<ExternalActionExecutionAuthorizationV1>;
     targetGuard?: RpcForwardTargetGuard;
+    /** The admitted route's canonical presence owner distinguishes target loss from a missing method. */
+    isTargetUnavailable?: () => Promise<boolean>;
     cancellation?: Readonly<{
         /** Server-minted correlation that is safe to expose to the exact target. */
         targetRequestId: string;
@@ -207,7 +209,7 @@ export async function forwardRpcCall(params: Readonly<{
         return recordMethodUnavailable({
             method: params.method,
             callStartedAt,
-            targetUnavailable: await isMachineRpcTargetUnavailable({
+            targetUnavailable: params.isTargetUnavailable ? await params.isTargetUnavailable() : await isMachineRpcTargetUnavailable({
                 io: params.io,
                 userId: params.targetUserId,
                 method: params.sessionDecisionTargetMethod ?? params.method,

@@ -1076,6 +1076,16 @@ async function runPluginsDevCommand(
     ...(sdkRegistryOrigin ? { sdkRegistryOrigin } : {}),
   }, runtime.signal ? { signal: runtime.signal } : {});
   if (result.kind === 'failed') {
+    if (result.code === 'plugin_dev_reviewRequired') {
+      // Rejoin the daemon-retained candidate through the ordinary install
+      // Action, which owns the approval Artifact and its decision lifecycle.
+      await handlePluginsCommand([
+        'install', requestedPath, '--dev',
+        ...(sdkRegistryOrigin ? ['--sdk-registry', sdkRegistryOrigin] : []),
+        ...(wantsJson(args) ? ['--json'] : []),
+      ], deps, runtime);
+      return;
+    }
     if (wantsJson(args)) {
       await printJsonEnvelope({
         ok: false,

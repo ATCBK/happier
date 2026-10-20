@@ -23,6 +23,8 @@ export const PERMISSIONS_SETTINGS = defineSettingsPage({
             featureId: 'sessions.direct',
             settings: {
                 global: {},
+                /** The per-Agent rows share one target-keyed preference. */
+                agentStorage: {},
             },
         },
     },

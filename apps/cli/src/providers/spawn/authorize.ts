@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { randomUUID } from 'node:crypto';
 import { assessProviderEndpoint } from '@happier-dev/protocol/providers/safety/url';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
@@ -211,8 +210,8 @@ type ProviderSpawnAuthorizationAttemptCommon<TAuthorization extends ProviderSpaw
   isRetainedAuthorizationCurrent: (
     input: RetainedManagedProviderAuthorizationCurrentnessCheck,
   ) => boolean;
-  revalidateBeforeEffect: () => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
-  revalidateBeforeCommit: () => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
+  revalidateBeforeEffect: (signal?: AbortSignal) => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
+  revalidateBeforeCommit: (signal?: AbortSignal) => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
   cleanupOnFailure: () => void;
   takeCleanupOnExit: () => (() => void) | null;
   transferLaunchMaterializationCleanupOwnership: () => void;
@@ -239,7 +238,7 @@ export type ProviderSpawnAuthorizationAttempt =
 
 type ProviderSpawnAuthorizationAttemptInput<TAuthorization extends ProviderSpawnAuthorization> = Readonly<{
   initial: TAuthorization;
-  revalidate: () => Promise<ProviderSpawnAuthorizationResult>;
+  revalidate: (signal?: AbortSignal) => Promise<ProviderSpawnAuthorizationResult>;
   resolveCredential: () => ProviderCredentialPlaintextResultForSpawn;
   materialize: (input: Readonly<{
     authorization: TAuthorization;
@@ -306,7 +305,7 @@ export function createProviderSpawnAuthorizationAttempt<
     }
   };
 
-  const revalidate = async () => {
+  const revalidate = async (signal?: AbortSignal) => {
     if (!isAuthorizationCurrent()) {
       return {
         ok: false as const,
@@ -317,7 +316,7 @@ export function createProviderSpawnAuthorizationAttempt<
       };
     }
     const managed = isManagedProviderSpawnAuthorization(input.initial);
-    const current = await input.revalidate();
+    const current = await input.revalidate(signal);
     if (!current.ok) {
       return managed
         ? {
@@ -386,8 +385,8 @@ export function createProviderSpawnAuthorizationAttempt<
     isAuthorizationCurrent,
     isRetainedAuthorizationCurrent,
     revalidateBeforeEffect: revalidate,
-    revalidateBeforeCommit: async () => {
-      const current = await revalidate();
+    revalidateBeforeCommit: async (signal?: AbortSignal) => {
+      const current = await revalidate(signal);
       if (!current.ok) cleanup();
       return current;
     },
@@ -547,13 +546,14 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
   resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
   managedPurposeBindingSnapshot?: QualifiedConnectedAccountPurposeBindingsV1;
   savedSecretOperationContext?: SavedSecretOperationContextV1;
+  signal?: AbortSignal;
 }>): Promise<Readonly<
   | { ok: true; attempt: ProviderSpawnAuthorizationAttempt }
   | { ok: false; error: ProviderErrorV1 }
 >> {
-  const admissionLifetime = createProviderOperationLifetime({
-    wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-  });
+  // Session/Run admission must not borrow an endpoint probe's wall cap. The
+  // containing launch and transport owners retain their own lifetime policy.
+  let admissionLifetime = createProviderOperationLifetime({ signal: input.signal });
   const authorizationId = randomUUID();
   const authorizationStartedAt = performance.now();
   const observePhase = async <T>(phase: 'catalog' | 'agent_activation' | 'dns' | 'purpose_bindings' | 'managed_runtime' | 'model_projection', work: () => Promise<T>): Promise<T> => {
@@ -654,11 +654,15 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     providersByContributionKey:
       input.lease.registry.contributes.providersByContributionKey ?? new Map(),
   };
+  const retirementSignal = input.lease.registry.agentRuntimesByAgentId.get(input.agentId)?.retirementSignal;
+  if (retirementSignal) {
+    admissionLifetime = createProviderOperationLifetime({
+      signal: input.signal ? AbortSignal.any([input.signal, retirementSignal]) : retirementSignal,
+    });
+  }
   let managedPurposeBindingSnapshot = input.managedPurposeBindingSnapshot;
   const resolveCurrent = async (
-    lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    }),
+    lifetime = admissionLifetime,
     admitSavedSecret = false,
   ): Promise<ProviderSpawnAuthorizationResult> => {
     let snapshot = getAccountSettingsSnapshot();
@@ -998,7 +1002,14 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     ok: true,
     attempt: createProviderSpawnAuthorizationAttempt({
       initial: initial.authorization,
-      revalidate: resolveCurrent,
+      revalidate: (signal) => resolveCurrent(signal
+        ? {
+            ...admissionLifetime,
+            signal: admissionLifetime.signal
+              ? AbortSignal.any([admissionLifetime.signal, signal])
+              : signal,
+          }
+        : admissionLifetime),
       resolveCredential: () => {
         const snapshot = getAccountSettingsSnapshot();
         if (!snapshot) {

@@ -5,7 +5,7 @@ import type { SessionWorkStateSnapshot } from '@/sync/domains/session/workState/
 
 import { SessionManagedWorkflowSection } from './SessionManagedWorkflowSection';
 import { SessionWorkflowActivitySection } from './SessionWorkflowActivitySection';
-import type { SessionManagedWorkflowRunsState } from './useSessionManagedWorkflowRuns';
+import type { SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import type { GoalActionCapabilities } from './goalActionVisibility';
 import type { SessionWorkflowActivityState } from './useSessionWorkflowActivity';
 import {

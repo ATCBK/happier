@@ -7,11 +7,13 @@ import { installUiListsCommonModuleMocks } from '../uiListsTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-installUiListsCommonModuleMocks();
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+// Selection is exposed through `accessibilityState` on native; on the web a plain button row omits the
+// invalid `aria-selected` (see `Item`), so the native boundary is where this contract is observable.
+installUiListsCommonModuleMocks({
+    reactNative: async () => {
+        const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeNativeMock({ platformOS: 'ios' });
+    },
 });
 
 const { CollectionIndexRow } = await import('./CollectionIndexRow');

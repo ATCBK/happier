@@ -70,7 +70,10 @@ export function resolveSessionRowPresentation(input: Readonly<{
      */
     standing?: boolean;
 }>): SessionRowPresentation {
-    const signalIndicator = resolveAttentionIndicator(input.attentionState, input.backgroundActive === true);
+    // Background activity only speaks for a row with nothing of its own to say:
+    // a reply, a finished turn, queued input or a request keeps its own marker.
+    const backgroundSpeaks = input.backgroundActive === true && input.attentionState === 'quiet';
+    const signalIndicator = resolveAttentionIndicator(input.attentionState, backgroundSpeaks);
     // Standing is the weakest thing a row can say, so it only speaks for a row
     // that has no signal of its own: anything the session is actually doing —
     // unread, ready, working, failed, permission, action — keeps the row.
@@ -83,7 +86,7 @@ export function resolveSessionRowPresentation(input: Readonly<{
             : 'emphasized';
     const accessibilityStatusTextKey = resolveAccessibilityStatusTextKey({
         attentionState: input.attentionState,
-        backgroundActive: input.backgroundActive === true,
+        backgroundSpeaks,
         presentsStanding,
     });
     const spoken = accessibilityStatusTextKey ? { accessibilityStatusTextKey } : {};
@@ -108,12 +111,12 @@ export function resolveSessionRowPresentation(input: Readonly<{
         return { attentionIndicator, titleTone, secondaryLine: 'status', ...spoken };
     }
 
-    if (input.backgroundActive === true) {
-        return { attentionIndicator, titleTone, secondaryLine: 'status', statusTextKey: 'status.backgroundActive', ...spoken };
-    }
-
     if (input.attentionState === 'ready') {
         return { attentionIndicator, titleTone, secondaryLine: 'status', statusTextKey: 'status.readyForReview', ...spoken };
+    }
+
+    if (input.backgroundActive === true) {
+        return { attentionIndicator, titleTone, secondaryLine: 'status', statusTextKey: 'status.backgroundActive', ...spoken };
     }
 
     if (presentsStanding) {
@@ -137,11 +140,11 @@ export function resolveSessionRowPresentation(input: Readonly<{
  */
 function resolveAccessibilityStatusTextKey(input: Readonly<{
     attentionState: SessionRowAttentionState;
-    backgroundActive: boolean;
+    backgroundSpeaks: boolean;
     presentsStanding: boolean;
 }>): SessionRowAccessibilityStatusTextKey | undefined {
     if (input.presentsStanding) return 'status.keptInAttention';
-    if (input.backgroundActive) return undefined;
+    if (input.backgroundSpeaks) return undefined;
     switch (input.attentionState) {
         case 'failed':
             return 'status.error';
@@ -167,16 +170,9 @@ function resolveAccessibilityStatusTextKey(input: Readonly<{
 
 function resolveAttentionIndicator(
     attentionState: SessionRowAttentionState,
-    backgroundActive: boolean,
+    backgroundSpeaks: boolean,
 ): SessionRowAttentionIndicator {
-    if (
-        backgroundActive
-        && attentionState !== 'failed'
-        && attentionState !== 'permission_required'
-        && attentionState !== 'action_required'
-    ) {
-        return 'working';
-    }
+    if (backgroundSpeaks) return 'working';
 
     switch (attentionState) {
         case 'working':

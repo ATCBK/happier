@@ -40,6 +40,10 @@ it('publishes an Account Action and binds its protected active reply through the
   // HTTP and Socket.IO are the only replaced boundaries. Action execution,
   // resource crypto, current-turn matching and the actual client stay real.
   vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (String(url).endsWith('/messages/by-local-id/input-1/reply')) return { status: 200, data: {
+      v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: 'observing', acceptedTurnId: 'turn-1',
+        discussion: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId } },
+    } };
     if (String(url).endsWith('/messages/by-local-id/original/reply')) return { status: 200, data: {
       v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'turn-1',
         discussion: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId },

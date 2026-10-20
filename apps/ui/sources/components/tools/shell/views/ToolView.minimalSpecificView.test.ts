@@ -31,6 +31,11 @@ vi.mock('@expo/vector-icons', () => ({
     Octicons: 'Octicons',
 }));
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./ToolView');
+await import('@/components/tools/renderers/core/_registry');
+await import('@/components/sessions/transcript/CommandView');
+
 describe('ToolView (minimal tools)', () => {
     afterEach(() => {
         standardCleanup();

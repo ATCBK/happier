@@ -29,7 +29,6 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 import { resolveSelectedVoiceProviderTitleKey } from '@/voice/registry/providerSelection';
 import {
     reconcileVoiceActivityFeedExpansion,
-    toggleVoiceActivityFeedExpansion,
     useVoiceActivityFeedExpansion,
 } from './voiceActivityFeedExpansionStore';
 import { voiceSurfaceHaptics } from './voiceSurfaceHaptics';
@@ -40,8 +39,11 @@ import {
     resolveVoiceStartAdmission,
 } from './resolveVoiceStartAdmission';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 const voiceProviderRegistry = createDefaultVoiceProviderRegistry();
+const executePresentationAction = createFrontDoorUiActionExecutor();
 
 /**
  * Coding work the Voice conversation delegated to a session, kept on its own channel so an
@@ -87,8 +89,8 @@ export type VoiceSurfaceViewModel = Readonly<{
     transcriptEntries: readonly VoiceSurfaceTranscriptEntry[];
     variant: VoiceSurfaceProps['variant'];
     visibleTranscriptEntries: readonly VoiceSurfaceTranscriptEntry[];
-    onBargeIn: () => void;
-    onCancelTurn: () => void;
+    onBargeIn: () => void | Promise<boolean>;
+    onCancelTurn: () => void | Promise<boolean>;
     onOpenConversation: () => void;
     onTeleport: () => void;
     onToggleExpanded: () => void;
@@ -184,7 +186,10 @@ export function useVoiceSurfaceModel(props: VoiceSurfaceProps): VoiceSurfaceView
         });
     }, [activityFeedEnabled, attemptId, canonicalVoice.ui.activityFeedAutoExpandOnStart]);
     const expanded = activityFeedExpansion.expanded;
-    const onToggleExpanded = React.useCallback(() => toggleVoiceActivityFeedExpansion(), []);
+    const onToggleExpanded = React.useCallback(() => {
+        fireAndForget(executePresentationAction('ui.voice_global.transcript.set_visible', { visible: !expanded }),
+            { tag: 'VoiceSurface.transcript' });
+    }, [expanded]);
 
     const isConnected = snap.status === 'connected';
     const currentSessionOwnerMetadata = currentSession
@@ -276,14 +281,17 @@ export function useVoiceSurfaceModel(props: VoiceSurfaceProps): VoiceSurfaceView
         && typeof snap.sessionId === 'string'
         && snap.sessionId.trim().length > 0
         && (snap.mode === 'thinking' || snap.mode === 'speaking');
+    const controlAttemptId = getVoiceSessionAttemptId();
     const handlers = React.useMemo(
         () => createVoiceSurfaceActionHandlers({
             sessionId: props.sessionId ?? null,
             snapSessionId: snap.sessionId ?? null,
+            expectedAttempt: controlAttemptId,
         }),
         [
             props.sessionId,
             snap.sessionId,
+            controlAttemptId,
         ],
     );
 

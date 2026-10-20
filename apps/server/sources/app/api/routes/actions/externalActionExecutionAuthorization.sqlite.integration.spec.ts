@@ -47,6 +47,7 @@ import {
 } from "@happier-dev/protocol/actions";
 import { EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2, ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { API_TOKEN_FULL_GRANT_V1, MACHINE_PLAIN_DATA_KEY_MARKER, SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, encodePlainMachineStoredContent, encodePasswordCredentialFieldV1, type AccountPasswordCredentialV1 } from "@happier-dev/protocol";
+import { buildSessionOrganizationAssignmentSnapshotHttpRequestV1 } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SOCKET_RPC_EVENTS, SessionActionRpcOriginV1Schema, WorkspaceSyncSourceContextV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema } from "@happier-dev/protocol/socketRpc";
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineInstallationProofPayloadV1Schema, signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
@@ -73,6 +74,9 @@ import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
 import { enableErrorHandlers } from "@/app/api/utils/enableErrorHandlers";
 import { requirePresentUser } from "@/app/api/utils/requirePresentUser";
 import { registerAccountEncryptionRoutes } from "@/app/api/routes/account/registerAccountEncryptionRoutes";
+import { registerDiscussionRoutes } from '@/app/api/routes/discussions/registerDiscussionRoutes';
+import { createDiscussion } from '@/app/discussions/mutations';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { registerAccountSettingsRoutes } from "@/app/api/routes/account/registerAccountSettingsRoutes";
 import { kvRoutes } from '@/app/api/routes/kv/kvRoutes';
 import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
@@ -1557,7 +1561,8 @@ describe("external Action execution authorization", () => {
         // Session publisher discovery is an external socket boundary. Persisted
         // source custody, issuance, both signatures and route admission stay real.
         let publisherCurrent = true;
-        const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null);
+        const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null,
+            undefined, false, routes => registerDiscussionRoutes(routes));
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
         const homeId = await getOrCreateServerIdentityId();
         const runId = crypto.randomUUID();
@@ -1599,6 +1604,29 @@ describe("external Action execution authorization", () => {
         };
         try {
             const start = await issue('workflow.run.start');
+            const createdDiscussion = await createDiscussion({ actorAccountId: fixture.account.id,
+                authentication: createPresentUserSessionAccessAuthentication(), request: {
+                    creationLocalId: crypto.randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Workflow question' } },
+                    firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                        parts: [{ t: 'text', text: 'Compare the proposed approach' }] } }, mentionedAccountIds: [] },
+                } });
+            if (!createdDiscussion.ok) throw new Error(createdDiscussion.error);
+            const discussionPath = `/v1/discussions/${createdDiscussion.value.discussion.id}/messages`;
+            const discussionDetailsPath = `/v1/discussions/${createdDiscussion.value.discussion.id}`;
+            const discussionDetails = await app.inject({ method: 'GET', url: discussionDetailsPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.read',
+                    method: 'GET', path: discussionDetailsPath, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect(discussionDetails.statusCode, discussionDetails.body).toBe(200);
+            const discussionRead = await app.inject({ method: 'GET', url: discussionPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.read',
+                    method: 'GET', path: discussionPath, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect(discussionRead.statusCode, discussionRead.body).toBe(200);
+            expect(discussionRead.json()).toMatchObject({ messages: [{ id: createdDiscussion.value.firstMessage.id }] });
+            const deniedPost = { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                parts: [{ t: 'text', text: 'Not admitted by a preparatory read' }] } }, mentionedAccountIds: [] };
+            expect((await app.inject({ method: 'POST', url: discussionPath, payload: deniedPost,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.post',
+                    method: 'POST', path: discussionPath, body: deniedPost, privateKey: fixture.keyPair.secretKey }) })).statusCode).toBe(401);
             const read = { operation: 'get', publisherMachineId: fixture.machine.id, runId };
             // A missing Run is a domain 404, rather than a refused storage read.
             const missing = await post(start, read);
@@ -2684,6 +2712,184 @@ describe("external Action execution authorization", () => {
             const privateDenied = await request(restrictedReader, 'GET', path);
             expect([privateDenied.statusCode, privateDenied.json()]).toEqual([403, { error: 'credential_scope_denied' }]);
         } finally { await app.close(); }
+    });
+
+    it.each(['discussion.post', 'discussion.reply'] as const)('admits only the signed %s participant-policy companion read', async actionId => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        vi.stubEnv('HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED', '1');
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, registerDiscussionRoutes);
+        try {
+            const foreignAccount = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+            const discussions: string[] = [];
+            for (const account of [fixture.account, foreignAccount]) {
+                const created = await createDiscussion({ actorAccountId: account.id,
+                    authentication: createPresentUserSessionAccessAuthentication(), request: {
+                        creationLocalId: crypto.randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Policy companion' } },
+                        firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                            parts: [{ t: 'text', text: 'Current participant policy' }] } }, mentionedAccountIds: [] },
+                    } });
+                if (!created.ok) throw new Error(created.error);
+                discussions.push(created.value.discussion.id);
+            }
+            const discussionId = discussions[0]!;
+            const path = `/v1/discussions/${discussionId}/participants`;
+            const root = await mint(app, fixture, actionId, { ...fixture.envelope, requestId: crypto.randomUUID(),
+                input: { discussionId, localId: crypto.randomUUID(), replyTarget: { kind: 'message', messageId: 'question' },
+                    content: { v: 1, parts: [{ t: 'text', text: 'Addressed reply' }] } } });
+            const headers = (method: string, requestPath: string, body?: unknown) => machineHeaders({
+                authorizationToken: root.token, effectActionId: actionId, method, path: requestPath, body,
+                privateKey: fixture.keyPair.secretKey });
+            const verify = (method: string, requestPath: string, body?: unknown, routeInput?: unknown,
+                effectActionId: string = actionId, machineSignature?: string) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: root.token, effectActionId, encodedTarget: encodeExternalActionResolvedTargetV1(root.binding.target),
+                method, path: requestPath, body, routeInput,
+                machineSignature: machineSignature ?? signExternalActionMachineRequestV1({ authorizationToken: root.token,
+                    effectActionId, target: root.binding.target, installationId: fixture.machine.installationId!,
+                    requestId: root.binding.requestId, method, path: requestPath, body, privateKey: fixture.keyPair.secretKey }),
+            });
+            expect(await verify('GET', path, undefined, { discussionId })).not.toBeNull();
+            const admitted = await app.inject({ method: 'GET', url: path, headers: headers('GET', path) });
+            expect([admitted.statusCode, admitted.json()]).toMatchObject([200, { discussionId, participants: [] }]);
+            // The installed host signs decrypted operands, not a new grant. A
+            // different Account's Discussion remains private at the real route.
+            const privatePath = `/v1/discussions/${discussions[1]!}/participants`;
+            expect((await app.inject({ method: 'GET', url: privatePath,
+                headers: headers('GET', privatePath) })).statusCode).toBe(404);
+            for (const [method, requestPath, body, routeInput] of [
+                ['GET', path, undefined, { discussionId: 'other' }],
+                ['GET', '/v1/discussions/other/participants', undefined, { discussionId }],
+                ['GET', `${path}?includeMessages=true`, undefined, { discussionId }],
+                ['GET', path, {}, { discussionId }],
+                ['POST', path, {}, { discussionId }],
+                ['POST', `${path}/invite`, { participant: { kind: 'account', accountId: foreignAccount.id } },
+                    { discussionId, participant: { kind: 'account', accountId: foreignAccount.id } }],
+            ] as const) expect(await verify(method, requestPath, body, routeInput), `${method} ${requestPath}`).toBeNull();
+            expect(await verify('GET', path, undefined, { discussionId }, 'discussion.participants.list')).toBeNull();
+            expect(await verify('GET', path, undefined, { discussionId }, actionId, '')).toBeNull();
+            const unsignedHeaders = headers('GET', path);
+            delete unsignedHeaders[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER];
+            expect((await app.inject({ method: 'GET', url: path, headers: unsignedHeaders })).statusCode).toBe(401);
+            const queryPath = `${path}?includeMessages=true`;
+            expect((await app.inject({ method: 'GET', url: queryPath, headers: headers('GET', queryPath) })).statusCode).toBe(401);
+            expect((await db.discussionMessage.count({ where: { discussionId } }))).toBe(1);
+        } finally { await app.close(); vi.unstubAllEnvs(); }
+    });
+
+    it('admits declaration-owned SessionTarget preparation reads only under the original signed root', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        vi.stubEnv('HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED', '1');
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, routes => {
+            registerSessionFollowRoutes(routes);
+            registerDiscussionRoutes(routes);
+        });
+        const actionId = 'session.status.get';
+        const query = buildSessionListServerQueryV1(projectSessionListFilterHomeQueriesV1(normalizeSessionListFilterV1({
+            show: 'sessions', scope: 'all_accessible', homeServerIds: ['home'],
+        }),
+            { storage: 'active', includeInactive: true, mountedHomeServerIds: ['home'] })[0]!.query);
+        const issue = (root = actionId) => mint(app, fixture, root, { ...fixture.envelope, requestId: crypto.randomUUID(),
+            input: { sessionId: { selector: 'followers', of: session.id } } });
+        try {
+            const authorization = await issue();
+            const verify = (method: string, path: string, body?: unknown, routeInput?: unknown,
+                sessionRouteTarget?: { kind: 'session'; sessionId: string; actionId: 'follow.list' },
+                root = authorization, effectActionId = root.binding.actionId, target = root.binding.target) =>
+                verifyExternalActionDomainExecutionRequest({ authorizationToken: root.token, effectActionId,
+                    encodedTarget: encodeExternalActionResolvedTargetV1(target), method, path, body, routeInput, sessionRouteTarget,
+                    machineSignature: signExternalActionMachineRequestV1({ authorizationToken: root.token, effectActionId,
+                        target, installationId: fixture.machine.installationId!, requestId: root.binding.requestId,
+                        method, path, body, privateKey: fixture.keyPair.secretKey }) });
+            const participantsPath = '/v1/discussions/discussion-1/participants';
+            const censusPath = '/v2/account/session-follow-rules';
+            const assignmentsRead = buildSessionOrganizationAssignmentSnapshotHttpRequestV1([session.id]);
+            const assignmentsPath = assignmentsRead.path;
+            const assignmentsInput = assignmentsRead.query;
+            const sourcesPath = `/v2/sessions/${session.id}/follows/sessions`;
+            const followersPath = `/v2/sessions/${session.id}/follows/followers`;
+            const scope = { kind: 'session' as const, sessionId: session.id, actionId: 'follow.list' as const };
+            for (const [method, path, body, routeInput] of [
+                ['POST', '/v2/sessions/query', query, query],
+                ['GET', '/v1/account/encryption/currentness', undefined, {}],
+                ['GET', '/v1/features/authenticated', undefined, {}],
+                ['GET', censusPath, undefined, {}],
+                ['GET', participantsPath, undefined, { discussionId: 'discussion-1' }],
+                ['POST', '/v1/account/project-rows/list', {}, {}],
+                ['GET', assignmentsPath, undefined, assignmentsInput],
+            ] as const) expect(await verify(method, path, body, routeInput), path).not.toBeNull();
+            expect(await verify('GET', sourcesPath, undefined, { destinationSessionId: session.id }, scope)).not.toBeNull();
+            expect(await verify('GET', followersPath, undefined, { sourceSessionId: session.id }, scope)).not.toBeNull();
+            const census = await app.inject({ method: 'GET', url: censusPath, headers: machineHeaders({
+                authorizationToken: authorization.token, effectActionId: actionId, method: 'GET', path: censusPath,
+                body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect([census.statusCode, census.json()]).toEqual([200, { rules: [] }]);
+            const get = (path: string) => app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                authorizationToken: authorization.token, effectActionId: actionId, method: 'GET', path,
+                body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            const foreignAccount = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+            const foreignSession = await db.session.create({ data: { accountId: foreignAccount.id, tag: crypto.randomUUID(),
+                encryptionMode: 'plain', metadata: '{}' } });
+            const listed = await app.inject({ method: 'POST', url: '/v2/sessions/query', payload: query, headers: machineHeaders({
+                authorizationToken: authorization.token, effectActionId: actionId, method: 'POST', path: '/v2/sessions/query',
+                body: query, privateKey: fixture.keyPair.secretKey }) });
+            expect(listed.statusCode, listed.body).toBe(200);
+            expect(listed.json().sessions.map((row: { id: string }) => row.id)).toEqual([session.id]);
+            const sourceList = await get(sourcesPath);
+            expect(sourceList.statusCode, sourceList.body).toBe(200);
+            expect((await get(`/v2/sessions/${foreignSession.id}/follows/sessions`)).statusCode).toBe(404);
+            for (const owner of [fixture.account, foreignAccount]) {
+                const created = await createDiscussion({ actorAccountId: owner.id,
+                    authentication: createPresentUserSessionAccessAuthentication(), request: {
+                        creationLocalId: crypto.randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Selector access' } },
+                        firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                            parts: [{ t: 'text', text: 'Participants' }] } }, mentionedAccountIds: [] },
+                    } });
+                if (!created.ok) throw new Error(created.error);
+                const response = await get(`/v1/discussions/${created.value.discussion.id}/participants`);
+                expect(response.statusCode, response.body).toBe(owner.id === fixture.account.id ? 200 : 404);
+            }
+            for (const [method, path, body, routeInput] of [
+                ['POST', '/v2/sessions/query', { ...query, accountId: 'foreign' }, undefined],
+                ['POST', '/v2/sessions/query?extra=true', query, undefined],
+                ['GET', '/v2/sessions/query', undefined, undefined],
+                ['GET', participantsPath, undefined, { discussionId: 'other' }],
+                ['GET', `${participantsPath}?includeMessages=true`, undefined, { discussionId: 'discussion-1' }],
+                ['POST', '/v1/discussions/discussion-1/participants/invite', { participant: { kind: 'account', accountId: 'foreign' } },
+                    { discussionId: 'discussion-1', participant: { kind: 'account', accountId: 'foreign' } }],
+                ['PUT', censusPath, {}, undefined],
+                ['GET', `${censusPath}?accountId=foreign`, undefined, { accountId: 'foreign' }],
+                ['POST', '/v1/account/project-rows/mutate', {}, undefined],
+                ['GET', `${assignmentsPath}&includeAllTagAssignments=true`, undefined, { ...assignmentsInput, includeAllTagAssignments: true }],
+                ['GET', '/v2/account/settings', undefined, {}],
+            ] as const) expect(await verify(method, path, body, routeInput), path).toBeNull();
+            expect(await verify('GET', censusPath, undefined, {}, undefined, authorization, 'follow.list')).toBeNull();
+            expect(await verify('GET', censusPath, undefined, {}, undefined, authorization, actionId,
+                { kind: 'machine', machineId: 'foreign-machine' })).toBeNull();
+            const unrelated = await issue('agents.models.list');
+            expect(await verify('GET', censusPath, undefined, {}, undefined, unrelated)).toBeNull();
+            await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
+                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
+            } } });
+            const actionRestricted = await issue();
+            const privateDenied = await app.inject({ method: 'GET', url: censusPath, headers: machineHeaders({
+                authorizationToken: actionRestricted.token, effectActionId: actionId, method: 'GET', path: censusPath,
+                body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect([privateDenied.statusCode, privateDenied.json()]).toEqual([403, { error: 'credential_scope_denied' }]);
+            await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
+                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
+                targets: { sessions: [session.id], machines: [fixture.machine.id] },
+            } } });
+            const restricted = await issue();
+            for (const [method, path, body, routeInput] of [
+                ['POST', '/v2/sessions/query', query, query], ['GET', censusPath, undefined, {}],
+                ['GET', participantsPath, undefined, { discussionId: 'discussion-1' }],
+                ['POST', '/v1/account/project-rows/list', {}, {}],
+            ] as const) expect(await verify(method, path, body, routeInput, undefined, restricted), path).toBeNull();
+            expect(await verify('GET', sourcesPath, undefined, { destinationSessionId: session.id }, scope, restricted)).not.toBeNull();
+            expect(await verify('GET', '/v2/sessions/outside/follows/sessions', undefined, { destinationSessionId: 'outside' },
+                { ...scope, sessionId: 'outside' }, restricted)).toBeNull();
+        } finally { await app.close(); vi.unstubAllEnvs(); }
     });
 
     it('admits signed Follow preview corpus phases without widening collection or private Account authority', async () => {

@@ -1445,6 +1445,7 @@ model Session {
     createdByApiToken AccountApiToken? @relation("ApiTokenCreatedSessions", fields: [createdByApiTokenId], references: [id], onDelete: SetNull)
     account           Account             @relation(fields: [accountId], references: [id])
     accountFollows    AccountSessionFollow[]
+    accountExecutionRunFollows AccountSessionFollow[] @relation("AccountFollowExecutionRunSource")
     /// Receiver routing suppression for this Session, independent of Follow edges.
     deliveryMutes     String?
     /// Explicit authored Team context only; access remains grant-owned.
@@ -1537,6 +1538,7 @@ model Session {
     originatedWorkflowRuns AutomationRun[] @relation("WorkflowRunOriginSession")
     discussionParticipants DiscussionParticipant[]
     followSourceEdges      SessionFollowEdge[] @relation("SessionFollowSource")
+    followExecutionRunSourceEdges SessionFollowEdge[] @relation("ExecutionRunFollowSource")
     followDestinationEdges SessionFollowEdge[] @relation("SessionFollowDestination")
 
     @@unique([accountId, tag])
@@ -1926,6 +1928,7 @@ model Discussion {
     keyEnvelopes               DiscussionKeyEnvelope[]
     participants               DiscussionParticipant[]
     followDestinations         SessionFollowEdge[] @relation("DiscussionFollowSource")
+    accountFollows             AccountSessionFollow[] @relation("AccountFollowDiscussionSource")
 
     @@unique([createdByAccountId, creationLocalId])
     @@index([ownerAccountId, archivedAt, lastMessageAt, id])
@@ -2081,8 +2084,18 @@ enum SessionFollowNotificationLevel {
 }
 
 model AccountSessionFollow {
+    id String @id @default(cuid())
     accountId String
-    sessionId String
+    sessionId String?
+    /// Session writers may omit this key; generic sources must provide it.
+    sourceKey String?
+    sourceDiscussionId String?
+    sourceExecutionRunSessionId String?
+    sourceExecutionRunId String?
+    sourceWorkflowRunId String?
+    deliveredDiscussionSeq Int?
+    deliveredExecutionRunTerminalEventId String?
+    deliveredWorkflowRunRevision Int?
     following Boolean @default(true)
     notificationLevel SessionFollowNotificationLevel @default(important)
     hasPersistentFollow Boolean @default(true)
@@ -2094,10 +2107,17 @@ model AccountSessionFollow {
     notifyOnce String?
 
     account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-    session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    sourceDiscussion Discussion? @relation("AccountFollowDiscussionSource", fields: [sourceDiscussionId], references: [id], onDelete: Cascade)
+    sourceExecutionRunSession Session? @relation("AccountFollowExecutionRunSource", fields: [sourceExecutionRunSessionId], references: [id], onDelete: Cascade)
+    sourceWorkflowRun AutomationRun? @relation("AccountFollowWorkflowRunSource", fields: [sourceWorkflowRunId], references: [id], onDelete: Cascade)
 
-    @@id([accountId, sessionId])
+    @@unique([accountId, sessionId])
+    @@unique([accountId, sourceKey])
     @@index([sessionId])
+    @@index([sourceDiscussionId])
+    @@index([sourceExecutionRunSessionId])
+    @@index([sourceWorkflowRunId])
 }
 
 enum SessionFollowDeliveredTurnStatus {
@@ -2119,6 +2139,9 @@ model SessionFollowEdge {
     sourceKey            String
     sourceSessionId      String?
     sourceDiscussionId   String?
+    sourceExecutionRunSessionId String?
+    sourceExecutionRunId String?
+    sourceWorkflowRunId String?
     destinationSessionId String
     /// Manager is a relation on Follow, never an independent work-tree row.
     relation              String @default("follower")
@@ -2133,9 +2156,13 @@ model SessionFollowEdge {
     deliveredAgentStateVersion Int    @default(0)
     deliveredTurnId            String?
     deliveredTurnStatus        SessionFollowDeliveredTurnStatus?
+    deliveredExecutionRunTerminalEventId String?
+    deliveredWorkflowRunRevision Int?
 
     sourceSession      Session? @relation("SessionFollowSource", fields: [sourceSessionId], references: [id], onDelete: Cascade)
     sourceDiscussion   Discussion? @relation("DiscussionFollowSource", fields: [sourceDiscussionId], references: [id], onDelete: Cascade)
+    sourceExecutionRunSession Session? @relation("ExecutionRunFollowSource", fields: [sourceExecutionRunSessionId], references: [id], onDelete: Cascade)
+    sourceWorkflowRun AutomationRun? @relation("WorkflowRunFollowSource", fields: [sourceWorkflowRunId], references: [id], onDelete: Cascade)
     destinationSession Session @relation("SessionFollowDestination", fields: [destinationSessionId], references: [id], onDelete: Cascade)
 
     @@id([destinationSessionId, sourceKey, relation])
@@ -2143,6 +2170,8 @@ model SessionFollowEdge {
     @@unique([destinationSessionId, sourceDiscussionId, relation], map: "SessionFollowEdge_discussion_source_relation_key")
     @@index([sourceSessionId])
     @@index([sourceDiscussionId])
+    @@index([sourceExecutionRunSessionId, sourceExecutionRunId])
+    @@index([sourceWorkflowRunId])
 }
 
 model SessionMessage {
@@ -2976,6 +3005,8 @@ model AutomationRun {
     assignments        AutomationRunAssignment[]
     workflowInvocations        WorkflowRunInvocation[]
     workflowDataKeyEnvelopes    WorkflowRunDataKeyEnvelope[]
+    accountFollows AccountSessionFollow[] @relation("AccountFollowWorkflowRunSource")
+    sessionFollowEdges SessionFollowEdge[] @relation("WorkflowRunFollowSource")
 
     @@index([accountId, state, dueAt])
     @@index([accountId, causeKind, state])
@@ -3399,6 +3430,7 @@ model Artifact {
     keyEnvelopes ArtifactKeyEnvelope[]
     id                String   @id // UUID provided by client
     accountId         String
+    kind              String?
     account           Account  @relation(fields: [accountId], references: [id])
     header            Bytes // Encrypted header (can contain JSON)
     headerVersion     Int      @default(0)
@@ -3418,6 +3450,7 @@ model Artifact {
 
     @@index([accountId])
     @@index([accountId, updatedAt])
+    @@index([accountId, kind])
 }
 
 model ArtifactRevision {

@@ -121,8 +121,9 @@ vi.mock("@/storage/db", async () => {
     const transaction = {
         ...inTxPostgresControlStatementMock,
         ...uniqueConflictTransaction,
+        teamCredentialResource: { findMany: async () => [] },
         async $queryRawUnsafe(query: string) {
-            if (query.includes('FROM "Account"') && query.includes('FOR NO KEY UPDATE')) {
+            if (query.includes('FROM "Account"') && /FOR (KEY SHARE|NO KEY UPDATE)/.test(query)) {
                 return [{ id: "account-concurrent-create" }];
             }
             throw new Error("Unexpected fixture SQL");

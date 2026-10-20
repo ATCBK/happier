@@ -95,6 +95,16 @@ describe('mapRenderedSelectionToMarkdownSource', () => {
     ).toBeNull();
   });
 });
+describe('native block selections within the full Doc grammar', () => {
+  it('maps the second reference label in its admitted source window without losing document link definitions', () => {
+    const markdown = '# Earlier\n\n[shown][ref] and [shown][ref].\n\n[ref]: https://example.test';
+    const rendered = '\nshown and shown.\n';
+    const start = rendered.lastIndexOf('shown');
+    const input = { markdown, rendered, start, end: start + 5,
+      sourceRange: { start: markdown.indexOf('[shown]'), end: markdown.indexOf('\n\n[ref]') } };
+    expect(mapRenderedSelectionToMarkdownSource(input)).toEqual({ start: markdown.lastIndexOf('[shown]') + 1, end: markdown.lastIndexOf('[shown]') + 6 });
+  });
+});
 
 describe('mapMarkdownSourceToRenderedRange', () => {
   it('places a stored source passage on the rendered occurrence it came from, never a repeated phrase', () => {

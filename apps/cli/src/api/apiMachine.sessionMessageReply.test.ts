@@ -150,7 +150,7 @@ it.each([false, true])('recovers a Discussion result through the actual Session 
   });
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {
     sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } },
-  }, capabilities: {} }), { status: 200 })));
+  }, capabilities: { serverIdentity: { serverIdentityId: 'srv_reply_home' } } }), { status: 200 })));
   const machineSocket = createApiSessionSocketStub({ emit: acknowledgeRegistration, emitWithAck: (event, raw) => {
     if (event === SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 || event === SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1)
       throw new Error('Discussion return cannot create or mark a Session return');
@@ -219,8 +219,8 @@ it.each([false, true])('recovers a Discussion result through the actual Session 
     getCreateRuntime: () => null, recoverBootstrap: async () => null });
   const acquired: unknown[] = [], released: unknown[] = [];
   if (hostedRequester) bindApiSessionSocketSequenceMock(io, [machineSocket, publisherSocket]);
-  const client = new ApiMachineClient(os.credentials.token, { id: 'target-machine', encryptionMode: 'plain', encryptionKey: new Uint8Array(32),
-    encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
+  const client = new ApiMachineClient(os.credentials.token, { id: 'target-machine', encryptionMode: 'plain',
+    metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
       ...(hostedRequester ? { requesterSessionRuntime: { serverId: configuration.activeServerId,
         resolve: async sessionId => { const context = await requesterResolver(sessionId); if (context) acquired.push(context); return context; },
         release: async context => { await releaseUnretainedRequesterSessionRuntimeContext(context,

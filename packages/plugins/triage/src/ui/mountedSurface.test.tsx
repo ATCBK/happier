@@ -474,14 +474,11 @@ describe('the mounted PRs & Issues surface', () => {
         });
         await settleWindow('view', shell);
 
-        await visibleTexts(shell, [
-            TRIAGE_UI_TRANSLATIONS.fr['plugins.triage.surface.upToDate'],
-        ]);
         // Refresh is the toolbar's icon control: its translated words are its name.
         await expect(shell.getByRole('button', {
             name: TRIAGE_UI_TRANSLATIONS.fr['plugins.triage.surface.refresh'],
         })).resolves.toBeDefined();
-        await expect(shell.queryByText('Up to date')).resolves.toBeUndefined();
+        await expect(shell.queryByRole('button', { name: 'Refresh' })).resolves.toBeUndefined();
     });
 
     it('renders one window assembled from every configured source', async () => {
@@ -493,8 +490,12 @@ describe('the mounted PRs & Issues surface', () => {
             'Replace the duplicated normalizer',
             'Middle change',
             'Older change',
-            'Up to date',
         ]);
+        // Healthy is quiet. A settled window stops being current after the refresh interval with nothing on
+        // screen changing, so a resting "Up to date" would soon be untrue. The toolbar states the read's age
+        // instead (lab "Updated just now"), from the time every configured source last completed a read.
+        await expect(shell.queryByText('Up to date')).resolves.toBeUndefined();
+        await expect(shell.getByText('Updated just now')).resolves.toBeDefined();
         // The window is the aggregate's, not one source's: source A walked two
         // pages and source B one, all through a single Action invocation family.
         expect(harness.scanCalls.count).toBe(3);

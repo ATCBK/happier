@@ -1,15 +1,20 @@
 import * as React from 'react';
+import { v5 as uuidv5 } from 'uuid';
 import type { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { DocCollaborationActionInputSchemasV1, DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { ArtifactAccessActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { writeDiscussionSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
+import type { DiscussionMentionSpan } from '@/components/discussions/discussionComposerDocument';
+import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 
 /**
  * The Artifacts surfaces reach document writes, history, restore and storage through the canonical `artifact.*`
@@ -28,8 +33,9 @@ export type ArtifactActionFailure = Readonly<{
 export type ArtifactActionOutcome<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; failure: ArtifactActionFailure }>;
 
 type SurfaceMutationActionId = 'artifact.create' | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete' | 'doc.comment.reply' | 'doc.edit.propose' | 'doc.edit.accept' | 'doc.edit.decline';
-type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | SurfaceMutationActionId;
-const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1 };
+type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | 'artifact.access.grants.list' | SurfaceMutationActionId;
+const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1,
+    'artifact.access.grants.list': ArtifactAccessActionOutputSchemasV1['artifact.access.grants.list'] };
 type SurfaceActionResult<Id extends SurfaceActionId> = z.infer<(typeof SURFACE_OUTPUT_SCHEMAS)[Id]>;
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -80,10 +86,25 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
             : readOutcome(actionId, result);
     };
     return {
+        /** Captured alongside every operation; a modal must not rebind this client to the focused Home. */
+        scope,
         /** Seed the existing private Discussion draft from the source's captured Home. */
         beginPassageComment: (passage: DocPassageRefV1) => {
-            writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion' }, patch: { passage } });
-            return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId } } });
+            const draftId = uuidv5(JSON.stringify(['happier.doc-passage-comment-draft.v1', passage.ref.serverId,
+                passage.ref.artifactId, passage.revision.headerVersion, passage.revision.bodyVersion,
+                passage.range.start, passage.range.end]), uuidv5.URL);
+            writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion', draftId }, patch: { passage } });
+            return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId }, draftId } });
+        },
+        /**
+         * Prepare (never send) a reply to a suggested edit in its own thread: the thread's draft gets the
+         * addressed request unless it already holds the person's words, and the thread opens replying to it.
+         */
+        beginProposalReply: (input: Readonly<{ proposalRef: DiscussionMessageRefV1; text: string; mentions: readonly DiscussionMentionSpan[] }>) => {
+            const { discussionId } = input.proposalRef.discussion;
+            seedDiscussionDraft({ scope, address: { kind: 'discussion', discussionId }, text: input.text, mentions: input.mentions });
+            return buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: scope.serverId }, discussionId,
+                messageId: input.proposalRef.messageId } });
         },
         readDoc: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.read']>) => run('doc.read', input),
         replyToPassage: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.comment.reply']>) => runMutation('doc.comment.reply', input),
@@ -94,6 +115,8 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
         updateArtifact: (input: ArtifactActionInputV1<'artifact.update'>) => runMutation('artifact.update', input),
         storageUsage: () => run('artifact.storage.usage', {}),
         listRevisions: (artifactId: string) => run('artifact.revisions.list', { artifactId }),
+        /** Who the document is shared with (its grant roster), for the page's audience line. */
+        listAccessGrants: (artifactId: string) => run('artifact.access.grants.list', { artifactId }),
         restoreRevision: (input: Readonly<{ artifactId: string; bodyVersion: number; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>) =>
             runMutation('artifact.revisions.restore', input),
         deleteArtifact: (input: Readonly<{ artifactId: string; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>,

@@ -65,7 +65,7 @@ import type { TeamIdentityConnectionView as LifecycleConnectionView } from "./te
 import { isSameProviderContext } from "@/app/auth/providers/providerReference";
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
-import { authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
+import { authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
 import {
     projectCurrentTeamIdentityConnectionV1InTx,
     projectIdentityConnectionResult,

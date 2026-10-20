@@ -507,7 +507,7 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   }
 
   // Session and originless admissions cannot substitute for a Discussion context owner.
-  if (purpose === 'run') {
+  if (purpose === 'run' && !input.context.origin?.discussion) {
     for (const definition of definitions.values()) {
       if (usesWorkflowContext(definition, 'discussion')) return invalidInput();
     }
@@ -916,6 +916,11 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
     concrete.set(sourceKey, { ...definition, defaults });
   }
   let agentStartLeaves: readonly MaterializedWorkflowLeafV1[];
+  if (purpose === 'run' && input.context.resultDelivery?.kind === 'originating_discussion') {
+    const unsupported = materializedLeaves.flatMap(listWorkflowAcceptedLeafSelectionsV1)
+      .find(leaf => leaf.kind === 'step' && leaf.executionTarget.kind === 'detached_run');
+    if (unsupported) return unavailable(unsupported.blockId, { code: 'target_unavailable', reason: 'selection_unavailable' });
+  }
   const frozenChildren = Object.fromEntries([...concrete].filter(([key]) => key !== '$root'));
   try { agentStartLeaves = await readWorkflowAcceptedAgentStartLeavesV1({
     machineId: input.context.machineId, workspaceTarget: input.context.workspaceTarget, materializedLeaves,

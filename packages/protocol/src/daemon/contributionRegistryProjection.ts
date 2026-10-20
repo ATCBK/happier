@@ -1235,6 +1235,8 @@ export const PluginProjectedActionV2Schema = lazyZodSchema(() => (<T extends z.Z
   // body, so a reader fetches one Action's schemas on demand through
   // `DaemonPluginActionSchemasReadRequestSchema`.
   inputHints: zMini.optional(PluginProjectedActionInputHintsV2Schema),
+  /** Current declared purpose scope, shared by host setup and Action admission. */
+  connectedAccountPurposes: z.optional(z.array(PluginProjectedConnectedAccountPurposeDeclarationV1Schema)),
   priority: z.optional(z.number().check(z.int())),
   dangerLevel: PluginActionDangerLevelV2Schema,
   confirmation: zMini.optional(PluginActionConfirmationV2Schema),

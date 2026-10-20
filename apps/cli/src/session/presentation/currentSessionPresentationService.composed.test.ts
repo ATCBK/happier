@@ -284,9 +284,14 @@ describe('current-session presentation publication composition', () => {
     const call = (method: string, params: unknown) => client.rpcHandlerManager.handleRequest({
       method: `${session.id}:${method}`, params, authorization: origin,
     });
-    const bound = CurrentSessionPresentationBindResultV1Schema.parse(await call(
-      CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, { clientId: 'viewer-client', focused: true, draftRevision: 0 },
-    ));
+    const patchesBeforeBind = boundary.patch.mock.calls.length;
+    const bindings = await Promise.all(Array.from({ length: 3 }, async () =>
+      CurrentSessionPresentationBindResultV1Schema.parse(await call(
+        CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, { clientId: 'viewer-client', focused: true, draftRevision: 0 },
+      ))));
+    const bound = bindings[0]!;
+    expect(bindings).toEqual([bound, bound, bound]);
+    expect(boundary.patch.mock.calls.length - patchesBeforeBind).toBe(1);
     expect(bound.status).toBe('bound');
     if (bound.status !== 'bound') throw new Error('Viewer did not bind');
     expect(parsePlainSessionAgentState(stored.agentState)).toHaveProperty(CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY);

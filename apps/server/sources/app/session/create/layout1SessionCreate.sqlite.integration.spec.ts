@@ -763,9 +763,16 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     pendingVersion: 4,
                 },
             });
-            await db.$executeRaw`INSERT INTO AccountSessionFollow
-                (accountId, sessionId, following, notificationLevel, includeInVoice, voiceDeliveredFrontier)
-                VALUES (${owner.id}, ${created.session.id}, true, 'important', true, ${JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null })})`;
+            await db.accountSessionFollow.create({
+                data: {
+                    accountId: owner.id,
+                    sessionId: created.session.id,
+                    following: true,
+                    notificationLevel: "important",
+                    includeInVoice: true,
+                    voiceDeliveredFrontier: JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }),
+                },
+            });
             const creationChange = await db.accountChange.findUniqueOrThrow({
                 where: {
                     accountId_kind_entityId: {
@@ -859,7 +866,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
             WHEN NEW.kind = 'session' BEGIN SELECT RAISE(ABORT, 'test_change_write_rejected'); END`);
         try {
             const input = prepared({ accountId: owner.id, tag: "publication-failure" });
-            await expect(inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+            await expect(inTx(async (tx) => {
                 if (entry === "ordinary") return await createOrRejoinLayout1SessionByTagInTx(tx, input);
                 return await createFreshBoundLayout1SessionInTx(tx, { prepared: input, sessionId: "reserved-publication-failure" });
             })).rejects.toThrow();
@@ -897,7 +904,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     accountEncryptionMode: "e2ee",
                     dataEncryptionKey: Buffer.from(tweetnacl.randomBytes(32)).toString("base64"),
                 });
-                await expect(inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+                await expect(inTx(async (tx) => {
                     if (entry === "ordinary") return await createOrRejoinLayout1SessionByTagInTx(tx, input);
                     return await createFreshBoundLayout1SessionInTx(tx, {
                         prepared: input,
@@ -989,7 +996,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                 data: { status: "suspended" },
             });
 
-            const outcome = await inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+            const outcome = await inTx(async (tx) => {
                 if (entry === "ordinary") return createOrRejoinLayout1SessionByTagInTx(tx, input);
                 if (entry === "rejoin") {
                     const rejoined = await rejoinLayout1SessionByTagInTx(tx, input);

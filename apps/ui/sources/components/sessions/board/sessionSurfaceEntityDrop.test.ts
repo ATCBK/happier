@@ -3,7 +3,7 @@ import { createSessionSurfaceNoteDocumentV1, applySessionBoardLayoutOperationV1,
 import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { projectSessionBoard } from '@/sync/domains/session/board/sessionBoardProjection';
-import { resolveSessionBoardEntityDrop, resolveSessionCompanionEntityDrop } from './sessionSurfaceEntityDrop';
+import { resolveSessionBoardEntityDrop, resolveSessionCompanionEntityDrop, sessionSurfaceEntityDropDestinationKey } from './sessionSurfaceEntityDrop';
 
 const scope = { serverId: 'home', accountId: 'account' };
 const address = { serverId: 'home', sessionId: 'session' };
@@ -28,6 +28,31 @@ function board(widget = false) {
     });
 }
 describe('qualified Session surface entity drops', () => {
+    it('keys Board and Companion gaps by their effective index rather than their neighboring anchors', () => {
+        const key = (admission: ReturnType<typeof resolveSessionBoardEntityDrop>) => {
+            expect(admission.status).toBe('allowed');
+            if (admission.status !== 'allowed') throw new Error('Expected an admitted gap');
+            return sessionSurfaceEntityDropDestinationKey?.(admission);
+        };
+        const projected = board();
+        const view = projected.views.find(view => view.id === 'a')!;
+        const destinationBoard = { ...projected, views: [
+            { ...view, placements: [...view.placements, { ...view.placements[0]!, itemId: 'three' }] },
+            ...projected.views.filter(view => view.id !== 'a'),
+        ] };
+        const boardContext = { item, scope, address, board: destinationBoard, viewId: 'a', preview };
+        const gap = key(resolveSessionBoardEntityDrop({ ...boardContext, anchor: { side: 'after', itemId: 'two' } }));
+        expect(gap).toEqual(expect.any(String));
+        expect(key(resolveSessionBoardEntityDrop({ ...boardContext, anchor: { side: 'before', itemId: 'three' } }))).toBe(gap);
+        expect(key(resolveSessionBoardEntityDrop({ ...boardContext, anchor: { side: 'after', itemId: 'three' } }))).not.toBe(gap);
+        const companionItem = { kind: 'companion-item' as const, scope, address, item: { kind: 'builtin' as const, id: 'session_summary' as const } };
+        const companion = { item: companionItem, scope, address, board: projected, ready: true, preview,
+            items: [companionItem.item, { kind: 'widget' as const, widgetId: 'two' }, { kind: 'widget' as const, widgetId: 'three' }] };
+        const companionGap = key(resolveSessionCompanionEntityDrop({ ...companion, anchor: { side: 'after', itemKey: 'widget:two' } }));
+        expect(companionGap).toEqual(expect.any(String));
+        expect(key(resolveSessionCompanionEntityDrop({ ...companion, anchor: { side: 'before', itemKey: 'widget:three' } }))).toBe(companionGap);
+        expect(key(resolveSessionCompanionEntityDrop({ ...companion, anchor: { side: 'after', itemKey: 'widget:three' } }))).not.toBe(companionGap);
+    });
     it('routes a qualified Project-area copy to Board and Companion through the existing movement Action', () => {
         const ref = { surface: { ...scope, owner: { kind: 'project' as const, projectId: 'portable-source' } }, instanceId: 'configured-one' };
         const carried: EntityDragItemV1 = { kind: 'widget-area-instance', scope, ref };

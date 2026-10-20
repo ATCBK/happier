@@ -31,7 +31,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!view)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} onRetry={props.model.refresh} />;
   const cost = props.query.metric === 'cost';
   const selectedCost = view.pageCost;
   const currency = selectedCost.selection?.currency ?? view.costPresentation.currency;

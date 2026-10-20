@@ -2107,10 +2107,11 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
               agentId: resolveExecutionRunRuntimeBackendId(preparedParams.backendTarget), runId,
               connectedServices: selection.connectedServices,
               expectedAccountSettingsScopeKey: accountSettingsSnapshot.scopeKey,
-            });
+            }, params.signal);
             return;
           }
           await admitExecutionRunInheritedProviderSelection({
+            signal: params.signal,
             selection: selection.modelSelection,
             backendTarget: preparedParams.backendTarget,
             agentId: resolveExecutionRunRuntimeBackendId(preparedParams.backendTarget),

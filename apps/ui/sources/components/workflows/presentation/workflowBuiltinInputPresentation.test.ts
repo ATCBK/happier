@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveWorkflowBuiltinInputPresentation } from './workflowBuiltinInputPresentation';
+import { resolveBuiltinWorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/builtins/catalog';
+
+import { listWorkflowPersonInputs, resolveWorkflowBuiltinInputPresentation } from './workflowBuiltinInputPresentation';
 
 describe('built-in workflow input presentation', () => {
     it('gives collaboration inputs human-readable labels through the shared presentation owner', () => {
@@ -27,5 +29,16 @@ describe('built-in workflow input presentation', () => {
     it('keeps authored workflows outside built-in localization', () => {
         expect(resolveWorkflowBuiltinInputPresentation('plugin:example/custom')).toBeUndefined();
         expect(resolveWorkflowBuiltinInputPresentation(null)).toBeUndefined();
+    });
+    it('never asks a person for an input the host binds, for any built-in', () => {
+        const hostBound = ['triggerId', 'diffFingerprint', 'previousRoundContext'];
+        for (const id of ['keep-going', 'review-and-converge', 'plan-with-a-panel', 'open-a-pull-request']) {
+            const inputs = resolveBuiltinWorkflowDefinitionV1(id)!.definition.inputs;
+            expect(listWorkflowPersonInputs(inputs).map((input) => input.name), id)
+                .toEqual(inputs.map((input) => input.name).filter((name) => !hostBound.includes(name)));
+        }
+        // A required input stays askable whatever its name: a form never hides what it needs to start.
+        const required = [{ name: 'triggerId', valueType: 'string' as const, required: true }];
+        expect(listWorkflowPersonInputs(required)).toEqual(required);
     });
 });

@@ -238,7 +238,11 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       && admittedSettingsBasis.scopeKey === snapshot.scopeKey
       && admittedSettingsBasis.settingsVersion === snapshot.settingsVersion
       && sameProviderConnectionsCatalogAuthority(admittedSettingsBasis.providerConnectionsCatalog, snapshot.providerConnectionsCatalog);
-    if (admittedSettingsBasis && !settingsBasisIsCurrent) {
+    if (admittedSettingsBasis && (
+      admittedSettingsBasis.scopeKey !== snapshot.scopeKey
+      || admittedSettingsBasis.settingsVersion > snapshot.settingsVersion
+      || !sameProviderConnectionsCatalogAuthority(admittedSettingsBasis.providerConnectionsCatalog, snapshot.providerConnectionsCatalog)
+    )) {
       return {
         ok: false,
         error: createProviderErrorV1('provider_authorization_changed', {
@@ -252,7 +256,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       : readProviderSettingsForCli(snapshot);
     const providerSettings = settingsRead.settings;
     if (
-      settingsBasisIsCurrent
+      admittedSettingsBasis !== undefined
       && operationScope.dnsEvidenceByConnectionId
       && !operationScope.dnsEvidenceByConnectionId.has(request.connectionId)
     ) {
@@ -264,7 +268,9 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
         }),
       };
     }
-    let dnsEvidenceByEndpointUrl = settingsBasisIsCurrent
+    // Endpoint evidence belongs to the unchanged Provider row, independently
+    // of a newer Account preference version.
+    let dnsEvidenceByEndpointUrl = admittedSettingsBasis !== undefined
       ? operationScope.dnsEvidenceByConnectionId?.get(request.connectionId)
       : undefined;
     if (!operationScope.dnsEvidenceByConnectionId) {
@@ -363,7 +369,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
     if (currentSnapshot?.providerConnectionsCatalog?.status !== 'ready'
       || admittedSettingsBasis && (
         admittedSettingsBasis.scopeKey !== currentSnapshot.scopeKey
-        || admittedSettingsBasis.settingsVersion !== currentSnapshot.settingsVersion
+        || admittedSettingsBasis.settingsVersion > currentSnapshot.settingsVersion
         || !sameProviderConnectionsCatalogAuthority(admittedSettingsBasis.providerConnectionsCatalog, currentSnapshot.providerConnectionsCatalog)
       )) {
       return {
@@ -374,12 +380,14 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
         }),
       };
     }
-    const currentSettingsRead = admittedSettingsBasis
+    const reuseSettingsRead = admittedSettingsBasis
+      && admittedSettingsBasis.settingsVersion === currentSnapshot.settingsVersion;
+    const currentSettingsRead = reuseSettingsRead
       ? settingsRead
       : readProviderSettingsForCli(currentSnapshot);
     return resolveProviderProbeAuthorization({
       request,
-      accountSettings: admittedSettingsBasis ? admittedSettingsBasis.accountSettings : currentSnapshot.settings,
+      accountSettings: reuseSettingsRead ? admittedSettingsBasis.accountSettings : currentSnapshot.settings,
       savedSecretResources: currentSnapshot.savedSecretResources,
       providerSettings: currentSettingsRead.settings,
       settingsRead: currentSettingsRead,

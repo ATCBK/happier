@@ -33,7 +33,10 @@ export function WallpaperHaze(
       <View
         style={[
           StyleSheet.absoluteFill,
-          { maskImage: mask, WebkitMaskImage: mask } as object,
+          // The quarter-size render is scaled up by 4 from a rounded size, so it can end a few px past an
+          // edge that is not a multiple of 4 (a 390px phone paints 392px): clip it to the layer, or the
+          // page scrolls sideways.
+          { overflow: 'hidden', maskImage: mask, WebkitMaskImage: mask } as object,
         ]}
       >
         <View

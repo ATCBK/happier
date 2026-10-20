@@ -1,6 +1,7 @@
 import type { CapabilitiesDetectRequest, CapabilityDetectRequest, CapabilityDetectResult, CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol';
 import type { CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabilitiesProtocol';
 import { getMachineCapabilitiesSnapshot, prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale } from '@/hooks/server/useMachineCapabilitiesCache';
+import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import { LATEST_VERSION_CHECK_FRESH_MS } from '@/updates/latestVersionCheckFreshness';
 import { machineCapabilitiesInvoke } from '@/sync/ops';
 import { getAgentResumeExperimentsFromSettings, getNewSessionRelevantInstallableDepKeys } from '@/agents/catalog/catalog';
@@ -291,7 +292,7 @@ async function collectAgentInstallables(
  * The Updates surface asks through here too, so there is one collector.
  */
 export async function ensureMachineUpdateFactsBackground(
-    opts: Readonly<{ machineIds: readonly string[]; serverId?: string | null; signal?: AbortSignal }>,
+    opts: Readonly<{ machineIds: readonly string[]; serverId?: string | null; signal?: AbortSignal; accountLifetime?: ServerAccountScopeLifetime }>,
     depsOverrides: Partial<Readonly<{ prefetchMachineCapabilitiesIfStale: typeof prefetchMachineCapabilitiesIfStale }>> = {},
 ): Promise<void> {
     if (opts.signal?.aborted) return;
@@ -300,6 +301,8 @@ export async function ensureMachineUpdateFactsBackground(
     await Promise.all(opts.machineIds.map((machineId) => prefetch({
         machineId,
         serverId: opts.serverId,
+        accountLifetime: opts.accountLifetime,
+        cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt({ id: machineId }, opts.serverId) || null,
         staleMs: LATEST_VERSION_CHECK_FRESH_MS,
         request,
         signal: opts.signal,

@@ -20,6 +20,7 @@ import { HAPPIER_PAGE_METRICS, isHappierSectionActionStacked } from './pageMetri
 import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle } from './pageText.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from './Surface.js';
 import type { HappierSurfaceGradient } from './material.js';
+import { HappierBodyEdgeContext } from './columnEdge.js';
 
 /**
  * The shape of a page section's sheet: the page radius and a hairline edge on
@@ -326,6 +327,8 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
   const grouped = children.some(isSheetGroup);
   return (
     <HappierPageSectionContext.Provider value={section}>
+      {/* A sheet inside a widget body draws its rows' own edge again. */}
+      <HappierBodyEdgeContext.Provider value={false}>
       <HappierMaterialSurface testID={props.testID} materialRole={props.surface === 'none' ? undefined : 'card'} gradient={props.surface === 'none' ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface} style={[sheetStyle, props.style]}>
         {grouped
           ? children.map((child, index) => (isSheetGroup(child) ? (
@@ -348,6 +351,7 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
             ) : cloneElement(child, { key: child.key ?? `page-sheet-row-${index}`, showDivider: false } as DividerChildProps & { key: string })))
           : withRowDividers(children)}
       </HappierMaterialSurface>
+      </HappierBodyEdgeContext.Provider>
     </HappierPageSectionContext.Provider>
   );
 }

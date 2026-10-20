@@ -688,7 +688,6 @@
     "src/session/replay/hydrateReplayDialogFromTranscript.ts",
     "src/session/replay/replayMessagesFixture.testkit.ts",
     "src/session/services/getSessionRecentMessages.ts",
-    "src/session/usageLimitRecoveryControls/resolveUsageLimitRecoveryMaxAttemptsExhaustion.ts",
     "src/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit.ts",
     "src/settings/remoteHosts/hydrateRemoteHostCatalog.ts",
     "src/settings/scopedRuntimeActionSettingsProvider.ts",

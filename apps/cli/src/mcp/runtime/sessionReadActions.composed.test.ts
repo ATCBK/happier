@@ -172,7 +172,8 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
           : actionId === 'session.open' ? { ok: true, status: 'opened', sessionId: child }
           : actionId === 'session.stop' ? { ok: true, sessionId: child,
             stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } }
-          : { ok: true, sessionId: child, archivedAt: actionId === 'session.archive' ? 123 : null });
+          : actionId === 'session.archive' ? { success: true, sessionId: child, archivedAt: 123 }
+          : { ok: true, sessionId: child, archivedAt: null });
     }
     expect(forwarded).toEqual(targets.map(() => actionId));
     if (actionId === 'session.fork') expect(machineRequests).toMatchObject([{ parentSessionId: sessionId, forkPoint: { type: 'latest' } }]);

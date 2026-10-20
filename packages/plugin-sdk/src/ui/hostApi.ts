@@ -24,7 +24,7 @@ import type {
     PluginActionInputById,
     PluginActionResultById,
     PluginInvocableActionId,
-} from '../actions/service.js';
+} from '../actions/actionTypeMap.generated.js';
 import { CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 as canonicalCurrentUiContextBoundedIncompletenessV1 } from '@happier-dev/protocol/plugins/ui/currentUiContext';
 import { PLUGIN_UI_SUB_PATH_MAX_UTF8_BYTES_V1 as canonicalPluginUiSubPathMaxUtf8BytesV1, normalizePluginUiSubPathV1 as canonicalNormalizePluginUiSubPathV1, pluginUiTargetedContributionOperationKey as canonicalPluginUiTargetedContributionOperationKey, selectPluginUiTargetedContributionOperationV1 as canonicalSelectPluginUiTargetedContributionOperationV1, selectPluginUiTargetedContributionSurfaceV1 as canonicalSelectPluginUiTargetedContributionSurfaceV1, selectPluginUiTargetedContributionV1 as canonicalSelectPluginUiTargetedContributionV1, PluginUiPreparedReviewWorkspaceResultV1Schema as canonicalPluginUiPreparedReviewWorkspaceResultV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 as canonicalComposerMediaContentCapabilityV1, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 as canonicalMaxComposerContentInspectBytesV1, ComposerContentHandleV1Schema as canonicalComposerContentHandleV1Schema, ComposerContentInspectRequestV1Schema as canonicalComposerContentInspectRequestV1Schema, ComposerContentInspectWireResultV1Schema as canonicalComposerContentInspectWireResultV1Schema, ComposerContentPickMediaRequestV1Schema as canonicalComposerContentPickMediaRequestV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
@@ -74,7 +74,7 @@ import type { PluginUiHostReadReferenceV1 as ProtocolPluginUiHostReadReferenceV1
 /** Host reads share Resource lifecycle while retaining the Action's caller policy. */
 export type PluginUiHostReadReference = ProtocolPluginUiHostReadReferenceV1;
 export type PluginUiResourceReference = PluginReference | PluginUiHostReadReference;
-import type { InteractionSeverity } from '../interactions.js';
+import type { InteractionSeverity } from '../interactionContracts.js';
 import type {
     ComposerAttachmentAuthorValueV1,
     ComposerAttachmentUpdateV1,
@@ -450,6 +450,8 @@ export type OpenConnectedAccountsRequest =
     | Readonly<{
         service: PluginUiContributionIdentityV1;
         accountId?: string;
+        /** Open host-owned selection for one declared consumer purpose. */
+        purpose?: Readonly<{ consumer: PluginUiContributionIdentityV1; purpose: string }>;
     }>;
 
 export interface PluginUiHostApi {

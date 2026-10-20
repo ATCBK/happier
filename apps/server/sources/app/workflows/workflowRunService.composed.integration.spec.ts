@@ -66,6 +66,8 @@ import { createSignedPluginInstallationPublisherHeader, createTrustedMachineInst
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import * as workflowRunService from "./workflowRunService";
 import { AUTOMATION_TEMPLATE_V02_PLAIN, AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED } from "@happier-dev/protocol/testing/accountScopedCipherFixtures";
+import { projectNativeJsonValueForTransport } from "@happier-dev/protocol/json/strictJsonValue";
+import { deriveWorkflowSessionInputLocalIdV2 } from "@happier-dev/protocol/sessions/messages/sessionInputAdmission";
 
 import {
     admitWorkflowInvocations as admitWorkflowInvocationsOwner,
@@ -3049,6 +3051,203 @@ describe("workflowRunService (integration)", () => {
         expect(first.candidates.map((candidate) => candidate.run.id).sort())
             .toEqual([activeRunId, terminalRunId, interruptedRunId].sort());
         for (const candidate of first.candidates) expect(WorkflowRunSummaryV1Schema.parse(candidate.run)).toEqual(candidate.run);
+
+        // A child can finish before its aggregate publication succeeds. Keep
+        // that interrupted parent reachable after the child leaves the index.
+        await db.workflowRunInvocation.updateMany({ where: { runId: interruptedRunId }, data: { lifecycle: "completed" } });
+        const afterCompletion = await listWorkflowRunsForRecovery({ accountId: seeded.accountId,
+            machineId: seeded.machineId, pageByteLimit: 4_096 });
+        expect(afterCompletion.candidates.map(candidate => candidate.run.id).sort())
+            .toEqual([activeRunId, terminalRunId, interruptedRunId].sort());
+        expect(await db.automationRun.findUnique({ where: { id: interruptedRunId }, select: { state: true } }))
+            .toEqual({ state: "interrupted" });
+
+        // Root cancellation is the durable whole-Run intent. A cancelled child
+        // in an otherwise live Run must not enlist that parent in recovery.
+        await db.workflowRunInvocation.update({ where: { id: rootId }, data: { lifecycle: "cancelled" } });
+        const cancelledChildId = randomUUID();
+        const liveRoot = await db.workflowRunInvocation.findFirstOrThrow({
+            where: { runId: activeUncertainRunId, parentRecordId: null }, select: { id: true },
+        });
+        await db.workflowRunInvocation.create({ data: { id: cancelledChildId, runId: activeUncertainRunId,
+            sequence: 1n, parentRecordId: liveRoot.id, memberOrdinal: 0n, attempt: 0n, lifecycle: "cancelled",
+            contentEnvelope: progressEnvelope({ ...seeded, runId: activeUncertainRunId, id: cancelledChildId,
+                sequence: 1n, parentRecordId: liveRoot.id, memberOrdinal: 0n }) } });
+        const afterCancellation = await listWorkflowRunsForRecovery({ accountId: seeded.accountId,
+            machineId: seeded.machineId, pageByteLimit: 4_096 });
+        expect(afterCancellation.candidates.map(candidate => candidate.run.id).sort())
+            .toEqual([activeRunId, terminalRunId, interruptedRunId].sort());
+        const foreignMachine = await listWorkflowRunsForRecovery({ accountId: seeded.accountId,
+            machineId: otherMachine.id, pageByteLimit: 4_096 });
+        expect(foreignMachine.candidates.map(candidate => candidate.run.id)).toEqual([otherMachineRunId]);
+    });
+
+    it("settles cancelled-root custody through signed indexed recovery after the last child fact survives a failed parent write", async () => {
+        const [{ createWorkflowRunRecoveryReader, createWorkflowInvocationRecoveryFactWriter },
+            { createWorkflowInvocationRecoveryObserver }] = await Promise.all([
+            import("../../../../cli/src/daemon/workflows/recovery"),
+            import("../../../../cli/src/daemon/workflows/invocationRecoveryObserver"),
+        ]);
+        const seeded = { ...await seed(), machineId: randomUUID() };
+        const publisherKeys = tweetnacl.sign.keyPair();
+        const installationId = randomUUID();
+        await createTrustedMachineInstallation({ ...seeded, installationId, keyPair: publisherKeys });
+        const runId = randomUUID();
+        const rootId = randomUUID();
+        const childId = randomUUID();
+        const localInputId = deriveWorkflowSessionInputLocalIdV2({ purpose: "invocation", runId, invocationRecordId: childId });
+        await admitWorkflowRun({ ...seeded, runId, origin: { kind: "direct" },
+            acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId }) });
+        await initializeWorkflowRunExecution({ accountId: seeded.accountId, runId, expectedRevision: 0,
+            checkpointEnvelope: checkpointEnvelope(seeded.accountId, runId, rootId, 2n),
+            rootInvocation: { id: rootId, contentEnvelope: progressEnvelope({ ...seeded, runId, id: rootId,
+                sequence: 0n, parentRecordId: null, memberOrdinal: 0n }) } });
+        await db.workflowRunInvocation.create({ data: { id: childId, runId, sequence: 1n, parentRecordId: rootId,
+            memberOrdinal: 0n, attempt: 0n, lifecycle: "running",
+            contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: "plain",
+                binding: { v: 1, purpose: "invocation_progress", accountId: seeded.accountId, runId, recordId: childId,
+                    sequence: "1", parentRecordId: rootId, memberOrdinal: "0", attempt: "0" },
+                progress: { kind: "happier.workflow-progress.v1", blockKind: "step", invocationPath: { blockId: "step", scope: [] },
+                    attempt: "0", logicalInvocationRecordId: childId,
+                    execution: { kind: "session", sessionId: seeded.sessionId, localInputId } },
+            })) } });
+        // Match retained R77 parents: cancellation closes child facts while the
+        // incumbent claim still owns the not-yet-terminal parent row.
+        await db.automationRun.update({ where: { id: runId }, data: { state: "claimed", leaseExpiresAt: new Date(Date.now() + 60_000) } });
+        await cancelWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: 1 });
+        const { app, headers } = await createReviewStorageApp(seeded.accountId);
+        const path = "/v3/automations/runs/workflow-storage";
+        let rejectParentSettlement = true;
+        const storage = { execute: async (request: import("../../../../cli/src/daemon/workflows/workflowRunStorageClient").WorkflowRunStorageOperation) => {
+            // A transport outage after the invocation facts commits must be
+            // recoverable on the next ordinary startup/reconnect pass.
+            if (rejectParentSettlement && request.operation === "transition") throw new Error("storage_unavailable");
+            const body = { ...request, publisherMachineId: seeded.machineId };
+            const response = await app.inject({ method: "POST", url: path, payload: body, headers: { ...headers,
+                [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: createSignedPluginInstallationPublisherHeader({
+                    keyPair: publisherKeys, machineId: seeded.machineId, installationId, path, body }) } });
+            if (response.statusCode !== 200) throw new Error(`Workflow storage ${response.statusCode}: ${response.body}`);
+            return response.json();
+        } };
+        try {
+            const witness = await accountCurrentness(seeded.accountId);
+            if (witness.mode !== "plain") throw new Error("Fixture must be plain");
+            const observer = createWorkflowInvocationRecoveryObserver({ credentials: { token: "unused", encryption: null },
+                machineId: seeded.machineId, actionExecutor: { execute: async () => { throw new Error("Recovery must not launch"); } },
+                // Only the Session HTTP/socket observation boundary is replaced;
+                // the real observer classifies the exact cancelled input.
+                observeSession: async request => {
+                    expect(request).toMatchObject({ sessionId: seeded.sessionId, localId: localInputId });
+                    return { ok: true, sessionId: seeded.sessionId, localId: localInputId, result: { kind: "cancelled", message: "cancelled" } };
+                } });
+            const recover = createWorkflowRunRecoveryReader({ accountId: seeded.accountId, machineId: seeded.machineId, storage,
+                resolveAccountEncryption: async () => ({ kind: "available", witness }), reconcileInvocation: observer });
+            await recover("control");
+            const before = await getWorkflowRun({ accountId: seeded.accountId, runId });
+            expect(before.run).toMatchObject({ state: "claimed", workflowCustodyState: "pending" });
+            expect(await db.workflowRunInvocation.findMany({ where: { runId }, select: { lifecycle: true } }))
+                .toEqual([{ lifecycle: "cancelled" }, { lifecycle: "cancelled" }]);
+            // Feed the real producer's sealed facts through the exact consumer.
+            const writer = createWorkflowInvocationRecoveryFactWriter({ accountId: seeded.accountId, run: before.run,
+                parentAttempt: 1, storage, encryption: { witness, runCrypto: { mode: "plain" } } });
+            expect((await writer.readInvocation(rootId))?.progress.blockKind).toBe("root");
+            expect((await writer.readInvocation(childId))?.progress.reason).toEqual({ code: "session_input_cancelled" });
+            await expect(deleteWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: before.run.revision }))
+                .rejects.toMatchObject({ code: "custody_pending" });
+
+            rejectParentSettlement = false;
+            await recover("reconnect");
+            const settled = await getWorkflowRun({ accountId: seeded.accountId, runId });
+            expect(settled.run).toMatchObject({ state: "cancelled", workflowCustodyState: "settled" });
+            await recover("startup");
+            expect(await db.workflowRunInvocation.count({ where: { runId } })).toBe(2);
+            await expect(deleteWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: settled.run.revision }))
+                .resolves.toEqual({ deleted: true, runId });
+        } finally { await app.close(); }
+    });
+
+    it.each(["aggregate", "startup_failure"] as const)("repairs interrupted %s through signed indexed daemon recovery after a failed write", async scenario => {
+        const [{ createWorkflowRunRecoveryReader, createWorkflowInvocationRecoveryFactWriter },
+            { createWorkflowInvocationRecoveryObserver }, { createHostActionOperationRuntime },
+            { ActionOperationGetV1ResponseSchema }] = await Promise.all([
+            import("../../../../cli/src/daemon/workflows/recovery"),
+            import("../../../../cli/src/daemon/workflows/invocationRecoveryObserver"),
+            import("../../../../cli/src/daemon/actionOperations/createHostActionOperationRuntime"),
+            import("@happier-dev/protocol/actions/operations/v1"),
+        ]);
+        const seeded = { ...await seed(), machineId: randomUUID() };
+        const publisherKeys = tweetnacl.sign.keyPair();
+        const installationId = randomUUID();
+        await createTrustedMachineInstallation({ ...seeded, installationId, keyPair: publisherKeys });
+        const runId = randomUUID();
+        const rootId = randomUUID();
+        const childId = randomUUID();
+        const creationKey = `workflow:${runId}:${childId}`;
+        const operations = createHostActionOperationRuntime({ machineId: seeded.machineId, generateOperationId: () => "original-startup",
+            resolveAccountId: async () => seeded.accountId });
+        await operations.observeExecution({ actionId: "session.spawn_new", actionRequestId: creationKey, input: { creationKey },
+            execute: async () => { throw Object.assign(new Error("startup transport failed"), { code: "ECONNABORTED" }); } }).catch(() => undefined);
+        const observed = ActionOperationGetV1ResponseSchema.parse(await operations.handlers.getV2({ operationId: "original-startup" }));
+        if (observed.kind !== "found") throw new Error("Missing produced startup failure");
+        const operation = observed.operation;
+        await admitWorkflowRun({ ...seeded, runId, origin: { kind: "direct" }, acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId }) });
+        await initializeWorkflowRunExecution({ accountId: seeded.accountId, runId, expectedRevision: 0,
+            checkpointEnvelope: checkpointEnvelope(seeded.accountId, runId, rootId, 2n),
+            rootInvocation: { id: rootId, contentEnvelope: progressEnvelope({ ...seeded, runId, id: rootId,
+                sequence: 0n, parentRecordId: null, memberOrdinal: 0n, stepProgress: { completed: 0, total: 1 } }) } });
+        await db.workflowRunInvocation.create({ data: { id: childId, runId, sequence: 1n, parentRecordId: rootId,
+            memberOrdinal: 0n, attempt: 0n, lifecycle: scenario === "aggregate" ? "completed" : "running",
+            contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: "plain",
+                binding: { v: 1, purpose: "invocation_progress", accountId: seeded.accountId, runId, recordId: childId,
+                    sequence: "1", parentRecordId: rootId, memberOrdinal: "0", attempt: "0" },
+                progress: { kind: "happier.workflow-progress.v1", blockKind: "step", invocationPath: { blockId: "step", scope: [] },
+                    attempt: "0", logicalInvocationRecordId: childId, ...(scenario === "aggregate" ? { result: "late result" } : {
+                        execution: { kind: "action", actionId: "session.spawn_new", actionRequestId: creationKey, localInputId: creationKey,
+                            input: { creationKey }, output: projectNativeJsonValueForTransport({ operation: observed.operation }),
+                            awaitedOperations: [{ key: "startup", serverId: "home", machineId: seeded.machineId, operationId: operation.operationId }] },
+                    }) },
+            })) } });
+        await db.automationRun.update({ where: { id: runId }, data: { state: "interrupted", claimedByMachineId: null,
+            claimedAt: null, leaseExpiresAt: null } });
+        const { app, headers } = await createReviewStorageApp(seeded.accountId);
+        const path = "/v3/automations/runs/workflow-storage";
+        let rejectWrite = true;
+        const storage = { execute: async (request: import("../../../../cli/src/daemon/workflows/workflowRunStorageClient").WorkflowRunStorageOperation) => {
+            if (rejectWrite && request.operation === "invocations.fact"
+                && request.invocationId === (scenario === "aggregate" ? rootId : childId)) {
+                rejectWrite = false;
+                throw new Error("storage_unavailable");
+            }
+            const body = { ...request, publisherMachineId: seeded.machineId };
+            const response = await app.inject({ method: "POST", url: path, payload: body, headers: { ...headers,
+                [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: createSignedPluginInstallationPublisherHeader({
+                    keyPair: publisherKeys, machineId: seeded.machineId, installationId, path, body }) } });
+            if (response.statusCode !== 200) throw new Error(`Workflow storage ${response.statusCode}: ${response.body}`);
+            return response.json();
+        } };
+        try {
+            const witness = await accountCurrentness(seeded.accountId);
+            if (witness.mode !== "plain") throw new Error("Fixture must be plain");
+            const observer = createWorkflowInvocationRecoveryObserver({ credentials: { token: "unused", encryption: null },
+                machineId: seeded.machineId, actionExecutor: { execute: async () => { throw new Error("Recovery must not launch"); } },
+                nativeActionOperations: { get: async () => ({ kind: "not_found" }),
+                    cancel: async () => { throw new Error("Terminal startup"); }, wait: async () => { throw new Error("Terminal startup"); } } });
+            const recover = createWorkflowRunRecoveryReader({ accountId: seeded.accountId, machineId: seeded.machineId, storage,
+                resolveAccountEncryption: async () => ({ kind: "available", witness }), reconcileInvocation: observer });
+            await expect(recover("startup")).rejects.toThrow(scenario === "aggregate" ? "storage_unavailable" : "workflow_outcome_unresolved");
+            await recover("reconnect");
+            expect(rejectWrite).toBe(false);
+            const current = await getWorkflowRun({ accountId: seeded.accountId, runId });
+            expect(current.run.state).toBe("interrupted");
+            const writer = createWorkflowInvocationRecoveryFactWriter({ accountId: seeded.accountId, run: current.run,
+                expectedRevision: current.run.revision, storage, encryption: { witness, runCrypto: { mode: "plain" } } });
+            if (scenario === "aggregate") expect((await writer.readInvocation(rootId))?.progress.stepProgress).toMatchObject({ completed: 1, total: 1 });
+            else {
+                expect((await writer.readInvocation(childId))?.index.lifecycle).toBe("failed");
+                expect((await writer.readInvocation(childId))?.progress.reason).toEqual({ code: "ECONNABORTED", message: "startup transport failed" });
+            }
+            expect(await db.workflowRunInvocation.count({ where: { runId } })).toBe(2);
+        } finally { await app.close(); }
     });
 
     it("fails workflow reads closed while the Account encryption state is inconsistent", async () => {

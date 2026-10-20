@@ -42,7 +42,6 @@ export async function readManualSessionSpawnOperationDetails(
         ...(options.waitForTerminal ? { waitForTerminal: true, timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv() } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
     });
-    if (!shouldContinue()) return null;
     if (response.kind !== 'found'
         || response.operation.operationId !== operation.operationId
         || response.operation.actionId !== 'session.spawn_new'
@@ -56,6 +55,10 @@ export async function readManualSessionSpawnOperationDetails(
         || response.operation.state === 'succeeded' && response.operation.result === undefined) {
         throw new Error('action_operation_result_unavailable');
     }
+    // Requester reads and custodian pushes feed the same settlement authority.
+    // Retiring a local observer cannot erase a received, qualified owner fact.
+    actionOperationStore.mergeSnapshots({ serverId: scope.serverId, snapshots: [response.operation] });
+    if (!shouldContinue()) return null;
     return response.operation;
 }
 
@@ -77,10 +80,11 @@ export async function awaitManualSessionSpawnOperation(
         const cursors = new Set<string>();
         while (!operation && !signal.aborted) {
             const page = await listActionOperations({ ...transport, request: cursor ? { cursor } : {} });
-            if (signal.aborted) return null;
             operation = page.items.find(candidate => candidate.actionId === 'session.spawn_new'
                 && candidate.scope.accountId === scope.accountId && candidate.scope.machineId === machineId
                 && (candidate.requestId === userAttemptId || candidate.requestId === buildManualSessionCreationKey(userAttemptId))) ?? null;
+            if (operation) actionOperationStore.mergeSnapshots({ serverId: scope.serverId, snapshots: [operation] });
+            if (signal.aborted) return null;
             if (!page.nextCursor || cursors.has(page.nextCursor)) break;
             cursors.add(page.nextCursor);
             cursor = page.nextCursor;

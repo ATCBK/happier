@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useLocalSetting, useSetting } from '@/sync/store/settingsReadHooks';
 
 import { INSTRUMENT_DURATIONS, INSTRUMENT_SPRINGS } from './motionTokens';
 
@@ -35,7 +35,7 @@ export type MotionPreferences = Readonly<{
     effectsEnabled: boolean;
     /** Odometer number rolls — user toggle AND not `minimal`. */
     animatedNumbersEnabled: boolean;
-    /** Haptic feedback — native only AND not `minimal`. */
+    /** Haptic feedback — native only and controlled by this device’s preference. */
     hapticsEnabled: boolean;
     /** True when the OS reduce-motion / reduce-transparency flag forced the level. */
     reduceMotion: boolean;
@@ -45,6 +45,7 @@ export type MotionPreferences = Readonly<{
 
 export type MotionPreferencesInput = Readonly<{
     visualEffectsLevel: MotionLevel;
+    hapticsEnabled: boolean;
     animatedNumbers: boolean;
     contextGaugeStyle: ContextGaugeStyle;
     /** OS `prefers-reduced-motion` (web) / Reduce Motion (native). */
@@ -71,7 +72,7 @@ export function resolveMotionPreferences(input: MotionPreferencesInput): MotionP
         entrance,
         effectsEnabled: level === 'full',
         animatedNumbersEnabled: input.animatedNumbers && !isMinimal,
-        hapticsEnabled: !input.isWeb && !isMinimal,
+        hapticsEnabled: !input.isWeb && input.hapticsEnabled,
         reduceMotion: input.osReduceMotion,
         contextGaugeStyle: input.contextGaugeStyle,
     };
@@ -83,6 +84,7 @@ export function resolveMotionPreferences(input: MotionPreferencesInput): MotionP
  */
 export function useMotionPreferences(): MotionPreferences {
     const visualEffectsLevel = useSetting('visualEffectsLevel');
+    const hapticsEnabled = useLocalSetting('hapticsEnabled');
     const animatedNumbers = useSetting('animatedNumbers');
     const contextGaugeStyle = useSetting('contextGaugeStyle');
     const osReduceMotion = useReducedMotionPreference();
@@ -91,11 +93,12 @@ export function useMotionPreferences(): MotionPreferences {
     return React.useMemo(
         () => resolveMotionPreferences({
             visualEffectsLevel,
+            hapticsEnabled,
             animatedNumbers,
             contextGaugeStyle,
             osReduceMotion,
             isWeb,
         }),
-        [visualEffectsLevel, animatedNumbers, contextGaugeStyle, osReduceMotion, isWeb],
+        [visualEffectsLevel, hapticsEnabled, animatedNumbers, contextGaugeStyle, osReduceMotion, isWeb],
     );
 }

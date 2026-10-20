@@ -75,13 +75,15 @@ describe('MessageView Account attribution', () => {
     });
 
     it('opens the producing workflow step and scopes live attribution to that exact run and invocation', async () => {
+        const home = await upsertServerProfile({ serverUrl: 'https://workflow-source.example.test' });
+        storage.setState({ profileScope: { serverId: home.id, accountId: 'viewer-a' } });
         const run = createWorkflowRunSummaryFixture({ id: 'run-a' });
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run, { kind: 'available', value: { title: 'Daily digest' } })]);
         const invocation = createWorkflowInvocationIndexFixture({ id: 'invocation-a', runId: run.id, parentRecordId: 'root', memberOrdinal: '2', sequence: '87' });
         storage.getState().upsertWorkflowRunInvocation({ runId: run.id, invocation, parentRevision: run.revision });
         const screen = await renderScreen(
             <MessageViewWithSessionCommon
-                sessionId="session-b" metadata={null}
+                sessionId="session-b" serverId={home.id} metadata={null}
                 message={{ kind: 'user-text', id: 'workflow-message', localId: null, createdAt: 1, text: 'Summarize today',
                     meta: { happierProvenanceV1: { v: 2, kind: 'workflow_invocation', runId: run.id, invocationRecordId: invocation.id, stepOrdinal: '3' } } }}
                 forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
@@ -94,7 +96,7 @@ describe('MessageView Account attribution', () => {
         const chipProps = screen.findHostByTestId(chip)?.props;
         expect(chipProps?.role ?? chipProps?.accessibilityRole).toBe('link');
         await screen.pressByTestIdAsync(chip);
-        expect(attributionBoundaries.push).toHaveBeenCalledWith(createWorkflowInvocationRoute(run.id, invocation.id));
+        expect(attributionBoundaries.push).toHaveBeenCalledWith(createWorkflowInvocationRoute(run.id, invocation.id, home.id));
 
         attributionBoundaries.transcriptCommits.mockClear();
         await act(async () => {
@@ -269,6 +271,44 @@ describe('MessageView Account attribution', () => {
         expect(screen.findHostByTestId('transcript-provenance-attribution:home-scoped-producer')?.props.accessibilityLabel)
             .toBe('message.provenanceFrom(source=Lead B)');
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Other Home title');
+    });
+
+    it('quotes an answer another Session returned as information, named from the transcript Home, not as the person’s bubble', async () => {
+        const home = await upsertServerProfile({ serverUrl: 'https://returned-answer-home.example.test' });
+        const answerer = createSessionFixture({ id: 'answerer', serverId: home.id, metadataLayoutVersion: 1,
+            metadata: { ...createSessionFixture().metadata!, name: 'Checkout UI retry states' } });
+        storage.setState({
+            sessionListRowsByServerId: { [home.id]: { answerer } },
+            sessionListIndexByServerId: { [home.id]: [{ type: 'session', sessionId: 'answerer', serverId: home.id }] },
+        });
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon
+                sessionId="asker" serverId={home.id} metadata={null}
+                message={{
+                    kind: 'user-text', id: 'returned-answer', localId: 'returned-local', createdAt: 1,
+                    text: 'No. A replayed charge shows “Payment confirmed”.',
+                    meta: {
+                        happierProvenanceV1: { v: 1, kind: 'happierSession', sourceSessionId: 'answerer', via: 'mcp' },
+                        happierInputAuthorityV1: { v: 1, producer: 'sessionAction', permission: { admittedPermissionCeiling: 'read-only' },
+                            returnedAnswer: { requestSessionId: 'answerer', requestLocalId: 'question/1', outcome: 'answer', delivery: 'wake',
+                                senderSessionId: 'answerer' } },
+                    },
+                }}
+                forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
+                messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
+                toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }}
+            />,
+        );
+        const quote = screen.findHostByTestId('transcript-returned-answer:returned-answer');
+        expect(quote).not.toBeNull();
+        const text = screen.getTextContent();
+        expect(text).toContain('Checkout UI retry states');
+        expect(text).toContain('session.returnedAnswer.answered');
+        expect(text).toContain('session.returnedAnswer.asInformation');
+        // The quote's header is the attribution: no second "From …" label above it.
+        expect(screen.findHostByTestId('transcript-provenance-attribution:returned-answer')).toBeNull();
+        // The exact request read mounts only when the person opens it.
+        expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.questionState')).toBeNull();
     });
 
     it('renders a single trusted human byline before the bubble while preserving recovered-history status', async () => {

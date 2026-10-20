@@ -402,10 +402,9 @@ export function ServiceRowView(props: Readonly<{
     const { row } = props;
     const declaration = row.target.declaration;
     const relocation = useProjectServicePlacementObservation(declaration?.selection.kind === 'manifest' ? declaration.selection.name : '',
-        undefined, declaration?.workspaceRefId);
-    // The operation's confirmed Stop is corroborated by the native feed before offering a new Start.
-    const recoverable = relocation.stoppedBeforeStart && row.status === 'stopped';
-    const relocating = relocation.attachment !== null && !recoverable && !relocation.failedBeforeStop;
+        undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped' });
+    const recoverable = relocation.stoppedBeforeStart;
+    const relocating = relocation.relocating;
     const operationText = recoverable ? t('localServices.rowStatus.stopped') : relocating ? relocation.progressText : null;
     // A refused action reads in place under its own row, never in a dialog over the page.
     const runner = useLocalServiceActionRunner({ presentation: 'inline' });

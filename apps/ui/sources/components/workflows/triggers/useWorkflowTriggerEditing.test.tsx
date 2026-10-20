@@ -417,6 +417,8 @@ describe('workflow trigger editing lifetime', () => {
     });
 
     it('reports cold Account reads as failed and recovers through its original query', async () => {
+        // This failure is settled; reconnecting Homes retain their loading state.
+        storage.setState({ endpointStatus: 'offline' });
         listReply = async () => { listReply = undefined; throw new Error('offline'); };
         const query = { scope: 'account_inline' } as const;
         const hook = await renderHook(() => useWorkflowTriggerSets(query));
@@ -442,6 +444,7 @@ describe('workflow trigger editing lifetime', () => {
     });
 
     it('reports failed reads, keeps known rows and retries the same owner', async () => {
+        storage.setState({ endpointStatus: 'offline' });
         seed(set);
         const hook = await renderHook(useWorkflowTriggerEditing, { initialProps: { definitionId, sourceKey: 'saved-a', projectTarget } });
         expect(hook.getCurrent().set?.automationId).toBe('set-1');

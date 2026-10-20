@@ -84,10 +84,11 @@ export function createWorkflowDefinitionRoute(definitionId: string, serverId?: s
  */
 export function createAdmittedWorkflowRunRoute(
     workflowRun: Readonly<{ recipeKind: 'workflow-v2'; workflowRunId: string }> | undefined,
+    serverId?: string | null,
 ): ReturnType<typeof createWorkflowRunRoute> | null {
     if (workflowRun === undefined) return null;
     const runId = readWorkflowRunId(workflowRun.workflowRunId);
-    return runId === null ? null : createWorkflowRunRoute(runId);
+    return runId === null ? null : createWorkflowRunRoute(runId, serverId);
 }
 
 /** Address one exact invocation while retaining the Run as the route owner. */

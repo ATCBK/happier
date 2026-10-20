@@ -17,6 +17,7 @@ import {
   copyConnectedServiceHomeEntry,
   isConnectedServiceHomeEntryLinkedToSource,
   linkConnectedServiceHomeEntry,
+  listDisplacedConnectedServiceHomeDirectories,
   moveConnectedServiceHomeEntryAside,
   prepareManagedConnectedServiceHomeDestination,
   removeLinkedConnectedServiceHomeEntries,
@@ -677,6 +678,31 @@ export async function applyConnectedServiceStateSharingDescriptor(
     if (await isConnectedServiceHomeEntryLinkedToSource(sourcePath, join(targetRoot, entryName))) {
       await rm(join(targetRoot, entryName), { force: true });
     }
+  }
+
+  // A native writer can retain an open file after its directory is moved aside for a
+  // shared link. Re-adopt those later writes before replacement imports/verification;
+  // retirement signals and turn completion are not filesystem synchronization points.
+  const displacedStateRoots: ConnectedServiceSessionFileImportRoot[] = [];
+  const mergeSharedStateFile = input.mergeSharedStateFile;
+  for (const entryName of stateEntryNames) {
+    const entry = resolveDescriptorEntryForPath(input.descriptor, 'state', entryName);
+    if (!entry || (entry.mode !== 'linked' && entry.mode !== 'linked_or_copied')) continue;
+    const destinationRoot = join(targetRoot, entryName);
+    for (const sourceRoot of await listDisplacedConnectedServiceHomeDirectories(destinationRoot)) {
+      displacedStateRoots.push({
+        sourceRoot,
+        destinationRoot,
+        ...(mergeSharedStateFile ? {
+          mergeSharedStateFile: (file) => mergeSharedStateFile({
+            ...file, entryPath: `${entryName}/${file.entryPath}`,
+          }),
+        } : {}),
+      });
+    }
+  }
+  if (displacedStateRoots.length > 0) {
+    await importConnectedServiceSessionFiles({ roots: displacedStateRoots });
   }
 
   if (input.requestedStateMode === 'shared' && effectiveStateMode === 'shared') {

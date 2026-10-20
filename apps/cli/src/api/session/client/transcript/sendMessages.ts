@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { buildAgentEventLocalId } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 import type {
     Metadata,
@@ -64,21 +65,28 @@ export function prepareSessionEventMessageViaPort(
     const transcriptEvent = event.type === 'ready'
         ? { ...event, ownerActivityDelivery: undefined }
         : event;
+    // Spawn/resume retries can report the same capability facts again. Reuse
+    // transcript local-id deduplication across processes, rather than keeping
+    // another publication ledger. Different causes/items remain distinct.
+    const notice = readSessionCapabilityNoticeV1(transcriptEvent);
+    const noticeId = notice ? `capability-notice:${createHash('sha256').update(JSON.stringify(
+        notice.items.map(item => JSON.stringify([item.kind, item.itemId ?? null, item.name, item.code, item.detail ?? null])).sort(),
+    )).digest('hex')}` : null;
     return {
-        payload: port.buildOutboundSessionMessagePayload(buildSessionEventContent(transcriptEvent, id, meta)),
+        payload: port.buildOutboundSessionMessagePayload(buildSessionEventContent(transcriptEvent, noticeId ?? id, meta)),
         // Backward-compatible authenticated composition sideband: predecessor
         // Homes already accept opaque local ids, while current Homes recognize
         // this bounded prefix without adding a field to the strict v1 wire.
         // Only sender absence is projected. A caller can never assert rich
         // ownership and suppress the Home leg; that remains derived from the
         // authenticated persistent runtime binding at the Activity owner.
-        localId: ownerActivityDelivery === 'home_required'
+        localId: noticeId ?? (ownerActivityDelivery === 'home_required'
             ? `activity-ready-home_required:${randomUUID()}`
             : event.type === 'prompt-composition'
                 ? buildAgentEventLocalId(event.type, [event.composition.evidenceId])
                 : event.type === 'goal-changed' || event.type === 'worker-report'
                     ? buildAgentEventLocalId(event.type, [id ?? randomUUID()])
-                : randomUUID(),
+                : randomUUID()),
         messageRole: resolveSessionEventMessageRole(),
         sessionEventType: event.type === 'ready' ? 'ready' : undefined,
     };

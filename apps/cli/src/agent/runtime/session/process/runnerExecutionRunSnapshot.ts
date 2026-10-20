@@ -82,8 +82,8 @@ export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessi
       happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
       path, sessionId: input.sessionId, runner: current.runner, retainedAgent: current.retainedAgent,
     };
-    const dispatch = async (operation: AgentRuntimeDaemonServiceRequestV1['operation'], executionRunSnapshotId?: string) => {
-      const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({ authority, timeoutMs: null,
+    const dispatch = async (operation: AgentRuntimeDaemonServiceRequestV1['operation'], executionRunSnapshotId?: string, signal?: AbortSignal) => {
+      const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({ authority, timeoutMs: null, signal,
         createRequest: token => ({ v: 1, context: { token, sessionId: input.sessionId,
           ...(executionRunSnapshotId ? { executionRunSnapshotId } : {}) }, operation }) });
       if (!response.ok) {
@@ -130,15 +130,15 @@ export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessi
         throw Object.assign(createExecutionRunCodedError(code, code), { code, details: { providerError: refusal.providerError } });
       };
       const providerLaunch: ExecutionRunProviderLaunchServices = {
-        async admitInheritedSelection(request) {
+        async admitInheritedSelection(request, signal) {
           const result = await dispatch({ kind: 'execution_run.provider.admit_v1', ...request,
-            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId);
+            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId, signal);
           if (result.kind !== 'execution_run.provider.admitted') return unavailable();
           if (!result.ok) return providerRefusal(result);
         },
-        async prepareLaunch(request) {
+        async prepareLaunch(request, signal) {
           const result = await dispatch({ kind: 'execution_run.provider.prepare_v1', ...request,
-            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId);
+            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId, signal);
           if (result.kind !== 'execution_run.provider.prepared') return unavailable();
           if (!result.ok) return providerRefusal(result);
           const environment: Record<string, string> = {};
@@ -153,8 +153,9 @@ export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessi
             ...(result.connectedServices !== undefined ? { connectedServices: result.connectedServices } : {}),
             providerBinding: result.providerBinding, additionalRedactionValues: result.additionalRedactionValues,
             sanitizeDiagnosticText: redaction.snapshotRedactor(),
-            revalidateBeforeCommit: async () => {
-              const current = await dispatch({ kind: 'execution_run.provider.revalidate_v1' }, snapshot.snapshotId);
+            revalidateBeforeCommit: async (commitSignal?: AbortSignal) => {
+              const current = await dispatch({ kind: 'execution_run.provider.revalidate_v1' }, snapshot.snapshotId,
+                commitSignal && signal ? AbortSignal.any([signal, commitSignal]) : commitSignal ?? signal);
               if (current.kind !== 'execution_run.provider.revalidated') return unavailable();
               return current.result;
             },

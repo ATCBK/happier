@@ -281,6 +281,19 @@ describe('WidgetFrame', () => {
         await act(async () => { screen.findByTestId('daily.viewport')!.props.onLayout?.({ nativeEvent: { layout: { width: 560, height: 888 } } }); });
         expect(observed?.geometry).toEqual({ width: 560, height: 300 });
     });
+    it('tells a content-height body at least the room its footprint declares, so a chart in a tall cell is not sized from its own first frame', async () => {
+        let observed: ReturnType<typeof useWidgetPresentation>;
+        function Body() { observed = useWidgetPresentation(); return <>a sized plot</>; }
+        const screen = await renderScreen(<WidgetFrame testID="daily" frameStyle="plain" grouped placement="home" title="Daily usage" bodyHeight="content"
+            widgetPresentation={{ size: 'tall', footprint: { columns: 2, columnSpan: 1, rowSpan: 4, height: 'tall', width: 'half' } }}
+            body={{ kind: 'content', children: <Body /> }} />);
+        // The body first draws small (a skeleton, a floor-height plot); its declared room is what a chart reads.
+        await act(async () => { screen.findByTestId('daily.viewportBody')?.props.onLayout({ nativeEvent: { layout: { width: 560, height: 120 } } }); });
+        expect(observed?.geometry?.width).toBe(560);
+        expect(observed?.geometry?.height).toBeGreaterThan(300);
+        // The room is declared, not applied: the body itself is not stretched to it.
+        expect(screen.findByTestId('daily.viewportBody')!.props.style).not.toHaveProperty('minHeight');
+    });
     it('does not say the source again when the title already names it', async () => {
         const named = await renderFrame({ title: 'New in PRs & Issues', source: 'PRs & Issues' });
         // One mention in the header; the accessible name still carries the source.
@@ -288,6 +301,11 @@ describe('WidgetFrame', () => {
         expect(named.findByTestId('frame')?.props.accessibilityLabel).toBe('New in PRs & Issues, PRs & Issues');
         const distinct = await renderFrame({ title: 'Latest runs', source: 'Automations' });
         expect(distinct.getTextContent()).toContain('Automations');
+    });
+    it('ends the header with the ⋯ menu, then the move grip, the one order on every card', async () => {
+        const screen = await renderFrame({ menu: <Text testID="frame-menu">menu</Text>, grip: <Text testID="frame-grip">grip</Text> });
+        const order = screen.tree.findAllByType(Text).map((node) => node.props.testID).filter((id: unknown) => id === 'frame-menu' || id === 'frame-grip');
+        expect(order).toEqual(['frame-menu', 'frame-grip']);
     });
     it('keeps the suffix that tells near-identical machines apart when a bound source is too long for its header', async () => {
         const screen = await renderFrame({ source: 'Following group · NLDW6-3-11-20 · 0371' });

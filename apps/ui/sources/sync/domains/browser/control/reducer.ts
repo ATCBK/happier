@@ -3,6 +3,8 @@ import type {
     BrowserViewTargetV1,
 } from '@happier-dev/protocol';
 
+import { withoutPreviewAdmission } from '@/sync/domains/local/services/preview/url';
+
 import { isClientRenderedBrowserEngine } from './lifecycle';
 import { buildBrowserAdapterCapabilities } from '../adapters/capabilities';
 import type { DesktopWebViewNativeAvailability } from '../adapters/desktopWebView';
@@ -139,7 +141,28 @@ function removeViewsForSession(
     return next;
 }
 
-export function applyBrowserControlEvent(state: BrowserControlState, event: BrowserEventV1): BrowserControlState {
+/**
+ * A relay preview's address never holds its one-use admission: the opener seeds the status row's
+ * access URL and the frame commits a freshly admitted one, which are the same document. Keeping the
+ * credential out of the address keeps it out of the field, Copy and every reader of the view, and
+ * keeps that first load from counting as a navigation (a new generation re-navigates the frame).
+ */
+function withoutViewAdmission(state: BrowserControlState, event: BrowserEventV1): BrowserEventV1 {
+    const target = event.kind === 'viewOpened' ? event.target
+        : 'viewId' in event ? state.viewsById[event.viewId]?.target : undefined;
+    if (target?.kind !== 'localServicePreview') return event;
+    let next = event;
+    for (const key of ['currentUrl', 'pendingUrl'] as const) {
+        const value: unknown = (next as Record<string, unknown>)[key];
+        if (typeof value !== 'string') continue;
+        const clean = withoutPreviewAdmission(value);
+        if (clean !== value) next = { ...next, [key]: clean } as BrowserEventV1;
+    }
+    return next;
+}
+
+export function applyBrowserControlEvent(state: BrowserControlState, input: BrowserEventV1): BrowserControlState {
+    const event = withoutViewAdmission(state, input);
     if ('viewId' in event && event.kind !== 'viewOpened') {
         const view = state.viewsById[event.viewId];
         if (view && (view.browserSessionId !== event.browserSessionId

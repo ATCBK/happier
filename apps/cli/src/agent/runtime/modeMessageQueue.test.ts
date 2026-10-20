@@ -3,7 +3,7 @@ import { MessageQueue2 } from './modeMessageQueue';
 import { hashObject } from '@/utils/deterministicJson';
 
 describe('MessageQueue2', () => {
-    it('retains next-turn context without starting work and consumes it once under the next real input mode', async () => {
+    it('retains next-turn context until the exact represented item is discarded', async () => {
         const queue = new MessageQueue2<string>(mode => mode, {
             isContextOnly: (_message, mode) => mode === 'next-turn-information',
             withContext: (message, context) => `${context.join('\n')}\n${message}`,
@@ -18,8 +18,14 @@ describe('MessageQueue2', () => {
         await expect(waiting).resolves.toMatchObject({
             mode: 'human-input-mode', message: 'Answer to the earlier question\nContinue the work',
         });
+        expect(queue.getContextOnlyMessages()).toEqual(['Answer to the earlier question']);
         queue.push('Another input', 'human-input-mode');
-        await expect(queue.waitForMessagesAndGetAsString()).resolves.toMatchObject({ message: 'Another input' });
+        await expect(queue.waitForMessagesAndGetAsString()).resolves.toMatchObject({
+            message: 'Answer to the earlier question\nAnother input',
+        });
+        expect(queue.discardMatching(message => message === 'Answer to the earlier question')).toBe(1);
+        queue.push('After exact representation', 'human-input-mode');
+        await expect(queue.waitForMessagesAndGetAsString()).resolves.toMatchObject({ message: 'After exact representation' });
         queue.close();
     });
 

@@ -122,6 +122,12 @@ export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverri
                 ...theme.colors.fab,
                 gradient: deriveFabGradient(theme, baseTheme),
             },
+            // The selected dot sits inside an unfilled ring on the row's own surface, so it takes the
+            // ring's selection ink. A dot the profile set explicitly is kept as set.
+            radio: {
+                ...theme.colors.radio,
+                dot: explicitOverrides.has('control.radio.dot') ? theme.colors.radio.dot : theme.colors.radio.active,
+            },
             segmentedControl: {
                 ...theme.colors.segmentedControl,
                 activeGradient: deriveSegmentedControlActiveGradient(theme, baseTheme),

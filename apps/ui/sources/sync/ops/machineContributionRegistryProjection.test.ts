@@ -230,18 +230,29 @@ describe('machine contribution registry projection ops', () => {
             .resolves.toEqual({ supported: false, reason: 'error' });
     });
 
-    it('classifies a scoped Machine admission timeout and allows a fresh targeted read after recovery', async () => {
+    it.each(['machine-row', 'features', 'socket', 'reachability'] as const)('releases shared targeted reads when %s setup never settles, even after abort', async (phase) => {
         const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
-        let rowStarted = false;
-        network.setHttpResponder(async (input, init) => {
-            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
-            rowStarted = true;
-            // HTTP is the genuine boundary: the real scoped setup owner must
-            // cancel its unanswered GET and expose its canonical typed timeout.
-            return await new Promise<Response>((_resolve, reject) => {
-                const abort = () => reject(new DOMException('Request aborted', 'AbortError'));
-                init?.signal?.addEventListener('abort', abort, { once: true });
-                if (init?.signal?.aborted) abort();
+        const { deleteServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        await resetServerReachabilitySupervisors();
+        deleteServerFeaturesSnapshot({ serverId: serverAId });
+        let setupAttempts = 0;
+        let recovered = false;
+        network.setHttpResponder(async (input) => {
+            const path = new URL(String(input)).pathname;
+            const held = phase === 'reachability' ? path === '/health' || path === '/v1/auth/ping'
+                : path === (phase === 'features' ? '/v1/features' : '/v1/machines/machine-1');
+            if (!held || phase === 'socket') return null;
+            setupAttempts++;
+            // The network boundary deliberately ignores cancellation. The real
+            // setup budget, not a cooperative mock rejection, must release demand.
+            return await new Promise<Response>(() => {});
+        });
+        if (phase === 'socket') network.setSocketConfigurator(({ socket }) => {
+            const connect = socket.connect;
+            socket.connect = vi.fn(() => {
+                setupAttempts++;
+                if (recovered) connect();
             });
         });
         const input = {
@@ -251,17 +262,24 @@ describe('machine contribution registry projection ops', () => {
         };
         vi.useFakeTimers();
         const pending = machinePluginUiTargetedContributionsRead('machine-1', input);
-        await vi.waitFor(() => expect(rowStarted).toBe(true));
+        const joined = machinePluginUiTargetedContributionsRead('machine-1', input);
+        await vi.waitFor(() => expect(setupAttempts).toBeGreaterThan(0));
         await vi.advanceTimersByTimeAsync(30_000);
-        await expect(pending).resolves.toEqual({ supported: false, reason: 'timeout' });
+        await expect(Promise.all([pending, joined])).resolves.toEqual([
+            { supported: false, reason: 'timeout' },
+            { supported: false, reason: 'timeout' },
+        ]);
 
+        recovered = true;
         network.setHttpResponder(async (request) => new URL(String(request)).pathname === '/v1/account/encryption'
             ? Response.json({ mode: 'plain', updatedAt: 0 })
             : null);
         machineRpcWithServerScopeMock.mockResolvedValueOnce({
             status: 'current', targetedContributions: targetedSnapshot(), targetedSurfaceMounts: [],
         });
-        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+        const recovery = machinePluginUiTargetedContributionsRead('machine-1', input);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(recovery)
             .resolves.toMatchObject({ supported: true, targetedContributions: targetedSnapshot() });
     });
 

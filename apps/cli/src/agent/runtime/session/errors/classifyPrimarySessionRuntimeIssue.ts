@@ -19,6 +19,12 @@ import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process
 import { classifyProviderOutputFailure } from '@/agent/runtime/classifyProviderOutputFailure';
 import { AgentRuntimeDiagnosticDataV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
+import axios from 'axios';
+import { HttpStatusError } from '@/api/client/httpStatusError';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
+import { isRetryableMcpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import {
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE,
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW,
@@ -491,6 +497,20 @@ export function classifyPrimarySessionRuntimeIssue(
     ? redactBugReportSensitiveText(`${requestErrorCode === null ? '' : `ACP ${requestErrorCode}: `}${typedDiagnostic.message}`).slice(0, 2_000)
     : null;
   const errorCode = inspectOwnErrorCodeDataProperty(input.error);
+  // Home adapters preserve only their status; machine bootstrap can also throw
+  // Axios' original error. Require Home provenance before applying its existing
+  // endpoint policy, so an Agent's own HTTP failure stays an Agent failure.
+  const homeError = input.error instanceof Error && input.error.cause instanceof HttpStatusError
+    ? input.error.cause : input.error;
+  const homeHttpFailure = input.cause === 'session_error' && (isRetryableAccountEncryptionCurrentnessError(input.error)
+    || isRetryableMcpServerCatalogUnavailableError(input.error) || (() => {
+    if (homeError instanceof HttpStatusError) return true;
+    if (!axios.isAxiosError(homeError) || !homeError.config?.url) return false;
+    try {
+      const homeBase = `${resolveServerHttpBaseUrl()}/`;
+      return new URL(homeError.config.url, homeError.config.baseURL ?? homeBase).href.startsWith(homeBase);
+    } catch { return false; }
+  })() && ['server_error', 'timeout', 'network'].includes(classifyServerEndpointError(homeError).kind));
   const runtimeAuthClassification = readRuntimeAuthClassification(input.error);
   const runtimeAuthUsageLimit = buildUsageLimitDetailsFromRuntimeAuthClassification(
     runtimeAuthClassification,
@@ -517,6 +537,7 @@ export function classifyPrimarySessionRuntimeIssue(
     && errorCode.value === 'metadata_privacy_upgrade_required';
   // Host turn publication reclassifies its typed diagnostic, not the original Error instance.
   const promptPreparationCode = teamCredentialDenial ? null
+    : homeHttpFailure ? 'preparation_pending'
     : input.error instanceof PromptStackPreparationError
       ? input.error.cause instanceof HomeTargetResolutionError ? input.error.cause.code : input.error.code
     : input.cause === 'session_error' && errorCode.kind === 'string'
@@ -572,6 +593,7 @@ export function classifyPrimarySessionRuntimeIssue(
       ?? (metadataPrivacyUpgradeRequired ? 'Session startup needs a compatible Home. Update or reconnect, then retry the Session.' : null)
       ?? (errorCode.kind === 'string' && errorCode.value === 'metadata_tuple_ambiguous'
         ? 'Session state could not be confirmed. Check the Home connection, then retry the Session.' : null)
+      ?? (homeHttpFailure ? 'Session startup could not reach a ready Home. Check the Home connection, then retry the Session.' : null)
       ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
       ?? (startupFailureCode ? AGENT_STARTUP_FAILURE_PREVIEWS[startupFailureCode] : null)
       ?? buildSafeModelNotFoundPreview(input.error)

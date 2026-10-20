@@ -428,6 +428,10 @@ The root component props are deliberately curated. In particular, `Form` and
 schema source instructions or host account metadata; List and overlay adapters
 derive host-only injection props from their public semantic inputs.
 
+In 0.3 development source, a `Select` with `presentation="menu"` or `"field"`
+and no options keeps its trigger disabled. Options can arrive or be withdrawn
+while mounted; the caller explains loading, unavailable or empty source data.
+
 ## Published package contents
 
 Release automation publishes what `files` in `package.json` selects. The

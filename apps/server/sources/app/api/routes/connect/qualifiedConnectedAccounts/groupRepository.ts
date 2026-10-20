@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 import {
     isPrismaErrorCode,
 } from "@/storage/prisma";
@@ -185,10 +185,7 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         accountId: string;
         service?: QualifiedConnectedAccountServiceRef;
     }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
+): Promise<QualifiedConnectedAccountGroupV4[]> {
     const service = params.service
         ? QualifiedConnectedAccountServiceRefSchema.parse(params.service)
         : null;
@@ -248,28 +245,13 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         }
         return true;
     });
-    return preparedRows.map((row) => ({
-        group: toQualifiedConnectedAccountGroup(row),
-        activeProfileId: row.activeProfileId,
-    }));
+    return preparedRows.map(toQualifiedConnectedAccountGroup);
 }
 
 export async function listAllQualifiedConnectedAccountGroupsInTx(
     tx: QualifiedGroupListStorage,
     params: Readonly<{ accountId: string }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(tx, params);
-    return projections.map((projection) => projection.group);
-}
-
-export async function listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx(
-    tx: QualifiedGroupListStorage,
-    params: Readonly<{ accountId: string }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
     return await listQualifiedConnectedAccountGroupsByFilter(tx, params);
 }
 
@@ -279,9 +261,7 @@ export async function listQualifiedConnectedAccountGroups(
         service: QualifiedConnectedAccountServiceRef;
     }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(db, params);
-    return projections.map((projection) => projection.group);
+    return await listQualifiedConnectedAccountGroupsByFilter(db, params);
 }
 
 const qualifiedGroupInclude = {
@@ -545,25 +525,6 @@ export async function readQualifiedConnectedAccountGroup(
     return row ? toQualifiedConnectedAccountGroup(row) : null;
 }
 
-export async function readQualifiedConnectedAccountGroupForLegacyProjection(
-    params: Readonly<{
-        accountId: string;
-        service: QualifiedConnectedAccountServiceRef;
-        groupId: string;
-    }>,
-): Promise<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}> | null> {
-    const row = await readQualifiedGroupRowInTx(db, params);
-    return row
-        ? {
-            group: toQualifiedConnectedAccountGroup(row),
-            activeProfileId: row.activeProfileId,
-        }
-        : null;
-}
-
 export type QualifiedConnectedAccountGroupMutationResult =
     | Readonly<{
         status: "written";
@@ -735,7 +696,7 @@ export async function createQualifiedConnectedAccountGroup(
         group: params.group,
     });
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const serviceDigest =
             createQualifiedConnectedAccountServiceDigest(parsed.service);
         const groupDigest =
@@ -895,7 +856,7 @@ export async function patchQualifiedConnectedAccountGroup(
         params.patch,
     );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1077,7 +1038,7 @@ export async function deleteQualifiedConnectedAccountGroup(
     const service =
         QualifiedConnectedAccountServiceRefSchema.parse(params.service);
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service,
@@ -1167,7 +1128,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             params.patch,
         );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1302,7 +1263,7 @@ async function mutateQualifiedGroupMember(
         );
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1594,7 +1555,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
         );
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1706,7 +1667,7 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             params.mutation,
         );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: mutation.group.service,

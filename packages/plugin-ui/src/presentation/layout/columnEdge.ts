@@ -21,3 +21,10 @@ export function useHappierColumnEdgeRemainder(insetPx: number): number {
 export function useHappierColumnEdgePx(): number {
   return useContext(HappierColumnEdgeContext);
 }
+
+/**
+ * @internal A body that already stands its content on its own edge (a widget frame's body): a line inside
+ * it (an empty note, a failure line) starts on that edge, beside the body's titles and figures, instead of
+ * adding a collection row's inset of its own.
+ */
+export const HappierBodyEdgeContext = createContext(false);

@@ -43,6 +43,8 @@ import { useMessageComposerAttachments } from '@/components/sessions/transcript/
 import { useTranscriptMotion } from '@/components/sessions/transcript/motion/TranscriptMotionContext';
 import { ThinkingTimelineRow } from '@/components/sessions/transcript/thinking/ThinkingTimelineRow';
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
+import { projectWorkerCardDelivery } from '@/components/sessions/transcript/events/followWorkerCardDelivery';
+import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
 import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
@@ -84,10 +86,13 @@ import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { UserMessageBubble } from './UserMessageBubble';
+
+const EMPTY_FOLLOW_DELIVERY_BY_LOCAL_ID: ReadonlyMap<string, FollowDeliveryProjectionV1 | null> = new Map();
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { isRecoveredHistoryTranscriptObservation } from "@happier-dev/session-core/messages";
 import type { TranscriptEventEmphasis } from '@/components/sessions/transcript/events/transcriptEventEmphasis';
 import { Icon } from '@/components/ui/icons/Icon';
+import { ReturnedAnswerQuote, readReturnedAnswer } from '@/components/sessions/transcript/returnedAnswer/ReturnedAnswerQuote';
 import { Typography } from '@/constants/Typography';
 import { SessionMessageAccountByline } from './SessionMessageAccountByline';
 import type { ToolViewDisplaySettings } from '@/components/tools/shell/views/toolViewDisplaySettings';
@@ -253,7 +258,7 @@ function AppWorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanc
     return <MessageProvenanceAttributionLabel testID={testID} label={label} />;
   }
   return <WorkflowMessageProvenanceChip {...props} label={label}
-    onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId))} />;
+    onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId, serverId))} />;
 }
 
 function WorkflowMessageProvenanceChip(props: WorkflowMessageProvenanceProps & Readonly<{ label: string; onPress?: () => void }>) {
@@ -299,6 +304,8 @@ function MessageProvenanceAttribution(props: Readonly<{ message: Message; server
   // only a producer that is not the person (a Workflow, an Automation, a Session, a plugin) is named.
   if (!provenance || provenance.kind === 'host' || provenance.kind === 'happierApp'
     || provenance.kind === 'cli' || provenance.kind === 'voice') return null;
+  // The returned-answer quote names its sender in its own header.
+  if (readReturnedAnswer(props.message)) return null;
   if (provenance.kind === 'workflow_invocation') {
     return <WorkflowMessageProvenanceAttribution
       messageId={props.message.id}
@@ -646,6 +653,11 @@ function RenderBlock(props: {
         >
           <TranscriptEventRow
             event={props.message.event}
+            followDeliveryProjection={props.message.event.type === 'worker-update'
+              ? projectWorkerCardDelivery({ ...props.message.event,
+                  ownProjection: props.message.followDeliveryProjection },
+                  props.toolRouteCommon.followDeliveryByLocalId ?? EMPTY_FOLLOW_DELIVERY_BY_LOCAL_ID)
+              : props.message.followDeliveryProjection}
             messageId={props.message.id}
             localId={props.message.localId}
             sessionId={props.sessionId}
@@ -734,6 +746,8 @@ function UserTextBlock(props: {
     debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
   }), [props.message, props.messageDisplayCommon.debugInformationEnabled]);
   const isVoiceAgentTurn = messageDisplay.isVoiceAgentTurn;
+  // An answer another session returned here is quoted as information, not drawn as the person's bubble.
+  const returnedAnswer = React.useMemo(() => readReturnedAnswer(props.message), [props.message]);
 
   const structuredNode = renderStructuredMessage({
 	    message: props.message,
@@ -955,44 +969,8 @@ function UserTextBlock(props: {
     );
   }
 
-  return (
-    <CommittedMessageActions
-      message={props.message} sessionId={props.sessionId} serverId={props.serverId}
-      selectableText={selectableMessage} copyText={copyText} isStructuredOnly={isStructuredOnly} hasUnsupportedContent={unsupportedContentMeta != null}
-      canFork={props.canFork} forkCommon={props.forkCommon} isForkAllowed={props.isForkAllowed}
-      settings={props.messageDisplayCommon} rollbackAction={props.rollbackAction}
-      messagePins={props.messagePins} onToggleMessagePin={props.onToggleMessagePin}
-      showActions={showMessageActions} showPinAction={showPinButton}
-      timestampText={timestampText} invertTimestampAndActions={timestampPresentation.invertTimestampAndActions}
-      onActionsFocus={handleActionsFocus} onActionsBlur={handleActionsBlur}
-      onActionHoverIn={isWeb ? () => setIsCopyButtonHovered(true) : undefined}
-      onActionHoverOut={isWeb ? () => setIsCopyButtonHovered(false) : undefined}
-      hoverProps={hoverProps}
->
-      {(actionsRow) => (
-      <View
-        collapsable={false}
-        style={[styles.userMessageContainer, props.historical ? styles.historicalMessageContainer : null]}
-      >
-        {selectionEnabled && selectableMessage ? (
-          <View style={styles.messageSelectionCheckboxSlot}>
-            <MessageSelectionCheckbox
-              messageId={props.message.id}
-              role={selectableMessage.role}
-              previewText={selectableMessage.text}
-              testID={`transcript-message-select-checkbox:${props.message.id}`}
-            />
-          </View>
-        ) : null}
-        <View
-          style={styles.userMessageWrapper}
-          {...(isWeb ? {} : { pointerEvents: 'box-none' as const })}
-        >
-          <View style={styles.userMessageBubbleAligner}>
-          <UserMessageBubble
-            discarded={isDiscarded}
-            attention={{ sessionAddress: transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null, routeMessageId: buildMessageRouteId(props.message), seq: resolveTranscriptMessageSeq(props.message), radius: TRANSCRIPT_MESSAGE_HIGHLIGHT_RADIUS }}
-          >
+  const bubbleContent = (
+          <>
             <MarkdownView codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])} markdown={renderedMarkdownText} findActive={findActive} findSourceRanges={findSourceRanges} renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
             {attachmentsMeta ? (
               <AttachmentsInlineImages
@@ -1033,8 +1011,56 @@ function UserTextBlock(props: {
             {isDiscarded && (
               <Text selectable style={styles.discardedCommittedMessageLabel}>{t('message.discarded')}</Text>
             )}
+          </>
+  );
+
+  return (
+    <CommittedMessageActions
+      message={props.message} sessionId={props.sessionId} serverId={props.serverId}
+      selectableText={selectableMessage} copyText={copyText} isStructuredOnly={isStructuredOnly} hasUnsupportedContent={unsupportedContentMeta != null}
+      canFork={props.canFork} forkCommon={props.forkCommon} isForkAllowed={props.isForkAllowed}
+      settings={props.messageDisplayCommon} rollbackAction={props.rollbackAction}
+      messagePins={props.messagePins} onToggleMessagePin={props.onToggleMessagePin}
+      showActions={showMessageActions} showPinAction={showPinButton}
+      timestampText={timestampText} invertTimestampAndActions={timestampPresentation.invertTimestampAndActions}
+      onActionsFocus={handleActionsFocus} onActionsBlur={handleActionsBlur}
+      onActionHoverIn={isWeb ? () => setIsCopyButtonHovered(true) : undefined}
+      onActionHoverOut={isWeb ? () => setIsCopyButtonHovered(false) : undefined}
+      hoverProps={hoverProps}
+>
+      {(actionsRow) => (
+      <View
+        collapsable={false}
+        style={[styles.userMessageContainer, props.historical ? styles.historicalMessageContainer : null]}
+      >
+        {selectionEnabled && selectableMessage ? (
+          <View style={styles.messageSelectionCheckboxSlot}>
+            <MessageSelectionCheckbox
+              messageId={props.message.id}
+              role={selectableMessage.role}
+              previewText={selectableMessage.text}
+              testID={`transcript-message-select-checkbox:${props.message.id}`}
+            />
+          </View>
+        ) : null}
+        <View
+          style={styles.userMessageWrapper}
+          {...(isWeb ? {} : { pointerEvents: 'box-none' as const })}
+        >
+          {returnedAnswer ? (
+          <ReturnedAnswerQuote message={props.message} answer={returnedAnswer} sessionId={props.sessionId} serverId={props.serverId}>
+            {bubbleContent}
+          </ReturnedAnswerQuote>
+          ) : (
+          <View style={styles.userMessageBubbleAligner}>
+          <UserMessageBubble
+            discarded={isDiscarded}
+            attention={{ sessionAddress: transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null, routeMessageId: buildMessageRouteId(props.message), seq: resolveTranscriptMessageSeq(props.message), radius: TRANSCRIPT_MESSAGE_HIGHLIGHT_RADIUS }}
+          >
+            {bubbleContent}
           </UserMessageBubble>
           </View>
+          )}
           {actionsRow}
         </View>
       </View>

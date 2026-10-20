@@ -3,6 +3,7 @@ import * as React from 'react';
 import { decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { t } from '@/text';
 
 export type CodeTextFileState =
     | Readonly<{ kind: 'idle' }>
@@ -34,6 +35,9 @@ export function useCodeTextFile(scope: WorkspaceScopeBase, path: string | null, 
                     ? { kind: 'ready', text: decodeUtf8Base64(result.content) }
                     : { kind: 'error', error: result.error },
             });
+        }).catch((error: unknown) => {
+            if (controller.signal.aborted) return;
+            setState({ key, value: { kind: 'error', error: error instanceof Error ? error.message : t('files.fileReadFailed') } });
         });
         return () => controller.abort();
         // The scope object is read through its cache key: the same workspace never refetches on identity.

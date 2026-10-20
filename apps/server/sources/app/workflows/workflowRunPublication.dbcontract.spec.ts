@@ -17,6 +17,7 @@ import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAc
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 import { admitWorkflowRun, cancelWorkflowRun, commitWorkflowInvocationFact } from "./workflowRunService";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { observeLazyPrismaQuery } from "@/app/changes/accountPublicationContention.testkit";
 import { cancelAutomationRun } from "@/app/automations/automationRunService";
 import { revokeMachineInTx } from "@/app/machines/machineMutations";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
@@ -174,25 +175,30 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         const originalTransaction = db.$transaction.bind(db);
         const conflicts: string[] = [];
         let publications = 0;
+        let publishingPeer = false;
         // A real concurrent publisher advances Account.seq after the snapshot's
         // audience read and before its first ordered Account lock on every attempt.
         // All storage decisions, locks, CAS predicates and watcher owners stay real.
         const interleaved = async (body: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) =>
-            originalTransaction(async tx => {
+            publishingPeer ? originalTransaction(body, options) : originalTransaction(async tx => {
                 let advanced = false;
                 return body(new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
-                            await originalTransaction(cursorTx => markAccountChanged(cursorTx, {
-                                accountId: source.owner.id, kind: "account", entityId: "unrelated-storage-publication",
-                            }));
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-storage-publication",
+                                }));
+                            } finally { publishingPeer = false; }
                             publications++;
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } }));
             }, operation === "exhaustion" ? { ...options, isolationLevel: "Serializable" } : options);
         db.$transaction = interleaved as typeof db.$transaction;
@@ -297,24 +303,30 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
             parentRecordId: null, memberOrdinal: 0n, attempt: 0n, lifecycle: "running", contentEnvelope: envelope() } });
         const originalTransaction = db.$transaction.bind(db);
         const conflicts: string[] = [];
+        let publishingPeer = false;
         // Interleave at the real Prisma boundary, after the audience read has
         // established a snapshot but before its first Account lock. Cursor
         // publication and all Workflow internals execute their real owners.
         const interleaved = async (operation: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) => {
+            if (publishingPeer) return originalTransaction(operation, options);
             return originalTransaction(async tx => {
                 let advanced = false;
                 const boundary = new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
-                            await originalTransaction(cursorTx => markAccountChanged(cursorTx, {
-                                accountId: source.owner.id, kind: "account", entityId: "unrelated-cursor-publication",
-                            }));
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-cursor-publication",
+                                }));
+                            } finally { publishingPeer = false; }
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } });
                 return operation(boundary);
             }, options);
@@ -350,24 +362,30 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         };
         const originalTransaction = db.$transaction.bind(db);
         const conflicts: string[] = [];
+        let publishingPeer = false;
         // Real cursor publication lands after audience discovery, before the
         // first ordered Account lock, on every attempt. No internal owner is
         // replaced: HTTP admission, mode/access fences and storage stay real.
         const interleaved = async (operation: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) => {
+            if (publishingPeer) return originalTransaction(operation, options);
             return originalTransaction(async tx => {
                 let advanced = false;
                 return operation(new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
-                            await originalTransaction(cursorTx => markAccountChanged(cursorTx, {
-                                accountId: source.owner.id, kind: "account", entityId: "unrelated-create-publication",
-                            }));
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-create-publication",
+                                }));
+                            } finally { publishingPeer = false; }
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } }));
             }, options);
         };

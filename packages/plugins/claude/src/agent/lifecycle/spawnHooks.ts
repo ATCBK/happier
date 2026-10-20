@@ -1,6 +1,6 @@
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 
-import { resolveClaudeConfigDirOverride } from '../environment.js';
+import { resolveClaudeConfigDirOverride, resolveClaudeConfigDirEnvOverlay } from '../environment.js';
 import { resolveClaudeExternalSandboxEnv } from '../runtime/launchSettings.js';
 
 type ClaudeDaemonResolvedTool =
@@ -97,7 +97,7 @@ export function augmentClaudeDaemonSpawnEnv(event: unknown): Record<string, stri
     const claudeConfigDir = explicitConfigDir ?? savedConfigDir ?? resolveClaudeConfigDirOverride(env);
 
     return {
-        ...(claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : {}),
+        ...resolveClaudeConfigDirEnvOverlay({ CLAUDE_CONFIG_DIR: claudeConfigDir ?? undefined }),
         ...resolveClaudeExternalSandboxEnv(env),
     };
 }

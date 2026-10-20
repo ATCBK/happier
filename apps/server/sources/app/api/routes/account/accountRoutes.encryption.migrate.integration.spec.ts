@@ -4478,6 +4478,7 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
             await acquireAccountSessionOwnerMetadataFenceInTx(
                 tx,
                 fixture.account.id,
+                "content",
             );
             await tx.session.update({
                 where: { id: fixture.session.id },

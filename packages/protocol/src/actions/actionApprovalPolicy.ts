@@ -27,7 +27,7 @@ export type ResolveActionApprovalRoutingArgs = Readonly<{
   requiredByPolicy?: boolean;
   /** Host-proved contextual classification, resolved through the same settings/waiver owner. */
   defaultSafety?: ActionSpec['safety'];
-  /** Admitted audience widening strengthens the UI default without changing Settings or authority. */
+  /** Host-proved exposure classification; Settings and execution authority still apply. */
   defaultUiConfirmation?: boolean;
   /** An admitted shared request's outward effect; still subject to Settings Require/Waive. */
   defaultConfirmation?: boolean;
@@ -101,8 +101,8 @@ function requiresDefaultApprovalFloor(
   const surface = resolveApprovalSurface(ctx);
   const spec = getActionSpec(actionId);
   const policy = spec.approvalPolicy;
-  const uiPolicyConfirmation = defaultUiConfirmation === true
-    || (policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy'));
+  const uiPolicyConfirmation = defaultUiConfirmation
+    ?? policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy');
   defaultSafety ??= spec.safetyForInput?.(input) ?? spec.safety;
   if (policy?.pluginCaptureWaiver === true) return true;
   // Permission answers share the Agent default on MCP too; persisted surface

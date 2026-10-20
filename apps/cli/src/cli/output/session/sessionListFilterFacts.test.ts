@@ -16,6 +16,23 @@ const projectFilter = normalizeSessionListFilterV1({ homeServerIds: ['home'],
 const tagFilter = normalizeSessionListFilterV1({ homeServerIds: ['home'], tagIds: [{ serverId: 'home', tagId: 'bob-tag' }] });
 
 describe('current CLI Session filter facts', () => {
+  it.each([undefined, ''])('treats readable pathless metadata as a Project miss (path=%s)', path => {
+    const facts = projectCliSessionListFilterFactsV1({ credentials,
+      accountEncryption: createAccountEncryptionCurrentnessFixture(),
+      row: { ...row, metadata: JSON.stringify({ machineId: 'alice-machine', ...(path === undefined ? {} : { path }) }) },
+      nowMs: Date.now(), serverId: 'home', viewerAccountId: 'bob', workspaceRefs: [workspaceRef] });
+    expect(matchSessionListFilterV1(projectFilter, facts)).toBe('miss');
+    expect(matchSessionListFilterV1(normalizeSessionListFilterV1({ ...projectFilter,
+      projects: { include: [], exclude: projectFilter.projects!.include } }), facts)).toBe('match');
+  });
+
+  it('keeps unreadable owner facts unavailable rather than treating them as pathless', () => {
+    const facts = projectCliSessionListFilterFactsV1({ credentials,
+      accountEncryption: createAccountEncryptionCurrentnessFixture(), row: { ...row, metadata: 'unreadable' },
+      nowMs: Date.now(), serverId: 'home', viewerAccountId: 'bob', workspaceRefs: [workspaceRef] });
+    expect(matchSessionListFilterV1(projectFilter, facts)).toBe('unavailable');
+  });
+
   it('uses prepared current Project and tag assignments in the shared list/preview/evaluator projector', () => {
     const input = { credentials, accountEncryption: createAccountEncryptionCurrentnessFixture(), row,
       nowMs: Date.now(), serverId: 'home', viewerAccountId: 'bob',

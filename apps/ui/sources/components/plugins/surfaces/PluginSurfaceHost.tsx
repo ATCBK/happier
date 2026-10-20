@@ -38,7 +38,7 @@ import {
     PluginSurfaceSourceCauseContext,
     resolvePluginSurfaceSourceCause,
 } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
-import type { PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { getPluginExecutionOriginCandidateOrigin, type PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { SessionExecutionTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import {
@@ -2044,6 +2044,29 @@ function renderPluginSurfaceUnavailable(
     );
 }
 
+/** Retain presentation only; the bound controller still admits every operation. */
+function PluginSurfacePresentation(props: Readonly<{
+    lifetime: BoundPluginSurfaceMountLifetime;
+    children?: React.ReactElement;
+    notice?: React.ReactNode;
+}>): React.ReactElement {
+    const committed = React.useRef<Readonly<{
+        lifetime: BoundPluginSurfaceMountLifetime;
+        content: React.ReactElement;
+    }> | null>(null);
+    React.useLayoutEffect(() => {
+        if (props.children && props.lifetime.isCurrent()) {
+            committed.current = { lifetime: props.lifetime, content: props.children };
+        } else if (committed.current?.lifetime !== props.lifetime || !props.lifetime.isCurrent()) {
+            committed.current = null;
+        }
+    });
+    // Account, target and occurrence retirement must still remove private state.
+    const retained = committed.current?.lifetime === props.lifetime && props.lifetime.isCurrent()
+        ? committed.current.content : null;
+    return <>{props.notice}<React.Fragment key="surface">{props.children ?? retained}</React.Fragment></>;
+}
+
 /**
  * B is supplied only by the response-local A→B adapter. Its target is the
  * already-resolved physical parent target; it is presentation context only,
@@ -2353,9 +2376,16 @@ function PluginSurfaceHostMount(props: Readonly<(
         ?? origin?.machineId
         ?? (needsMachineExecution ? pluginExecution.selection.storedTarget?.machineId : null)
         ?? (accountUnionMount ? null : props.machineId);
-    const machineDisplayIds = React.useMemo(() => (
-        typeof machineId === 'string' && machineId.trim() ? [machineId] : []
-    ), [machineId]);
+    // Administration's refusal, with the one Machine that refused when it is only one.
+    const executionSelectionState = needsMachineExecution ? pluginExecution.selection.state : null;
+    const refusingMachineIds = React.useMemo(() => executionSelectionState?.kind === 'unavailable'
+        ? [...new Set(executionSelectionState.candidates.map(candidate => (
+            getPluginMachineExecutionOriginRef(getPluginExecutionOriginCandidateOrigin(candidate)).machineId)))]
+        : [], [executionSelectionState]);
+    const machineDisplayIds = React.useMemo(() => [
+        ...(typeof machineId === 'string' && machineId.trim() ? [machineId] : []),
+        ...refusingMachineIds,
+    ], [machineId, refusingMachineIds]);
     const machineDisplayNamesById = useMachineDisplayNamesById(machineDisplayIds);
     const homeHasMachines = useHomeHasMachines();
     const machineDisplayName = typeof machineId === 'string'
@@ -2525,6 +2555,12 @@ function PluginSurfaceHostMount(props: Readonly<(
     // semantics, surface activity, or target reads on the whole Machine describe.
     const machineConnectionPending = (needsMachineExecution && pluginExecution.selection.loading)
         || (mountedTargetSnapshotRequired && !mountedTargetReady && mountedTargetRead.phase === 'loading');
+    const mountedTargetFallback = mountedTargetRead.phase === 'failed'
+        ? resolveMountedTargetProjectionFallback(mountedTargetRead) : null;
+    const daemonConnectionFailure = mountedTargetFallback?.state === 'unavailable'
+        ? { code: mountedTargetRead.failure?.reason === 'timeout' ? 'timeout' as const : 'unavailable' as const,
+            reasonCode: mountedTargetFallback.reasonCode }
+        : undefined;
     // A fresh process whose machine has no reachable daemon can still mount the
     // destination it last confirmed, because the retained presentation slice it
     // booted from carries the target admission that accompanied it. This is the
@@ -2924,7 +2960,15 @@ function PluginSurfaceHostMount(props: Readonly<(
     const controllerFacts = Object.freeze({
         ...baseControllerFacts,
         executionOriginSelectionKind: needsMachineExecution ? pluginExecution.selection.state.kind : undefined,
+        ...(executionSelectionState?.kind === 'unavailable' && executionSelectionState.candidates.length > 0
+            ? { executionOriginRefusal: Object.freeze({
+                reasons: executionSelectionState.reasons,
+                ...(refusingMachineIds.length === 1 ? { machineDisplayName: machineDisplayNamesById[refusingMachineIds[0]!] ?? null } : {}),
+            }) }
+            : {}),
         isDaemonConnectionPending: () => machineConnectionPending,
+        daemonConnectionFailure: !needsMachineExecution || pluginExecution.selection.state.kind === 'selected'
+            ? daemonConnectionFailure : undefined,
         resolveContributedAction,
         ...(currentUiContextReader
             ? { readCurrentUiContext: currentUiContextReader.readCurrentUiContext }
@@ -3095,8 +3139,10 @@ function PluginSurfaceHostMount(props: Readonly<(
         : mountedComposerBinding
             ?? (targetedBinding ? undefined : props.binding);
     const openConnectedAccounts = React.useCallback((request: PluginUiOpenConnectedAccountsRequestV1): void => {
-        router.push(buildConnectedAccountsSettingsRoute(request));
-    }, [router]);
+        router.push(buildConnectedAccountsSettingsRoute(request, accountLifetime && machineId ? {
+            scope: accountLifetime.scope, machineId,
+        } : undefined));
+    }, [router, accountLifetime, machineId]);
     const controllerBindingWithConnectedAccounts = React.useMemo<BoundPluginSurfaceBinding>(() => Object.freeze({
         ...(controllerBinding ?? {}),
         openConnectedAccounts,
@@ -3619,6 +3665,9 @@ function PluginSurfaceHostMount(props: Readonly<(
         );
     };
     if (!renderGate.canRender) {
+        if (renderGate.state === 'loading') {
+            return <PluginSurfacePresentation lifetime={controller} notice={renderUnavailable(renderGate.reason, renderGate.state)} />;
+        }
         return renderUnavailable(renderGate.reason, renderGate.state);
     }
     if (!mountBinding) {
@@ -3638,11 +3687,13 @@ function PluginSurfaceHostMount(props: Readonly<(
     if (!resolvedSurfaceTarget.resolved) {
         return renderUnavailable(resolvedSurfaceTarget.reason);
     }
-    // Account-mode disclosure is required for every executable renderer. Do
-    // not lend either public Host API transport a stale, inferred, or absent
-    // context while the canonical cache is resolving or has just invalidated.
+    // A resolved Account mode is required before building a new renderer
+    // context. Revalidation keeps only the incumbent presentation within its
+    // controller lifetime; it does not replace current Account/Action admission.
     if (accountLocalInteractionEnabled && !accountEncryptionMode) {
-        return renderAccountEncryptionModeReadiness();
+        return accountEncryptionModeReadiness.status === 'loading'
+            ? <PluginSurfacePresentation lifetime={controller} notice={renderAccountEncryptionModeReadiness()} />
+            : renderAccountEncryptionModeReadiness();
     }
     const surfaceTarget = resolvedSurfaceTarget.target;
     const resolvedHostApi = controller.hostApi;
@@ -4280,6 +4331,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         />
     );
     return (
+        <PluginSurfacePresentation lifetime={controller}>
         <InputTypePickerHostProvider enabled={renderer.kind === 'reactNative'}
             machineId={machineId ?? undefined} serverId={serverId} sessionId={props.sessionId}
             accountLifetime={accountLifetime ?? undefined} isCurrent={controller.isCurrent}
@@ -4303,6 +4355,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(pluginActionApproval.approvalId!)}?serverId=${encodeURIComponent(accountLifetime?.scope.serverId ?? serverId ?? '')}`)} />
         ) : null}
         </InputTypePickerHostProvider>
+        </PluginSurfacePresentation>
     );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LimaCommandResult, LimaExecutor } from '@happier-dev/cli-common/machineLima';
+import type { LimaCommandResult, LimaExecutor } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createLimaProvider } from './provider.js';
 import { LimaLaunchSchema } from './schemas.js';
 import { MachineProvisionerObservationV1Schema } from '@happier-dev/plugin-sdk/machine-provisioners';

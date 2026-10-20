@@ -98,6 +98,20 @@ describe('settingsRouteRegistry', () => {
         expect(typeof sessionRoute?.options.headerLeft).toBe('function');
     });
 
+    it('returns prompt sections to their parent without entering the retired Stacks redirect', () => {
+        for (const pathname of [
+            '/settings/prompts/docs', '/settings/prompts/templates', '/settings/prompts/folders',
+            '/settings/prompts/stacks/coding',
+        ]) {
+            expect(resolveSettingsRouteParentPathname(pathname)).toBe('/settings/prompts');
+        }
+        for (const pathname of ['/settings/prompts/stacks/voice', '/settings/prompts/stacks/profiles']) {
+            expect(resolveSettingsRouteParentPathname(pathname)).toBe('/settings/prompts/stacks/coding');
+        }
+        expect(resolveSettingsRouteParentPathname('/settings/prompts/stacks/profiles/profile-1'))
+            .toBe('/settings/prompts/stacks/profiles');
+    });
+
     it('resolves route parent paths from the current settings pathname', () => {
         expect(resolveSettingsRouteParentPathname('/settings')).toBeNull();
         expect(resolveSettingsRouteParentPathname('/settings/session')).toBe('/settings');
@@ -108,6 +122,14 @@ describe('settingsRouteRegistry', () => {
         expect(resolveSettingsRouteParentPathname('/settings/prompts/docs/doc%2F1/export')).toBe('/settings/prompts/docs/doc%2F1');
         expect(resolveSettingsRouteParentPathname('/settings/plugins/examples.descriptor-only/settings')).toBe('/settings/plugins/examples.descriptor-only');
         expect(resolveSettingsRouteParentPathname('/session/s1')).toBeNull();
+    });
+
+    it('returns from an open plugin source to the Sources list before leaving the page', () => {
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/sources', { source: 'marketplace:abc' }))
+            .toBe('/settings/plugins/sources');
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/sources')).toBe('/settings/plugins');
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/diagnostics', { source: 'marketplace:abc' }))
+            .toBe('/settings/plugins');
     });
 
     it('returns from a machine-default category to Defaults before leaving the page', () => {

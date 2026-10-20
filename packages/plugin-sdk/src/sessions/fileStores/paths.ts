@@ -1,5 +1,6 @@
 /** @moduleRealm daemon */
 import {
+  canonicalAbsolutePathsEqual as canonicalAbsolutePathsEqualShared,
   expandHomeDirPath,
   isCanonicalAbsolutePathInsideRoot as isCanonicalAbsolutePathInsideRootShared,
   resolveHomeDirFromEnvironment,
@@ -11,6 +12,8 @@ import { promisify } from 'node:util';
 const realpathAsync = promisify(realpath);
 
 export { resolveHomeDirFromEnvironment };
+
+export const canonicalAbsolutePathsEqual: (left: string, right: string) => boolean = canonicalAbsolutePathsEqualShared;
 
 /**
  * Public SDK projection of the shared cross-platform lexical-containment

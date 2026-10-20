@@ -162,6 +162,35 @@ describe('ShareSheet full presentation', () => {
         expect(screen.findByTestId('document-share-browse:team')).not.toBeNull();
     });
 
+    it('leads with the matches while a query is typed, then who already has access', () => {
+        const typed = (query: string): ShareSheetModel => ({ ...model, directory: { query, sections: [{
+            kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false, loadingMore: false, candidates: [] }] } });
+        const sectionIds = (value: ShareSheetModel) => buildShareSheetSelectionStep({ model: value, actions,
+            adapter: { ...adapter, sections: () => ({ afterAccess: [{ kind: 'static', id: 'answerers', options: [] }],
+                trailing: [{ kind: 'static', id: 'agent-results', options: [] }] }) },
+            presentation: 'inline', onExpand: noop, idPrefix: '', revealSuggestions: true }).sections.map(section => section.id);
+        const atRest = sectionIds(typed(''));
+        expect(atRest.indexOf('current')).toBeLessThan(atRest.indexOf('directory:account'));
+        const searching = sectionIds(typed('ma'));
+        expect(searching.indexOf('directory:account')).toBeLessThan(searching.indexOf('current'));
+        expect(searching.indexOf('agent-results')).toBeLessThan(searching.indexOf('current'));
+        expect(searching.indexOf('current')).toBeLessThan(searching.indexOf('answerers'));
+    });
+    it('says who the people directory lists and where to connect with someone when it has no one to offer', () => {
+        const people = (partial: Partial<ShareSheetModel['directory']['sections'][number]>, query = ''): ShareSheetModel => ({ ...model,
+            directory: { query, sections: [{ kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false,
+                loadingMore: false, candidates: [], ...partial }] } });
+        const sectionIds = (value: ShareSheetModel) => buildShareSheetSelectionStep({ model: value, actions, adapter, presentation: 'full',
+            onExpand: noop, idPrefix: '', directoryKind: 'account' }).sections.map(section => section.id);
+        expect(sectionIds(people({}))).toContain('directory-empty');
+        // Still loading, another page to come, a typed search and a directory with someone in it are not this state.
+        expect(sectionIds(people({ status: 'loading' }))).not.toContain('directory-empty');
+        expect(sectionIds(people({ hasMore: true }))).not.toContain('directory-empty');
+        expect(sectionIds(people({}, 'ma'))).not.toContain('directory-empty');
+        expect(sectionIds(people({ candidates: [{ principal: { ref: { kind: 'account', accountId: 'maya' }, key: 'account:maya',
+            displayName: 'Maya', accessibilityLabel: 'Maya' }, addition: { kind: 'allowed' }, operation: { kind: 'idle' } }] })))
+            .not.toContain('directory-empty');
+    });
     it('names why a candidate cannot be added instead of offering Add, and explains it on press', async () => {
         vi.useFakeTimers();
         const explain = vi.fn();

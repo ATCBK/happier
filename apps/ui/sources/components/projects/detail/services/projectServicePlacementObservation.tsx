@@ -273,7 +273,8 @@ export function ProjectServicePlacementObservationProvider(props: Readonly<{
   return <ScopedObservationProvider key={scopeKey} source={props.source} binding={binding} runtimeActionExecute={props.runtimeActionExecute}>{props.children}</ScopedObservationProvider>;
 }
 
-export function useProjectServicePlacementObservation(serviceName: string, managedScopeKey?: string, declarationWorkspaceRefId?: string) {
+export function useProjectServicePlacementObservation(serviceName: string, managedScopeKey?: string,
+  native?: Readonly<{ declarationWorkspaceRefId?: string; absent: boolean }>) {
   const context = React.useContext(Context);
   const attach = React.useCallback((attachment: ProjectServicePlacementOperationAttachment) => context?.attach(serviceName, attachment),
     [context?.attach, serviceName]);
@@ -283,6 +284,7 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   [context?.executeMove, serviceName]);
   const candidate = context?.entries.get(serviceName);
   const domain = candidate?.observation?.operation?.snapshot.domainRef;
+  const declarationWorkspaceRefId = native?.declarationWorkspaceRefId;
   const entry = declarationWorkspaceRefId === undefined || declarationWorkspaceRefId === context?.source.refId
     || (domain?.kind === 'projectService' && domain.declaration?.workspaceRefId === declarationWorkspaceRefId) ? candidate : undefined;
   const destination = entry?.attachment.destination;
@@ -294,7 +296,7 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   const phase = snapshot?.progress?.kind === 'phase' ? snapshot.progress.phase : null;
   const unknown = operation?.observation !== 'available' || snapshot?.observation?.kind === 'outcome_uncertain'
     || snapshot?.error?.errorCode === 'outcome_uncertain' || snapshot?.state === 'failed' || snapshot?.state === 'cancelled';
-  const stoppedBeforeStart = operation?.observation === 'available'
+  const stoppedBeforeStart = native?.absent === true && operation?.observation === 'available'
     && (snapshot?.state === 'failed' || snapshot?.state === 'cancelled')
     && (phase === 'stopped' || phase === 'copying' || phase === 'preparing'
       || phase === 'starting' && (snapshot.error?.errorCode === 'project_setup_consent_required'
@@ -302,8 +304,11 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
     && snapshot?.error?.errorCode !== 'outcome_uncertain';
   const failedBeforeStop = operation?.observation === 'available'
     && (snapshot?.state === 'failed' || snapshot?.state === 'cancelled') && phase === null;
+  // Attachments retain inspection/recovery history. Only unresolved relocation
+  // overrides native row facts; a succeeded operation's last phase is historical.
+  const relocating = entry !== undefined && snapshot?.state !== 'succeeded' && !stoppedBeforeStart && !failedBeforeStop;
   const destinationName = (destinationMachine ? getMachineDisplayName(destinationMachine) : null) ?? t('projectServices.otherMachine');
-  const progressText = !entry ? null : unknown ? t('projectServices.moveUnknown')
+  const progressText = !relocating ? null : unknown ? t('projectServices.moveUnknown')
     : phase === 'stopping' ? t('localServices.rowStatus.stopping')
     : phase === 'stopped' ? t('localServices.rowStatus.stopped')
     : phase === 'copying' ? t('projectWorkers.copying', { machine: destinationName })
@@ -317,7 +322,7 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
     if (managedScopeKey) context?.selectManaged(serviceName, managedScopeKey, draft, purpose);
   }, [context?.selectManaged, managedScopeKey, serviceName]);
   return { hasOwner: context !== null, attachment: entry?.attachment ?? null,
-    operation: operation ?? null, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
+    operation: operation ?? null, relocating, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
     executeMove, requestPending: context?.pendingRequests.has(serviceName) ?? false,
     managed, selectManaged, runtimeActionExecute: context?.runtimeActionExecute };
 }

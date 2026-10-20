@@ -62,6 +62,7 @@ import {
   deleteConversationBindingForInvocation,
   deleteConversationConnectionForInvocation,
   prepareConversationConnectionForInvocation,
+  remediateConversationConnectionSetupForInvocation,
   readConversationBindingForInvocation,
   reportConversationTransportFactForInvocation,
   resolveConversationBindingForInvocation,
@@ -665,6 +666,20 @@ function createChannelsPlugin() {
         surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         run: prepareConversationConnectionForInvocation,
+      },
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionSetupRemediate,
+        title: 'Resolve conversation provider setup',
+        description: 'Applies the selected provider’s setup repair using its selected Connected Account.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
+        placementBindings: ['primary'],
+        dangerLevel: 'writesRemote',
+        confirmation: {
+          title: 'Resolve conversation provider setup?',
+          body: 'This applies the selected provider’s remote setup repair using its selected account.',
+          confirmLabel: 'Resolve setup',
+        },
+        run: remediateConversationConnectionSetupForInvocation,
       },
       [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionRetest]: {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionRetest,

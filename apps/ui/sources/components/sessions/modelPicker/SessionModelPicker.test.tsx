@@ -78,6 +78,69 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
+    it('passes the exact Connected Account source to the existing experimental confirmation', () => {
+        const { selected, providerGroups } = experimentalProviderGroup('connected-source:catalog-a');
+        const connectedAccountTarget = { kind: 'group' as const,
+            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+        expect(resolveSessionModelPickerSelection({
+            groups: [{ ...providerGroups[0]!, connectedAccountTarget, connectionRevision: 0 }], ref: selected,
+        })).toMatchObject({ kind: 'confirm-experimental', connectedAccountTarget,
+            connectionId: selected.providerConnectionId, expectedConnectionRevision: 0 });
+    });
+    it.each([false, true])('finds authoritative native models by exact id and label despite an unavailable Provider projection (favorite %s)', async (favorite) => {
+        const agentTargetKey = 'agent:acme.agent/reviewer';
+        const modelId = 'openai/gpt-6.1-sol';
+        const selected = { agentTargetKey, providerConnectionId: null, modelId };
+        const onSelect = vi.fn();
+        const screen = await renderScreen(<SessionModelPicker
+            agentTargetKey={agentTargetKey}
+            nativeModels={[
+                { value: 'default', label: 'Automatic' },
+                { value: modelId, label: 'GPT-6.1 Sol' },
+                { value: `${modelId}-fast`, label: 'GPT-6.1 Sol Fast' },
+                ...Array.from({ length: 8 }, (_, i) => ({ value: `other/${i}`, label: `Other model ${i}` })),
+            ]}
+            providerGroups={[]}
+            providerProjectionAuthoritative={false}
+            projectionError={createProviderErrorV1('provider_catalog_unavailable')}
+            favoriteEntries={favorite ? [{ ref: selected }] : undefined}
+            probe={{ phase: 'idle', failed: false }}
+            selected={null}
+            effectiveLabel="Automatic"
+            onSelect={onSelect}
+        />);
+        const optionId = `model-picker-overlay-option:${JSON.stringify([agentTargetKey, null, modelId])}`;
+        expect(screen.findByTestId(optionId)).toBeTruthy();
+        for (const query of [modelId, 'gpt-6.1-sol', 'GPT-6.1 Sol']) {
+            act(() => screen.changeTextByTestId('model-picker-overlay-search', query));
+            expect(screen.findByTestId(optionId)).toBeTruthy();
+            expect(screen.getTextContent()).not.toContain('Other model 0');
+        }
+        await screen.pressByTestIdAsync(optionId);
+        expect(onSelect).toHaveBeenCalledWith(selected);
+        expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeNull();
+    });
+    it('retains an unavailable Provider catalog diagnostic for a named connection, Provider selection or no discovered native catalog', async () => {
+        const agentTargetKey = 'agent:acme.agent/reviewer';
+        for (const scenario of ['connection', 'selection', 'no-native']) {
+            const error = createProviderErrorV1('provider_catalog_unavailable', scenario === 'connection'
+                ? { connectionId: 'pc_work' } : undefined);
+            const screen = await renderScreen(<SessionModelPicker
+                agentTargetKey={agentTargetKey}
+                nativeModels={scenario === 'no-native'
+                    ? [{ value: 'default', label: 'Automatic' }]
+                    : [{ value: 'native/model', label: 'Native model' }]}
+                providerGroups={[]}
+                providerProjectionAuthoritative={false}
+                projectionError={error}
+                selected={scenario === 'selection' ? { agentTargetKey,
+                    providerConnectionId: ProviderConnectionIdSchema.parse('pc_work'), modelId: 'work/model' } : null}
+                effectiveLabel="Automatic"
+                onSelect={vi.fn()}
+            />);
+            expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeTruthy();
+        }
+    });
     it('confirms unconfirmed experimental compatibility through the Account regardless of model-load availability', () => {
         const ref = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'manual-model' };
         const group = createProviderModelProjectionGroupFixture({ modelLoadAction: 'machine_required', rows: [{

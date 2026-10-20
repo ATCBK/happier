@@ -359,6 +359,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                 && typeof body.targetMachineId === 'string' ? body.targetMachineId : undefined;
             const replyIntent = body && typeof body === 'object' && 'reply' in body ? SessionMessageReplyAdmissionV1Schema.parse(body.reply) : undefined;
             const followAdmission = body && typeof body === 'object' ? {
+                followSourceApp: app,
                 ...('followSources' in body ? { followSources: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followSources.parse(body.followSources) } : {}),
                 ...('followRelations' in body ? { followRelations: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followRelations.parse(body.followRelations) } : {}),
                 ...('followDeliveryV1' in body ? { followDeliveryV1: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followDeliveryV1.parse(body.followDeliveryV1) } : {}),
@@ -498,7 +499,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                 if (res.error === "invalid-params") return reply.code(400).send({ error: res.error });
                 if (res.error === "forbidden") return reply.code(403).send({ error: res.error });
                 if (res.error === "session-not-found" || res.error === "not-found") return reply.code(404).send({ error: res.error });
-                if (res.error === "action-conflict") return reply.code(409).send({ error: res.error });
+                if (res.error === "action-conflict" || res.error === "already-sent") return reply.code(409).send({ error: res.error });
                 if (res.error === "reset-start-unsupported") return reply.code(409).send({ error: res.error });
                 return reply.code(500).send({ error: res.error });
             }

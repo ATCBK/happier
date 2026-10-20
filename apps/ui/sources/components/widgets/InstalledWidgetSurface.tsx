@@ -383,7 +383,8 @@ export function ConfiguredWidgetRefusal(props: Readonly<{
     // A failed choices read is neither a lost value nor a missing input: say it could not be read and offer
     // the read again (the same Retry every other failed read offers).
     const readFailed = resolution.status === 'unavailable' && resolution.retry !== undefined && repair.kind === 'input';
-    const title = readFailed ? t('widgetAdd.optionsFailed')
+    // On the card the failure is the widget's; "the choices" is the setup step's own word for it.
+    const title = readFailed ? t('widgetAdd.widgetLoadFailed')
         : repair.kind === 'connect' ? t('widgetAdd.connectionNeeded', { field: field?.label ?? t('settings.connectedServices') })
         : repair.kind === 'session_denied' ? t('widgetAdd.sessionDenied', { session })
         : repair.kind === 'session_unavailable' ? t('widgetAdd.sessionUnavailable', { session })

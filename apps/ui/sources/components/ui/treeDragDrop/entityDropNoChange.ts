@@ -11,4 +11,5 @@ export const WIDGET_MOVE_UNCHANGED_CODE = 'widget_position_unchanged';
 export const ENTITY_DROP_UNCHANGED_CODES: ReadonlySet<string> = new Set([
     ...PANE_DROP_UNCHANGED_CODES,
     'no-change', 'same-position', 'board-no-change', WIDGET_MOVE_UNCHANGED_CODE,
+    'already-kept', 'already-placed', 'board-already-here', 'unchanged', 'already_under',
 ]);

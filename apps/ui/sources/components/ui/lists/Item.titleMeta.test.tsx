@@ -18,6 +18,10 @@ vi.mock('react-native-unistyles', async () => {
   return createUnistylesMock();
 });
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./Item');
+await import('@/components/ui/text/Text');
+
 afterEach(() => {
   standardCleanup();
   vi.resetModules();

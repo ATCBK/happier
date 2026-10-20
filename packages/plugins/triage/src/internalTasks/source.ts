@@ -34,7 +34,7 @@ export function internalTaskLocalRefV1(taskId: string): TriageSourceEntryLocalRe
   return { kindId: 'task', collisionScope: 'personal', entryId: taskId };
 }
 function taskRef(id: string): TriageEntryRefV1 { return { source: INTERNAL_TASK_SOURCE_V1, ...internalTaskLocalRefV1(id) }; }
-function admitsInstance(instance: TriageConfiguredSourceInstanceV1): boolean {
+export function isInternalTaskConfiguredInstanceV1(instance: TriageConfiguredSourceInstanceV1): boolean {
   return instance.instance.source.pluginId === INTERNAL_TASK_SOURCE_V1.pluginId && instance.instance.source.localId === INTERNAL_TASK_SOURCE_V1.localId
     && instance.binding.purpose === INTERNAL_TASK_DRAFT_V1.binding.purpose && 'source' in instance.binding && instance.binding.source === 'accountData'
     && instance.localInstanceKey === INTERNAL_TASK_DRAFT_V1.localInstanceKey && instance.configuration.token === INTERNAL_TASK_DRAFT_V1.configuration.token;
@@ -65,7 +65,7 @@ function observation(task: Task, list: TaskList): Extract<TriageGetResultV1, { k
 }
 
 export async function scanInternalTasks(input: TriageScanInputV1, context: PluginInvocationContext): Promise<TriageScanResultV1> {
-  if (!admitsInstance(input.instance)) return { kind: 'failed', failure: INVALID_ADDRESS };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance)) return { kind: 'failed', failure: INVALID_ADDRESS };
   const list = await readTasks(context);
   if (list === null) return { kind: 'failed', failure: UNAVAILABLE };
   let after: string | undefined;
@@ -92,11 +92,16 @@ export async function scanInternalTasks(input: TriageScanInputV1, context: Plugi
 }
 
 export async function getInternalTask(input: TriageGetInputV1, context: PluginInvocationContext): Promise<TriageGetResultV1> {
-  if (!admitsInstance(input.instance) || !admitsRef(input.localRef)) return { kind: 'unresolved', localRef: input.localRef, failure: INVALID_ADDRESS };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || !admitsRef(input.localRef)) return { kind: 'unresolved', localRef: input.localRef, failure: INVALID_ADDRESS };
   const list = await readTasks(context);
   if (list === null) return { kind: 'unresolved', localRef: input.localRef, failure: UNAVAILABLE };
   const task = list.todos.find(candidate => candidate.id === input.localRef.entryId);
-  return task ? observation(task, list) : { kind: 'absent', localRef: input.localRef };
+  if (!task) return { kind: 'absent', localRef: input.localRef };
+  return { ...observation(task, list), taskFields: {
+    title: task.title, body: task.notes ?? '', assigneeIds: task.owner === undefined ? [] : [task.owner],
+    labelIds: [...(task.labels ?? [])], dueDate: task.dueAt === undefined ? null : new Date(task.dueAt).toISOString(),
+    parent: task.parentId === undefined ? null : taskRef(task.parentId), blockedBy: (task.blockedBy ?? []).map(taskRef),
+  } };
 }
 
 function localRelation(ref: TriageEntryRefV1): boolean {
@@ -132,7 +137,7 @@ function writeResult(result: HostWriteResult | ActionApprovalRequestCreatedResul
 }
 
 export async function createInternalTask(input: TriageTaskCreateInputV1, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
-  if (!admitsInstance(input.instance) || input.kindId !== 'task') return { kind: 'refused', reason: 'unsupportedKind' };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || input.kindId !== 'task') return { kind: 'refused', reason: 'unsupportedKind' };
   const fields = fieldsFrom(input.fields);
   if (!fields) return { kind: 'refused', reason: 'unsupportedField' };
   const list = await readTasks(context);
@@ -146,7 +151,7 @@ export async function createInternalTask(input: TriageTaskCreateInputV1, context
 }
 
 export async function editInternalTask(input: TriageTaskEditInputV1, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
-  if (!admitsInstance(input.instance) || !admitsRef(input.localRef)) return { kind: 'refused', reason: 'unsupportedKind' };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || !admitsRef(input.localRef)) return { kind: 'refused', reason: 'unsupportedKind' };
   const fields = fieldsFrom(input.fields);
   if (!fields) return { kind: 'refused', reason: 'unsupportedField' };
   const list = await readTasks(context);
@@ -155,7 +160,7 @@ export async function editInternalTask(input: TriageTaskEditInputV1, context: Pl
 }
 
 export async function transitionInternalTask(input: TriageTaskTransitionInputV1, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
-  if (!admitsInstance(input.instance) || !admitsRef(input.localRef)) return { kind: 'refused', reason: 'unsupportedKind' };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || !admitsRef(input.localRef)) return { kind: 'refused', reason: 'unsupportedKind' };
   const state = INTERNAL_TASK_STATES_V1.find(candidate => candidate === input.transitionId);
   if (!state) return { kind: 'refused', reason: 'unsupportedTransition' };
   const list = await readTasks(context);
@@ -164,7 +169,7 @@ export async function transitionInternalTask(input: TriageTaskTransitionInputV1,
 }
 
 export async function linkInternalTaskSession(input: TriageSourceLinkSessionInputV1, context: PluginInvocationContext): Promise<TriageSourceLinkSessionResultV1> {
-  if (!admitsInstance(input.instance) || !admitsRef(input.localRef)) return { status: 'failed' };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || !admitsRef(input.localRef)) return { status: 'failed' };
   const list = await readTasks(context);
   if (!list) return { status: 'failed' };
   const result = await context.services.actions.execute('tasks.internal.session.link', { scope: list.scope, taskId: input.localRef.entryId,
@@ -173,7 +178,7 @@ export async function linkInternalTaskSession(input: TriageSourceLinkSessionInpu
 }
 
 export async function readInternalTaskSessionLinks(input: TriageSourceReadSessionLinksInputV1, context: PluginInvocationContext): Promise<TriageSourceReadSessionLinksResultV1> {
-  if (!admitsInstance(input.instance) || (input.localRef !== undefined && !admitsRef(input.localRef))) return { kind: 'failed', failure: INVALID_ADDRESS };
+  if (!isInternalTaskConfiguredInstanceV1(input.instance) || (input.localRef !== undefined && !admitsRef(input.localRef))) return { kind: 'failed', failure: INVALID_ADDRESS };
   const list = await readTasks(context);
   if (!list) return { kind: 'failed', failure: UNAVAILABLE };
   const links: Extract<TriageSourceReadSessionLinksResultV1, { kind: 'complete' }>['links'][number][] = [];

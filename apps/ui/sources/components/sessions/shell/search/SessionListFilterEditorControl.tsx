@@ -36,8 +36,9 @@ export type SessionListFilterEditorControlProps = Readonly<{
  */
 const MINIMUM_TRIGGER_TARGET_SIZE = resolveTouchTargetFloorPx() ?? SESSION_LIST_COLUMN_METRICS.titleRowHeightPx;
 /**
- * The scope popover's width: the approved panel (design lab C2) — two scope columns side by side in a
- * compact surface that never takes the sidebar's full width; longer tile labels wrap in their tiles.
+ * The scope popover's width: the approved panel (design lab C2), a compact surface that never takes the
+ * sidebar's full width. At this width the scope tiles stack in one column so every name stays whole
+ * (the panel's `SCOPE_TILE_MIN_WIDTH`); a wider host (a native dialog on a large screen) seats two side by side.
  */
 const SCOPE_POPOVER_WIDTH_PX = 312;
 /** Tall enough for every facet on a laptop screen; beyond it the panel scrolls inside. */

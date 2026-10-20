@@ -4,18 +4,22 @@ import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js
 import { instantiateWidgetLayoutFragmentGroupV1, type WidgetLayoutFragmentDraftV1, type WidgetLayoutFragmentGroupV1 } from './widgetLayoutFragmentV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 import type { WidgetAreaPresetV1 } from './widgetSurfaceArtifactV1.js';
-import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, UsageSourceInventoryScopeSchema, type UsageQuery } from '../inputs/usageQuery.js';
+import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import type { UsageAnalyticsBreakdownDimension } from '../usage/usageAnalyticsContracts.js';
 import type { WidgetSizeV1 } from './widgetPresentationV1.js';
 
 export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources'] as const;
 export type UsageWidgetPresetId = typeof USAGE_WIDGET_PRESET_IDS[number];
+const defaultNames: Readonly<Record<UsageWidgetPresetId, string>> = {
+    overview: 'Overview', costs: 'Costs', work: 'Work', usage: 'Usage', plans: 'Plans', coach: 'Coach',
+    'how-you-work': 'How you work', sources: 'Sources',
+};
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
-const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
+const scopeSchema = () => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(lazyZodSchema(() => z.pick(UsageQuerySchema, {
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
-}))), { target: 'draft-7' }));
+})), { target: 'draft-7' }));
 
 type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: 'tokens' | 'cost';
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;
@@ -23,11 +27,12 @@ type Arrangement = Readonly<{ width: 'half' | 'full'; widgets: readonly PresetWi
 const w = (id: string, size: WidgetSizeV1, extra?: Omit<PresetWidget, 'id' | 'size'>): PresetWidget => ({ id, size, ...extra });
 /**
  * Each host view is one Card · Lines group (lab `d2views`, `wgusage-CD`): declared sizes pack into the
- * group's two columns — Overview's tall daily bars on the left beside the period and capacity — and a
- * phone stacks the same children in reading order.
+ * group's two columns — Overview's period figures lead as one band, then the tall daily bars beside
+ * capacity (lab d2views-OV) — and a phone stacks the same children in reading order.
  */
 const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>> = {
-    overview: [{ width: 'full', widgets: [w('usage_daily', 'tall'), w('usage_period_summary', 'medium'), w('usage_capacity', 'medium'),
+    // Daily shares its band with Capacity alone: beside a two-widget column its cell stood open under the legend.
+    overview: [{ width: 'full', widgets: [w('usage_period_summary', 'full'), w('usage_daily', 'tall'), w('usage_capacity', 'medium'),
         // Efficiency's four figures are the compact one: the group's column packing stacks it over Rhythm
         // beside the Projections list, so neither column ends in a half-empty cell (lab wgusage-CD).
         w('usage_coach', 'full'), w('usage_projections', 'medium'), w('usage_efficiency', 'small'),
@@ -50,7 +55,7 @@ const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>
     coach: [{ width: 'full', widgets: [w('usage_coach', 'large')] }],
     'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full'), w('usage_parallel', 'full'), w('usage_human_loop', 'medium'),
         w('usage_night_shift', 'medium'), w('usage_recap', 'large')] }],
-    sources: [{ width: 'full', widgets: [w('usage_sources', 'large')] }],
+    sources: [{ width: 'full', widgets: [w('usage_sources', 'large'), w('usage_source_coverage', 'medium'), w('usage_unpriced', 'medium')] }],
 };
 
 /** Portable fragments have no placement identities; the platform allocates each host occurrence. */
@@ -73,13 +78,13 @@ export function createUsageWidgetPresetFragments(names: Readonly<Record<UsageWid
                 } } })),
         };
         const applicableScopes = scopes.filter(field => group.children.some(child => Object.hasOwn(child.instance.bindings, field.path)));
-        return { name: names[id], inputs: { fields: applicableScopes.map(field => ({ ...field, required: true })) }, inputSchema: scopeSchema(id === 'sources'), group };
+        return { name: names[id], inputs: { fields: applicableScopes.map(field => ({ ...field, required: true })) }, inputSchema: scopeSchema(), group };
     });
     return fragments as Record<UsageWidgetPresetId, readonly WidgetLayoutFragmentDraftV1[]>;
 }
 
 /** Host metadata is localized by the mounted page, never read from a caller's layout input. */
-export function createUsageWidgetPresets(names: Readonly<Record<UsageWidgetPresetId, string>>, options?: Readonly<{ initialMetric?: UsageQuery['metric'] }>): readonly WidgetAreaPresetV1[] {
+export function createUsageWidgetPresets(names: Readonly<Record<UsageWidgetPresetId, string>> = defaultNames, options?: Readonly<{ initialMetric?: UsageQuery['metric'] }>): readonly WidgetAreaPresetV1[] {
     const fragments = createUsageWidgetPresetFragments(names, options);
     return USAGE_WIDGET_PRESET_IDS.map(id => ({ id, name: names[id], items: fragments[id].map((fragment, index) =>
         instantiateWidgetLayoutFragmentGroupV1(fragment.group, { groupId: `${id}:group:${index}`,

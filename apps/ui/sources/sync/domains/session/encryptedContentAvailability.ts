@@ -80,6 +80,11 @@ export function readSessionContentAvailability(
         ?? (subject.encryptionMode === 'plain' ? 'ready' : null);
 }
 
+/** An encrypted Session no decryption owner has decided for this viewer yet: neither readable nor blocked. */
+export function isSessionContentUnsettled(subject: SessionContentAvailabilitySubject): boolean {
+    return subject.encryptionMode !== 'plain' && readSessionContentAvailability(subject) === null;
+}
+
 /**
  * Every derived value is settled by construction: hydration has finished deciding and retrying
  * cannot change the answer, so a present availability means route and list surfaces stop showing

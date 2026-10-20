@@ -54,7 +54,11 @@ describe('workflow_run_update notification interaction', () => {
             kind: 'openWorkflowRun',
             serverId: 'server-1',
             serverUrl: 'https://api.example.test',
+            route: '/workflows/runs/run-42?serverId=server-1',
         });
+        expect(parseActivityInteraction({ actionIdentifier: DEFAULT_ACTION, defaultActionIdentifier: DEFAULT_ACTION,
+            data: { topic: 'workflow_run_update', runId: 'run-42', updateKind: 'completed', serverId: 'server-1' } })?.route)
+            .toBe('/workflows/runs/run-42?serverId=server-1');
     });
 
     it('never routes to a caller-supplied url for a workflow update', () => {

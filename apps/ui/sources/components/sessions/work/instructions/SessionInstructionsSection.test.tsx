@@ -279,37 +279,37 @@ describe('Work › Instructions', () => {
     expect(shared.findByTestId('session-work-instructions.edit')).toBeNull();
   });
 
-  it('says a stale-basis Detach was overtaken, not refused, and keeps the document', async () => {
-    const account = await createVoiceSettingsAccountTestHarness(settingsParse({ actionsSettingsV1: { v: 1, actions: {} } }));
+  it('releases a failed Detach and keeps the canonical attachment and document', async () => {
+    const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const fixture = await createPlainArtifactHomeFixture('https://work-instructions-detach.test', {
+      handleRequest: async (path, init) => sessionHttp.handle(`https://work-instructions-detach.test${path}`, init),
+    });
     try {
-      const serverId = account.scope.serverId;
-      // The Home already holds a newer revision of this Session than the one this section reviewed.
-      const current = createSessionFixture({ id: 'bot', serverId, metadataVersion: 2 });
+      await loadSyncSingletonForTests();
+      const serverId = fixture.home.id;
+      const attachedRef = { ...ref, serverId };
+      const stack = [{ id: 'session.instructions', ref: attachedRef, enabled: true, placement: 'system_append' as const }];
+      const current = createSessionFixture({ id: 'bot', serverId, metadataVersion: 2,
+        metadata: { path: '/worktree', host: 'localhost', work: { promptStack: stack } } });
       storage.setState({ sessions: { ...storage.getState().sessions, bot: current } });
-      const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
-      const homeRequest = account.request.getMockImplementation();
-      if (!homeRequest) throw new Error('Expected the Home HTTP boundary');
-      account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? homeRequest(input, init));
-      vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+      sessionHttp.rejectNextPatch('bot');
       const screen = await renderScreen(
         <SessionInstructionsBody
-          session={{ ...current, metadataVersion: 1 }}
+          session={current}
           serverId={serverId}
-          source={source({ status: 'ready', ref, document: documentOf('Current instructions') })}
+          source={source({ status: 'ready', ref: attachedRef, document: documentOf('Current instructions') })}
         />,
       );
       await screen.pressByTestIdAsync('session-work-instructions.detach');
-      // Only the metadata CAS's `conflict` outcome reaches this line; a refusal would say the user can't.
-      await act(async () => {
-        await vi.waitFor(() => expect(['conflict', 'refused', 'failed']
-          .filter((reason) => screen.findByTestId(`session-work-instructions.${reason}`))).not.toEqual([]));
-      });
+      await vi.waitFor(() => expect(screen.findByTestId('session-work-instructions.failed')).toBeTruthy());
+      expect(screen.findByTestId('session-work-instructions.detach')?.props.disabled).not.toBe(true);
       expect(screen.findByTestId('session-work-instructions.refused')).toBeNull();
-      expect(screen.findByTestId('session-work-instructions.conflict')).toBeTruthy();
       expect(screen.findByTestId('session-work-instructions.body')).toBeTruthy();
-      expect(sessionHttp.writes).toEqual([]);
+      const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
+      expect(readSessionOwnerMetadataView(storage.getState().sessions.bot!)?.work).toMatchObject({ promptStack: stack });
+      expect(sessionHttp.writes).toEqual(['bot']);
       expect(Modal.confirm).not.toHaveBeenCalled();
-    } finally { standardCleanup(); await account.dispose(); }
+    } finally { standardCleanup(); await fixture.dispose(); }
   });
 
   it('withholds instructions from a shared viewer before any read', () => {

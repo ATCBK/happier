@@ -1,7 +1,15 @@
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 
 export type SessionAccountChangeCursor = { accountId: string; cursor: number };
+export type SessionAccountChangePublication = AccountChangePublication;
+
+/** Resolve only from a transaction's explicit final projection or after commit. */
+export function resolveSessionAccountChangePublications(
+    publications: readonly SessionAccountChangePublication[],
+): SessionAccountChangeCursor[] {
+    return publications.map(publication => ({ accountId: publication.accountId, cursor: publication.resolveCursor() }));
+}
 
 /**
  * The generic Session AccountChange fanout.
@@ -17,7 +25,7 @@ export async function markAccountChangesForSessionAccounts(params: {
     accountIds: readonly string[];
     hint?: unknown;
     hintForAccount?: (accountId: string) => { kind: "suppress" } | { kind: "publish"; value: unknown };
-}): Promise<SessionAccountChangeCursor[]> {
+}): Promise<SessionAccountChangePublication[]> {
     const hints = new Map<string, unknown>();
     for (const accountId of params.accountIds) {
         const projected = params.hintForAccount

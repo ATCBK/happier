@@ -70,8 +70,8 @@ export function SessionListSessionItem(props: SessionListSessionItemProps) {
     const session = rowSession;
 
     const sessionKey = rowViewModel.sessionKey;
-    const isIos = Platform.OS === 'ios';
-    const nativeContextMenuOpen = isIos && sessionKey != null && props.nativeContextMenuSessionKey === sessionKey;
+    const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
+    const nativeContextMenuOpen = isNativeMobile && sessionKey != null && props.nativeContextMenuSessionKey === sessionKey;
 
     return (
         <SessionListRow
@@ -87,7 +87,7 @@ export function SessionListSessionItem(props: SessionListSessionItemProps) {
             onDragCancel={props.onDragCancel}
             onTogglePinnedSessionKey={sessionKey ? props.onTogglePinnedSessionKey : null}
             onSetTagsSessionKey={sessionKey ? props.onSetTagsSessionKey : null}
-            onNativeContextMenuOpenChangeSessionKey={isIos && sessionKey ? props.onNativeContextMenuOpenChangeSessionKey : null}
+            onNativeContextMenuOpenChangeSessionKey={isNativeMobile && sessionKey ? props.onNativeContextMenuOpenChangeSessionKey : null}
             isDragActive={props.draggingSessionKey != null}
             isBeingDragged={sessionKey != null && sessionKey === props.draggingSessionKey}
             dataIndex={props.dataIndex}
@@ -128,7 +128,7 @@ export function SessionListSessionItem(props: SessionListSessionItemProps) {
             onMoveUp={props.onMoveUp}
             onMoveDown={props.onMoveDown}
             onDeleteDraft={props.onDeleteDraft}
-            {...(isIos && sessionKey != null ? { nativeContextMenuOpen } : null)}
+            {...(isNativeMobile && sessionKey != null ? { nativeContextMenuOpen } : null)}
         />
     );
 }

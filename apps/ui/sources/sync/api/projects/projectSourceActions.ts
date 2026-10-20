@@ -4,6 +4,7 @@ import {
     ProjectSourcesCreateInputV1Schema, ProjectSourcesCreateOutputV1Schema,
     ProjectSourcesUpdateInputV1Schema, ProjectSourcesUpdateOutputV1Schema,
     ProjectSourcesDeleteInputV1Schema, ProjectSourcesDeleteOutputV1Schema,
+    type ProjectSourcesFailureV1,
 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -34,7 +35,7 @@ export function createProjectSourceActionDeps(account: SourceAccountPort) {
             throw error;
         }
     }
-    async function request<T>(path: string, method: string, input: unknown, schema: Schema<T>, context?: ActionExecutorContext): Promise<T | ActionExecuteFailure> {
+    async function request<T>(path: string, method: string, input: unknown, schema: Schema<T>, context?: ActionExecutorContext): Promise<T | ActionExecuteFailure | ProjectSourcesFailureV1> {
         let issued = false;
         try {
             account.assertCurrent();
@@ -46,8 +47,13 @@ export function createProjectSourceActionDeps(account: SourceAccountPort) {
             // A Source refusal is a domain result, including its current conflict row.
             // Parsing it at every status preserves that result instead of collapsing it to HTTP prose.
             let output: T;
-            try { output = schema.parse(await response.json()); }
+            let payload: unknown;
+            try { payload = await response.json(); output = schema.parse(payload); }
             catch (error) {
+                // The Home explicitly refused the exhausted transaction. An arbitrary
+                // failed mutation response still follows the outcome-unknown path below.
+                if (response.status === 503 && payload && typeof payload === 'object' && 'error' in payload
+                    && payload.error === 'database_transaction_conflict_exhausted') return { ok: false, error: 'source_backend_unavailable' };
                 const code = response.status === 404 || response.status === 405 ? 'unsupported_action'
                     : response.status === 401 ? 'action_home_signed_out' : response.status === 403 ? 'action_forbidden' : null;
                 if (code) return { ok: false, errorCode: code, error: code };

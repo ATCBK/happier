@@ -51,7 +51,7 @@ describe('resolveSessionRunnerRuntimeState', () => {
           expectedRunnerPid: input.tracked.pid, expectedProcessCommandHash: input.tracked.processCommandHash } })).resolves.toMatchObject({ ok: true, status: 'restarted' });
       expect(kill).toHaveBeenCalledWith(input.tracked.pid, 'SIGTERM');
       await expect(restartSessionRunnerOnCurrentRuntime({ ...input, requestRestart,
-        request: { sessionId: input.sessionId, mode: 'if_stale', reason: 'ui_stale_runner_banner' } })).resolves.toMatchObject({ ok: false, status: 'version_unknown' });
+        request: { sessionId: input.sessionId, mode: 'if_stale', reason: 'ui_stale_runner_banner' } })).resolves.toMatchObject({ ok: false, status: 'version_unknown', reasonCode: 'runner_generation_unattested' });
     } finally { kill.mockRestore(); }
   });
 });

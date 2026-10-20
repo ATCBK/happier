@@ -14,6 +14,7 @@ import { t } from '@/text';
 import { resolveSessionSubagentKindLabelKey } from './resolveSessionSubagentKindLabelKey';
 import { resolveSessionSubagentPrimaryTitle } from './resolveSessionSubagentPrimaryTitle';
 import { WORKER_KIND_GLYPHS } from '@/components/sessions/work/workerKindGlyphs';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
 
 /**
  * Everything a surface needs to draw one unit of Session agent work — resolved once, for everyone.
@@ -205,11 +206,12 @@ function resolveFacts(
     const subtitle = subagent?.display.subtitle?.trim() ?? entry.metaDetail?.trim() ?? null;
     const title = resolveTitle(entry, subagent);
     const runId = entry.runId?.trim() ?? null;
+    const agentLabel = subagent?.display.providerLabel?.trim() || subagent?.runRef?.backendId?.trim() || null;
 
     const candidates = [
         subagent ? resolveRunKindLabel(subagent) ?? t(resolveSessionSubagentKindLabelKey(subagent.kind)) : null,
         originLabel?.trim() || null,
-        subagent?.display.providerLabel?.trim() || subagent?.runRef?.backendId?.trim() || null,
+        agentLabel ? resolveAgentCatalogTitle(agentLabel) : null,
         teamLabel,
         // A Run's subtitle is its raw intent token (`delegate`); the kind above already says it in words.
         subtitle && subtitle !== intent ? subtitle : null,

@@ -675,16 +675,17 @@ describe('ServiceRowView', () => {
         return buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' })[0]!;
     }
 
-    it('reads a never-started declaration as Ready to start: its command, its file and no status word', async () => {
+    it('reads a never-started declaration as Ready to start: its command, its file chip and no status word', async () => {
         const row = projectRow(projectTarget({ commandPreview: 'yarn storybook', declaration: { workspaceRefId: 'accepted',
             selection: { kind: 'native', source: { kind: 'native', tool: 'package_script', file: 'apps/ui/package.json', target: 'storybook' } } } }));
         const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={vi.fn()} machineName="devbox" testID="row" />);
         const text = screen.getTextContent();
         expect(text).toContain('yarn storybook');
-        // One quiet line: the declaring file is plain text beside the command, no chip, and
-        // "Ready to start" (the section) is what says it has not started.
-        expect(screen.findAllByTestId('row-source')).toHaveLength(0);
-        expect(text).toContain('yarn storybook · package.json');
+        // One quiet line: the command, then the declaring file as the same source chip a running row
+        // draws (lab s-services), and "Ready to start" (the section) says it has not started.
+        expect(screen.findAllByTestId('row-source')).toHaveLength(1);
+        expect(text).toContain('yarn storybook ·');
+        expect(text).toContain('package.json');
         expect(text).not.toContain('not started');
         expect(text).not.toContain('Unavailable');
         expect(text).not.toContain("can't be started");

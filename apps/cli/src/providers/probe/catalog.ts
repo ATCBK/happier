@@ -495,7 +495,9 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             if (error.reason === 'cancelled') throw new ProviderProbeCancelledError();
             return {
               status: 'error',
-              error: createProviderErrorV1('provider_endpoint_unavailable', {
+              // Establishment exhausted the containing catalog budget before
+              // any endpoint request. There is no endpoint outage evidence.
+              error: createProviderErrorV1('provider_catalog_unavailable', {
                 connectionId,
                 machineId,
               }),

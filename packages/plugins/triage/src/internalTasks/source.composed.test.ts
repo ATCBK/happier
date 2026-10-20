@@ -35,6 +35,19 @@ async function withSource(run: (kit: Awaited<ReturnType<typeof createPluginTestk
 }
 
 describe('registered internal Happier task source', () => {
+  it('returns complete editable values only on an exact read of the existing task', async () => {
+    const title = '界'.repeat(1000);
+    const notes = 'Task notes\n\nPreserve whitespace.  \n';
+    await withSource(async kit => {
+      const exact = await kit.invokeAction('internal/tasks/get-v1', { v: 1, instance, localRef });
+      expect(exact).toMatchObject({ kind: 'present', snapshot: { projectionTruncated: true },
+        taskFields: { title, body: notes, assigneeIds: [], labelIds: [], dueDate: null, parent: null, blockedBy: [] } });
+      expect(TriageGetResultV1Schema.safeParse(exact).success).toBe(true);
+      const scan = await kit.invokeAction('internal/tasks/scan-v1', { v: 1, instance, page: { kind: 'initial', limit: 20 } });
+      expect(JSON.stringify(scan)).not.toContain(notes);
+      expect(TriageScanResultV1Schema.safeParse(scan).success).toBe(true);
+    }, { status: 'ok', scope, todos: [{ ...predecessor, title, notes, state: 'unstarted' }], undoneOrder: [predecessor.id], completedOrder: [] });
+  });
   it('creates, edits, transitions and reopens the same raw Account record with one link writer', async () => {
     const rows = new Map<string, { value: unknown; version: number }>([
       ['todo.old-task', { value: predecessor, version: 1 }],

@@ -63,7 +63,8 @@ describe('Session reply publication through the real Action and publisher', () =
     clients.add(client);
     client.observeHostTurnFacts({ turnId: 'discussion-turn', facts: { initiator: 'user', workDepth: 0 } });
     const executor = createActionExecutor(createCliActionDeps({ credentials, token: credentials.token, sessionId,
-      serverId: 'discussion-home', mode: 'plain', ctx: null, sessionMessageReplyPublisher: client }));
+      serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test',
+      mode: 'plain', ctx: null, sessionMessageReplyPublisher: client }));
     const source = { sourceSessionId: sessionId, sourceTurnId: 'discussion-turn', sourceInputId: 'discussion-input',
       via: 'action', discussionAddressing } as const;
     const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId,
@@ -98,9 +99,10 @@ describe('Session reply publication through the real Action and publisher', () =
 
   it('allows an authenticated shared editor publisher to pass without Account owner material', async () => {
     const progress = { v: 1, mode: 'wait', acceptedTurnId: 'editor-turn', disposition: 'observing' } as const;
+    let originalAvailable = true;
     http.get.mockImplementation(async (url: string) => url.endsWith('/v1/auth/ping') ? { status: 200, data: {} }
       : url.endsWith('/messages/by-local-id/editor-original/reply')
-      ? { status: 200, data: { v: 1, status: 'available', progress } }
+      ? { status: 200, data: originalAvailable ? { v: 1, status: 'available', progress } : { v: 1, status: 'none' } }
       : url.endsWith('/messages/reply-capability') ? { status: 200, data: { v: 1, protocolVersions: [1] } }
       : { status: 404, data: {} });
     const fallback = createApiSessionSocketStub();
@@ -119,9 +121,24 @@ describe('Session reply publication through the real Action and publisher', () =
         createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
     });
     clients.add(client);
+    const input = { sessionId: client.sessionId, requestLocalId: 'editor-original', reply: { kind: 'pass' } };
+    const invoke = () => client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
+      rpcContext: { callerAuthority: 'present_user' },
+    });
+    expect(await invoke()).toMatchObject({ v: 1, ok: false, error: 'conflict' });
     client.observeHostTurnFacts({ turnId: 'editor-turn', facts: { initiator: 'user', workDepth: 0 } });
-    expect(await client.publishSessionMessageReply({ requestLocalId: 'editor-original', reply: { kind: 'pass' } }))
+    expect(await invoke())
       .toMatchObject({ v: 1, ok: true, progress: { outcome: { kind: 'pass' } } });
+    const origin = { v: 1, caller: { kind: 'session', sessionId: client.sessionId, starterDepth: 0, turnDepth: 0 },
+      sourceTurnId: 'unrelated-turn', sourceInputId: input.requestLocalId, callerPermissionMode: null, requestId: 'reply-action' } as const;
+    expect(await client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
+      rpcContext: { callerAuthority: 'account_automation', sessionActionOrigin: origin },
+    })).toMatchObject({ v: 1, ok: false, error: 'conflict' });
+    expect(await client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
+      rpcContext: { callerAuthority: 'account_automation' },
+    })).toMatchObject({ ok: false, errorCode: 'role_rpc_origin_unavailable' });
+    originalAvailable = false;
+    expect(await invoke()).toMatchObject({ v: 1, ok: false, error: 'unavailable' });
   });
 
   it('releases only an actual source input and turn through its authenticated Session socket', async () => {
@@ -294,16 +311,17 @@ describe('Session reply publication through the real Action and publisher', () =
     client.observeHostTurnFacts({ turnId: 'accepted-turn', facts: { initiator: 'user', workDepth: 0 } });
     const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId,
       mode: 'plain', ctx: null, sessionMessageReplyPublisher: client });
-    const executor = createActionExecutor(deps);
-    const input = { sessionId, requestLocalId: 'original-input', reply: { kind: 'answer', message: '  Revision 42 is checked.\n' } };
-    const publication = client.publishSessionMessageReply({ requestLocalId: input.requestLocalId,
-      reply: { kind: 'answer', message: input.reply.message } });
+    const input = { sessionId, requestLocalId: 'original-input', reply: { kind: 'answer' as const, message: '  Revision 42 is checked.\n' } };
+    const publication = client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
+      rpcContext: { callerAuthority: 'present_user' },
+    });
     await vi.waitFor(() => expect(socket.emitWithAck.mock.calls.map(([event]) => event))
       .toContain(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1), { timeout: 5000 });
     expect(await publication).toMatchObject({ v: 1, ok: true });
-    expect(await executor.execute('session.message.reply', input, { surface: 'cli', authority: 'present_user' }))
-      .toMatchObject({ ok: true, result: { v: 1, ok: true, progress: { outcome: {
-        kind: 'answer', result: { sessionId, messageId: 'committed-answer' } } } } });
+    expect(await client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
+      rpcContext: { callerAuthority: 'present_user' },
+    })).toMatchObject({ v: 1, ok: true, progress: { outcome: {
+      kind: 'answer', result: { sessionId, messageId: 'committed-answer' } } } });
     expect(mutations).toEqual([expect.objectContaining({ sessionId, requestSessionId: sessionId,
       requestLocalId: 'original-input', operation: { kind: 'fulfill', turnId: 'accepted-turn',
         outcome: { kind: 'answer', result: { sessionId, messageId: 'committed-answer' } } } }),

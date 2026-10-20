@@ -1066,6 +1066,7 @@ describe('buildCommandPaletteCommands', () => {
 
   it('registers pet commands when the companion feature is enabled', async () => {
     const pushes: string[] = [];
+    const execute = vi.fn(async () => ({ ok: true, result: {} }));
     const wake = vi.fn();
     const tuck = vi.fn();
     const resetPosition = vi.fn();
@@ -1093,7 +1094,7 @@ describe('buildCommandPaletteCommands', () => {
         openNewSession: () => {},
         navigateToSession: () => {},
       },
-      actions: { execute: async () => ({ ok: true, result: {} }) },
+      actions: { execute },
       alert: async () => {},
     });
 
@@ -1115,7 +1116,8 @@ describe('buildCommandPaletteCommands', () => {
     expect(tuck).toHaveBeenCalledTimes(1);
     expect(resetPosition).toHaveBeenCalledTimes(1);
     expect(refreshCodexPets).toHaveBeenCalledTimes(1);
-    expect(pushes).toEqual(['/settings/pets']);
+    expect(pushes).toEqual([]);
+    expect(execute).toHaveBeenCalledWith('ui.pet.choose', {}, { surface: 'ui' });
   });
 
   it('omits surface pet controls when only the settings chooser is available', async () => {

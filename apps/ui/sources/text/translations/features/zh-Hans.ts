@@ -1,5 +1,6 @@
 // Locale-owned feature copy; each domain retains its own initialization scope.
 import { discussionQuoteCopy } from '../discussionQuoteTranslations.shared';
+import { discussionAttributionCopy, sessionReadinessCopy } from '../sessionReadinessTranslations.shared';
 import * as EnglishFeatures from './en';
 import * as Shared_accountDisplayTranslations from '../accountDisplayTranslations.shared';
 import * as Shared_accountEncryptionRecoveryTranslations from '../accountEncryptionRecoveryTranslations.shared';
@@ -1008,6 +1009,10 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
         },
         facts: {
             edited: ({ age }) => `${age}编辑`,
+            version: ({ n }) => `版本 ${n}`,
+            sharedWithTeam: ({ team }) => `已与 ${team} 共享`,
+            shared: '已共享',
+            onlyYou: '仅你自己',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1025,11 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
             openRevision: ({ n }) => `打开版本 ${n}`,
             count: ({ count }) => `${count}个对话`,
             countUnavailable: '无法获取评论数',
+            refineHint: '选择要评论的文字',
+            threadsTitle: '对话',
+            refineFailed: '无法定位所选内容。请重新选择文字。',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} 条回复`,
+            acceptedToast: ({ n }) => `已接受 · 版本 ${n}`,
             youAccepted: ({ name }) => `你接受了 ${name} 的修改`,
             accepted: ({ name }) => `${name} 的修改已被接受`,
         },
@@ -1046,6 +1056,8 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
             undoConflict: '此修改之后文档已变更，无法撤销。打开历史记录选择一个版本。',
             openDocument: '打开文档',
             someone: '某人',
+            askRedo: '请求重做',
+            redoRequest: '在你提出建议后文档已更改。能否基于当前版本重新提出建议？',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "zh-Hans">;
 
@@ -2185,6 +2197,7 @@ const detailPageTranslations = { 'zh-Hans': {
             contextDescription: '发起此请求的会话和代理。',
             sessionOnHome: ({ home }) => `${home} 上的会话`,
             sessionElsewhere: '不在此设备上的会话',
+            requesterYou: '你',
             origin: {
                 voice: '通过语音请求',
                 agent: '由代理请求',
@@ -2193,9 +2206,39 @@ const detailPageTranslations = { 'zh-Hans': {
                 ui: '在应用中请求',
                 api: '通过 API 请求',
                 plugin: '由插件请求',
+                workflowRun: '由工作流运行请求',
                 system: '由 Happier 请求',
             },
             proposalsDescription: '批准后将发布到评审中。',
+            requester: {
+                title: '由谁确认',
+                descriptionYou: '这是你请求的，所以由你确认。',
+                descriptionOther: ({ name }) => `这是 ${name} 请求的，所以只有对方可以确认。`,
+                askedBy: '请求者',
+                anotherPerson: '其他人',
+                waitingFor: ({ name }) => `等待 ${name} 确认`,
+                confirmedBy: '确认人',
+                declinedBy: '拒绝人',
+                thread: {
+                    youConfirm: '是你提出的，所以由你确认',
+                    review: '查看并确认…',
+                    decline: '拒绝',
+                    waiting: ({ name }) => `等待 ${name} 确认。只有提出请求的人可以确认。`,
+                    using: ({ label }) => `使用 ${label}`,
+                    usingAccount: '使用已连接的账号',
+                    usingTeam: '使用团队设置',
+                    ownerAccount: ({ name }) => `所有者：${name}`,
+                    ownerTeam: ({ name }) => `所有者：团队 ${name}`,
+                    ownerTeamUnnamed: '所有者：某个团队',
+                    why: '已为此类写入设置',
+                    confirmedPending: ({ name }) => `${name} 已确认 · 等待结果`,
+                    done: ({ name }) => `已完成 · 由 ${name} 确认`,
+                    declined: ({ name }) => `${name} 已拒绝 · 未写入任何内容`,
+                    canceled: '已取消 · 未写入任何内容',
+                    uncertain: '尚不确定是否已完成。请勿再次确认。',
+                    failed: '未能完成',
+                },
+            },
         },
         runs: {
             description: '你的机器上的后台运行。',
@@ -2536,6 +2579,7 @@ const zhHans: EntityDragDropTranslations = {
     surface: {
         scopeMismatch: '它在另一个 Home 或账户中',
         widgetMoveUnavailable: '此组件无法移到这个界面区域',
+        widgetChecking: '仍在确认可以移到哪里',
         widgetReadOnly: '你可以查看此布局，但不能更改。请向所有者申请编辑权限',
         widgetAlreadyHere: '它已在这个界面区域。请在那里重新排序',
         widgetCantLiveHere: '此组件无法放在这个界面区域。请从“添加组件”在这里添加',
@@ -5424,6 +5468,7 @@ const zhHans: MachineAgentsTranslation = {
     installYourself: '需自行安装',
     unsupportedOs: '无法在此系统上运行',
     unsupportedArch: '没有适用于此处理器的版本',
+    unsupported: '无法在此运行',
     installing: '正在安装…',
     progress: ({ done, total }) => `${done} / ${total}`,
     checking: '正在检查…',
@@ -8005,7 +8050,7 @@ const localizedReviewVocabulary = { 'zh-Hans': {
         installReviewSections: {
             ...localizedTechnicalReviewVocabulary['zh-Hans'],
             archiveUrlRetention: 'Happier 会将完整的归档 URL（包括其中的凭据）保存在所选机器上，用于今后的更新。URL 过期或被撤销可能导致更新失败。',
-            trustedCodeTitle: '受信任的代码', trustedCodeDisclosure: '插件以受信任代码的形式在 Happier 内运行，并不在沙箱中。除了下方列出的由 Happier 中转的服务外，插件还可以直接使用本应用自身的权限——文件、网络、环境和进程。下方的列表是插件声明的内容，也是你之后可以关闭的内容，而不是限制其代码可触及范围的边界。', identity: '身份与软件包', evidence: '技术证据', executableCode: '可执行代码与扩展项', requiredAccess: '必需的主机访问权限', optionalAccess: '可选的主机访问权限', requestInterceptors: '请求拦截器', rawCredentials: '原始凭据访问声明', compatibility: '兼容性与更新', none: '未声明任何内容', scope: ({ scope }: { scope: string }) => `范围：${scope}`, developmentPath: ({ locator }: { locator: string }) => `${locator} · 开发版本`, publisherUnverified: ({ displayName, id }: { displayName: string; id: string }) => `${displayName} · ${id} · 未验证`, integrityBasis: { expected: ({ integrity }: { integrity: string }) => `${integrity}（预期值）`, observed: ({ integrity }: { integrity: string }) => `${integrity}（观测值）` }, signatureStatus: { verified: ({ keyId }: { keyId: string }) => `已验证注册表签名：${keyId}`, unsupported: ({ keyId }: { keyId: string }) => `不支持的注册表签名：${keyId}` }, provenanceDeclaredUnverified: ({ predicateType }: { predicateType: string }) => `已声明但未验证：${predicateType}`, provenanceRetrievedUnverified: ({ predicateTypes }: { predicateTypes: string }) => `已获取但未验证：${predicateTypes}`, provenanceUnavailable: ({ code }: { code: string }) => `来源证明不可用：${code}`, curationUnreviewed: ({ sourceId }: { sourceId: string }) => `未经审阅的目录来源：${sourceId}`, curationApproved: ({ sourceId, reviewedAt, reason }: { sourceId: string; reviewedAt: string; reason: string }) => `由 ${sourceId} 于 ${reviewedAt} 审阅${reason}`, savedSecret: '已保存的密钥', connectedAccount: '已连接的账户', secretKinds: ({ kinds }: { kinds: string }) => `密钥类型：${kinds}`, connectedAccountService: ({ service }: { service: string }) => `服务：${service}`, credentialPurpose: ({ purpose }: { purpose: string }) => `用途：${purpose}`, credentialUse: ({ realm, phase }: { realm: string; phase: string }) => `在${realm}的${phase}阶段使用`, credentialAccess: ({ access }: { access: string }) => `访问内容：${access}`, credentialRequestHeaders: ({ origin, headers }: { origin: string; headers: string }) => `发送到 ${origin} 的请求头：${headers}`, credentialRequestEnvironment: ({ keys }: { keys: string }) => `环境变量：${keys}`, credentialRequestFiles: ({ files }: { files: string }) => `文件：${files}`, realm: { web: '网页端', ios: 'iOS 客户端', android: 'Android 客户端', daemon: '后台服务' }, phase: { settings: '设置', prepare: '准备', connection: '连接', speech: '语音' }, runtimeApi: ({ version }: { version: number }) => `运行时接口 ${version}`,
+            trustedCodeTitle: '受信任的代码', trustedCodeDisclosure: '插件以受信任代码的形式在 Happier 内运行，并不在沙箱中。除了下方列出的由 Happier 中转的服务外，插件还可以直接使用本应用自身的权限——文件、网络、环境和进程。下方的列表是插件声明的内容，也是你之后可以关闭的内容，而不是限制其代码可触及范围的边界。', identity: '身份与软件包', evidence: '技术证据', executableCode: '可执行代码与扩展项', requiredAccess: '必需的主机访问权限', optionalAccess: '可选的主机访问权限', requestInterceptors: '请求拦截器', rawCredentials: '原始凭据访问声明', compatibility: '兼容性与更新', none: '未声明任何内容', scope: ({ scope }: { scope: string }) => `范围：${scope}`, networkAccess: ({ methods, targets }: { methods: string; targets: string }) => `可向 ${targets} 发送 ${methods} 请求`, networkAccessAnyMethod: ({ targets }: { targets: string }) => `可向 ${targets} 发送请求`, networkTargetHostSuffix: ({ suffix }: { suffix: string }) => `${suffix} 下的任意主机`, networkPrivate: ({ line }: { line: string }) => `${line}（包括专用网络）`, developmentPath: ({ locator }: { locator: string }) => `${locator} · 开发版本`, publisherUnverified: ({ displayName, id }: { displayName: string; id: string }) => `${displayName} · ${id} · 未验证`, integrityBasis: { expected: ({ integrity }: { integrity: string }) => `${integrity}（预期值）`, observed: ({ integrity }: { integrity: string }) => `${integrity}（观测值）` }, signatureStatus: { verified: ({ keyId }: { keyId: string }) => `已验证注册表签名：${keyId}`, unsupported: ({ keyId }: { keyId: string }) => `不支持的注册表签名：${keyId}` }, provenanceDeclaredUnverified: ({ predicateType }: { predicateType: string }) => `已声明但未验证：${predicateType}`, provenanceRetrievedUnverified: ({ predicateTypes }: { predicateTypes: string }) => `已获取但未验证：${predicateTypes}`, provenanceUnavailable: ({ code }: { code: string }) => `来源证明不可用：${code}`, curationUnreviewed: ({ sourceId }: { sourceId: string }) => `未经审阅的目录来源：${sourceId}`, curationApproved: ({ sourceId, reviewedAt, reason }: { sourceId: string; reviewedAt: string; reason: string }) => `由 ${sourceId} 于 ${reviewedAt} 审阅${reason}`, savedSecret: '已保存的密钥', connectedAccount: '已连接的账户', secretKinds: ({ kinds }: { kinds: string }) => `密钥类型：${kinds}`, connectedAccountService: ({ service }: { service: string }) => `服务：${service}`, credentialPurpose: ({ purpose }: { purpose: string }) => `用途：${purpose}`, credentialUse: ({ realm, phase }: { realm: string; phase: string }) => `在${realm}的${phase}阶段使用`, credentialAccess: ({ access }: { access: string }) => `访问内容：${access}`, credentialRequestHeaders: ({ origin, headers }: { origin: string; headers: string }) => `发送到 ${origin} 的请求头：${headers}`, credentialRequestEnvironment: ({ keys }: { keys: string }) => `环境变量：${keys}`, credentialRequestFiles: ({ files }: { files: string }) => `文件：${files}`, realm: { web: '网页端', ios: 'iOS 客户端', android: 'Android 客户端', daemon: '后台服务' }, phase: { settings: '设置', prepare: '准备', connection: '连接', speech: '语音' }, evidenceLabel: { integrity: '完整性', signature: '签名', provenance: '来源', curation: '目录审核', happier: 'Happier 版本', publisher: '发布者' }, runtimeApi: ({ version }: { version: number }) => `运行时接口 ${version}`,
         },
         sourceAdministration: { title: '来源与注册表', subtitle: 'Happier 在这些位置查找可浏览的插件：内置注册表、插件添加的注册表，以及你自己添加的注册表。', communityTitle: '公共 npm 目录', communitySubtitle: '内置 · 在公共 npm 中发现符合条件的 Happier 插件，而非任意 npm 软件包；结果未经审阅。', configuredTitle: '市场来源', configuredEmpty: '未配置其他市场来源。', add: '添加来源', edit: '编辑来源', remove: '移除来源', removeTitle: '要移除市场来源吗？', removeBody: ({ name }: { name: string }) => `${name} 将不再用于这台机器上的发现。已安装的插件不会改变。`, sourceUrl: '来源地址', displayName: '显示名称', description: '可选说明', enabled: '已启用', disabled: '已停用', curated: '精选来源', user: '你的来源', loadError: '无法加载市场来源。', retry: '重试', operationFailed: '无法应用此更改。请检查机器连接后重试。', operationOutcomeUnknownTitle: '更改需要审阅', operationOutcomeUnknownBody: '所选机器可能已应用此更改，但 Happier 无法确认结果。请先查看刷新后的设置，再重新更改。' },
         updatePolicy: { title: '更新规则', target: ({ machine, server }: { machine: string; server: string }) => `通过 ${server} 应用于 ${machine}。`, pinned: '固定版本', pinnedSubtitle: '在选择其他规则前不更新。', allowed: '允许更新', allowedSubtitle: '明确更新无需再次确认，除非声明的权限扩大。' },
@@ -8178,6 +8223,10 @@ const pluginSettingsPresentationTranslations = { 'zh-Hans': {
             runOnAutoHint: '已为你选择',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `此操作在 ${machine} 上不可用。请重新连接，或通过“运行于”选择另一台机器。`,
             noMachineRunsPlugin: ({ plugin }: { plugin: string }) => `你的机器上都还没有运行 ${plugin}。在其中一台安装后即可在此使用。`,
+            pluginCouldNotStart: ({ plugin, machine }: { plugin: string; machine: string }) => `${plugin} 无法在 ${machine} 上启动。请在该机器上重启 Happier，或通过“运行于”选择另一台机器。`,
+            pluginMachineUnreachable: ({ plugin, machine }: { plugin: string; machine: string }) => `${machine} 目前无法连接，因此 ${plugin} 暂时无法在其上运行。请重新连接，或通过“运行于”选择另一台机器。`,
+            pluginNotReady: ({ plugin, machine }: { plugin: string; machine: string }) => `${plugin} 已安装在 ${machine} 上，但在那里尚未准备好运行。`,
+            pluginNotReadyAnywhere: ({ plugin }: { plugin: string }) => `${plugin} 已安装，但在你的所有机器上都尚未准备好运行。`,
             runOnNoneAvailable: '暂无可运行它的机器',
             runsEverywhere: '在每台运行 Happier 的机器上',
             nothingAddedTitle: '尚未添加插件',
@@ -9350,6 +9399,7 @@ const sessionBoardTranslations = { 'zh-Hans': {
         mobile: { searchPlaceholder: '搜索此面板' },
         inline: {
             openPanel: '在面板中打开',
+            showHere: '在此显示',
             openPanelA11y: ({ title }) => `在面板中打开“${title}”`,
         },
         companion: {
@@ -9415,6 +9465,7 @@ const sessionBoardTranslations = { 'zh-Hans': {
                 returnedToChat: '智能体已返回聊天',
                 boardViewSelected: '智能体已选择看板视图',
                 boardItemRevealed: '智能体已打开看板项目',
+                shownInChat: '智能体已在对话中显示',
                 fullOpened: '智能体已打开随行面板',
             },
         },
@@ -9494,6 +9545,10 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersPeopleNote: '他们的级别由各自保留',
         followersSessionMeaning: { everything: '每次更新都唤醒它', important: '需要它时唤醒它', quiet: '在它的下一轮' },
         followersManager: '它的管理者',
+        followersAlsoFollows: '也在关注它',
+        followersEffectiveWake: '可以唤醒它',
+        followersEffectiveNextTurn: '在它的下一轮',
+        followersEffectiveOff: '未选择任何事件',
         followersSessions: ({ count }: { count: number }) => `${count} 个会话`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? '在关注' : '在关注'}`,
         justYouBody: ({ home }) => `与 ${home} 上的人共享。他们可以关注进展、在这里讨论,并在你离开时接手。`,
@@ -9513,8 +9568,8 @@ const sessionCollaborationPaneTranslations = {...Domain_sessionCollaborationPane
 
 const en = Shared_sessionCollaborationTranslations.en;
 
-const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "zh-Hans"> = { 'zh-Hans': { pane: sessionCollaborationPaneTranslations['zh-Hans'], title: '成员', viewingNow: '正在查看', justYou: '只有你', typing: '正在输入…', stale: '可能不是最新', unavailable: '实时在线状态不可用', connecting: '连接中…', unnamed: 'Happier 成员', open: '打开协作', conversations: "讨论", accessUnavailable: '会话访问权限不可用', accessUnavailableReason: '此 Home 不支持将会话共享给其他人。', discussion: { participants: { title: "参与者", loading: "正在查看谁在这里…", peopleGroup: "成员", agentsGroup: "智能体", agentsNote: "每个都保留自己的会话、机器和审批", owner: "所有者", you: "你", hereNow: "在线", canPost: "可发言", canRead: "可阅读", teamAccess: "团队访问", noAgents: "还没有智能体", model: "模型", session: "会话", modelStarting: "模型启动中", policyWhenAddressed: "被提及时回答", policyReadsOnly: "只读", policyDrafts: "起草待审批", policyWatches: "关注并发言", privateNote: "只有受邀的人可以阅读。提及永远不会授予权限。", inheritedNote: "受邀的人及其团队可以阅读。提及永远不会授予权限。", leave: "离开", invitedOnly: "仅限受邀", teamCanRead: "团队可阅读", people: ({ count }) => count === 1 ? '只有你' : `${count.toLocaleString()} 人`, peopleAndAgents: ({ people, agents }) => `${people.toLocaleString()} 人，${agents.toLocaleString()} 个智能体` }, home: { needsYou: "需要你处理", filter: "筛选", filterAll: "全部讨论", filterUnread: "未读", filterEmpty: "没有符合此筛选的内容", today: "今天", thisWeek: "本周", earlier: "更早", columnEmpty: "你受邀参与的讨论会显示在这里", inviteTitle: "与人和智能体一起讨论", inviteBody: "把队友、会话、机器人和模型拉进同一个对话。提及某个智能体，它会在自己的会话中、按自己的审批回答。", idleTitle: "打开一个讨论", idleBody: "从列表中选择一个，或与人和智能体开始新的讨论。", audience: "仅限你邀请的人", draftWaiting: "有草稿等你处理", approvalPending: "需要你的批准" }, manage: { startAgain: "重新启动", startAgainBody: "它的会话尚未启动。用相同设置再试一次。", invitePlaceholder: "搜索人员、会话或模型", policyWhenAddressedBody: "提及或回复它时。默认。", policyReadsOnlyBody: "只阅读；从不在这里回答。", policyDraftsBody: "由你发布它的回答，或丢弃。", policyWatchesBody: "阅读每条消息并可能回答。即使不说话也会消耗轮次。", answersGroup: "回答方式", operationsGroup: "会话", openSession: "打开它的会话", removeModel: "移除并归档它的会话", removeModelBody: "它是为此讨论启动的；历史会保留。", removeSession: "从此讨论中移除", removeSessionBody: "该会话会继续独立运行。", rowHint: "选择回答方式、打开或移除", working: "正在保存…", checking: "正在确认是否完成…", failed: "未能完成。", leaveTitle: "离开此讨论", leaveBody: "必须有人拥有它。把它交给这里的某人，或将其归档；不会删除任何内容。", transferGroup: "让其他人成为所有者", transferSubtitle: "成为所有者，然后你离开", noTransferCandidates: "请先邀请某人再转交。", archiveInstead: "改为归档", archiveInsteadBody: "你仍是所有者。恢复之前任何人都不能发言。", inviteSubtitle: "只有你邀请的人可以阅读", sessionsGroup: "你的会话", modelsGroup: "模型", sessionCandidate: "会话 · 被提及时回答", modelOn: ({ machine }: { machine: string }) => `${machine} 上的模型`, modelCandidate: "你的新会话 · 选择代理和模型", startedGroup: "为此讨论启动", modelSessionOn: ({ machine }: { machine: string }) => `你在 ${machine} 上的会话`, modelStartingOn: ({ machine }: { machine: string }) => `正在 ${machine} 上启动…`, modelFailedOn: ({ machine }: { machine: string }) => `未能在 ${machine} 上启动`, modelNotStartedOn: ({ machine }: { machine: string }) => `尚未在 ${machine} 上启动` }, invite: { button: "邀请", title: ({ title }: { title: string }) => `邀请加入 ${title}`, canManage: "可管理", ownerOnly: "只有所有者可以更改受邀者。", failed: "无法保存邀请。" }, composer: { mention: "提及", mentionHint: "提及一个智能体，让它来回答" }, newPage: { namePlaceholder: "为这个讨论命名", emptyTitle: "提及应该回答的对象", emptyBody: "智能体只有被提及时才会回答。不提及任何人的消息只会发给人。" }, secondOpinion: { title: "征求第二意见", discussTitle: "讨论这个回答", discussionTitle: "第二意见", discussDiscussionTitle: "关于这个回答", defaultQuestion: "这样对吗？你会改什么？", subtitle: ({ session }: { session: string }) => `关于 ${session} 中的一个回答`, subtitleUntitled: "关于这个回答", answer: "这个回答", open: "打开讨论", askQuoteOnly: "仅附引用提问", shareAndAsk: "共享并提问", ask: "提问", askGroup: "提问对象", freshOpinionsHint: "选择一个提问对象", noReviewers: "这个 Home 上还没有其他会话", yourSession: "会话", moreSessions: "显示更多会话", question: "问题", freshOpinionsUnavailableTitle: "暂不支持同时询问多个", freshOpinionsUnavailableReason: "独立意见会分别询问每一个。现在请选择一个。", thisSession: "这个会话", cannotAskTitle: ({ name }: { name: string }) => `无法在这里询问 ${name}`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} 只能看到引用`, quoteOnlyBody: "无法打开这个会话的其余内容。", grantTitle: ({ name }: { name: string }) => `允许 ${name} 读取这个会话`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} 会保留 ${session} 的读取权限，直到你撤销。`, grantUnavailable: "你不能共享这个会话，因此只发送引用。", readsAsYouTitle: ({ name }: { name: string }) => `${name} 以你的身份读取这个会话`, readsTitle: ({ name }: { name: string }) => `${name} 已经可以读取这个会话`, readsAsYouBody: "不会新增共享任何内容。", discussionTitleRow: "新的讨论", discussionOnlyYou: "只有你，直到你邀请他人。", discussionPeople: ({ count }: { count: number }) => `你和另外 ${count} 人可以阅读`, readsGroup: "他们能读到什么", disclosure: { sameSession: "这就是写出这个回答的会话。", broader: "看到它的人会比现在能读这个回答的人更多。", public: "它会变成公开的。", notAllowed: "这个 Home 的共享规则不允许。", unavailable: "现在无法读取这个回答。" }, discussDone: "讨论已开始", asked: ({ name }: { name: string }) => `已询问 ${name}`, askedBody: "回答会出现在讨论中。", failed: "没有成功。", pending: "尚未完成。再试一次即可从中断处继续。", previewChanged: "可读取的人发生了变化。确认后再提问。" },
-        quote: discussionQuoteCopy['zh-Hans'],
+const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "zh-Hans"> = { 'zh-Hans': { pane: sessionCollaborationPaneTranslations['zh-Hans'], readiness: sessionReadinessCopy['zh-Hans'], title: '成员', viewingNow: '正在查看', justYou: '只有你', typing: '正在输入…', stale: '可能不是最新', unavailable: '实时在线状态不可用', connecting: '连接中…', unnamed: 'Happier 成员', open: '打开协作', conversations: "讨论", accessUnavailable: '会话访问权限不可用', accessUnavailableReason: '此 Home 不支持将会话共享给其他人。', discussion: { openAnchor: ({ name }: { name: string }) => `打开 ${name}`, reply: { readUpTo: "已读到问题为止的讨论", passed: ({ name }: { name: string }) => `${name} 选择跳过`, failed: ({ name }: { name: string }) => `${name} 无法回答`, cancelled: ({ name }: { name: string }) => `${name} 在回答前停止了` }, participants: { title: "参与者", loading: "正在查看谁在这里…", peopleGroup: "成员", agentsGroup: "智能体", agentsNote: "每个都保留自己的会话、机器和审批", owner: "所有者", you: "你", hereNow: "在线", canPost: "可发言", canRead: "可阅读", teamAccess: "团队访问", noAgents: "还没有智能体", model: "模型", session: "会话", modelStarting: "模型启动中", policyWhenAddressed: "被提及时回答", policyReadsOnly: "只读", policyDrafts: "起草待审批", policyWatches: "关注并发言", privateNote: "只有受邀的人可以阅读。提及永远不会授予权限。", mentionNote: "提及永远不会授予权限。", inheritedNote: "受邀的人及其团队可以阅读。提及永远不会授予权限。", leave: "离开", invitedOnly: "仅限受邀", teamCanRead: "团队可阅读", people: ({ count }) => count === 1 ? '只有你' : `${count.toLocaleString()} 人`, peopleAndAgents: ({ people, agents }) => `${people.toLocaleString()} 人，${agents.toLocaleString()} 个智能体` }, home: { search: "搜索讨论", needsYou: "需要你处理", filter: "筛选", filterAll: "全部讨论", filterUnread: "未读", filterEmpty: "没有符合此筛选的内容", today: "今天", thisWeek: "本周", earlier: "更早", columnEmpty: "你受邀参与的讨论会显示在这里", inviteTitle: "与人和智能体一起讨论", inviteBody: "把队友、会话、机器人和模型拉进同一个对话。提及某个智能体，它会在自己的会话中、按自己的审批回答。", idleTitle: "打开一个讨论", idleBody: "从列表中选择一个，或与人和智能体开始新的讨论。", audience: "仅限你邀请的人", draftWaiting: "有草稿等你处理", approvalPending: "需要你的批准" }, manage: { startAgain: "重新启动", startAgainBody: "它的会话尚未启动。用相同设置再试一次。", invitePlaceholder: "搜索人员、会话或模型", policyWhenAddressedBody: "提及或回复它时。默认。", policyReadsOnlyBody: "只阅读；从不在这里回答。", policyDraftsBody: "由你发布它的回答，或丢弃。", policyWatchesBody: "阅读每条消息并可能回答。即使不说话也会消耗轮次。", answersGroup: "回答方式", operationsGroup: "会话", openSession: "打开它的会话", removeModel: "移除并归档它的会话", removeModelBody: "它是为此讨论启动的；历史会保留。", removeSession: "从此讨论中移除", removeSessionBody: "该会话会继续独立运行。", rowHint: "选择回答方式、打开或移除", working: "正在保存…", checking: "正在确认是否完成…", failed: "未能完成。", leaveTitle: "离开此讨论", leaveBody: "必须有人拥有它。把它交给这里的某人，或将其归档；不会删除任何内容。", transferGroup: "让其他人成为所有者", transferSubtitle: "成为所有者，然后你离开", noTransferCandidates: "请先邀请某人再转交。", archiveInstead: "改为归档", archiveInsteadBody: "你仍是所有者。恢复之前任何人都不能发言。", inviteSubtitle: "只有你邀请的人可以阅读", sessionsGroup: "你的会话", modelsGroup: "模型", sessionCandidate: "各自在被提及时回答", modelOn: ({ machine }: { machine: string }) => `${machine} 上的模型`, modelCandidate: "你的新会话 · 选择代理和模型", startedGroup: "为此讨论启动", modelSessionOn: ({ machine }: { machine: string }) => `你在 ${machine} 上的会话`, modelStartingOn: ({ machine }: { machine: string }) => `正在 ${machine} 上启动…`, modelFailedOn: ({ machine }: { machine: string }) => `未能在 ${machine} 上启动`, modelNotStartedOn: ({ machine }: { machine: string }) => `尚未在 ${machine} 上启动` }, invite: { button: "邀请", title: ({ title }: { title: string }) => `邀请加入 ${title}`, canManage: "可管理", ownerOnly: "只有所有者可以更改受邀者。", failed: "无法保存邀请。" }, composer: { mention: "提及", mentionHint: "提及一个智能体，让它来回答" }, newPage: { namePlaceholder: "为这个讨论命名", emptyTitle: "提及应该回答的对象", emptyBody: "智能体只有被提及时才会回答。不提及任何人的消息只会发给人。" }, secondOpinion: { title: "征求第二意见", discussTitle: "讨论这个回答", discussionTitle: "第二意见", discussDiscussionTitle: "关于这个回答", defaultQuestion: "这样对吗？你会改什么？", subtitle: ({ session }: { session: string }) => `关于 ${session} 中的一个回答`, subtitleUntitled: "关于这个回答", answer: "这个回答", open: "打开讨论", askQuoteOnly: "仅附引用提问", shareAndAsk: "共享并提问", ask: "提问", askGroup: "提问对象", freshOpinionsHint: "选择一个提问对象", noReviewers: "这个 Home 上还没有其他会话", yourSession: "会话", moreSessions: "显示更多会话", question: "问题", freshOpinionsUnavailableTitle: "暂不支持同时询问多个", freshOpinionsUnavailableReason: "独立意见会分别询问每一个。现在请选择一个。", thisSession: "这个会话", cannotAskTitle: ({ name }: { name: string }) => `无法在这里询问 ${name}`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} 只能看到引用`, quoteOnlyBody: "无法打开这个会话的其余内容。", grantTitle: ({ name }: { name: string }) => `允许 ${name} 读取这个会话`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} 会保留 ${session} 的读取权限，直到你撤销。`, grantUnavailable: "你不能共享这个会话，因此只发送引用。", readsAsYouTitle: ({ name }: { name: string }) => `${name} 以你的身份读取这个会话`, readsTitle: ({ name }: { name: string }) => `${name} 已经可以读取这个会话`, readsAsYouBody: "不会新增共享任何内容。", discussionTitleRow: "新的讨论", discussionOnlyYou: "只有你，直到你邀请他人。", discussionPeople: ({ count }: { count: number }) => `你和另外 ${count} 人可以阅读`, readsGroup: "他们能读到什么", disclosure: { sameSession: "这就是写出这个回答的会话。", broader: "看到它的人会比现在能读这个回答的人更多。", public: "它会变成公开的。", notAllowed: "这个 Home 的共享规则不允许。", unavailable: "现在无法读取这个回答。" }, discussDone: "讨论已开始", asked: ({ name }: { name: string }) => `已询问 ${name}`, askedBody: "回答会出现在讨论中。", failed: "没有成功。", pending: "尚未完成。再试一次即可从中断处继续。", previewChanged: "可读取的人发生了变化。确认后再提问。" },
+        quote: discussionQuoteCopy['zh-Hans'], attribution: discussionAttributionCopy['zh-Hans'],
         heldParticipant: "会话参与者",
         participantHeld: ({ participant }: { participant: string }) => `${participant}已暂缓。暂不支持来自其他账户的请求。`,
         featureUnavailable: "此 Home 未启用对话。", bindingUnavailable: "请重新登录此 Home 以查看对话。", scopeMismatch: "这些对话属于此 Home 上的其他账户。", modeMismatch: "内容与会话的加密模式不匹配。请重试，或请会话管理员检查访问权限。",  title: "讨论", newDiscussion: "新讨论", create: '创建对话', titlePlaceholder: '对话标题', messagePlaceholder: '写下消息…', active: '进行中', activeDisclosure: '显示进行中的对话', archived: '已归档', archivedDisclosure: '显示已归档的对话', emptyActive: '还没有进行中的对话。', emptyArchived: '没有已归档的对话。', loading: '正在加载对话…', loadError: '无法加载对话。', retry: '重试', checking: '正在检查更新…', deliveryUnknown: '发送结果未知 — 重试前请先检查。', locked: '你可以阅读此对话，但不能发布消息。', offline: '你当前离线。重新连接后即可继续。', unavailable: '此对话不可用。', unreadCount: ({ count }) => `${count.toLocaleString()} 条未读`, unreadMentionCount: ({ count }) => `${count.toLocaleString()} 条未读提及`,
@@ -9739,7 +9794,8 @@ const sessionFollowTranslations: Pick<Record<
             "externalAttachedOnly": "后台同步已关闭，因此只有在此会话处于连接状态时才可能收到更新。",
             "sheetTitle": ({ name }) => `关注${name}`,
             "sheetSubtitle": "你会收到多少消息",
-            "ownerNote": "这是你的会话，因此你始终关注它",
+            "suppressed": "更新已关闭。你仍是它的所有者。",
+            "turnOff": "关闭更新",
             "alsoFollow": ({ facts, count }) => `${facts}也在关注`,
             "people": "成员",
             "quietHours": ({ range }) => `免打扰时段 ${range} · 不会推送；一切仍会进入收件箱`,
@@ -9844,13 +9900,22 @@ const sessionFollowTranslations: Pick<Record<
             "wakeOnHumanChange": "有人添加消息时唤醒",
             "stop": "停止更新",
             "stopForSource": ({ title }) => `停止来自“${title}”的更新`,
+            "panelSubtitle": "它会收到多少消息",
             "includeNextTurn": "在目标会话的下一轮中包含更新。",
             "empty": "它关注的会话会显示在这里",
             "sourceKeyPreparing": "正在准备加密访问…",
             "sourceKeyWaiting": "正在等待加密访问。",
             "sourceKeyUnavailable": "此计算机无法提供加密访问。",
             "sourceSessionKeyUnavailable": "此会话的加密访问在此处不可用。",
-            "catchUpPending": "待补充更新"
+            "catchUpPending": "待补充更新",
+            "kindDiscussion": "讨论",
+            "kindWorkflowRun": "工作流运行",
+            "executionRun": ({ title }) => `“${title}”中的一次运行`,
+            "sourceUnavailable": "已不可用",
+            "followsThis": ({ title }) => `${title} 关注此会话`,
+            "ruleMatching": ({ facts }: { facts: string }) => `匹配的会话：${facts}`,
+            "ruleEvery": "它能看到的所有会话",
+            "managerOnly": "它作为此会话的管理者接收动态。可在其协调者设置中更改。"
         },
         "preferences": {
             "title": "自动关注",
@@ -10221,6 +10286,8 @@ const sessionListFilterTranslations = { zhHans: translated({
         filtersNoOptions: '没有可用的筛选条件', filtersClear: '清除筛选条件', filtersDone: '完成', filtersArchived: '已归档',
         filtersNeedsMeOnly: '仅需要我处理的', filtersNeedsMeOnlyDescription: '等待你处理的会话', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} 更多`,
+        filtersStatus: '状态', filtersStatusFailed: '失败', filtersProject: '项目', filtersProjectIs: '是', filtersProjectIsNot: '不是',
+        filtersProjectNot: ({ names }: { names: string }) => `项目不是 ${names}`,
         filtersResultCount: ({ count }: { count: number }) => `${count} 项`,
         queryInitialLoadingTitle: '正在加载会话…', queryUpdatingTitle: '正在更新会话…',
         querySomeHomesUnavailableTitle: '部分 Home 不可用', querySomeHomesUnavailableDescription: 'Happier 正在显示可访问的内容。请在这些 Home 恢复在线后重试。',
@@ -10428,14 +10495,34 @@ const zhHans: typeof en = {
         wokenBy: ({ count }) => (count === 1 ? '由一条更新唤醒' : `由 ${count} 条更新唤醒`),
         notFromYou: '不是你发送的消息',
     },
+    workerFollow: {
+        manager: '你的工作会话',
+        follower: '你关注了它',
+        rule: '你的规则',
+        queued: '排队中',
+        nextTurn: '下一轮',
+        woke: '已唤醒',
+        answered: '已回答',
+        held: '为你保留',
+        offline: '机器离线',
+        archived: '已归档',
+        locked: '机器已锁定',
+        muted: '已静音',
+        unavailable: '无法送达',
+        checkIn: '等待你确认',
+        exchangeStopped: '交流已停止',
+    },
     title: '工作',
     subtitle: {
         sessions: ({ count }) => `${count} 个会话`,
         runs: ({ count }) => `${count} 次运行`,
         nothingStarted: '尚未开始任何工作',
+        archived: ({ count }) => `${count} 个已归档`,
     },
     states: {
         recent: '最近',
+        archived: '已归档',
+        stopped: '已停止',
     },
     view: {
         a11y: '工作视图',
@@ -10450,6 +10537,7 @@ const zhHans: typeof en = {
     },
     actions: {
         showInTranscript: '在对话记录中显示',
+        unarchive: '取消归档',
     },
     putUnder: {
         title: "置于…之下",
@@ -11121,6 +11209,7 @@ const shareSheetTranslations = { 'zh-Hans': {
         browseGroups: '浏览所有团队群组',
         membersOnlyLink: '复制链接供已有访问权限的人使用。',
         allLoaded: '已加载全部结果',
+        noConnectedPeople: '这里只会显示与你有联系的人。',
         copyLink: '复制链接',
         linkCopied: '链接已复制',
         copyLinkFailed: '无法复制链接。',
@@ -13377,7 +13466,8 @@ const widgetAddTranslations = { 'zh-Hans': {
         panes: '面板',
         panesHint: '以链接形式添加，在详情中打开',
         builtIn: '内置',
-        prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？', machine: '哪台机器？' },
+        sessionDetails: '会话详情',
+        prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？', checkout: '哪个工作区？', machine: '哪台机器？' },
         inputLabels: { session: '会话', metric: '指标', breakdown: '细分', groupBy: '分组依据', apiEquivalent: 'API 等价', agent: '代理', model: '模型', project: '项目', workspace: '工作区', backendMode: '后端模式', source: '来源', machine: '机器' },
         nativeDescriptions: {
             session_summary: '查看所选会话的活动和后续步骤。',
@@ -13424,6 +13514,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         noChoices: '暂时没有可选项',
         optionsLoading: '正在加载选项…',
         optionsFailed: '无法加载选项',
+        widgetLoadFailed: '无法加载此小组件',
         invalidValue: '未找到',
         inputsInvalid: '请检查此小组件的输入',
         inputsUnavailable: '所选输入不可用',
@@ -13481,6 +13572,9 @@ const widgetAddTranslations = { 'zh-Hans': {
         refusals: {
             areaUnavailable: "此处暂时无法使用小组件。请稍后重试。",
             writeUnconfirmed: "你的 Home 没有确认这项操作。请检查此区域，然后重试。",
+            inputsAccessDenied: "你无法读取该会话，因此小组件无法显示它。",
+            inputsChoiceGone: "该选项已不可用。请选择其他选项。",
+            inputsChoicesUnavailable: "无法加载此小组件的选项。请稍后重试。",
             inputsInvalid: "部分输入无效。请检查后重试。",
             typeUnavailable: "此小组件已不可用。请选择其他小组件。",
             sizeUnsupported: "此小组件不支持该尺寸。请选择其他尺寸。",
@@ -14169,7 +14263,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, runPattern: '运行…', runPatternTitle: '运行模式', anotherRound: '再来一轮', participantTitle: '选择参与者', participantSearch: '查找会话或模型', participantSession: '你的会话 · 按自身设置回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 会话`, participantDone: '完成', shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找工作流', builtin: '内置', library: '你的库', noInputs: '无需输入', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, runPattern: '运行…', runPatternTitle: '运行模式', anotherRound: '再来一轮', participantTitle: '选择参与者', participantSearch: '查找会话或模型', participantSession: '各自按自身设置回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 会话`, participantDone: '完成', choicesFailed: '无法加载选项', shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找模式', builtin: '内置', library: '你的库', noInputs: '无需输入', needsSession: '需要会话', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -14339,9 +14433,10 @@ const zhHans: WorkflowTriggersCopy = {
         emptyBody: '添加一个，用于审查每一轮、持续推进目标或响应拉取请求。',
         loadFailed: '无法加载此会话的触发器。',
         accountLoadFailed: '无法加载你的触发器。',
+        habitsHere: '此处的习惯',
         title: '触发器',
         countOn: ({ count }) => `${count} 个已开启`,
-        info: '发生某事时在此会话中运行的内容。它们留在此会话中，不会出现在你的库中。',
+        info: '从此会话启动的内容，以及写入此会话的内容。它们保留在此会话中，不会出现在你的库中。',
         saveFailed: '无法保存此触发器。你的更改仍在这里。',
     },    kindDescription: {
         pluginEvent: "在插件观察到事件时运行。",
@@ -15028,6 +15123,9 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `${time} 与 ${machine} 失去联系`,
         didNotFinish: '此步骤未完成',
         causeNotRecorded: '未记录失败原因',
+        agentTimedOut: '未能及时连接到智能体',
+        agentUnreachable: '无法连接到智能体',
+        agentConnectionLost: '与智能体的连接已断开',
         keptBody: '已完成的步骤会保留，已完成的工作不会重复。',
         choicesOnReconnect: ({ machine }: { machine: string }) => `${machine} 重新连接后会显示恢复选项。`,
         noChoices: '此步骤无法从这里继续。',
@@ -15235,7 +15333,7 @@ const workspaceSyncDiagnosticTranslations = { 'zh-Hans': {
 
 const workspaceSyncSetAttentionTranslations = { 'zh-Hans': { attention: { conflictedLinks: ({ count }) => `${count} 条连接存在冲突`, unavailableLinks: ({ count }) => `${count} 条连接需要检查状态` } } } satisfies Pick<Record<keyof typeof workspaceSyncDiagnosticTranslations, Pick<WorkspaceSyncTranslation, 'attention'>>, "zh-Hans">;
 
-const workspaceSyncAddMachineTranslations = { 'zh-Hans': { availableOn: '可用于', addMachine: { replica: '副本', exactReplica: '精确副本', editableCopy: '可编辑副本', editableCopyHint: '关联计算机上的更改可能会被其他计算机上的智能体看到。冲突版本需要审查。如果需要隔离，请使用单独的工作树。' } } } satisfies Pick<Record<keyof typeof workspaceSyncDiagnosticTranslations, Pick<WorkspaceSyncTranslation, 'availableOn' | 'addMachine'>>, "zh-Hans">;
+const workspaceSyncAddMachineTranslations = { 'zh-Hans': { availableOn: '可用于', addMachine: { replica: '副本', exactReplica: '精确副本', editableCopy: '可编辑副本', thisMachine: '这台计算机', machineHint: '此工作区保持同步的位置。', folderSetup: '文件夹准备', awaitingApproval: '等待你的批准。', editableCopyHint: '关联计算机上的更改可能会被其他计算机上的智能体看到。冲突版本需要审查。如果需要隔离，请使用单独的工作树。' } } } satisfies Pick<Record<keyof typeof workspaceSyncDiagnosticTranslations, Pick<WorkspaceSyncTranslation, 'availableOn' | 'addMachine'>>, "zh-Hans">;
 
 const workspaceSyncReviewOutcomeTranslations = { 'zh-Hans': { keepBoth: '保留两个版本', preserveAt: ({ path }) => `在 ${path} 保留另一版本`, notReviewed: '未检查；此处不会更改', confirmScope: '只会更改列出的已检查工作区。不可用的工作区保持不变。', preserved: '已保留', alreadyPresent: '已存在', notStarted: '未开始', askAgent: '询问智能体', askAgentPrompt: ({ path, versions }) => `请帮我检查这些关联工作区中 ${path} 的冲突版本：\n${versions}\n请检查当前文件并提出安全的解决建议。未经我批准，不要更改或解决冲突。` } } satisfies Pick<Record<keyof typeof workspaceSyncDiagnosticTranslations, Pick<WorkspaceSyncTranslation['review'], 'keepBoth' | 'preserveAt' | 'notReviewed' | 'confirmScope' | 'preserved' | 'alreadyPresent' | 'notStarted' | 'askAgent' | 'askAgentPrompt'>>, "zh-Hans">;
 

@@ -79,7 +79,7 @@ const accountField = { path: 'account', title: 'Library Account', widget: 'json'
 const artifactField = { path: 'artifactId', title: 'Library item id', widget: 'text', required: true,
   description: 'Artifact id from the library list, or a new unique id when creating an item.' } as const satisfies InputFieldHint;
 const bindingsField = { path: 'bindings', title: 'Input bindings', widget: 'json', required: true,
-  description: 'Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.' } as const satisfies InputFieldHint;
+  description: 'Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.' } as const satisfies InputFieldHint;
 const pathsField = { path: 'paths', title: 'Input paths', widget: 'text_list', listSeparator: 'newline',
   description: 'Only change these declared field paths. Omit to replace or reset the complete binding set.' } as const satisfies InputFieldHint;
 const revisionField = { path: 'expectedRevision', title: 'Current layout revision', widget: 'json', required: true,
@@ -200,7 +200,7 @@ const WIDGET_INSTANCE_ACTION_FIELDS = {
     description: 'Optional Home-qualified Session supplying widget discovery context. Selecting it grants no access.' }],
   'widgets.item.list': [surfaceField],
   'widgets.item.add': [surfaceField, { path: 'instance', title: 'Configured widget', widget: 'json', required: true,
-    description: 'Complete v1 instance with a unique id, definition reference and bindings.' }, areaField, sizeField, indexField,
+    description: 'Complete v1 instance with a unique id, definition reference and bindings. A value binding must satisfy the widget’s inputSchema from widgets.catalog.list; use a picked Session, Machine or checkout exactly as action_options_resolve returns it (consumer widget, fieldPath = the input path).' }, areaField, sizeField, indexField,
     { path: 'placement', title: 'Session Board placement', widget: 'json', description: 'Owner-native Session Board tab, view and placement options.' }, groupIdField],
   'widgets.item.remove': [refField],
   'widgets.item.move': [refField, { ...indexField, requiredWhen: { op: 'not', predicate: { op: 'truthy', path: 'to' } },

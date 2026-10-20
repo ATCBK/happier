@@ -11,6 +11,7 @@ import { createProtocolSystemTasksRunnerAdapter, createSystemTasksCapability, sy
 import { getLiveSystemTasksRunnerAdapter } from '@/capabilities/systemTasks/liveSystemTasksRunner';
 import { SystemTaskResultSchema } from '@happier-dev/protocol/system/tasks/spec';
 import { writeJsonStdout } from '@/cli/output/jsonEnvelope';
+import { projectSafeAuthError } from '@/cli/commands/auth/errorDiagnostic';
 import { createActionOperationRunner } from '@/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationStore } from '@/daemon/actionOperations/actionOperationStore';
 
@@ -27,6 +28,7 @@ const guestEnv = { ...process.env, HAPPIER_HOME_DIR: String(input.guestHome), HA
   HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_LOCAL_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined,
   HAPPIER_ACTIVE_SERVER_ID: undefined };
 let pendingRequest: { publicKey: string; remoteProfileId: string } | undefined;
+let waitDiagnostic: { v?: 1; ok?: false; kind?: 'auth_wait'; code?: string | number; status?: number } | undefined;
 const executor = createHappierJsonExecutorFromTextRunner(async (args, options) => await new Promise((resolveResult, reject) => {
   const startedAt = Date.now();
   console.error(`qb73 subprocess start: ${args[0]} ${args[1]}`);
@@ -40,6 +42,9 @@ const executor = createHappierJsonExecutorFromTextRunner(async (args, options) =
     cwd: resolve(root, 'apps/cli'), env: guestEnv, stdio: ['pipe', 'pipe', 'pipe'], signal: options?.signal,
   });
   const stdout: Buffer[] = [], stderr: Buffer[] = [];
+  if (args[1] === 'wait' && input.killWaitProcess === true) {
+    child.once('spawn', () => child.kill('SIGKILL'));
+  }
   child.stdout.on('data', chunk => stdout.push(Buffer.from(chunk)));
   child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
   child.on('error', reject);
@@ -47,6 +52,17 @@ const executor = createHappierJsonExecutorFromTextRunner(async (args, options) =
     console.error(`qb73 subprocess close: ${args[0]} ${args[1]} ${status} ${Date.now() - startedAt}ms`);
     const output = Buffer.concat(stdout).toString('utf8');
     if (args[1] === 'request' && status === 0) pendingRequest = JSON.parse(output);
+    if (args[1] === 'wait' && input.observeWaitDiagnostic === true) {
+      // Inspect the actual guest's single JSON document, never forward its raw
+      // output or diagnostic message (which could carry credential material).
+      try {
+        const envelope = JSON.parse(output);
+        const diagnostic = projectSafeAuthError(envelope.error);
+        waitDiagnostic = { v: envelope.v === 1 ? 1 : undefined, ok: envelope.ok === false ? false : undefined,
+          kind: envelope.kind === 'auth_wait' ? 'auth_wait' : undefined,
+          code: diagnostic.code, status: diagnostic.status };
+      } catch { /* Missing or contaminated JSON stays unobserved. */ }
+    }
     resolveResult({ status: status ?? 1, stdout: output, stderr: Buffer.concat(stderr).toString('utf8') });
   });
   child.stdin.on('error', () => {});
@@ -77,7 +93,8 @@ await operations.observe({ actionId: 'machines.managed.acquire', scope, execute:
   return { ok: true, result: result.data ?? null };
 } });
 async function publishOutcome(result: SystemTaskResult, lateConsent?: { rejected: boolean; waitStatus: number; waitCode?: string }): Promise<void> {
-  await writeJsonStdout({ task: result, operation: await operations.waitForTerminal(scope, 'qb73-operation'), ...(lateConsent ? { lateConsent } : {}) });
+  await writeJsonStdout({ task: result, operation: await operations.waitForTerminal(scope, 'qb73-operation'),
+    ...(waitDiagnostic ? { waitDiagnostic } : {}), ...(lateConsent ? { lateConsent } : {}) });
   process.exitCode = result.ok ? 0 : 1;
 }
 process.once('SIGTERM', () => { void runner.cancel({ taskId }); });

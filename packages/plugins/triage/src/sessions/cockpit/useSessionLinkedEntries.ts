@@ -15,8 +15,9 @@ import { fromCorpusStoredRow } from '../../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../../corpus/collections/rows.js';
 import { useTriageListWindow } from '../../ui/window/useTriageListWindow.js';
 import { resolveTriageSourceWorkflowSubjectV1, hasTriageSourceSessionRelationsV1 } from '../../ui/detail/sourceSurface.js';
-import { TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema } from '../../actions/sessionLinksProtocol.js';
+import { TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema, type TriageSourceSessionLinksLaneV1 } from '../../actions/sessionLinksProtocol.js';
 import type { TriageSourceSessionLinkV1 } from '../sourceSessionRelations.js';
+import { renderSourceQualifiedId } from '../../corpus/identity/components.js';
 import { triageEntryRowKey } from '../../projection/listWindow.js';
 import {
     TRIAGE_SESSION_LINKED_ENTRIES_COLLECTION_ID_V1,
@@ -198,7 +199,8 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     const readiness = usePluginHostReadiness(sourceReadAvailable);
     const [sourceRead, setSourceRead] = React.useState<Readonly<{
         owner: PluginUiEphemeralSharedScope | null; sessionId: string;
-        status: 'absent' | 'loading' | 'ready' | 'failed'; links: readonly TriageSourceSessionLinkV1[];
+        status: 'absent' | 'loading' | 'ready' | 'partial' | 'failed'; links: readonly TriageSourceSessionLinkV1[];
+        lanes?: readonly TriageSourceSessionLinksLaneV1[];
     }>>({ owner, sessionId, status: sourceReadAvailable ? 'loading' : 'absent', links: [] });
     const [sourceRefresh, setSourceRefresh] = React.useState(0);
     React.useEffect(() => {
@@ -217,10 +219,16 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
                     TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, { v: 1, sessionId }, { signal: controller.signal },
                 ));
                 if (controller.signal.aborted) return;
-                setSourceRead((previous) => ({ owner, sessionId, status: result.kind === 'complete' ? 'ready' : 'failed',
-                    links: result.kind === 'complete' ? result.links : [...new Map([
-                        ...(previous.owner === owner && previous.sessionId === sessionId ? previous.links : []), ...result.links,
-                    ].map((link) => [triageEntryRowKey(link.entryRef), link])).values()] }));
+                setSourceRead((previous) => {
+                    const unavailable = result.lanes === undefined ? null : new Set(result.lanes
+                        .filter((lane) => lane.health.kind !== 'complete').map((lane) => renderSourceQualifiedId(lane.source)));
+                    const retained = previous.owner === owner && previous.sessionId === sessionId
+                        ? previous.links.filter((link) => unavailable === null || unavailable.has(renderSourceQualifiedId(link.entryRef.source))) : [];
+                    return { owner, sessionId, status: result.kind === 'complete' ? 'ready' : result.kind, lanes: result.lanes,
+                        links: result.kind === 'complete' ? result.links : [...new Map([
+                            ...retained, ...result.links,
+                        ].map((link) => [triageEntryRowKey(link.entryRef), link])).values()] };
+                });
             } catch {
                 if (!controller.signal.aborted) setSourceRead((previous) => ({ owner, sessionId, status: 'failed',
                     links: previous.owner === owner && previous.sessionId === sessionId ? previous.links : [] }));
@@ -261,6 +269,7 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
             sourceLinks: sourceRead.owner === owner && sourceRead.sessionId === sessionId ? sourceRead.links : [],
             sourceLinksStatus: sourceRead.owner === owner && sourceRead.sessionId === sessionId
                 ? sourceRead.status === 'absent' ? 'ready' : sourceRead.status : 'loading',
+            sourceLanes: sourceRead.owner === owner && sourceRead.sessionId === sessionId ? sourceRead.lanes : undefined,
             workflowSubject: (entryRef) => resolveTriageSourceWorkflowSubjectV1(targetedContributions, entryRef) }),
         [hydration, queryState, targetedContributions, window.snapshot.window?.rows, sourceRead, sessionId, owner],
     );

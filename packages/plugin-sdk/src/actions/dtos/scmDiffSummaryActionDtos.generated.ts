@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { ScmComparisonSource } from '../../scm/projections.js';
+import type { ScmComparisonSource } from '../../scm/comparisonSource.js';
 
 export type ScmDiffSummaryActionInputById = {
     readonly "scm.commit.resolveOutcome": {
@@ -51,6 +51,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -99,6 +105,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -216,6 +228,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -263,6 +281,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };

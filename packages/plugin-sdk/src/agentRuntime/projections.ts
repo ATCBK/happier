@@ -462,6 +462,29 @@ export {
   assertExperimentalAgentSessionRealtimeRuntime as assertAgentSessionRealtimeRuntime,
 } from '../experimental/agentRuntime/realtime.js';
 export { buildUsageObservationEffect } from '../usage.js';
+export { estimateUsageModelCost } from '@happier-dev/protocol/usage/usageCost';
+export type { UsageModelCostEstimate } from '@happier-dev/protocol/usage/usageCost';
+export type {
+  ResolvedUsageModelPrice,
+  UsageModelPriceCatalog,
+  UsageModelPriceOverridesV1,
+  UsageModelPriceRates,
+} from '@happier-dev/protocol/usage/usageModelPriceCatalog';
+export { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
+export type { UsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+export {
+  listHappierToolAutoApprovedNamesV1,
+  listHappierToolAutoApprovedNameSpellingsV1,
+} from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
+export { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+export type { McpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+export {
+  AGENT_STARTUP_FAILURE_PREVIEWS,
+  readAgentStartupFailureCode,
+  type AgentStartupFailureCode,
+} from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+export { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+export { isSessionModeSelectionUnavailable } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 export type { AgentAcpHistorySession } from './acp.js';
 export type {

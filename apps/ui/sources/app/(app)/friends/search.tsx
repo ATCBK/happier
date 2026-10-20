@@ -4,7 +4,10 @@ import type { ScrollView, ScrollViewProps } from 'react-native';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { UserSearchResult } from '@/components/friends/UserSearchResult';
-import { searchUsersByUsername, sendFriendRequest } from '@/sync/api/social/apiFriends';
+import { searchUsersByUsername } from '@/sync/api/social/apiFriends';
+import { readFriendMutationProfile } from '@/sync/ops/friends';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useAuth } from '@/auth/context/AuthContext';
 import { UserProfile } from '@/sync/domains/social/friendTypes';
 import { Modal } from '@/modal';
@@ -40,6 +43,8 @@ export function SearchFriendsScreen() {
     const { theme } = useUnistyles();
     const enabled = useRequireFriendsEnabled();
     const { credentials } = useAuth();
+    const { serverId } = useActiveServerSnapshot();
+    const { execute } = useMountedActionExecution(serverId);
     const [searchQuery, setSearchQuery] = useState('');
     const [processingUserId, setProcessingUserId] = useState<string | null>(null);
     const [profileOverrides, setProfileOverrides] = useState<Record<string, UserProfile>>({});
@@ -62,7 +67,9 @@ export function SearchFriendsScreen() {
 
         setProcessingUserId(user.id);
         try {
-            const updatedProfile = await sendFriendRequest(credentials, user.id);
+            const updatedProfile = readFriendMutationProfile(
+                await execute('friends.add', { uid: user.id }),
+            );
 
             if (updatedProfile) {
                 setProfileOverrides((prev) => ({ ...prev, [updatedProfile.id]: updatedProfile }));
@@ -71,7 +78,7 @@ export function SearchFriendsScreen() {
             } else {
                 await Modal.alert(t('friends.userNotFound'));
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             if (error instanceof HappyError && error.message === 'provider-required') {
                 await Modal.alert(t('friends.bothMustHaveGithub'));
                 return;
@@ -84,7 +91,7 @@ export function SearchFriendsScreen() {
                 await Modal.alert(t('friends.disabled'));
                 return;
             }
-            if (error.message?.includes('yourself')) {
+            if (error instanceof Error && error.message.includes('yourself')) {
                 await Modal.alert(t('friends.cannotAddYourself'));
             } else {
                 await Modal.alert(t('errors.failedToSendRequest'));
@@ -92,7 +99,7 @@ export function SearchFriendsScreen() {
         } finally {
             setProcessingUserId(null);
         }
-    }, [credentials]);
+    }, [credentials, execute]);
 
     const renderUserItem = ({ item }: { item: UserProfile }) => (
         <UserSearchResult

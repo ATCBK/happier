@@ -1,4 +1,5 @@
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { isSessionModeSelectionUnavailable } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { randomUUID } from 'node:crypto';
@@ -185,6 +186,7 @@ import {
 } from './nativeAgentSessionInteractions';
 import type { ExternalSessionHostOperationPort } from '@/session/external/hostOperationOwner';
 import type { RuntimeExactProviderInputOutcome } from '@/agent/runtime/session/input/providerInputOutcome';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createAgentSessionTurnInvariant } from '@/agent/runtime/session/turn/agentSessionTurnInvariant';
 import {
     normalizeAvailableCommands,
@@ -1636,6 +1638,30 @@ export function applyNativeAgentConfigurationUpdate(
     };
 }
 
+function isNativeAgentSessionModeUnavailable(
+    configuration: AgentSessionConfigurationSnapshot | undefined,
+    publications: NativeAgentSessionPublications | undefined,
+): boolean {
+    const modeId = configuration?.mode.value;
+    if (!modeId || !publications) return false;
+    const snapshot = publications.modesSource.read();
+    return isSessionModeSelectionUnavailable(modeId, {
+        availableModes: snapshot.modes, currentModeId: snapshot.currentModeId,
+    });
+}
+
+export function assertNativeAgentSessionModeAvailable(
+    configuration: AgentSessionConfigurationSnapshot | undefined,
+    publications: NativeAgentSessionPublications | undefined,
+): void {
+    if (isNativeAgentSessionModeUnavailable(configuration, publications)) {
+        throw new SessionStartupInputRefusalError({
+            code: 'native_agent_session_mode_unavailable',
+            message: 'The selected native Agent mode is not available in this Session.',
+        });
+    }
+}
+
 function toHostConfigurationOutcome(
     result: Awaited<ReturnType<NonNullable<AgentSessionRuntime['updateConfiguration']>>>,
 ): RuntimeConfigUpdateOutcomeV1 {
@@ -2347,6 +2373,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
     initialConfiguration?: AgentSessionConfigurationSnapshot;
     expectedProviderSessionId?: string;
     usagePublisher?: NativeAgentSessionUsagePublisher;
+    publications?: NativeAgentSessionPublications;
 }>): PluginRuntimeHookOperations {
     const capabilities = params.capabilities;
     return createNativeAgentSessionOperations(
@@ -2378,6 +2405,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
                 params.session,
             ),
         },
+        params.publications,
     );
 }
 
@@ -2422,6 +2450,7 @@ export function createNativeAgentSessionOperations(
         sessionId: expectedSessionId,
         ...(expectedProviderSessionId ? { expectedProviderSessionId } : {}),
     });
+    let lastProviderSessionEvent: Extract<AgentSessionRuntimeEvent, { kind: 'provider-session-id' }> | null = null;
     let deliveryOutcomeHandler: ((outcome: PluginRuntimePromptDeliveryOutcome) => void) | null = null;
     let providerNativeCommandNames = new Set<string>();
     const inputCorrelations = new Map<string, NativeInputCorrelation>();
@@ -2824,6 +2853,7 @@ export function createNativeAgentSessionOperations(
         }
         if (observation.status === 'ignored') return;
         const event = observation.event;
+        if (event.kind === 'provider-session-id') lastProviderSessionEvent = event;
         if (firstAssistantTextTiming
             && isForegroundTurnRuntimeTranscriptEvent(event)
             && event.turnId === firstAssistantTextTiming.turnId
@@ -3113,6 +3143,9 @@ export function createNativeAgentSessionOperations(
     };
     const createControlContext = (activity: 'active' | 'inactive'): AgentSessionControlContext => {
         if (!directFacets) throw new Error('Native Agent direct-facet context is unavailable');
+        // Controls can be the first demand after Resume. Observe the admitted
+        // native identity before reading it, just as prompt dispatch does.
+        ensureSubscription();
         const providerSessionId = invariant.read().providerSessionId ?? undefined;
         return createNativeAgentSessionControlContext({
             context: directFacets.context,
@@ -3736,12 +3769,19 @@ export function createNativeAgentSessionOperations(
         subscribeRuntimeEvents(handler) {
             if (disposeStarted) return () => undefined;
             const refreshCurrentSnapshot = listeners.size === 0 && subscription !== null;
+            const providerIdentity = refreshCurrentSnapshot ? lastProviderSessionEvent : null;
             listeners.add(handler);
             if (refreshCurrentSnapshot) {
                 subscription?.dispose();
                 subscription = null;
             }
             ensureSubscription();
+            // An earlier control may have demanded the initial identity with
+            // no transcript listener. Replay that accepted snapshot, without
+            // re-admitting it as a new native event or losing it on re-watch.
+            if (providerIdentity && providerIdentity === lastProviderSessionEvent) {
+                publishCanonicalEvent?.(providerIdentity);
+            }
             return () => listeners.delete(handler);
         },
         async sendTurnPrompt(prompt: string, meta?: RuntimeTurnPromptMeta): Promise<void> {
@@ -3889,6 +3929,10 @@ export function createNativeAgentSessionOperations(
                     logger.infoFile('[NativeAgentSession] Turn phase', {
                         phase: 'send_returned', sessionId: expectedSessionId,
                         turnId: correlation.turnId, localId: correlation.inputId, status: result.status,
+                        ...(result.status !== 'admitted' ? {
+                            diagnosticCode: result.diagnostic.code,
+                            ...('retryable' in result ? { retryable: result.retryable } : {}),
+                        } : {}),
                         durationMs: Math.round(performance.now() - sendStartedAt),
                     });
                 } catch (error) {
@@ -4156,6 +4200,9 @@ export function createNativeAgentSessionOperations(
             const nextConfiguration = applyNativeAgentConfigurationUpdate(configuration, {
                 ...update, ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             }, directFacets.getWorkspaceWrites);
+            if (isNativeAgentSessionModeUnavailable(nextConfiguration.snapshot, publications)) {
+                return reportOutcome({ status: 'failed', reason: 'native_agent_session_mode_unavailable' }, 'native_agent_session_mode_unavailable');
+            }
             if (nextConfiguration.snapshot.workspaceWrites === 'deny' && directFacets.capabilities.workspaceWrites !== 'deny') {
                 return reportOutcome({ status: 'failed', reason: 'role_policy_unenforceable' }, 'role_policy_unenforceable');
             }
@@ -4228,12 +4275,22 @@ export function createNativeAgentSessionOperations(
                 // Native evidence is fenced as soon as retirement begins. Preserve
                 // exact unresolved custody before native cleanup can block or fail.
                 for (const correlation of inputCorrelations.values()) {
-                    correlation.admissionAbortController?.abort(
-                        new Error('Native Agent runtime delivery was retired before dispatch'),
-                    );
                     if (acceptedInputIds.has(correlation.inputId)) continue;
                     if (rejectedInputIds.has(correlation.inputId)) continue;
                     if (uncertainInputIds.has(correlation.inputId)) continue;
+                    if (correlation.admissionAbortController) {
+                        rejectedInputIds.add(correlation.inputId);
+                        emitDeliveryOutcome({ type: 'input-rejected-before-provider', localInputId: correlation.inputId,
+                            userMessageSeq: correlation.userMessageSeq,
+                            ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
+                            reason: 'host_retired_before_dispatch',
+                            diagnostic: { code: 'host_retired_before_dispatch', severity: 'warning' },
+                            retryable: true, retireLocalCustodyAfterDurableBlock: true });
+                        correlation.admissionAbortController.abort(
+                            new Error('Native Agent runtime delivery was retired before dispatch'),
+                        );
+                        continue;
+                    }
                     uncertainInputIds.add(correlation.inputId);
                     emitDeliveryOutcome({
                         type: 'input-custody-unknown',
@@ -5914,6 +5971,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             let manualCompaction: NativeAgentSessionManualCompaction;
             try {
                 assertGenerationCurrent();
+                assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
                 cancellation = resolveNativeAgentSessionCancellation(
                     identity.agentId,
                     sessionCapabilities,

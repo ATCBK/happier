@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 
 export type SessionOpsRpcRequest = Readonly<{
     serverUrl: string;
@@ -24,11 +25,13 @@ export type SessionOpsSocketAckRequest = Readonly<{
 }>;
 
 type SessionOpsHttpResponder = (...args: Parameters<RuntimeFetch>) => Promise<Response | null>;
+type SessionOpsSocketOptions = Readonly<{ auth?: { token?: string }; transports?: unknown }>;
 type SessionOpsSocketBoundary = ReturnType<typeof import('../mocks/socketIo').createSocketIoBoundaryStub> & Readonly<{
     serverUrl: string;
     token: string | undefined;
+    options: SessionOpsSocketOptions;
 }>;
-type SessionOpsSocketFactory = (serverUrl: string, options: { auth?: { token?: string } }) => SessionOpsSocketBoundary['socket'];
+type SessionOpsSocketFactory = (serverUrl: string, options: SessionOpsSocketOptions) => SessionOpsSocketBoundary['socket'];
 
 // Runtime consumers retain the SDK import between fixture installations.
 const installedSocketBoundary = vi.hoisted(() => ({ current: null as SessionOpsSocketFactory | null }));
@@ -53,7 +56,7 @@ export async function installSessionOpsNetworkBoundary() {
         const boundary = createSocketIoBoundaryStub();
         const { socket } = boundary;
         sockets.push(socket);
-        const recordedBoundary = { ...boundary, serverUrl, token: options.auth?.token };
+        const recordedBoundary = { ...boundary, serverUrl, token: options.auth?.token, options };
         socketBoundaries.push(recordedBoundary);
         let timeoutMs: number | null = null;
         // Pooled sockets retain this transport across a test's spy restoration.
@@ -92,7 +95,7 @@ export async function installSessionOpsNetworkBoundary() {
         const actual = await importOriginal<typeof import('socket.io-client')>();
         return {
             ...actual,
-            io: (serverUrl: string, options: { auth?: { token?: string } }) => {
+            io: (serverUrl: string, options: SessionOpsSocketOptions) => {
                 const current = installedSocketBoundary.current;
                 if (!current) throw new Error('Session operations Socket boundary is not installed');
                 return current(serverUrl, options);
@@ -145,6 +148,9 @@ export async function installSessionOpsNetworkBoundary() {
         if (url.pathname === '/health') return new Response(null, { status: 200 });
         if (url.pathname === '/v1/auth/ping') return Response.json({});
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: homes.get(url.origin)!.encryptionMode, updatedAt: 1 });
+        if (url.pathname === '/v1/account/encryption/currentness' && homes.get(url.origin)!.encryptionMode === 'plain') {
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        }
         if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         const accountId = homes.get(url.origin)?.accountId;
         if (!accountId) throw new Error(`Test Home Account is unavailable: ${url.origin}`);

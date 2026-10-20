@@ -6,6 +6,19 @@ import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { setWidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 
 describe('native widget target contracts', () => {
+    it.each(['usage_source_coverage', 'usage_unpriced'])('admits %s with independently bound query scope and no presentation controls', id => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id });
+        expect(descriptor).not.toBeNull();
+        if (!descriptor) return;
+        expect(readWidgetInputTargetV1(descriptor)).toEqual({ kind: 'app' });
+        expect(isWidgetTargetHostableV1(descriptor, 'corePage')).toBe(true);
+        expect(descriptor.inputs?.fields.map(field => field.path)).toEqual(['period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis']);
+        const query = normalizeUsageQuery({ period: { startMs: 1000 }, machines: ['pinned'] });
+        const instance: WidgetInstanceV1 = { v: 1, id: 'panel', definition: { kind: 'builtin', id },
+            bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path, { kind: 'value', value: query[field.path as keyof typeof query] ?? null }])) };
+        expect(resolveConfiguredWidgetInputs({ descriptor, instance, providedContext: {}, viewerValues: {} }))
+            .toMatchObject({ status: 'ready', input: { period: { startMs: 1000 }, machines: ['pinned'] } });
+    });
     it('derives machine and root from authorized checkout rows rather than supplied page values', () => {
         const checkout = { serverId: 'home', id: 'checkout', machineId: 'real-machine', rootPath: '/repo', createdAtMs: 0 };
         const input = { value: { ...checkout, rootPath: '/repo/' }, serverId: 'home', workspaceRefs: [checkout] };

@@ -24,6 +24,7 @@ import {
   GITHUB_FIXTURE_REPOSITORY,
   GITHUB_FIXTURE_REPOSITORY_ID,
   GITHUB_PULL_REQUEST_RESPONSE,
+  GITHUB_ISSUE_RESPONSE,
   GITHUB_SEARCH_PULL_REQUEST_ITEM,
   githubSearchResponse,
   githubChangedFile,
@@ -49,6 +50,30 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('loads exact task fields despite honest row-fact truncation through the registered get Action', async () => {
+    const body = 'Full task body\n\nKeep the Markdown whitespace.  \n';
+    const issue = { ...GITHUB_ISSUE_RESPONSE, number: 7, title: '界'.repeat(1000), body,
+      labels: [{ name: ' preserve label whitespace ' }], assignees: [{ login: 'octocat' }],
+      url: `https://api.github.com/repos/${REPOSITORY_KEY}/issues/7`,
+      repository_url: `https://api.github.com/repos/${REPOSITORY_KEY}`,
+      html_url: `https://github.com/${REPOSITORY_KEY}/issues/7` };
+    const transport = createStubGithubTransport({ respond: (request) => request.url.endsWith('/issues/7')
+      ? { status: 200, body: issue } : undefined });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    try {
+      const result = await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.get, { v: 1,
+        instance: configuredInstance({ scope: 'repository' }),
+        localRef: { kindId: 'issue', collisionScope: `github:${GITHUB_FIXTURE_REPOSITORY_ID}`, entryId: '7' },
+        lastKnownLocator: { v: 1, routingToken: REPOSITORY_KEY },
+      }, { surface: 'agent', sessionId: 'task-edit-session' });
+      expect(result).toMatchObject({ kind: 'present', snapshot: { projectionTruncated: true }, taskFields: {
+        title: issue.title, body, labelIds: [' preserve label whitespace '], assigneeIds: ['octocat'],
+      } });
+      expect(TriageGetResultV1Schema.safeParse(result).success).toBe(true);
+    } finally { await plugin.dispose(); }
+  });
   it.each([
     { name: 'readable failing', checkStatus: 200, empty: false, headStatus: 200, failureCode: null },
     { name: 'readable empty', checkStatus: 200, empty: true, headStatus: 200, failureCode: null },

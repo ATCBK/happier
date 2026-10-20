@@ -1,14 +1,19 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 import { projectFollowPolicyEditorV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
-import type { SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { FollowSourceRelationV1, SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { resolveFollowDeliveryV1, type FollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { projectAccountSessionFollowPolicyEditor } from '@/components/sessions/follow/accountSessionFollowController';
 import { SessionFollowSourcesEditor } from '@/components/sessions/follow/SessionFollowSourcesEditor';
+import { FollowEditorPanel } from '@/components/sessions/follow/FollowEditorPanel';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { useIsTablet } from '@/utils/platform/responsive';
 import { useAccountSessionFollowController } from '@/components/sessions/follow/useAccountSessionFollowController';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 import { useSessionFollowers } from '@/components/sessions/follow/useSessionFollowers';
@@ -39,7 +44,49 @@ function describePersonLevel(preset: FollowPreset): string {
     return joinHappierFacts(t(`session.follow.policy.${preset}`), meaning);
 }
 
-type SessionFollower = Readonly<{ sessionId: string; manager: boolean; policy: SessionFollowSourceV1['policy'] }>;
+type SessionFollowerRelation = Readonly<{
+    relation: 'manager' | 'follower';
+    policy: SessionFollowSourceV1['policy'];
+    deliveryState: SessionFollowSourceV1['deliveryState'];
+}>;
+
+type SessionFollowerDelivery = Readonly<{
+    delivery: 'wake' | 'next_turn' | 'off';
+    via: readonly SessionFollowerRelation['relation'][];
+}>;
+
+const followerEvents = {
+    needsYouDecision: { kind: 'needs_you', type: 'decision' },
+    needsYouApproval: { kind: 'needs_you', type: 'approval' },
+    needsYouBlocked: { kind: 'needs_you', type: 'blocked' },
+    needsYouContinue: { kind: 'needs_you', type: 'decision', mode: 'continue' },
+    finished: { kind: 'finished' },
+    failedOrStopped: { kind: 'failed_or_stopped' },
+    stalled: { kind: 'stalled' },
+    updatePosted: { kind: 'update_posted' },
+    personWrote: { kind: 'person_wrote' },
+    goalChanged: { kind: 'goal_changed' },
+    message: { kind: 'message' },
+} as const satisfies Record<string, FollowEventV1>;
+
+/** Ask for an actual event, including its needs-you type, mode and handler. */
+export function projectFollowerDelivery(follower: Pick<SessionFollower, 'relations'>, event: FollowEventV1): SessionFollowerDelivery {
+    const decision = resolveFollowDeliveryV1({ policies: follower.relations.map((relation) => relation.policy), event });
+    return {
+        delivery: decision.session.wake ? 'wake' : decision.session.nextTurn ? 'next_turn' : 'off',
+        // The canonical resolver's selected flag always projects to one session channel.
+        via: follower.relations.filter((relation) => resolveFollowDeliveryV1({ policies: [relation.policy], event }).selected)
+            .map((relation) => relation.relation),
+    };
+}
+
+export type SessionFollower = Readonly<{
+    sessionId: string;
+    manager: boolean;
+    relations: readonly SessionFollowerRelation[];
+    /** Policy intent, before receiver availability or source access is applied. */
+    effective: Readonly<{ [K in keyof typeof followerEvents]: SessionFollowerDelivery }>;
+}>;
 
 /**
  * Who follows, from the reverse read: one row per following session (a receiver can hold both a
@@ -47,24 +94,44 @@ type SessionFollower = Readonly<{ sessionId: string; manager: boolean; policy: S
  * active) and the other people. Unknown stays null, never zero.
  */
 export function projectSessionFollowerCensus(projection: Readonly<{
-    sources: readonly SessionFollowSourceV1[];
+    sources: readonly FollowSourceRelationV1[];
     follows: readonly unknown[];
     peopleCount?: number;
 }> | null): Readonly<{ sessions: readonly SessionFollower[] | null; peopleCount: number | null; otherPeople: number | null }> {
     if (!projection) return { sessions: null, peopleCount: null, otherPeople: null };
-    const byReceiver = new Map<string, SessionFollower>();
+    const byReceiver = new Map<string, { sessionId: string; relations: SessionFollowerRelation[] }>();
     for (const source of projection.sources) {
-        const current = byReceiver.get(source.destinationSessionId);
-        byReceiver.set(source.destinationSessionId, {
-            sessionId: source.destinationSessionId,
-            manager: (current?.manager ?? false) || source.relation === 'manager',
-            // The follow's own level; a manager-only relation shows the manager's.
-            policy: current && source.relation === 'manager' ? current.policy : source.policy,
-        });
+        // This is the reverse census for one Session source. Other source kinds
+        // share Follow's list transport but are not followers of this Session.
+        if (!('sourceSessionId' in source)) continue;
+        const current = byReceiver.get(source.destinationSessionId)
+            ?? { sessionId: source.destinationSessionId, relations: [] };
+        current.relations.push({ relation: source.relation ?? 'follower', policy: source.policy, deliveryState: source.deliveryState });
+        byReceiver.set(source.destinationSessionId, current);
     }
     const peopleCount = projection.peopleCount ?? null;
     return {
-        sessions: [...byReceiver.values()],
+        sessions: [...byReceiver.values()].map(({ sessionId, relations }) => {
+            const decision = (event: FollowEventV1) => projectFollowerDelivery({ relations }, event);
+            return {
+                sessionId,
+                manager: relations.some((relation) => relation.relation === 'manager'),
+                relations,
+                effective: {
+                    needsYouDecision: decision(followerEvents.needsYouDecision),
+                    needsYouApproval: decision(followerEvents.needsYouApproval),
+                    needsYouBlocked: decision(followerEvents.needsYouBlocked),
+                    needsYouContinue: decision(followerEvents.needsYouContinue),
+                    finished: decision(followerEvents.finished),
+                    failedOrStopped: decision(followerEvents.failedOrStopped),
+                    stalled: decision(followerEvents.stalled),
+                    updatePosted: decision(followerEvents.updatePosted),
+                    personWrote: decision(followerEvents.personWrote),
+                    goalChanged: decision(followerEvents.goalChanged),
+                    message: decision(followerEvents.message),
+                },
+            };
+        }),
         peopleCount,
         otherPeople: peopleCount === null ? null : Math.max(0, peopleCount - (projection.follows.length > 0 ? 1 : 0)),
     };
@@ -89,6 +156,8 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
     const census = React.useMemo(() => projectSessionFollowerCensus(followers.projection), [followers.projection]);
     const { sessions, peopleCount, otherPeople } = census;
     const machineId = props.session ? (readSessionOwnerMetadataView(props.session)?.machineId ?? null) : null;
+    // Following reads this session's own relations by its identity: it stays whole while the session's snapshot loads.
+    const destination = React.useMemo(() => ({ id: props.target.sessionId }), [props.target.sessionId]);
 
     const headerLine = React.useMemo(() => {
         const sessionCount = sessions?.length ?? 0;
@@ -110,7 +179,7 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
                         count={sessions && peopleCount !== null ? sessions.length + peopleCount : undefined} />
                     <SessionPeopleYouRow target={props.target} openEditor={followEditor.openEditor}
                         anchorRef={followEditor.anchorRef} triggerRef={followEditor.triggerRef} />
-                    {sessions && sessions.length > 0 ? <SessionFollowerRows serverId={props.target.serverId} followers={sessions} /> : null}
+                    {sessions && sessions.length > 0 ? <SessionFollowerRows target={props.target} followers={sessions} /> : null}
                     {otherPeople ? (
                         <Item testID="session-people-followers-people" density="compact" showDivider={false} showChevron={false}
                             icon={<FollowerMark name="users" />}
@@ -120,33 +189,107 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
                 </View>
             ) : null}
             {followEditor.editor}
-            {props.session ? (
-                <View ref={props.followingAnchorRef} tabIndex={-1} collapsable={false} testID="session-people-following">
-                    <SessionFollowSourcesEditor destination={props.session} serverId={props.target.serverId}
-                        destinationMachineId={machineId} />
-                </View>
-            ) : null}
+            <View ref={props.followingAnchorRef} tabIndex={-1} collapsable={false} testID="session-people-following">
+                <SessionFollowSourcesEditor destination={destination} serverId={props.target.serverId}
+                    destinationMachineId={machineId} />
+            </View>
         </>
     );
 });
 
 
-/** The sessions that follow this one, named through the batched title projection; a row opens it. */
-function SessionFollowerRows(props: Readonly<{ serverId: string; followers: readonly SessionFollower[] }>) {
+/**
+ * A follower row's one line. One relation says its level and what that wakes. A receiver that is both its manager
+ * and an ordinary follower stays one row: who it is, that it also follows, and the union the Home delivers
+ * (wake, next turn, or no events selected), never just one relation's level.
+ */
+export function describeSessionFollower(follower: Pick<SessionFollower, 'manager' | 'relations' | 'effective'>): string {
+    const manager = follower.manager ? t('session.collaboration.pane.followersManager') : null;
+    const [only] = follower.relations;
+    if (only && follower.relations.length === 1) {
+        return joinHappierFacts(manager, describeSessionFollowLevel(projectFollowPolicyEditorV1(only.policy).preset as FollowPreset));
+    }
+    const deliveries = Object.values(follower.effective);
+    const meaning = deliveries.some((event) => event.delivery === 'wake')
+        ? t('session.collaboration.pane.followersEffectiveWake')
+        : deliveries.some((event) => event.delivery === 'next_turn')
+            ? t('session.collaboration.pane.followersEffectiveNextTurn')
+            : t('session.collaboration.pane.followersEffectiveOff');
+    return joinHappierFacts(
+        manager,
+        t('session.collaboration.pane.followersAlsoFollows'),
+        meaning,
+    );
+}
+
+/**
+ * The sessions that follow this one, named through the batched title projection. A row opens the same Follow
+ * panel as the follower's own Following row (lab P2-S): "<follower> follows this", why, and how much it hears,
+ * anchored to the row on a wide window and a pushed page on a phone. A receiver that hears only as this session's
+ * manager has no ordinary follow to edit here, so its panel says where that is changed.
+ */
+export function SessionFollowerRows(props: Readonly<{ target: SessionAddress; followers: readonly SessionFollower[] }>) {
     const router = useRouter();
-    const addresses = React.useMemo(() => props.followers.map((follower) => ({ sessionId: follower.sessionId, serverId: props.serverId })),
-        [props.serverId, props.followers]);
+    const anchored = useIsTablet();
+    const [openId, setOpenId] = React.useState<string | null>(null);
+    const addresses = React.useMemo(() => props.followers.map((follower) => ({ sessionId: follower.sessionId, serverId: props.target.serverId })),
+        [props.target.serverId, props.followers]);
     const titles = useSessionDisplayTitles(addresses);
+    const open = (followerId: string) => {
+        if (anchored) { setOpenId(followerId); return; }
+        router.push(buildScopedSessionRouteHref({
+            sessionId: followerId,
+            serverId: props.target.serverId,
+            suffix: '/follow-source',
+            query: { source: props.target.sessionId },
+        }) as Href);
+    };
     return <>
         {props.followers.map((follower, index) => {
-            const preset = projectFollowPolicyEditorV1(follower.policy).preset as FollowPreset;
-            return (
-                <Item key={follower.sessionId} testID={`session-people-follower-session-${follower.sessionId}`}
-                    density="compact" showDivider={false} title={titles[index] ?? t('session.untitled')} icon={<FollowerMark name="stack" />}
-                    subtitle={joinHappierFacts(follower.manager ? t('session.collaboration.pane.followersManager') : null, describeSessionFollowLevel(preset))}
-                    onPress={() => router.push(buildScopedSessionRouteHref({ sessionId: follower.sessionId, serverId: props.serverId }) as never)} />
-            );
+            const title = titles[index] ?? t('session.untitled');
+            return <SessionFollowerRow key={follower.sessionId} target={props.target} follower={follower} title={title}
+                open={anchored && openId === follower.sessionId} onOpen={() => open(follower.sessionId)} onClose={() => setOpenId(null)} />;
         })}
+    </>;
+}
+
+function SessionFollowerRow(props: Readonly<{
+    target: SessionAddress;
+    follower: SessionFollower;
+    title: string;
+    open: boolean;
+    onOpen(): void;
+    onClose(): void;
+}>) {
+    const anchorRef = React.useRef<View>(null);
+    const triggerRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
+    const why = describeSessionFollower(props.follower);
+    const panel = (parts: Readonly<{ body: React.ReactNode; footer: React.ReactNode }>) => (
+        <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={props.onClose}
+            testID={`session-people-follower-session-${props.follower.sessionId}-panel`}
+            accessibilityLabel={t('session.follow.sources.followsThis', { title: props.title })}
+            title={t('session.follow.sources.followsThis', { title: props.title })} subtitle={why}
+            mark={<FollowerMark name="stack" />} footer={parts.footer}>
+            {parts.body}
+        </FollowEditorPanel>
+    );
+    const ordinary = props.follower.relations.some((relation) => relation.relation === 'follower');
+    return <>
+        <View ref={anchorRef} collapsable={false}>
+            <Item pressableRef={triggerRef} testID={`session-people-follower-session-${props.follower.sessionId}`}
+                density="compact" showDivider={false} title={props.title} icon={<FollowerMark name="stack" />}
+                subtitle={why} subtitleLines={2} onPress={props.onOpen} />
+        </View>
+        {props.open ? (ordinary
+            // The follower's own editor and writers, placing this one source's panel at this row.
+            ? <SessionFollowSourcesEditor destination={{ id: props.follower.sessionId }} serverId={props.target.serverId}
+                destinationMachineId={null}
+                page={{ sourceKey: props.target.sessionId, onClose: props.onClose, frame: panel }} />
+            : panel({
+                body: <Item density="compact" showDivider={false} showChevron={false} mode="info" titleLines={0}
+                    title={t('session.follow.sources.managerOnly')} />,
+                footer: <SectionButtonRow trailing={<RoundButton title={t('common.done')} onPress={props.onClose} />}>{null}</SectionButtonRow>,
+            })) : null}
     </>;
 }
 

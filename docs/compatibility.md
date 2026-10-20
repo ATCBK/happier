@@ -37,6 +37,34 @@ proof. This is not a second accounting ledger or an inferred attribution shim.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## Confirmed background runner refresh (0.3 development)
+
+Ordinary runner-refresh V1 and process-attested V2 request bodies are unchanged.
+The explicit `daemon.sessionRunner.restart.confirmedBackground` operation accepts
+those same strict bodies and delegates to the ordinary restart owner with only
+native-background interruption allowed. It preserves child draining, foreground
+refusal, process identity and Provider binding security confirmation. No request
+reason proves consent.
+
+The app confirms raw reported activity, independent of presentation freshness,
+and also confirms a current daemon's native-background busy result. Only after
+that consent may a missing dedicated method fall back to the original V1 or V2
+operation; authorization, cancellation and other failures never downgrade.
+An older client using the ordinary operation safely receives busy for active
+native work. A current daemon accepts an omitted native activity field from a
+non-reporting runner; a successful unknown report permits refresh, while an
+actual read failure refuses it. The optional native slot extends the existing
+unreleased 0.3 Session-input live-work response in place. An old 0.3 development
+reader of a new runner is not a released coexistence contract.
+
+The inspected immutable CLI `cli-v0.2.16` and UI `ui-web-v0.2.17` tags at
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d` retain the strict V1 request;
+artifact publication provenance was not independently checked for this port.
+The moving 0.2 source intent includes PR607 refinements through `5763a9844b`.
+The new operation adds no persisted data or downgrade reader. Remove the
+missing-method adapter when supported original-operation-only daemons are no
+longer a reachable app target.
+
 ## MCP Test ingress (0.3 development)
 
 Current MCP Test Actions and UI requests address a saved server with `t: 'byId'`.
@@ -49,6 +77,42 @@ canonical reach resolver and daemon test pipeline. It adds no catalog write or
 second test pipeline. Remove this ingress when support for those released 0.2
 clients testing against an upgraded daemon ends. The moving predecessor at
 `f18aba940c5c56e5b24454e176c836c171098a2d` still produces that request.
+
+Test explicitly selects its one requested server through the canonical Session
+selection resolver, including an Off or ruleless server, without changing its
+reach rules. A successful saved-server Test records tool annotations in the
+existing catalog snapshot. Read-only Session tool projection still denies
+unclassified tools; checking an `allow_read_only` server first supplies the read
+annotations needed to expose its read tools after restart with resume.
+
+## Coarse Artifact kind (0.3 development)
+
+Artifact kind filtering is an additive HTTP and persistence extension.
+Current readers send the optional `kind` query and writers derive kind metadata
+without a feature gate.
+
+The one-way 0.3 upgrade does not support a 0.3 client against a 0.2 Home.
+No legacy-server adapter is required or provided. Current readers still require
+authenticated owner, access and Account-mode projections. The compatibility
+obligation is retained 0.2-created data opened through the current Home.
+
+Writes without kind remain accepted by the current Home. Historical rows have null kind;
+an opaque header edit without kind invalidates its previous classification. New
+writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
+The filtered response reports readable unclassified rows, and the shared
+`listArtifactHeadersV1` owner restarts a full scan while any remain. Header
+decryption, content validation and access remain authoritative. After publishing
+the inventory, `syncArtifacts.ts` best-effort repairs null or stale hints from
+headers it already opened, using the metadata-only write fenced by that header's
+version. Locked rows are never classified. The server makes repeated writes of
+the same kind no-ops without changing content bytes or versions. Inbox reads do
+not perform a separate backfill; explicit content writes derive the current hint.
+
+The new nullable column and Account/kind index require an additive migration
+before loading the new server Prisma projection. Migration deployment and shared
+Prisma client generation belong to the environment owner; source validation may
+generate private clients for disposable test databases without changing live
+clients. Full scans remain necessary for inventories with unclassified rows.
 
 ## Map the seam
 
@@ -222,6 +286,25 @@ Generated compatibility publication, real stored-row/revision checks and current
 package validation remain required integration gates. Retire the storage adapter
 when those persisted 0.2 inputs leave the supported data window, not merely when
 old processes disappear. This integration is unreleased and still under validation.
+
+### Retained quiet input (0.3 development)
+
+Pending Input revision 5 adds the closed `retainedContext` materialization proof
+for exact informational originals still retained by the current publisher's
+local queue. The parent proof-bearing request is also closed. A CLI sends this
+operand only after observing revision 5 support; an older or unknown Home leaves
+the operation unavailable instead of silently ignoring the proof. Ordinary
+requests without retained context retain the existing revision 2–4 ingress.
+The server verifies the same-Session claimed rows, informational admission and
+current publisher before excluding them from rejoin/claim selection. It does not
+resolve those rows or infer native acceptance. No persisted format changes.
+
+The inspected moving 0.2 predecessor at
+`89868c98f0cddc0a42fc3a97b2b3e311363756ed` advertises revision 2 and ignores
+unknown fields at its materialization ingress; its relevant paths were clean.
+That reader cannot safely consume this proof, hence the operation-scoped
+capability requirement. This is a 0.3 development contract, not a released
+mixed-version or loaded-runtime certification.
 
 ### Pending reset starts (0.3 development)
 
@@ -884,6 +967,23 @@ runtime admits that combination. It does not establish that a particular 0.2
 binary is eligible for 0.3 updates. Remove the guard only when no supported
 eligible binary can lack the SDK; delivering native modules still requires a
 native app build.
+
+### Native Doc passage selection (0.3 development)
+
+Exact passage comments use the existing enriched-Markdown native menu event's
+full `renderedText` snapshot, committed `sourceMarkdown` basis and UTF-16
+selection range. A menu from a different rendered basis cannot supply mapping
+evidence for the latest callback. The native dependency
+patch and its generated event emitters must be included in a rebuilt iOS/Android
+app; JavaScript or an OTA alone cannot add that payload to an installed binary.
+Older native events without the full snapshot do not publish a whole-block or
+quote-searched substitute; legacy text-only custom menu callbacks remain usable
+without source-mapping evidence. The marked-text refinement data contract passes the
+captured Markdown and a completion callback for the same native renderer and
+source mapper; the visible refinement host remains a Doc UI handoff.
+This is development behavior, not evidence that the host is composed, an
+installed app has the patch, or native selection/accessibility release checks
+have passed.
 
 ### Voice duration settings (0.3 development)
 
@@ -1700,6 +1800,14 @@ older strict servers reject that directive before mutation. The
 [Account transition contract](./encryption.md#account-mode-transition-status) owns resealing and
 replay; Session-bound drafts never participate solely because their address uses V2.
 
+New Discussion V2 addresses may carry an optional UUID `draftId`, serialized as
+`new-discussion/<draftId>`. The unkeyed `new-discussion` address retains the ordinary
+New Discussion draft. Keyed drafts use the same rows, encryption, CAS and Account-mode
+transition owner; they do not alias or replace the retained singleton. The key is
+closed identity data: an unavailable V2 operation retains the keyed local draft and
+must never retry it as an unkeyed write. This is part of the one-way development
+upgrade below, not a new V1 address or mixed-version coexistence contract.
+
 New-Session V2 authoring retains the title, creation identity, explicit memory choice and qualified
 prompt stack in the canonical synchronized field catalog. Another client can therefore reopen a
 Bot or Ask Happier draft with those choices. Existing 0.3 device-local copies are read only when
@@ -2081,9 +2189,13 @@ summaries and recipient-key census consume the same Run access owner.
 Cursors bind both Account and source/filter scope. `workflow.run.summaries`
 reads the requested saved-workflow ids in one indexed batch and returns latest,
 recent and Needs-you facts with byte-bounded `remainingSourceArtifactIds`.
-List, wait and summaries share the server's attention predicate: interrupted
-Runs, terminal Runs retaining child custody, or actionable invocation rows.
-Failed origin delivery and a settled exhausted result do not add attention.
+List, detail, wait and summaries share the server's attention predicate: failed
+Runs, or non-cancelled Runs with actionable invocation rows. Accepted managed
+Automation Runs use this Workflow predicate and are excluded from ordinary
+Automation attention, so a failure without a Session still appears once in Inbox.
+Linked step Session attention folds beneath the same Run. An interrupted state,
+pending physical Stop custody, failed origin delivery or a settled exhausted
+result alone does not add attention.
 Lean list rows expose `attentionRequired` from that same membership, including
 exact Run reads used by Boards. Other projections may omit it; omission is
 unknown, not false. Ordinary child-row wakes refresh this fact without advancing
@@ -2525,6 +2637,17 @@ backfill requirement. Undeployed target/plugin approval schemas may be refined
 in place through the same Artifact owner. Released V1 bytes and readers remain
 the historical compatibility boundary.
 
+For live-only target/plugin approvals in 0.3 development, the original admitted
+invocation retains the confidential operands and the same approval Artifact id
+through settlement. Its captured Account/Home writer publishes the terminal
+outcome, effect-attempt fact and any admitted operation-credential identity on
+that Artifact. Neither confidential input nor handler output is persisted by
+this receipt path. Success, failure and uncertain execution retain the original
+requester and execution origin; an unacknowledged receipt write reports
+`approval_execution_outcome_unknown` without retrying the effect. Once the live
+waiter is gone, another approval attempt remains `approval_stale`; history is
+read through the existing approval reader rather than replaying the operands.
+
 Storage proposals in 0.3 development optionally retain `storageRetryResults`
 inside the same strict V2 Artifact. This is an append-only list of strict settled
 Pile results, limited to the original execution's unsuccessful items with distinct
@@ -2843,8 +2966,15 @@ store. V1 list/get retain the closed snapshot reader inspected in clean `../0.2`
 at `37a6541578749067b49d4579be8c752c9591b8c8`: only `forkRequest`,
 `spawnAttempt`, and `handoff` domain references, with the original terminal
 `errorCode`/`error` pair. Its response projection omits current domain references,
-`setupReview`, `observation`, and failure `details`; it never rewrites retained
+`setupReview`, `observation`, `operationCredentialUses`, and failure `details`; it never rewrites retained
 custody, state, revisions, or revision notifications.
+
+Current V2 operation reads and current approval receipts retain content-free
+`operationCredentialUses` from actual host credential materialization. They
+describe the admitted label/kind, owning Account or Team when known,
+purpose-binding reason, and admission-time currentness; they neither grant
+credential access nor assert continuing readiness. Terminal/rejoined outcomes
+remain unchanged. The existing V1 response and push projection omit these facts.
 
 Managed controller failures in the current development V2 read retain a strict
 `managedControllerRequest` diagnostic: the static request path, failure category,
@@ -2953,6 +3083,12 @@ Remove the path when its support window has ended and evidence shows no supporte
 
 Shared-database Stack consumers keep descriptor continuity in their private
 runtime directory, selected by the preset's explicit shared-DB consumer fact.
+This is a QA/development topology: the source and consumers share the database's
+one Home identity, while each consumer retains its own descriptor history.
+One client profile must follow a single consumer; it must not alternate between
+consumers of that shared database. Their revisions do not form one shared
+endpoint history, so a different consumer's equal revision can conflict and a
+lower revision can be ignored by the client's monotonic descriptor admission.
 The source Stack and ordinary PostgreSQL/MySQL servers retain database-backed
 continuity. Each consumer publishes and restarts from its own private history;
 it neither reads nor writes the shared continuity row. Earlier undeployed 0.3

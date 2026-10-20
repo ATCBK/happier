@@ -1402,8 +1402,9 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(screen.findByTestId('agent-input-chip-picker-popover')).toBeTruthy();
         expect(screen.findByTestId('agent-input-chip-picker.option:engine:codex')).toBeTruthy();
         expect(lastPopoverProps?.anchorRef).toBe(agentChip.props.ref);
-        // The live engine detail picker uses the wider rail layout in this branch.
-        expect(lastPopoverProps?.maxWidthCap).toBe(720);
+        // With the rail shown the engine picker may span the composer column; without it, 570 (below).
+        const { layout } = await import('@/components/ui/layout/layout');
+        expect(lastPopoverProps?.maxWidthCap).toBe(layout.maxWidth);
         expect((lastOptionPickerOverlayProps?.options ?? []).map((o: any) => o.value)).toEqual(['default', 'session-model']);
 
         await act(async () => {

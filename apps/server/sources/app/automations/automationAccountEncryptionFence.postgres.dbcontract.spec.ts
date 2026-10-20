@@ -57,7 +57,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")(
                 let blocked = false;
                 await inTx(async transitionTx => {
                     const [{ pid }] = await transitionTx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
-                    const fence = await acquireAccountEncryptionTransitionFenceInTx(transitionTx, account.id);
+                    const fence = await acquireAccountEncryptionTransitionFenceInTx(transitionTx, account.id, "exclusive");
                     expect(fence.status).toBe("ready");
                     if (fence.status !== "ready") throw new Error("Transition fence unavailable");
                     await transitionTx.automation.update({ where: { id: automationId }, data: { deletedAt: null } });

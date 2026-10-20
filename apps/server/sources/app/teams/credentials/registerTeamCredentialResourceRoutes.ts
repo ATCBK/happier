@@ -407,6 +407,13 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         const hasEligibleSource = eligibility.some(candidate => candidate.eligibility?.status === 'eligible');
         const hasChangedSource = eligibility.some(candidate => candidate.eligibility?.status === 'unavailable'
             && (candidate.eligibility.reason === 'source_changed' || candidate.eligibility.reason === 'source_unavailable'));
+        const firstEligibility = eligibility[0]?.eligibility;
+        const brokerRefusalReason = firstEligibility?.status === 'unavailable'
+            && (firstEligibility.reason === 'application_unavailable' || firstEligibility.reason === 'model_unavailable')
+            && eligibility.every(candidate => candidate.eligibility?.status === 'unavailable'
+                && candidate.eligibility.reason === firstEligibility.reason)
+            ? firstEligibility.reason
+            : null;
         let sourcePresentation = resource.sourcePresentation;
         let providerSourceState: 'current' | 'changed' | 'unknown' = source.kind === 'provider_connection' ? 'unknown' : 'current';
         if (source.kind === 'provider_connection') {
@@ -436,7 +443,10 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
                 ? { kind: 'available' as const }
                 : resource.readiness.kind === 'update_required'
                     ? resource.readiness
-                    : { kind: 'broker_unavailable' as const };
+                    : {
+                        kind: 'broker_unavailable' as const,
+                        ...(brokerRefusalReason === null ? {} : { reason: brokerRefusalReason }),
+                    };
         const recoveryAction = !resource.enabled
             || readiness.kind === 'resource_corrupt'
             || (readiness.kind === resource.readiness.kind
@@ -648,6 +658,7 @@ export function registerTeamCredentialResourceRoutes(
         return reply.send(TeamCredentialDirectMaterialMineResponseV1Schema.parse({
             status: "ready",
             recipientMode: result.recipientMode,
+            admittedResource: result.admittedResource,
             stored: result.stored,
             expected: {
                 homeServerIdentityId: await getOrCreateServerIdentityId(env),

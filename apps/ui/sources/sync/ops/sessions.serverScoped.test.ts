@@ -126,6 +126,7 @@ describe('session resume and fork routing through the Home and Account boundary'
     function resumeOptions(overrides: Partial<Parameters<typeof ops.resumeSession>[0]> = {}) {
         return { sessionId: 'session-1', machineId: 'machine-1', directory: '/tmp',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, serverId: home.id,
+            executionAuthority: 'present_user',
             ...overrides } satisfies Parameters<typeof ops.resumeSession>[0];
     }
 
@@ -206,6 +207,46 @@ describe('session resume and fork routing through the Home and Account boundary'
         await expect(ops.resumeSession(resumeOptions())).resolves.toEqual({ type: 'success', sessionId: 'session-1' });
         expect(lifecycle).toEqual([]);
         expect(resumeRequests()).toHaveLength(1);
+        expect(resumeRequests()[0]?.payload).toMatchObject({
+            executionAuthorization: { provenance: 'user_request', requestId: expect.any(String) },
+        });
+    });
+
+    it('keeps automatic Pending wake distinct from explicit Resume intent', async () => {
+        await expect(ops.ensureSessionRuntimeForPendingInput(resumeOptions()))
+            .resolves.toMatchObject({ type: 'success', sessionId: 'session-1' });
+        expect(resumeRequests()).toHaveLength(1);
+        expect(resumeRequests()[0]?.payload).not.toHaveProperty('executionAuthorization');
+    });
+
+    it.each([undefined, 'account_automation'] as const)('does not promote %s authority from an authored Resume marker', async executionAuthority => {
+        await expect(ops.resumeSession(resumeOptions({ executionAuthority,
+            executionAuthorization: { provenance: 'user_request', requestId: 'authored-person-marker' },
+        }))).resolves.toMatchObject({ type: 'success', sessionId: 'session-1' });
+        expect(resumeRequests()).toHaveLength(1);
+        expect(resumeRequests()[0]?.payload).not.toHaveProperty('executionAuthorization');
+    });
+
+    it.each(['present_user', 'account_automation'] as const)('retains %s authority through the real Resume Action executor', async authority => {
+        const sessionId = 'c123456789012345678901234';
+        setSession(sessionId, { active: false, metadata: metadata.MetadataSchema.parse({
+            path: '/tmp', host: 'host.local', machineId: 'machine-1', flavor: 'claude', claudeSessionId: 'native-session',
+        }) });
+        boundary.respond(RPC_METHODS.SPAWN_HAPPY_SESSION, { type: 'success', sessionId });
+        boundary.respond(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE, { type: 'success', sessionId });
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const result = await createDefaultActionExecutor().execute('session.open', {
+            sessionId, serverId: home.id, intent: 'resume',
+        }, { serverId: home.id, surface: 'ui', authority, actionRequestId: 'exact-resume-action', bypassApprovals: true });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'opened' } });
+        expect(resumeRequests()).toHaveLength(1);
+        if (authority === 'present_user') {
+            expect(resumeRequests()[0]?.payload).toMatchObject({
+                executionAuthorization: { provenance: 'user_request', requestId: 'exact-resume-action' },
+            });
+        } else {
+            expect(resumeRequests()[0]?.payload).not.toHaveProperty('executionAuthorization');
+        }
     });
 
     it('waits for nonce-correlated runtime readiness before completing a guarded resume', async () => {
@@ -346,6 +387,25 @@ describe('session resume and fork routing through the Home and Account boundary'
         } finally { account.dispose(); }
     });
 
+    it('executes admitted control switching through the captured Home and existing switch RPC', async () => {
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+        const id = ActionIdSchema.parse('session.control.switch');
+        const executor = createDefaultActionExecutor();
+        boundary.respond('switch', true);
+        const result = await executor.execute(id, { sessionId: 'session-1', to: 'remote' }, {
+            surface: 'ui', authority: 'present_user', serverId: home.id,
+        });
+        expect(result).toEqual({ ok: true, result: { switched: true } });
+        expect(boundary.requests.filter(request => request.method === 'switch')).toEqual([
+            expect.objectContaining({ serverUrl: home.serverUrl, targetId: 'session-1', payload: { to: 'remote' } }),
+        ]);
+        boundary.respond('switch', false);
+        expect(await executor.execute(id, { sessionId: 'session-1', to: 'local' }, {
+            surface: 'ui', authority: 'present_user', serverId: home.id,
+        })).toMatchObject({ ok: false, errorCode: 'session_control_unavailable' });
+    });
+
     it('preserves resume authoring options at the actual daemon request boundary', async () => {
         const connectedServices = { v: 1, bindingsByServiceId: { anthropic: { source: 'connected', profileId: 'profile-1' } } } as const;
         await expect(ops.resumeSession(resumeOptions({ transcriptStorage: 'direct', attachMetadataIdentityPolicy: 'replace_with_runtime_identity',
@@ -427,7 +487,8 @@ describe('session resume and fork routing through the Home and Account boundary'
             .resolves.toEqual({ type: 'success', sessionId: 'session-1' });
         expect(resumeRequests()).toEqual([expect.objectContaining({ serverUrl: home.serverUrl, token: home.token, targetId: 'machine-1',
             method: RPC_METHODS.SPAWN_HAPPY_SESSION, payload: { type: 'resume-session', sessionId: 'session-1', directory: '/tmp',
-                backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, runtimeDescriptorV1 } })]);
+                backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, runtimeDescriptorV1,
+                executionAuthorization: { provenance: 'user_request', requestId: expect.any(String) } } })]);
     });
 
     it('keeps the shared spawn operation budget through the resume RPC transport', async () => {

@@ -7,6 +7,7 @@ import type { PageHeaderMetaFact } from '@/components/ui/layout/PageHeader';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { formatCapabilityCount } from './formatCapabilityCount';
 
 export type CapabilitySource =
   | Readonly<{ kind: 'you' }>
@@ -48,15 +49,6 @@ const TRUST_ICON: Readonly<Record<CapabilityTrust, IconName>> = {
   has_files: 'folder',
   runs_scripts: 'terminal',
 };
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  })
-    .format(value)
-    .toLowerCase();
-}
 
 function sourceFact(source: CapabilitySource): Fact {
   switch (source.kind) {
@@ -110,21 +102,22 @@ function buildFacts(
     facts.push({
       key: 'tools',
       text: t('capabilities.facts.toolCount', {
-        count: formatCount(cost.toolCount),
+        count: cost.toolCount,
+        shown: formatCapabilityCount(cost.toolCount),
       }),
     });
   if (cost?.tokensPerTurn !== undefined)
     facts.push({
       key: 'tokensPerTurn',
       text: t('capabilities.facts.tokensPerTurn', {
-        count: formatCount(cost.tokensPerTurn),
+        count: formatCapabilityCount(cost.tokensPerTurn),
       }),
     });
   if (cost?.tokensWhenUsed !== undefined)
     facts.push({
       key: 'tokens',
       text: t('capabilities.facts.tokensWhenUsed', {
-        count: formatCount(cost.tokensWhenUsed),
+        count: formatCapabilityCount(cost.tokensWhenUsed),
       }),
     });
   for (const [index, extra] of (input.extra ?? []).entries())

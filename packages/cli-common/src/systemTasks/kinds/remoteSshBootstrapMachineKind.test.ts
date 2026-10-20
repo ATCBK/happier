@@ -310,6 +310,8 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
   });
 
   it('enrolls an Iroh-only Home through the single-process streaming owner without public URL configuration', async () => {
+    const startedAt = Date.now();
+    let controllerDeadline: number | undefined;
     const endpointId = 'c'.repeat(64);
     const target = resolveHomeTargetFromDescriptor({
       descriptor: {
@@ -323,6 +325,7 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
     });
     const labels: string[] = [];
     const kind = createRemoteSshBootstrapMachineTaskKind({
+      onEnrollmentDeadline: deadlineMs => { controllerDeadline = deadlineMs; },
       resolveHostTrust: async () => ({ status: 'trusted' }),
       installRemoteCli: async () => undefined,
       approveLocalAuthRequest: async () => undefined,
@@ -381,6 +384,8 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
     });
     const completed = await waitForResult(runner, { taskId: 'iroh-only-enrollment', cursor: 0 });
     expect(completed.result).toMatchObject({ ok: true, data: { machineId: 'machine-iroh' } });
+    expect(controllerDeadline).toBeGreaterThanOrEqual(startedAt + 10 * 60_000);
+    expect(controllerDeadline).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
     expect(labels).toEqual(['auth.status']);
     expect(JSON.stringify(completed)).not.toContain(Buffer.alloc(32, 2).toString('base64url'));
   });

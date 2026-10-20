@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Stack, usePathname } from 'expo-router';
 import { View, useWindowDimensions, Platform } from 'react-native';
-import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
 import { ResizableDockedPane, type ResizableDockedPaneCommitMeta } from '@/components/ui/panels/ResizableDockedPane';
 import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
 import { resolveSidebarDockMaxWidthPx, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
@@ -29,6 +29,12 @@ import { WorkspaceShell } from '@/components/appShell/workspace/WorkspaceShell';
 import { createWorkspaceBarGeometry, WorkspaceBarGeometryContext } from '@/components/appShell/workspace/titleBar/workspaceBarGeometry';
 import { registerShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 import { VoiceTopBarPresenceMount } from '@/components/voice/presence/VoiceTopBarPresence';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+import { Modal } from '@/modal';
+import { t } from '@/text';
 
 /** The title strip's trailing Voice node (Top bar mode); one element, so the strip's memo holds. */
 const VOICE_TOP_BAR_TRAILING = <VoiceTopBarPresenceMount />;
@@ -45,6 +51,8 @@ const renderPeekColumn = (column: AppShellColumnModel) => (
 );
 
 export const SidebarNavigator = React.memo(() => {
+    const accountScope = useActiveServerAccountScope();
+    const { execute, isCurrent } = useMountedActionExecution(accountScope, { openOnRequest: true });
     const pathname = usePathname();
     const isDesktopOverlayWindow = isDesktopActivityOverlayWindowContext();
     const workspace = useOptionalWorkspaceNavigation();
@@ -67,11 +75,8 @@ export const SidebarNavigator = React.memo(() => {
     }, [catalog]);
     const { width: windowWidth } = useWindowDimensions();
     const sidebarCollapsed = useLocalSetting('sidebarCollapsed');
-    const [, setSidebarCollapsed] = useLocalSettingMutable('sidebarCollapsed');
     const sidebarWidthPx = useLocalSetting('sidebarWidthPx');
     const sidebarWidthBasisPx = useLocalSetting('sidebarWidthBasisPx');
-    const [, setSidebarWidthPx] = useLocalSettingMutable('sidebarWidthPx');
-    const [, setSidebarWidthBasisPx] = useLocalSettingMutable('sidebarWidthBasisPx');
     const [dragSidebarWidthPx, setDragSidebarWidthPx] = React.useState<number | null>(null);
     const collapseTriggeredDuringDragRef = React.useRef(false);
     const focusedPaneScopeId = paneState.focusMode?.scopeId ?? null;
@@ -127,6 +132,21 @@ export const SidebarNavigator = React.memo(() => {
         [columnShown, showSidebar],
     );
 
+    const handleSetColumnVisible = React.useCallback((visible: boolean) => {
+        if (visible && paneFocusModeChromeActive) dispatchPaneAction({ type: 'exitFocusMode' });
+        getStorage().getState().applyLocalSettings({ sidebarCollapsed: !visible }, { source: 'ui' });
+    }, [dispatchPaneAction, paneFocusModeChromeActive]);
+    const requestSetColumnVisible = React.useCallback(async (visible: boolean) => {
+        try {
+            const result = await execute('shell.column.set', { visible }, { retainInvocation: true });
+            if (!isCurrent() || result.ok || isActionApprovalDeclinedErrorCode(result.errorCode)
+                || result.errorCode === 'action_cancelled') return;
+            if (!presentActionTurnedOffNoticeIfOff(result, 'shell.column.set')) Modal.alert(t('common.error'), t('common.unavailable'));
+        } catch {
+            if (isCurrent()) Modal.alert(t('common.error'), t('common.unavailable'));
+        }
+    }, [execute, isCurrent]);
+
     const handleSidebarWidthDrag = React.useCallback((nextWidthPx: number | null, dragMeta?: ResizableDockedPaneCommitMeta | null) => {
         if (nextWidthPx == null) {
             collapseTriggeredDuringDragRef.current = false;
@@ -144,19 +164,18 @@ export const SidebarNavigator = React.memo(() => {
         if (shouldCollapseToCompactView) {
             collapseTriggeredDuringDragRef.current = true;
             setDragSidebarWidthPx(null);
-            setSidebarCollapsed(true);
+            fireAndForget(requestSetColumnVisible(false), { tag: 'SidebarNavigator.collapse' });
             return;
         }
 
         setDragSidebarWidthPx(nextWidthPx);
-    }, [setSidebarCollapsed, sidebarCollapsed]);
+    }, [requestSetColumnVisible, sidebarCollapsed]);
 
     const handleSidebarWidthCommit = React.useCallback((nextWidthPx: number) => {
         collapseTriggeredDuringDragRef.current = false;
         setDragSidebarWidthPx(null);
-        setSidebarWidthPx(nextWidthPx);
-        setSidebarWidthBasisPx(windowWidth);
-    }, [setSidebarWidthBasisPx, setSidebarWidthPx, windowWidth]);
+        getStorage().getState().applyLocalSettings({ sidebarWidthPx: nextWidthPx, sidebarWidthBasisPx: windowWidth }, { source: 'ui' });
+    }, [windowWidth]);
 
     const stackNavigationOptions = React.useMemo(() => ({
         lazy: false,
@@ -170,12 +189,9 @@ export const SidebarNavigator = React.memo(() => {
             : null),
     }), [isDesktopOverlayWindow]);
 
-    const handleSetColumnVisible = React.useCallback((visible: boolean) => {
-        if (visible && paneFocusModeChromeActive) dispatchPaneAction({ type: 'exitFocusMode' });
-        setSidebarCollapsed(!visible);
-    }, [dispatchPaneAction, paneFocusModeChromeActive, setSidebarCollapsed]);
-    const handleToggleColumn = React.useCallback(() => handleSetColumnVisible(effectiveSidebarCollapsed),
-        [effectiveSidebarCollapsed, handleSetColumnVisible]);
+    const handleToggleColumn = React.useCallback(() => {
+        fireAndForget(requestSetColumnVisible(effectiveSidebarCollapsed), { tag: 'SidebarNavigator.toggleColumn' });
+    }, [effectiveSidebarCollapsed, requestSetColumnVisible]);
     const columnActionRef = React.useRef({ present: showSidebar, visible: columnShown,
         available: column.kind !== 'none', setVisible: handleSetColumnVisible });
     React.useLayoutEffect(() => {

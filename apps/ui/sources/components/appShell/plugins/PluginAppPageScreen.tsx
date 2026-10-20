@@ -191,8 +191,7 @@ export function PluginAppPageScreen(props: Readonly<{
         isCurrent: () => pageIsMountedRef.current && accountLifetime?.isCurrent() !== false,
     }), [accountLifetime, props.localId, props.pluginId, router]);
     React.useEffect(() => () => locationOwner.dispose(), [locationOwner]);
-    const pageIsLive = props.subPath !== null && !!page && page.disabledReason === null
-        && page.placement.availability.state !== 'resolving';
+    const pageIsLive = props.subPath !== null && !!page && page.disabledReason === null;
     // A location this owner did not settle on — a push, a deep link, or the
     // user's own history walk — retires the declared step. Losing the live
     // page does the same even if its route sub-path has not moved; otherwise a
@@ -292,10 +291,9 @@ export function PluginAppPageScreen(props: Readonly<{
     const headerOptions = React.useMemo(() => ({ headerTitle, headerRight: () => routeActions }), [headerTitle, routeActions]);
     const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={routeActions}>{body}</PageNavigationContextActionsProvider>;
 
-    if (props.subPath !== null && (
-        (!page && (projection.phase === 'establishing' || projection.hasEstablishingMembers))
-        || (page?.disabledReason === null && page.placement.availability.state === 'resolving')
-    )) {
+    // A declared page keeps its physical host while execution revalidates.
+    // The host owns its notice and retention; only a missing declaration waits here.
+    if (props.subPath !== null && !page && (projection.phase === 'establishing' || projection.hasEstablishingMembers)) {
         return renderPage(
             <>
                 <Stack.Screen options={headerOptions} />

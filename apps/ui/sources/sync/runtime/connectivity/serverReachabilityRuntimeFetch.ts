@@ -118,9 +118,11 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
     }
 
     const signal = params.signal ?? params.init.signal ?? undefined;
+    const acquisitionLifetime = new AbortController();
     const reachabilityPromise = acquireServerReachabilitySupervisor({
         serverUrl: params.serverUrl,
         token: effectiveToken,
+        signal: acquisitionLifetime.signal,
         ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
     });
     let reachability: Awaited<typeof reachabilityPromise> | null = null;
@@ -156,6 +158,7 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
         }
         return response;
     } finally {
+        acquisitionLifetime.abort();
         if (reachability) {
             await reachability.release();
         } else {

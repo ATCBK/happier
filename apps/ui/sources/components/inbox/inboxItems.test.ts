@@ -13,6 +13,7 @@ import { TargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/appro
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
+import { countInbox, countInboxNeedsYou } from './inboxCounts';
 
 const emptyInput: InboxItemsInput = { sessionPresentation: { sessionsNeedingAttention: [], readySessions: [],
     markAllReadTargets: [], pendingRequestHydrationTargets: [] }, workGroups: [], workflowServerId: 'home-a',
@@ -128,6 +129,15 @@ describe('one Inbox row projection', () => {
         const read = { ...summary, lastReadSeq: 3, unreadCount: 0, unreadMentionCount: 0 };
         expect(buildInboxItems({ ...emptyInput, discussions: source(message, read, 'decision') }, before)[0])
             .toMatchObject({ type: 'decision', view: 'needs_you', read: true });
+        const countsFor = (items: readonly InboxItem[]) => ({ items, openApprovals: [], openUsageNotices: [],
+            actionOperationEntries: [], friendRequests: [], sessionPresentation: emptyInput.sessionPresentation,
+            workflowAttention: { runIds: [] }, automationAttention: { runIds: [] } });
+        for (const discussion of [summary, read]) {
+            const model = countsFor(buildInboxItems({ ...emptyInput, discussions: source(message, discussion, 'decision') }));
+            expect(countInboxNeedsYou(model)).toBe(1);
+            expect(countInbox(model)).toBe(1);
+        }
+        expect(countInbox(countsFor(buildInboxItems({ ...emptyInput, discussions: { scope, entries: [] } })))).toBe(0);
         expect(buildInboxItems({ ...emptyInput, discussions: { scope, entries: [] } }, before)).toEqual([]);
     });
     it.each(['blocked', 'decision', undefined] as const)('projects the canonical pending question subtype %s', async type => {

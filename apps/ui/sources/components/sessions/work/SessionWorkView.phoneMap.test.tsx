@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 
 import { createDeferred, createMachineFixture, createSessionFixture, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -39,6 +40,7 @@ const { resolveServerScopedMachine } = await import('@/sync/domains/machines/res
 // Keep the Work producer, launcher, selectors, pane and header publication real.
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
 const { storage } = await import('@/sync/domains/state/storage');
+const syncRuntime = await import('@/sync/sync');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
@@ -272,6 +274,57 @@ describe('phone Work List → Map', () => {
             credentials.resolve();
             await screen?.unmount();
             storage.setState(initial, true);
+            await connection.dispose();
+        }
+    }, 180_000);
+});
+
+describe('Work pane after a child was archived', () => {
+    it('says the archived child exists instead of inviting a first start, and offers it back', async () => {
+        const connection = await restoreServerAccountForTest({
+            serverUrl: 'https://work-archived-child.test', serverIdentityId: 'srv_work_archived_child', accountId: 'account',
+            request: async url => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+                return Response.json({}, { status: 404 });
+            },
+        });
+        const initial = storage.getState();
+        const serverId = connection.home.id;
+        const draftScope = getActiveServerAccountScope();
+        if (!draftScope) throw new Error('Expected the restored Account draft scope');
+        await ensureSessionDraftRepositoryHydrated(draftScope);
+        const lead = createSessionFixture({ id: 'lead', serverId });
+        const hydrateRows = vi.spyOn(syncRuntime.sync, 'hydrateSessionListRows').mockResolvedValue(undefined);
+        // The empty invitation is only said once the Session's transcript has loaded.
+        storage.setState({ sessions: { lead }, sessionListRowsByServerId: {}, sessionMessages: { lead: createSessionMessagesFixture({ isLoaded: true }) } });
+        const screen = await renderScreen(<WorkHost serverId={serverId} />, {
+            wrapper: ({ children }) => <InjectedAuthProvider credentials={connection.credentials}>{children}</InjectedAuthProvider>,
+        });
+        try {
+            // A Session that never started anything keeps its invitation.
+            await waitForHomeGovernance(() => expect(screen.findHostByTestId('session-work-empty')).not.toBeNull());
+            expect(screen.findHostByTestId('session-work-state-archived')).toBeNull();
+
+            const archivedChild = createSessionFixture({ id: 'old-child', serverId, manager: { sessionId: lead.id }, archivedAt: 1_000 });
+            await act(async () => storage.setState({ sessions: { lead, 'old-child': archivedChild } }));
+            await waitForHomeGovernance(() => expect(screen.findHostByTestId('session-work-state-archived')).not.toBeNull());
+            expect(screen.findHostByTestId('session-work-empty')).toBeNull();
+            expect(screen.findHostByTestId('session-work-unarchive:old-child')).not.toBeNull();
+            // The archived row names itself from its own content: the pane demands it like the sidebar does.
+            expect(hydrateRows).toHaveBeenCalledWith([{ serverId, sessionId: 'old-child' }]);
+            // Nothing live to switch between, so no List | Map (the desktop header follows the same rule).
+            expect(screen.findHostByTestId('session-work-view:list')).toBeNull();
+            // The header line counts it, where it used to say nothing was started.
+            expect(screen.getTextContent()).toContain('sessionWork.subtitle.archived');
+            expect(screen.getTextContent()).not.toContain('sessionWork.subtitle.nothingStarted');
+        } finally {
+            hydrateRows.mockRestore();
+            await screen.unmount();
+            storage.setState(initial, true);
+            resetSessionDraftRepositoryForTests();
             await connection.dispose();
         }
     }, 180_000);

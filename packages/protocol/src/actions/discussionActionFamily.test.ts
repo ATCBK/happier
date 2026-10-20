@@ -127,6 +127,16 @@ describe('Home Discussion Action identity', () => {
       answerPolicy: 'when_addressed' }).success).toBe(true);
     expect(invite.safeParse({ discussionId: 'question', participant: { kind: 'account', accountId: 'person' },
       answerPolicy: 'when_addressed' }).success).toBe(false);
+    const selected = { discussionId: 'question', participant: { kind: 'session',
+      sessionId: { selector: 'discussion', discussionId: 'reviewers' } } };
+    expect(invite.safeParse(selected).success).toBe(true);
+    expect(discussionFamily.discussionActionHttpWireInputSchemaV1('discussion.invite').safeParse(selected).success).toBe(false);
+    expect(() => bindDiscussionActionHttpRequestV1('discussion.invite', selected)).toThrow();
+    expect(bindDiscussionActionHttpRequestV1('discussion.invite', { ...selected,
+      participant: { kind: 'session', sessionId: 'resolved-reviewer' } })).toEqual({ method: 'POST',
+      path: '/v1/discussions/question/participants/invite', body: { participant: { kind: 'session', sessionId: 'resolved-reviewer' } } });
+    expect(getActionSpec('discussion.participant.remove').inputSchema.safeParse(selected).success).toBe(false);
+    expect(getActionSpec('discussion.participant.policy.set').inputSchema.safeParse({ ...selected, answerPolicy: 'reads_only' }).success).toBe(false);
   });
 
   it('accepts committed reference producer output and keeps identical raw IDs in different Homes distinct', () => {

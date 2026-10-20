@@ -274,8 +274,10 @@ describe('AgentInputAttachmentsRow', () => {
         ));
 
         expect(removals).toHaveLength(2);
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         for (const remove of removals) {
-            expect(flattenStyle(remove.props.style)).toMatchObject({ minHeight: 44, minWidth: 44 });
+            expect(flattenStyle(remove.props.style)).toMatchObject({ minHeight: touchFloor, minWidth: touchFloor });
             act(() => {
                 remove.props.onPress?.({} as never);
             });
@@ -476,13 +478,15 @@ describe('AgentInputAttachmentsRow', () => {
             ['row-remove-surface-remove', 'Remove incident summary', removeSurface],
         ] as const;
 
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         for (const [testID, label, handler] of removals) {
             const remove = screen.findByTestId(testID);
             expect(remove?.props.accessibilityRole).toBe('button');
             expect(remove?.props.accessibilityLabel).toBe(label);
             const style = flattenStyle(remove?.props.style);
-            expect(Math.max(Number(style.minHeight ?? 0), Number(style.height ?? 0))).toBeGreaterThanOrEqual(44);
-            expect(Math.max(Number(style.minWidth ?? 0), Number(style.width ?? 0))).toBeGreaterThanOrEqual(44);
+            expect(Math.max(Number(style.minHeight ?? 0), Number(style.height ?? 0))).toBeGreaterThanOrEqual(touchFloor);
+            expect(Math.max(Number(style.minWidth ?? 0), Number(style.width ?? 0))).toBeGreaterThanOrEqual(touchFloor);
             await screen.pressByTestIdAsync(testID);
             expect(handler).toHaveBeenCalledTimes(1);
         }

@@ -11,12 +11,6 @@ const setTranscriptMessageTimestampDisplayMode = vi.fn();
 const setTranscriptShowToolCalls = vi.fn();
 const setSessionThinkingDisplayMode = vi.fn();
 const setSessionThinkingInlinePresentation = vi.fn();
-const accountSettingsWrites = vi.hoisted(() => [] as unknown[]);
-
-// The Account settings sync engine is the persistence boundary; the view's write reaches it as one delta.
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-    getSyncSingleton: () => ({ applySettings: (delta: unknown) => { accountSettingsWrites.push(delta); } }),
-}));
 
 installSessionSettingsCommonModuleMocks({
     storage: async (importOriginal) => {
@@ -123,7 +117,7 @@ describe('TranscriptSettingsView', () => {
         expect(setTranscriptMessageTimestampDisplayMode).toHaveBeenCalledWith('always');
     });
 
-    it('shows thinking as picture choices and writes both settings behind the full inline choice in one write', async () => {
+    it('shows thinking as picture choices', async () => {
         const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
 
         const thinkingRow = screen.findAllByType(Item).find(node => node.props.testID === 'settings-session-thinking-display');
@@ -132,10 +126,6 @@ describe('TranscriptSettingsView', () => {
         expect(tiles?.props.options.map((option: { id: string }) => option.id)).toEqual(['inline_summary', 'inline_full', 'tool', 'hidden']);
         expect(tiles?.props.options.every((option: { preview?: unknown }) => option.preview != null)).toBe(true);
 
-        tiles?.props.onChange('inline_full');
-        expect(accountSettingsWrites).toEqual([{ sessionThinkingDisplayMode: 'inline', sessionThinkingInlinePresentation: 'full' }]);
-        expect(setSessionThinkingDisplayMode).not.toHaveBeenCalled();
-        expect(setSessionThinkingInlinePresentation).not.toHaveBeenCalled();
     });
 
     it('renders the Network for agent HTML choices in the agent visuals group', async () => {

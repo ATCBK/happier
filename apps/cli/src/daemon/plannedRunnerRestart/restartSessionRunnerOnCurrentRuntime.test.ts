@@ -5,6 +5,7 @@ import {
   RestartAllSessionRunnersResultV1Schema,
   RestartSessionRunnerResultV1Schema,
   RestartSessionRunnerRequestV1Schema,
+  SessionRunnerRuntimeStateV1Schema,
 } from '@happier-dev/protocol';
 import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
@@ -25,6 +26,9 @@ import {
 import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
 import { requestPlannedRunnerRestart } from './requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { restartStaleRunnersAfterDaemonStart } from './restartStaleRunnersAfterDaemonStart';
+import { prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { resolveSessionRunnerRuntimeState } from '../sessionRunnerRuntime/resolveRuntimeState';
 
 function currentIdentity(version: string): SessionRunnerEntrypointIdentity {
   return {
@@ -77,6 +81,122 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it.each(['active', 'unknown'] as const)('refuses active native work and permits nonreporting compatibility (%s), including a legacy UI reason', async state => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    const result = await restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'ui_stale_runner_banner' },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => state,
+    });
+    expect(result).toMatchObject(state === 'active'
+      ? { ok: false, status: 'busy', reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } }
+      : { ok: true, status: 'restarted' });
+    if (state === 'active') expect(requestRestart).not.toHaveBeenCalled();
+    else expect(requestRestart).toHaveBeenCalled();
+  });
+
+  it('refuses refresh when native activity cannot be read, without treating an absent report as a failure', async () => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    expect(await restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'doctor_repair' },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => { throw new Error('fixture transport unavailable'); },
+    })).toMatchObject({ status: 'partial_failure', diagnostics: { activityObservation: 'unavailable' } });
+    expect(requestRestart).not.toHaveBeenCalled();
+  });
+
+  it('permits explicit native-background interruption but still refuses a foreground turn', async () => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    const input = { currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => 'active' as const, allowNativeBackgroundInterruption: true as const,
+      request: { sessionId: 'sess-1', mode: 'if_stale' as const, reason: 'ui_stale_runner_banner' as const } };
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, tracked: trackedSession() })).toMatchObject({ status: 'restarted' });
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, tracked: trackedSession({ activeTurnId: 'foreground' }) }))
+      .toMatchObject({ status: 'busy', reasonCode: 'turn_in_progress' });
+  });
+
+  it('protects dry runs and rechecks native work at the physical signal gate', async () => {
+    let state: 'settled' | 'active' = 'active';
+    let gate: (() => unknown) | undefined;
+    const requestRestart = vi.fn<Parameters<typeof restartSessionRunnerOnCurrentRuntime>[0]['requestRestart']>(async input => { gate = input.canSignal; return { signaled: true }; });
+    const input = { request: { sessionId: 'sess-1', mode: 'if_stale' as const, reason: 'doctor_repair' as const },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => state };
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, request: { ...input.request, dryRun: true } }))
+      .toMatchObject({ status: 'busy' });
+    state = 'settled';
+    expect(await restartSessionRunnerOnCurrentRuntime(input)).toMatchObject({ status: 'restarted' });
+    state = 'active';
+    expect(await gate?.()).toBe('turn_in_progress');
+  });
+
+  it('returns an actionable typed refusal when the receiving runner cannot prepare restart admission', async () => {
+    const tracked = trackedSession();
+    const restart = () => restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'ui_stale_runner_banner' },
+      tracked,
+      currentIdentity: currentIdentity('0.2.11'),
+      requestRestart: input => requestPlannedRunnerRestart({ ...input, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: async () => ({ status: 'unsupported' }) }),
+        requestSignal: async request => {
+          if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+          throw new Error('Unsupported admission must not signal the runner');
+        },
+      }),
+    });
+    const result = await restart();
+    expect(result).toEqual({ ok: false, sessionId: 'sess-1',
+      status: 'restart_admission_unsupported', reasonCode: 'restart_admission_unsupported' });
+    expect(RestartSessionRunnerResultV1Schema.parse(result)).toEqual(result);
+    expect(await restart()).toEqual(result);
+    expect(SessionRunnerRuntimeStateV1Schema.parse(resolveSessionRunnerRuntimeState({ sessionId: 'sess-1', tracked,
+      currentIdentity: currentIdentity('0.2.11') })).plannedRestart)
+      .toMatchObject({ eligible: false, disabledReason: 'restart_admission_unsupported' });
+  });
+
+  it.each(['single', 'bulk', 'startup'] as const)('refuses %s refresh without capture authority and permits an explicit retry', async mode => {
+    const tracked = trackedSession();
+    const reservations = new Set<number>();
+    const signals: number[] = [];
+    let available = false;
+    const input = {
+      trackedSessions: [tracked], currentIdentity: currentIdentity('0.2.11'),
+      requestRestart: async input =>
+        requestPlannedRunnerRestart({ ...input, deferral: { kind: 'none' },
+          restartRequestedPids: reservations, pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+          isProcessSafeToSignal: async () => true,
+          captureRunnerRemainder: async () => available ? { scope: 'subtree', roots: [], ownership: [] } : undefined,
+          requestSignal: async request => {
+            if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+            signals.push(tracked.pid);
+            return { status: 'requested' };
+          },
+        }),
+    } satisfies Omit<Parameters<typeof restartAllSessionRunnersOnCurrentRuntime>[0], 'mode' | 'reason'>;
+    const run = async () => {
+      if (mode === 'single') return await restartSessionRunnerOnCurrentRuntime({ ...input, tracked,
+        request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'daemon_restart_session_runners_command' } });
+      const result = mode === 'bulk'
+        ? await restartAllSessionRunnersOnCurrentRuntime({ ...input, mode: 'if_stale', reason: 'daemon_restart_session_runners_command' })
+        : await restartStaleRunnersAfterDaemonStart({ readSettings: async () => ({ restartSessionRunnersOnUpdate: true }),
+          isShuttingDown: () => false, restart: () => input, logDebug: () => {}, logWarn: () => {} });
+      const bulk = 'status' in result ? result.status === 'completed' ? result.result : null : result;
+      expect(bulk).not.toBeNull();
+      return bulk!.results[0]!;
+    };
+    const refusal = await run();
+    expect(refusal).toEqual({ ok: false, status: 'partial_failure', sessionId: 'sess-1',
+      diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } });
+    expect(RestartSessionRunnerResultV1Schema.safeParse(refusal).success).toBe(true);
+    expect(signals).toEqual([]);
+    expect(reservations.size).toBe(0);
+    available = true;
+    expect(await run()).toMatchObject({ ok: true, status: 'restarted' });
+    expect(signals).toEqual([tracked.pid]);
+  });
   it('keeps final shutdown cancellation within the existing public restart response schema', async () => {
     const tracked = trackedSession();
     const restartRequestedPids = new Set<number>();

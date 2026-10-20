@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { ExecutionRunFollowEventV1Schema, RunFollowOccurrenceV1Schema, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
+import { resolveWorkflowRunFollowEventV1 } from '../../workflows/composeWorkflowRunWorkerUpdateV1.js';
+import { classifyWorkerUpdateEventV1 } from '../relations/workerUpdateV1.js';
+import { RunFollowUpdateNotificationV1Schema } from '../../activity/webhookPayload.js';
 
 import {
   buildSessionFollowWakeEventLocalId,
@@ -10,6 +14,8 @@ import {
   SessionFollowObservePendingRequestV1Schema,
   SessionFollowObservePendingResponseV1Schema,
   SessionFollowPendingObservationV1Schema,
+  SessionFollowRunOccurrenceRoutesRequestV1Schema,
+  SessionFollowRunOccurrenceRoutesResponseV1Schema,
 } from './sessionFollowTransportV1.js';
 
 const frontier = { transcriptSeq: 1, readyEventSeq: 2, agentStateVersion: 3, turn: null } as const;
@@ -20,6 +26,38 @@ const wakeObservations = [{ policy: { preset: 'everything' as const },
 }] as const;
 
 describe('Session Follow socket transport V1', () => {
+  it('binds Run routes to one exact original and per-edge cursor without a parent Session alias', () => {
+    const original = { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId: 'terminal-2' } as const;
+    const request = { v: 1, original } as const;
+    const event = ExecutionRunFollowEventV1Schema.parse({ kind: classifyWorkerUpdateEventV1({ workerKind: 'execution_run', ownerState: 'succeeded' }) });
+    const response = { ok: true, v: 1, original, event, routes: [{ destinationSessionId: 'receiver', relation: 'follower',
+      attachedAt: 12, policy: { preset: 'important' }, expectedTerminalEventId: 'terminal-1' }] } as const;
+    expect(SessionFollowRunOccurrenceRoutesRequestV1Schema.parse(request)).toEqual(request);
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.parse(response)).toEqual(response);
+    expect(SessionFollowRunOccurrenceRoutesRequestV1Schema.safeParse({ ...request, sourceSessionId: 'parent' }).success).toBe(false);
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ...response,
+      routes: [{ ...response.routes[0], expectedRevision: 1 }] }).success).toBe(false);
+    const workflow = { source: { kind: 'workflow_run', runId: 'workflow-1' }, revision: 4 } as const;
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ok: true, v: 1, original: workflow,
+      event: resolveWorkflowRunFollowEventV1({ state: 'succeeded' }),
+      routes: [{ destinationSessionId: 'receiver', relation: 'follower', attachedAt: 12,
+        policy: { preset: 'quiet' }, expectedRevision: 3 }] }).success).toBe(true);
+  });
+  it.each([{ kind: 'needs_you', type: 'decision' }, { kind: 'update_posted' }] as const)(
+    'admits a Workflow revision with its current $kind event through routing and input admission', event => {
+      const original = { source: { kind: 'workflow_run', runId: 'workflow-1' }, revision: 4 } as const;
+      const produced = resolveWorkflowRunFollowEventV1({ state: 'running', attentionRequired: event.kind === 'needs_you' });
+      expect(produced).toEqual(event);
+      expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ok: true, v: 1, original, event: produced,
+        routes: [{ destinationSessionId: 'receiver', relation: 'follower', attachedAt: 12,
+          policy: { preset: 'important' }, expectedRevision: 3 }] }).success).toBe(true);
+      expect(SessionFollowInputV1Schema.parse({ v: 1, original, event: produced, delivery: 'next_turn' })).toMatchObject({ event });
+      expect(RunFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: { original, event: produced } })).toMatchObject({ follow: { event } });
+      expect(SessionFollowInputV1Schema.safeParse({ v: 1, original, event: { ...event, unknown: true }, delivery: 'next_turn' }).success).toBe(false);
+      expect(RunFollowOccurrenceV1Schema.safeParse({ original: { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' },
+        terminalEventId: 'terminal-2' }, event }).success).toBe(false);
+    },
+  );
   it('carries a committed Discussion occurrence without a fabricated source Session', () => {
     const observation = { source: { kind: 'discussion', discussionId: 'discussion' }, destinationSessionId: 'receiver',
       policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },

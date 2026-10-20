@@ -11,6 +11,7 @@ import { db } from "@/storage/db";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { publishSessionArchiveTransition } from "@/app/session/archive/publishSessionArchiveTransition";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { log } from "@/utils/logging/log";
 import { type Fastify } from "../../types";
 
@@ -123,7 +124,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
         await publishSessionArchiveTransition({
             sessionId,
             projection: res.projection,
-            recipientCursors: res.recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(res.recipientCursors),
             badgeAttentionChanged: res.badgeAttentionChanged,
         }).then(() => {
             log({ module: "session-archive", sessionId, operation: "archive", phase: "publication_completed" }, "Published Session archive transition");
@@ -223,7 +224,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
         await publishSessionArchiveTransition({
             sessionId,
             projection: { archivedAt: null },
-            recipientCursors: res.recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(res.recipientCursors),
             badgeAttentionChanged: res.badgeAttentionChanged,
         }).then(() => {
             log({ module: "session-archive", sessionId, operation: "unarchive", phase: "publication_completed" }, "Published Session archive transition");

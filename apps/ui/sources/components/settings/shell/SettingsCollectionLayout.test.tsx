@@ -27,7 +27,8 @@ installSettingsViewCommonModuleMocks({
 const { SettingsCollectionLayout } = await import('./SettingsCollectionLayout');
 const { SettingsFloatingControlsHost } = await import('./SettingsModalFloatingControls');
 const { PageHeader } = await import('@/components/ui/layout/PageHeader');
-const { useHappierCollectionLayout, HAPPIER_COLLECTION_RAIL_WIDTH_PX } = await import('@happier-dev/plugin-ui/presentation');
+const { useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
+const { HAPPIER_COLLECTION_RAIL_WIDTH_PX } = await import('@happier-dev/plugin-ui/advanced');
 
 const modeSeen: Array<string | null> = [];
 const detailMounts = { count: 0 };

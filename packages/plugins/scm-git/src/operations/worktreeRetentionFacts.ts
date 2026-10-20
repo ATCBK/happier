@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { canonicalAbsolutePathsEqual } from '@happier-dev/cli-common/path';
+import { canonicalAbsolutePathsEqual } from '@happier-dev/plugin-sdk/fs';
 import type { ScmWorktreeEnrichmentEntry } from '@happier-dev/plugin-sdk/scm';
 import { inspectGitCheckoutIdentity, resolveGitAdminPath } from '../checkoutIdentity.js';
 import { runScmCommand } from '../runtime.js';

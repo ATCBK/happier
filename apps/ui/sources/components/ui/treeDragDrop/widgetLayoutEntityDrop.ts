@@ -3,7 +3,7 @@ import { z } from 'zod/mini';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDropAdmissionV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 import {
-    findWidgetLayoutItemV1, findWidgetLayoutParentV1, getWidgetLayoutItemIdV1, resolveWidgetGroupWidthFitV1, supportsWidgetGroupsV1,
+    WidgetInstanceActionInputSchemasV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, getWidgetLayoutItemIdV1, resolveWidgetGroupWidthFitV1, supportsWidgetGroupsV1,
     type WidgetInstanceRefV1, type WidgetLayoutGroupV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1, type WidgetProjectAreaV1,
 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
@@ -15,10 +15,10 @@ export const WidgetLayoutDropDestinationSchema = z.strictObject({
 });
 export type WidgetLayoutDropDestination = z.infer<typeof WidgetLayoutDropDestinationSchema>;
 
-/** Its source placement is still being read: a pending state, never a refusal. */
+/** Its source placement is still being read: the place is neither admitted nor refused yet (`describeEntityDropOutcome` words it). */
 export const WIDGET_MOVE_PENDING_CODE = 'widget_admission_pending';
-/** Neither is an answer about the place under the pointer, so the carried card shows only what it carries. */
-export const WIDGET_MOVE_SILENT_CODES: ReadonlySet<string> = new Set([WIDGET_MOVE_UNCHANGED_CODE, WIDGET_MOVE_PENDING_CODE]);
+/** Over its own place there is nothing to say, so the carried card shows only what it carries. */
+export const WIDGET_MOVE_SILENT_CODES: ReadonlySet<string> = new Set([WIDGET_MOVE_UNCHANGED_CODE]);
 
 /** Identity adapters do not select transport, credentials or layout authority. */
 export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRefV1 | null {
@@ -28,6 +28,17 @@ export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRef
     if (item.kind === 'session-board-item') return { surface: { ...item.scope, owner: { kind: 'sessionBoard', sessionId: item.address.sessionId } }, instanceId: item.itemId };
     if (item.kind === 'companion-item' && item.item.kind === 'instance') return { surface: { ...item.scope, owner: { kind: 'companion', sessionId: item.address.sessionId } }, instanceId: item.item.instance.id };
     return null;
+}
+
+/** Local feedback identity comes from the admitted owner-native position, never an anchor or preview. */
+export function widgetLayoutEntityDropDestinationKey(admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>): string | null {
+    if (admission.effect.actionId !== 'widgets.item.move') return null;
+    const move = WidgetInstanceActionInputSchemasV1['widgets.item.move'].parse(admission.effect.input);
+    // The legacy same-surface shape uses a widget ordinal; `to.index` is native content placement.
+    if (!('to' in move)) return JSON.stringify(['widget-order-position', move.ref.surface,
+        move.area ?? null, move.groupId ?? null, move.toIndex]);
+    const { to } = move;
+    return JSON.stringify(['widget-position', to.surface, to.tabId ?? null, to.area ?? null, to.groupId ?? null, to.index]);
 }
 
 /** An anchored insertion uses the destination's order after an empty source group dissolves. */

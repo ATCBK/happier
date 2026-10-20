@@ -16,7 +16,7 @@ type BrokerTunnel = Readonly<{
   close(): Promise<void>;
 }>;
 export type AccountConnectionProviderBrokerAccess = ManagedProviderEndpointAccessProjection & Readonly<{
-  readHttpBinding(): Promise<Readonly<{ endpointUrl: string; headers: Readonly<Record<string, string>> }>>;
+  readHttpBinding(signal?: AbortSignal): Promise<Readonly<{ endpointUrl: string; headers: Readonly<Record<string, string>> }>>;
 }>;
 export type OpenAccountConnectionProviderBrokerAccess = (input: Readonly<{
   connectionId: ProviderConnectionId;
@@ -75,10 +75,10 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     authorization: `Bearer ${tunnel.localCapability}`,
     [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,
   });
-  const assertAdmitted = async () => {
-    input.signal.throwIfAborted();
-    if (closed || !await input.admitConsumer(opened.authority, input.signal)) throw unavailable();
-    input.signal.throwIfAborted();
+  const assertAdmitted = async (signal: AbortSignal = input.signal) => {
+    signal.throwIfAborted();
+    if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
+    signal.throwIfAborted();
     if (closed) throw unavailable();
   };
   const cleanup = () => {
@@ -110,8 +110,8 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       throw unavailable();
     }
   }
-  const readHttpBinding = async () => {
-    await assertAdmitted();
+  const readHttpBinding = async (signal?: AbortSignal) => {
+    await assertAdmitted(signal ? AbortSignal.any([input.signal, signal]) : input.signal);
     return Object.freeze({ endpointUrl, headers });
   };
   return Object.freeze({
@@ -120,7 +120,7 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     access: Object.freeze({
       endpointUrl: (endpointTemplateId: string) => !closed && endpointTemplateId === input.application.endpointTemplateId ? endpointUrl : null,
       async request(request: ManagedServiceRequest) {
-        const binding = await readHttpBinding();
+        const binding = await readHttpBinding(request.signal);
         const path = normalizeProviderOriginRelativePathSyntax(request.pathAndQuery, { allowQuery: true });
         const target = new URL(path, localOrigin);
         if (target.origin !== localOrigin || target.hash !== '') throw unavailable();

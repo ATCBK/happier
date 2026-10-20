@@ -5,6 +5,7 @@ import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { fetchDaemonMemoryDocumentSummary, type MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 import type { MemoryDocumentSource } from './useMemoryDocument';
 
@@ -32,6 +33,11 @@ export function useMemoryDocumentSummary(params: Readonly<{
   const provider = useMemorySearchProvider({ kind: 'exact', serverId: account?.serverId ?? serverId },
     { enabled, corpora: DOCUMENTS });
   const target = provider.daemonTarget;
+  const selectedTarget = provider.selectedDaemonTarget;
+  const unavailableMachine = React.useMemo<MemoryDocumentSummary>(() => selectedTarget && account
+    && areServerProfileIdentifiersEquivalent(selectedTarget.serverId, account.serverId)
+    ? { state: 'unavailable', cause: { reason: 'machine_unavailable', target: selectedTarget } }
+    : UNAVAILABLE, [account, selectedTarget]);
   // An admitted status operation follows its caller's lifetime and may not answer.
   // Unknown counts are unavailable now, not a promise that a loading row will finish.
   // Keep that same read alive so a late answer can still supply the counts.
@@ -60,6 +66,7 @@ export function useMemoryDocumentSummary(params: Readonly<{
     });
     return () => controller.abort();
   }, [account, awaitingStatus, custody, enabled, key, params.preparationBasis, sessionId, target, view]);
-  if (!enabled || !target || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
+  if (!enabled || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
+  if (!target) return unavailableMachine;
   return loaded?.key === key ? loaded.summary : awaitingStatus;
 }

@@ -1,6 +1,7 @@
 import type { Tx } from "@/storage/inTx";
 
 import { ensureLayout1SessionCreateInvariantsInTx } from "./layout1SessionCreateInvariants";
+import { acquireLayout1SessionCreatePublicationAdmissionInTx } from "./sessionCreationPublicationAudience";
 import {
     applyRequestedSessionPlacementInTx,
     insertLayout1SessionRowInTx,
@@ -69,6 +70,7 @@ export async function createFreshBoundLayout1SessionInTx(
     }>,
 ): Promise<Exclude<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>, { kind: "rejoined" }>> {
     const { prepared, sessionId } = params;
+    await acquireLayout1SessionCreatePublicationAdmissionInTx(tx, prepared);
     const invariants = await ensureLayout1SessionCreateInvariantsInTx(tx, prepared);
     if (!invariants.ok) {
         return { kind: "rejected", rejection: invariants.rejection };

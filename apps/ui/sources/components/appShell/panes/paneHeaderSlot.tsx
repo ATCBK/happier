@@ -15,8 +15,11 @@ export type PaneHeaderLineSegment =
     | Readonly<{ text: string; tone: 'added' | 'removed' }>
     /** The one fact that needs the person ("1 waiting for you"): drawn in the attention colour. */
     | Readonly<{ text: string; attention: true }>
-    /** A fact led by its glyph (the task a conversation hangs off, "Invited only" behind a lock). */
-    | Readonly<{ text: string; icon: IconName }>;
+    /**
+     * A fact led by its glyph (the task a conversation hangs off, "Invited only" behind a lock). With
+     * `onPress` it is a way back to that thing: a link that keeps the line's quiet tone until pointed at.
+     */
+    | Readonly<{ text: string; icon: IconName; onPress?: () => void; accessibilityLabel?: string; testID?: string }>;
 
 /**
  * The pane header's live line: what this pane is about right now, in real nouns joined by " · "

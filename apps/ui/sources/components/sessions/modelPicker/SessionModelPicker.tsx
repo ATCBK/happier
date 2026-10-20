@@ -66,6 +66,7 @@ import {
 export type SessionModelPickerExperimentalConfirmation = Readonly<{
     kind: 'confirm-experimental';
     connectionId: string;
+    connectedAccountTarget?: SessionModelProjectionGroup['connectedAccountTarget'];
     expectedConnectionRevision: number;
     agentTargetKey: string;
     modelId: string;
@@ -125,6 +126,7 @@ export function resolveSessionModelPickerSelection(input: Readonly<{
             return {
                 kind: 'confirm-experimental',
                 connectionId: group.connectionId,
+                ...(group.connectedAccountTarget ? { connectedAccountTarget: group.connectedAccountTarget } : {}),
                 expectedConnectionRevision: group.connectionRevision,
                 agentTargetKey: row.ref.agentTargetKey,
                 modelId: row.ref.modelId,
@@ -236,7 +238,18 @@ export function SessionModelPicker(props: SessionModelPickerProps) {
         if (props.sourceBrowse) return <SessionModelSourceBrowse picker={props} sourceBrowse={props.sourceBrowse}
             scope={browseScope} onExit={exitBrowse} />;
     }
-    return <SessionModelPickerPane {...props} onBrowseSource={props.sourceBrowse ? setBrowseScope : undefined} />;
+    // A global, non-authoritative Provider projection cannot declare the Agent's discovered native
+    // catalog unavailable. Keep connection-specific failures and Provider-selection recovery intact.
+    const projectionError = !props.providerProjectionAuthoritative
+        && props.projectionError?.code === 'provider_catalog_unavailable'
+        && !props.projectionError.connectionId
+        && !props.selected?.providerConnectionId
+        && !props.selectedTeamCredentialModel
+        && props.nativeModels.some((model) => model.value !== 'default')
+        ? null
+        : props.projectionError;
+    return <SessionModelPickerPane {...props} projectionError={projectionError}
+        onBrowseSource={props.sourceBrowse ? setBrowseScope : undefined} />;
 }
 
 /** One source, in the same pane: its models, the scope bar, nothing committed until a card is picked. */
@@ -401,6 +414,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                 value: entry.ref,
                 source: projected?.source,
                 label: projected?.label ?? entry.label ?? entry.ref.modelId,
+                searchText: projected?.searchText ?? entry.ref.modelId,
                 description: projected?.description ?? entry.description,
                 accessibilityLabel: projected?.accessibilityLabel ?? entry.accessibilityLabel,
                 disabled: projected ? projected.disabled : true,

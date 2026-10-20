@@ -39,7 +39,7 @@ import {
 } from "@/app/home/audit/homeAdministrationEvents";
 import { persistentMachineWhere } from "@/app/machines/machineSelection";
 import { listTeamMembershipsForAccountInTx } from "@/app/teams/memberships/memberAdministration";
-import { publishHomeGovernanceChangedInTx } from "./governanceChanges";
+import { acquireHomeGovernanceAdmissionInTx, publishHomeGovernanceChangedInTx } from "./governanceChanges";
 import {
     HOME_ANONYMOUS_SIGNUP_KEY,
     HOME_AUTH_METHOD_ENABLE_KEYS,
@@ -719,6 +719,8 @@ export async function setHomeRoleInTx(tx: Tx, input: Readonly<{
     env: NodeJS.ProcessEnv;
     emailDeliveryReady: boolean;
 }>): Promise<HomeGovernanceResult<HomeRoleSetOutcome>> {
+    await acquireHomeGovernanceAdmissionInTx(tx,
+        { accountIds: [input.actorAccountId, input.targetAccountId], intent: "exclusive" });
     const admission = await authorizeHomeGovernanceMutationInTx(tx, {
         actorAccountId: input.actorAccountId,
         request: {

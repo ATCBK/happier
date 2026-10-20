@@ -19,10 +19,12 @@ import { SkillReadResultV1Schema } from './skillReadV1.js';
 import retainedFrontmatter from '../../../../fixtures/0.2-retained-skill-frontmatter.json';
 import { estimateTokensV1 } from '../../../capabilities/estimateTokensV1.js';
 import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
+import { listArtifactHeadersV1 } from '../../../artifacts/artifactListSelectionV1.js';
 
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
-function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader?: (machineId: string, path: string) => Promise<FoundSkillBundleV1>) {
+type RegistryPorts = Pick<ReturnType<typeof createRegistryHostV1>, 'readRegistryItem' | 'readRegistrySource' | 'filesForPointer' | 'readLinkSkills' | 'fetchLinkSkillFiles'>;
+function harness(registry?: RegistryPorts, foundReader?: (machineId: string, path: string) => Promise<FoundSkillBundleV1>) {
   // These in-memory ports stand for the independently committed Artifact/row/session stores.
   const artifacts = new Map<string, PromptLibraryStoredArtifact>();
   let usage: Record<string, number> = {}, usageUnavailable = false, rules: SkillRuleV1[] = [], rowRevision = 0, creates = 0, createAttempts = 0, failCreateAt = 0, failRules = false, failSession = false, failCreatedRead = false, failUpdatedRead = false;
@@ -62,6 +64,53 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it('opens a page through the batched Artifact owner while retaining per-item failures', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const artifact = h.artifacts.get(created.skillId)!;
+    h.artifacts.set('unreadable', { ...artifact, id: 'unreadable', body: 'invalid' });
+    h.artifacts.set('removed', { ...artifact, id: 'removed' });
+    const store = { ...h.store,
+      // Independent persistent-store transport; domain decoding and projection stay real.
+      readMany: async (ids: readonly string[]) => Promise.allSettled(ids.map(async id => id === 'removed' ? null : h.artifacts.get(id) ?? null)),
+      read: async () => { throw new Error('Unexpected per-item transport'); },
+    };
+    const execute = createSkillActionExecuteV1({ store, skillRules: h.skillRules, randomId: () => 'unused', includeInSession: async () => ({ ok: true }) });
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await execute('skills.list', {}, { surface: 'ui' }));
+    expect(result.items.find(item => item.skillId === created.skillId)).toMatchObject({ name: 'sample', description: 'A useful skill', userInvocable: true });
+    expect(result.unavailableItems).toEqual([
+      { skillId: 'unreadable', title: 'sample', reason: 'skill_content_unavailable' },
+      { skillId: 'removed', title: 'sample', reason: 'not_found' },
+    ]);
+  });
+  it('selects classified skill pages through the real library Action and daemon catalog', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const artifact = h.artifacts.get(created.skillId)!;
+    if (!artifact.header) throw new Error('Expected the created skill header');
+    const skill = { artifactId: artifact.id, header: artifact.header, body: artifact.body, createdAt: 1, updatedAt: 1 };
+    const unrelated = { ...skill, artifactId: 'unrelated-prompt', header: { kind: 'prompt_doc.v2' } };
+    const requests: (string | undefined)[] = [];
+    const list = async (options: Parameters<typeof listArtifactHeadersV1>[0]['options']) => listArtifactHeadersV1({ options,
+      encodeCursor: row => row.artifactId,
+      // This port is the HTTP/persistent inventory boundary; keep the selector real.
+      readPage: async page => {
+        requests.push(page?.coarseKind);
+        return { items: page?.coarseKind === 'skill' ? [skill] : [skill, unrelated], hasUnclassified: false };
+      } });
+    const store: PromptLibraryArtifactStore = { ...h.store, list: async options => {
+      const page = await list(options);
+      return { ...page, items: page.items.map(row => ({ id: row.artifactId, header: row.header, updatedAtMs: row.updatedAt })) };
+    } };
+    const execute = createSkillActionExecuteV1({ store, skillRules: h.skillRules, randomId: () => 'unused', includeInSession: async () => ({ ok: true }) });
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await execute('skills.list', {}, { surface: 'ui' }));
+    expect(result.items.find(item => item.skillId === created.skillId)?.name).toBe('sample');
+    expect(result.items.some(item => item.skillId === unrelated.artifactId)).toBe(false);
+    expect(requests).toEqual(['skill']);
+    requests.length = 0;
+    expect(await readSkillLibraryCatalog({ list })).toContainEqual({ id: created.skillId, name: 'sample' });
+    expect(requests).toEqual(['skill']);
+  });
   it('returns an addressed bundle in one read only when full file contents are requested', async () => {
     const h = harness(), stub = FIRST_PARTY_SKILLS_V1[0]!;
     const normal = SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store, request: { skillId: stub.skillId } }));
@@ -421,24 +470,26 @@ describe('skill library Actions', () => {
     expect(install).toMatchObject({ skillIds: ['skill-1'] });
     expect(readSkillLockV1(h.artifacts.get('skill-1')!.header).provenance).toMatchObject({ kind: 'registry', registry: { itemId: '', ref: { commit: initial } } });
     expect(JSON.parse(h.artifacts.get('skill-1')!.body!).entries).toMatchObject(files);
+    // Start the link-update scenario in its own library; Add now reuses the registry identity above.
+    const linked = harness(registry);
     head = initial;
-    await h.execute('skills.install', { source: { kind: 'link', url: source.url } }, { surface: 'ui' });
-    await h.execute('skills.update', { skillId: 'skill-2', expectedRevision: '1:1', files: [{ kind: 'upsert', file: { ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64') } }] }, { surface: 'ui' });
-    const artifact = h.artifacts.get('skill-2')!, lock = readSkillLockV1(artifact.header);
+    await linked.execute('skills.install', { source: { kind: 'link', url: source.url } }, { surface: 'ui' });
+    await linked.execute('skills.update', { skillId: 'skill-1', expectedRevision: '1:1', files: [{ kind: 'upsert', file: { ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64') } }] }, { surface: 'ui' });
+    const artifact = linked.artifacts.get('skill-1')!, lock = readSkillLockV1(artifact.header);
     const newItem = await registry.readRegistryItem({ sourceId: 'repo', itemId: '', version: latest });
     if (newItem.payload.kind !== 'skill') throw new Error('Expected upstream skill');
-    h.artifacts.set('skill-2', { ...artifact, header: { ...artifact.header, skillLock: { ...lock, upstream: { state: 'update_available', latest: newItem.payload.skill.ref } } } });
-    expect(await h.execute('skills.updates.apply', { skillId: 'skill-2', expectedRevision: '2:2' }, { surface: 'ui' })).toMatchObject({ ok: false, code: 'choices_required' });
-    const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(await h.execute('skills.updates.diff', { skillId: 'skill-2' }, { surface: 'ui' }));
+    linked.artifacts.set('skill-1', { ...artifact, header: { ...artifact.header, skillLock: { ...lock, upstream: { state: 'update_available', latest: newItem.payload.skill.ref } } } });
+    expect(await linked.execute('skills.updates.apply', { skillId: 'skill-1', expectedRevision: '2:2' }, { surface: 'ui' })).toMatchObject({ ok: false, code: 'choices_required' });
+    const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(await linked.execute('skills.updates.diff', { skillId: 'skill-1' }, { surface: 'ui' }));
     expect(diff.files).toMatchObject([{ path: 'SKILL.md', changed: true }]);
-    const applied = await h.execute('skills.updates.apply', { skillId: 'skill-2', expectedRevision: '2:2', choices: { 'SKILL.md': 'mine' } }, { surface: 'ui' });
+    const applied = await linked.execute('skills.updates.apply', { skillId: 'skill-1', expectedRevision: '2:2', choices: { 'SKILL.md': 'mine' } }, { surface: 'ui' });
     expect(applied).toMatchObject({ provenance: { kind: 'link', ref: { commit: latest } } });
-    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await h.execute('skills.list', {}, { surface: 'ui' }));
-    expect(listed.items.find(item => item.skillId === 'skill-2')).toMatchObject({ modified: true, upstream: { state: 'current' } });
-    expect(h.artifacts.get('skill-2')!.body).toContain(encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64'));
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await linked.execute('skills.list', {}, { surface: 'ui' }));
+    expect(listed.items.find(item => item.skillId === 'skill-1')).toMatchObject({ modified: true, upstream: { state: 'current' } });
+    expect(linked.artifacts.get('skill-1')!.body).toContain(encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64'));
   });
   it('previews multiple uploaded skill folders and preserves acknowledged identities if a later content write fails', async () => {
-    const h = harness(), source = { kind: 'upload', files: [...files.map(file => ({ ...file, path: 'one/' + file.path })), ...files.map(file => ({ ...file, path: 'two/' + file.path }))] };
+    const h = harness(), source = { kind: 'upload', files: [...files.map(file => ({ ...file, path: 'one/' + file.path })), ...files.map(file => ({ ...file, path: 'two/' + file.path, contentBase64: encodeBase64(new TextEncoder().encode(markdown.replace('name: sample', 'name: other')), 'base64') }))] };
     expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ path: 'one' }, { path: 'two' }] });
     expect(h.creates()).toBe(0); h.failCreateAt(2);
     expect(await h.execute('skills.install', { source }, { surface: 'ui' })).toMatchObject({ ok: false, errorCode: 'quota_exceeded', details: { skillIds: ['skill-1'] } });
@@ -492,6 +543,13 @@ describe('skill library Actions', () => {
     expect(await h.execute('skills.delete', { skillId: 'skill-1', expectedRevision: '1:1' }, { surface: 'ui' })).toEqual({ deleted: true });
     expect(h.artifacts.has('skill-1')).toBe(false); expect(h.rules()).toEqual([]);
   });
+  it('upload preview names relative files the bundle will not contain, and stays advisory', async () => {
+    const h = harness(); const withLink = (text: string) => [{ ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + text), 'base64') }];
+    const source = { kind: 'upload', files: withLink('\nFollow [the checklist](../../shared/checklist.md).\n') };
+    expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ outsideReferences: ['../../shared/checklist.md'] }] });
+    expect(await h.execute('skills.install', { source: { kind: 'upload', files }, dryRun: true }, { surface: 'ui' })).not.toHaveProperty('items.0.outsideReferences');
+    expect(await h.execute('skills.install', { source }, { surface: 'ui' })).toMatchObject({ skillIds: ['skill-1'] });
+  });
   it('upload preview is inert, reports modes, and commit Off writes no enabled rule', async () => {
     const h = harness(); const source = { kind: 'upload', files: [...files, { path: 'scripts/run.sh', contentBase64: 'eA==', contentKind: 'utf8', unixMode: 0o755 }] };
     expect(await h.execute('skills.install', { source: { kind: 'upload', files: [...files, { path: 'a:b', contentBase64: 'eA==', contentKind: 'utf8' }] } }, { surface: 'ui' }))
@@ -499,5 +557,136 @@ describe('skill library Actions', () => {
     expect(h.creates()).toBe(0);
     expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ trust: 'runs_scripts', provenance: { kind: 'upload' } }] }); expect(h.creates()).toBe(0);
     expect(await h.execute('skills.install', { source, where: { kind: 'replace', rules: [] } }, { surface: 'ui' })).toMatchObject({ skillIds: ['skill-1'] }); expect(h.rules()).toEqual([]);
+  });
+});
+
+describe('skills that refer to a sibling skill in the same source tree', () => {
+  const skillMd = (name: string, body = '') => `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}`;
+  const utf8 = (path: string, text: string) => ({ path, contentBase64: encodeBase64(new TextEncoder().encode(text), 'base64'), contentKind: 'utf8' as const });
+  const bundle = {
+    a: [utf8('a/SKILL.md', skillMd('a', 'Read [the setup](../b/SKILL.md) first and [the README](../README.md).')), utf8('a/notes.md', 'x')],
+    b: [utf8('b/SKILL.md', skillMd('b'))],
+    c: [utf8('c/SKILL.md', skillMd('c', 'Solo.'))],
+  };
+  const upload = (...names: (keyof typeof bundle)[]) => ({ kind: 'upload' as const, files: names.flatMap(name => bundle[name]) });
+  const caller = { surface: 'ui' as const };
+  const itemsOf = (result: unknown) => SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(result) as { items: { path: string; name: string; outsideReferences?: string[]; siblingSkills?: { path: string; references: string[] }[] }[] };
+
+  it('marks the referenced sibling on the preview and keeps every other reference as the advisory', async () => {
+    const h = harness();
+    const { items } = itemsOf(await h.execute('skills.install', { source: upload('a', 'b', 'c'), dryRun: true }, caller));
+    expect(items.find(item => item.path === 'a')).toMatchObject({
+      outsideReferences: ['../b/SKILL.md', '../README.md'], siblingSkills: [{ path: 'b', references: ['../b/SKILL.md'] }],
+    });
+    expect(items.find(item => item.path === 'b')).not.toHaveProperty('siblingSkills');
+    expect(items.find(item => item.path === 'c')).not.toHaveProperty('siblingSkills');
+    // Without the sibling in the same tree the reference is only the advisory.
+    expect(itemsOf(await h.execute('skills.install', { source: upload('a'), dryRun: true }, caller)).items[0]).not.toHaveProperty('siblingSkills');
+  });
+
+  it('adds exactly the selected skills, so an unticked sibling stays out', async () => {
+    const h = harness();
+    expect(await h.execute('skills.install', { source: upload('a', 'b', 'c'), selectPaths: ['a', 'b'] }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+    expect(await h.execute('skills.install', { source: upload('a', 'b', 'c'), selectPaths: ['a'] }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    expect(h.creates()).toBe(2);
+  });
+
+  it('reuses both upload identities and previews them as held without changing content or reach', async () => {
+    const h = harness();
+    const source = upload('a', 'b');
+    expect(await h.execute('skills.install', { source }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+    const before = [...h.artifacts.values()];
+    const rules = h.rules();
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await h.execute('skills.install', { source, dryRun: true }, caller));
+    expect(result).toMatchObject({ items: [{ path: 'a', inLibrary: 'skill-1' }, { path: 'b', inLibrary: 'skill-2' }] });
+    if (!('items' in result)) throw new Error('Expected preview');
+    expect(result.items[0]).not.toHaveProperty('siblingSkills');
+    expect(await h.execute('skills.install', { source, where: { kind: 'replace', rules: [] } }, caller))
+      .toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+    expect(h.creates()).toBe(2);
+    expect([...h.artifacts.values()]).toEqual(before);
+    expect(h.rules()).toEqual(rules);
+    // The same identity can still be explicitly added to an Agent's current Session.
+    expect(await h.execute('skills.install', { source }, { surface: 'agent', sessionId: 'session' }))
+      .toMatchObject({ skillIds: ['skill-1', 'skill-2'], includedInSessionId: 'session' });
+    expect(h.includes.get('session')).toEqual(['skill-1', 'skill-2']);
+    expect(h.creates()).toBe(2);
+  });
+
+  it('matches uploaded content by name and digest across roots, preserving the different-content name-conflict path', async () => {
+    const h = harness();
+    await h.execute('skills.create', { name: 'b', files: [utf8('SKILL.md', skillMd('b'))] }, caller);
+    expect(await h.execute('skills.install', { source: upload('a', 'b') }, caller))
+      .toMatchObject({ skillIds: ['skill-2', 'skill-1'] });
+    const relocated = { kind: 'upload', files: [utf8('other-root/SKILL.md', skillMd('b'))] };
+    expect(await h.execute('skills.install', { source: relocated }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    const changed = { kind: 'upload', files: [utf8('b/SKILL.md', skillMd('b', 'Different instructions.'))] };
+    expect(await h.execute('skills.install', { source: changed }, caller)).toMatchObject({ skillIds: ['skill-3'] });
+    expect(h.creates()).toBe(3);
+    expect(h.artifacts.get('skill-1')?.body).not.toEqual(h.artifacts.get('skill-3')?.body);
+  });
+
+  it('does not create a second identity when two selected upload roots contain the same skill', async () => {
+    const h = harness();
+    const source = { kind: 'upload', files: [utf8('one/SKILL.md', skillMd('b')), utf8('two/SKILL.md', skillMd('b'))] };
+    expect(await h.execute('skills.install', { source }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    expect(h.creates()).toBe(1);
+  });
+
+  describe('from a registry item', () => {
+    const repo = 'https://github.com/o/pack', commit = '1'.repeat(40);
+    const itemFor = (name: 'a' | 'b') => {
+      const text = (bundle[name][0] && new TextDecoder().decode(decodeBase64(bundle[name][0].contentBase64, 'base64')));
+      return { summary: { sourceId: 'pack', kind: 'skill' as const, itemId: name, title: name, version: commit }, fetchedAt: 1,
+        payload: { kind: 'skill' as const, skill: { ref: { kind: 'gitTree' as const, repo, path: name, commit, treeSha: '2'.repeat(40) }, skillMarkdown: text,
+          files: [{ path: 'SKILL.md', size: text.length, unixMode: 0o644 as const, blobSha: '3'.repeat(40) }] } } };
+    };
+    const fileBytes = (name: 'a' | 'b') => [{ path: 'SKILL.md', unixMode: 0o644 as const, bytes: new TextEncoder().encode(skillMd(name, name === 'a' ? 'See [b](../b/SKILL.md).' : '')) }];
+    const ports = (reads: string[]): RegistryPorts => ({
+      readRegistryItem: async pointer => itemFor(pointer.itemId as 'a'),
+      readRegistrySource: async () => ({ id: 'pack', title: 'Pack', format: 'git', kinds: ['skill'], url: repo, enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true }),
+      filesForPointer: async pointer => fileBytes(pointer.itemId as 'a'),
+      readLinkSkills: async (url, ref) => { reads.push(`${url}@${ref?.path}`); if (!ref) return [itemFor('a'), itemFor('b')];
+        if (ref.path !== 'b') throw new Error('not_found'); return [itemFor('b')]; },
+      fetchLinkSkillFiles: async (_url, item) => fileBytes(item.summary.itemId as 'a'),
+    });
+    const pointer = { kind: 'registry' as const, sourceId: 'pack', itemId: 'a', version: commit };
+
+    it('offers the sibling at the commit the item is pinned to, installs both, and records the sibling as a link import', async () => {
+      const reads: string[] = [];
+      const h = harness(ports(reads));
+      const { items } = itemsOf(await h.execute('skills.install', { source: pointer, dryRun: true }, caller));
+      expect(items.map(item => item.path)).toEqual(['a', 'b']);
+      expect(items[0]).toMatchObject({ siblingSkills: [{ path: 'b', references: ['../b/SKILL.md'] }] });
+      expect(reads).toEqual([`${repo}@b`]);
+      expect(h.creates()).toBe(0);
+      expect(await h.execute('skills.install', { source: pointer }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+      expect(readSkillLockV1(h.artifacts.get('skill-2')!.header).provenance).toMatchObject({ kind: 'link', url: repo, ref: { path: 'b', commit } });
+    });
+
+    it('adds only the item when the sibling is unticked', async () => {
+      const h = harness(ports([]));
+      expect(await h.execute('skills.install', { source: pointer, selectPaths: ['a'] }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    });
+
+    it('leaves a referred sibling the library already holds out of both the preview and the add of a whole link', async () => {
+      const h = harness(ports([]));
+      await h.execute('skills.install', { source: { ...pointer, itemId: 'b' } }, caller);
+      const link = { kind: 'link' as const, url: repo };
+      const preview = itemsOf(await h.execute('skills.install', { source: link, dryRun: true }, caller));
+      expect(preview.items.find(item => item.path === 'a')).not.toHaveProperty('siblingSkills');
+      expect(preview.items.find(item => item.path === 'b')).toMatchObject({ inLibrary: 'skill-1' });
+      expect(await h.execute('skills.install', { source: link }, caller)).toMatchObject({ skillIds: ['skill-2', 'skill-1'] });
+      expect(h.creates()).toBe(2);
+    });
+
+    it('does not add a sibling the library already holds', async () => {
+      const h = harness(ports([]));
+      await h.execute('skills.install', { source: pointer }, caller);
+      expect(itemsOf(await h.execute('skills.install', { source: pointer, dryRun: true }, caller)).items[0])
+        .toMatchObject({ path: 'a', inLibrary: 'skill-1' });
+      expect(await h.execute('skills.install', { source: pointer }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+      expect(h.creates()).toBe(2);
+    });
   });
 });

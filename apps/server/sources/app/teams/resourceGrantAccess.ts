@@ -98,6 +98,28 @@ export async function resolveResourceGrantAudienceInTx(tx: Tx, adapter: Resource
     return row ? resolveResourceGrantAudienceFromFacts(row) : [];
 }
 
+/** Read a prospective grant through the same live membership policy as a stored resource. */
+export async function readResourceGrantPrincipalAudienceInTx(tx: Tx, input: Readonly<{
+    ownerAccountId: string; principal: PrincipalRefV1;
+}>): Promise<string[]> {
+    const relations = resourceGrantRelationsSelect();
+    const facts: ResourceGrantAccessFacts = { ownerAccountId: input.ownerAccountId, encryptionMode: null,
+        accountGrants: [], teamGrants: [], groupGrants: [] };
+    const principal = input.principal;
+    if (principal.kind === 'account') {
+        const account = await tx.account.findUnique({ where: { id: principal.accountId }, select: { status: true } });
+        if (account) facts.accountGrants = [{ accountId: principal.accountId, accessLevel: 'view', account }];
+    } else if (principal.kind === 'team') {
+        const team = await tx.team.findUnique({ where: { id: principal.teamId }, select: relations.teamGrants.select.team.select });
+        if (team) facts.teamGrants = [{ accessLevel: 'view', team }];
+    } else {
+        const group = await tx.teamGroup.findUnique({ where: { id: principal.groupId },
+            select: { ...relations.groupGrants.select.teamGroup.select, teamId: true } });
+        if (group?.teamId === principal.teamId) facts.groupGrants = [{ accessLevel: 'view', teamGroup: group }];
+    }
+    return resolveResourceGrantAudienceFromFacts(facts);
+}
+
 /** Admins manage ordinary grants; assigning admin remains an owner operation. */
 export function mayManageResourceGrants(access: ResourceGrantAccess, nextLevel?: ResourceAccessLevelV1): boolean {
     return access.level === 'owner' || (access.level === 'admin' && nextLevel !== 'admin');

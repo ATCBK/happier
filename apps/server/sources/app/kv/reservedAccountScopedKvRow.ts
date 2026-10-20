@@ -3,7 +3,8 @@ import {
     type AccountEncryptionInconsistencyReason,
 } from "@/app/encryption/accountContentKeyAdmission";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
-import type { Tx } from "@/storage/inTx";
+import { transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
+import type { AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 
 import {
@@ -12,6 +13,7 @@ import {
 } from "./accountScopedKv";
 import {
     applyUserKvMutationsInTx,
+    readUserKvMutationConflict,
     type KVMutation,
     type UserKvMutationApplication,
 } from "./kvMutate";
@@ -49,6 +51,25 @@ export type ReservedAccountScopedKvRowsMutationResult =
     | Readonly<{ status: "updated"; rows: readonly Readonly<{ physicalKey: string; revision: number; cursor: number }>[] }>
     | Readonly<{ status: "conflict"; physicalKey: string; revision: number }>
     | ReservedAccountScopedKvRowFailure;
+
+/** Public row owners project a late CAS refusal only after their outer inTx rolls back. */
+export async function readReservedAccountScopedKvRowMutationConflict(error: unknown): Promise<
+    Extract<ReservedAccountScopedKvRowMutationResult, { status: "conflict" }> | null
+> {
+    const conflict = await readUserKvMutationConflict(error);
+    return conflict ? { status: "conflict", revision: conflict.version } : null;
+}
+
+type RowMutationSuccess = Extract<ReservedAccountScopedKvRowMutationResult, { status: "updated" }>;
+export type ReservedAccountScopedKvRowMutationInTxResult =
+    | Exclude<ReservedAccountScopedKvRowMutationResult, { status: "updated" }>
+    | (Omit<RowMutationSuccess, "cursor"> & TransactionResult<RowMutationSuccess>);
+
+type RowsMutationSuccess = Extract<ReservedAccountScopedKvRowsMutationResult, { status: "updated" }>;
+export type ReservedAccountScopedKvRowsMutationInTxResult =
+    | Exclude<ReservedAccountScopedKvRowsMutationResult, { status: "updated" }>
+    | (Readonly<{ status: "updated"; rows: readonly Readonly<{ physicalKey: string; revision: number }>[] }>
+        & TransactionResult<RowsMutationSuccess>);
 
 /**
  * A reserved domain's own semantics. Both parsers return `null` for a value
@@ -266,9 +287,9 @@ export async function mutateReservedAccountScopedKvRowInTx<TEnvelope>(
         expectedRevision: number | "absent";
         envelope: TEnvelope | null;
         domain: ReservedAccountScopedKvRowDomain<TEnvelope>;
-        markChanged: (params: Readonly<{ tx: Tx; revision: number }>) => Promise<number>;
+        markChanged: (params: Readonly<{ tx: Tx; revision: number }>) => Promise<AccountChangePublication>;
     }>,
-): Promise<ReservedAccountScopedKvRowMutationResult> {
+): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     const result = await mutateReservedAccountScopedKvRowsInTx(tx, {
         accountId: input.accountId,
         mutations: [{ physicalKey: input.physicalKey, expectedRevision: input.expectedRevision,
@@ -279,7 +300,11 @@ export async function mutateReservedAccountScopedKvRowInTx<TEnvelope>(
     if (result.status !== "updated") return result;
     const row = result.rows[0];
     if (!row) throw new Error(`${input.domain.label} mutation did not return a revision`);
-    return { status: "updated", revision: row.revision, cursor: row.cursor };
+    return Object.assign(transactionResult(() => {
+        const resolved = result.resolveResult().rows[0];
+        if (!resolved) throw new Error(`${input.domain.label} publication did not return a cursor`);
+        return { status: "updated" as const, revision: row.revision, cursor: resolved.cursor };
+    }), { status: "updated" as const, revision: row.revision });
 }
 
 /**
@@ -297,10 +322,10 @@ export async function mutateReservedAccountScopedKvRowsInTx(
             envelope: unknown;
             domain: ReservedAccountScopedKvRowDomain<unknown>;
         }>[];
-        markChanged: (params: Readonly<{ tx: Tx; physicalKey: string; revision: number }>) => Promise<number>;
+        markChanged: (params: Readonly<{ tx: Tx; physicalKey: string; revision: number }>) => Promise<AccountChangePublication>;
     }>,
-): Promise<ReservedAccountScopedKvRowsMutationResult> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+): Promise<ReservedAccountScopedKvRowsMutationInTxResult> {
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === "account_not_found") return { status: "account-not-found" };
     if (fence.status === "account_inconsistent") {
         return { status: "account-inconsistent", reason: fence.reason };
@@ -358,12 +383,17 @@ export async function mutateReservedAccountScopedKvRowsInTx(
         return { status: "conflict", physicalKey: conflict.key, revision: conflict.version };
     }
 
-    const rows: Array<{ physicalKey: string; revision: number; cursor: number }> = [];
+    const rows: Array<{ physicalKey: string; revision: number; publication: AccountChangePublication }> = [];
     for (const result of application.results) {
-        const cursor = await input.markChanged({ tx, physicalKey: result.key, revision: result.version });
-        rows.push({ physicalKey: result.key, revision: result.version, cursor });
+        const publication = await input.markChanged({ tx, physicalKey: result.key, revision: result.version });
+        rows.push({ physicalKey: result.key, revision: result.version, publication });
     }
-    return { status: "updated", rows };
+    return Object.assign(transactionResult(() => ({ status: "updated" as const,
+        rows: rows.map(row => ({ physicalKey: row.physicalKey, revision: row.revision,
+            cursor: row.publication.resolveCursor() })) })), {
+        status: "updated" as const,
+        rows: rows.map(row => ({ physicalKey: row.physicalKey, revision: row.revision })),
+    });
 }
 
 export type ReservedAccountScopedKvRowMigrationItem<TEnvelope> = Readonly<{
@@ -397,7 +427,7 @@ function indexMigrationItems<TEnvelope>(input: ReservedRowMigrationParams<TEnvel
 /** The Account transition caller holds its fence and rolls back every refusal. */
 export async function migrateReservedAccountScopedKvRowsForAccountModeInTx<TEnvelope>(
     tx: Tx, input: ReservedRowMigrationParams<TEnvelope> & Readonly<{
-        markChanged: (input: Readonly<{ tx: Tx; physicalKey: string; revision: number }>) => Promise<number>;
+        markChanged: (input: Readonly<{ tx: Tx; physicalKey: string; revision: number }>) => Promise<AccountChangePublication>;
     }>,
 ): Promise<Readonly<{ status: 'applied'; rows: readonly ReservedAccountScopedKvRowMigrationItem<TEnvelope>[] }>
     | Readonly<{ status: 'migration_incomplete' | 'invalid_content' }>> {
@@ -463,7 +493,7 @@ function singletonMigrationParams<TEnvelope>(input: ReservedSingletonMigrationPa
 /** Singleton catalogs require explicit coverage of retained tombstones, which conversion leaves unchanged. */
 export async function migrateReservedAccountScopedKvSingletonForAccountModeInTx<TEnvelope>(
     tx: Tx, input: ReservedSingletonMigrationParams<TEnvelope> & Readonly<{
-        markChanged: (input: Readonly<{ tx: Tx; revision: number }>) => Promise<number>;
+        markChanged: (input: Readonly<{ tx: Tx; revision: number }>) => Promise<AccountChangePublication>;
     }>,
 ): Promise<Readonly<{ status: 'applied'; row: Readonly<{ revision: number; content: TEnvelope | null }> | null }>
     | Readonly<{ status: 'migration_incomplete' | 'invalid_content' }>> {

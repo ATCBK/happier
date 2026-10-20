@@ -6,6 +6,7 @@ import { readHomeApplicationCarrierEligibility } from '@/sync/runtime/homeCarrie
 import { isRuntimeActive, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { acquireNativeDirectPreviewAccess, acquireServerPreviewAccess, hasNativePreviewRenderer, type NativeDirectPreviewLease } from './nativeDirectAccess';
+import { PREVIEW_ADMISSION_QUERY, withoutPreviewAdmission } from './url';
 
 export type NativeDirectPreviewInput = Readonly<{
     previewId: string | null;
@@ -36,15 +37,14 @@ function rebaseUrl(url: URL, origin: string): string {
     rebased.search = url.search;
     rebased.hash = url.hash;
     // Server preview admission is a one-use server-only capability, not an app parameter.
-    rebased.searchParams.delete('previewToken');
-    return rebased.toString();
+    return withoutPreviewAdmission(rebased.toString());
 }
 
 function withServerAdmission(url: string, fallback: URL): string {
-    const token = fallback.searchParams.get('previewToken');
+    const token = fallback.searchParams.get(PREVIEW_ADMISSION_QUERY);
     if (!token) return url;
     const admitted = new URL(url);
-    admitted.searchParams.set('previewToken', token);
+    admitted.searchParams.set(PREVIEW_ADMISSION_QUERY, token);
     return admitted.toString();
 }
 

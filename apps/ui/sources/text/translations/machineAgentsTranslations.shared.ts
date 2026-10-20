@@ -12,6 +12,7 @@ export type MachineAgentsTranslation = Readonly<{
     installYourself: string;
     unsupportedOs: string;
     unsupportedArch: string;
+    unsupported: string;
     installing: string;
     progress: (params: Readonly<{ done: string; total: string }>) => string;
     checking: string;
@@ -132,6 +133,7 @@ export const en: MachineAgentsTranslation = {
     installYourself: 'Install it yourself',
     unsupportedOs: 'Doesn’t run on this system',
     unsupportedArch: 'No build for this processor',
+    unsupported: 'Can’t run here',
     installing: 'Installing…',
     progress: ({ done, total }) => `${done} of ${total}`,
     checking: 'Checking…',

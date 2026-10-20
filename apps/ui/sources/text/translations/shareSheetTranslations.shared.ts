@@ -23,6 +23,7 @@ export type ShareSheetTranslations = Readonly<{
     browseGroups: string;
     membersOnlyLink: string;
     allLoaded: string;
+    noConnectedPeople: string;
     copyLink: string;
     linkCopied: string;
     copyLinkFailed: string;
@@ -85,6 +86,7 @@ export const shareSheetTranslationsEnglish = { en: {
         browseGroups: 'Browse all Team Groups',
         membersOnlyLink: 'Copy link is for people who already have access.',
         allLoaded: 'All results loaded',
+        noConnectedPeople: 'Only people you’re connected with appear here.',
         copyLink: 'Copy link',
         linkCopied: 'Link copied',
         copyLinkFailed: 'Couldn’t copy the link.',

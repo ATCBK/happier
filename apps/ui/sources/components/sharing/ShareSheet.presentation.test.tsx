@@ -181,7 +181,7 @@ const { getEnabledAgentIds } = await import('@/agents/catalog/enabled');
 const { getProfileSubtitle, getDefaultProfileListStrings } = await import('@/components/profiles/profileListModel');
 const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol');
 const { buildSessionListFilterQueryHomes } = await import('@/components/sessions/shell/search/sessionListViewFilters');
-const { fromBoardSessionFilter } = await import('@/components/boards/model/boardSessionFilter');
+const { fromStoredSessionListFilter } = await import('@/components/sessions/shell/search/storedSessionListFilter');
 const { useDocumentPublicLinkController } = await import('./documents/useDocumentPublicLinkController');
 const { DocumentPublicLinkSection } = await import('./documents/DocumentPublicLinkSection');
 const { SettingsSidebar } = await import('@/components/settings/shell/SettingsSidebar');
@@ -370,7 +370,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         [{ kind: 'session' as const, qualifiedId: { serverId: scope.serverId, id: 'release' } }], filter: boardFilter } };
     // The filter's retained corpus is canonical store state, separate from the one hand-picked member.
     // This source renderer has no live Socket; retained membership remains truthful without claiming fresh coverage.
-    for (const queryHome of buildSessionListFilterQueryHomes(fromBoardSessionFilter(boardFilter, [scope.serverId]),
+    for (const queryHome of buildSessionListFilterQueryHomes(fromStoredSessionListFilter(boardFilter, [scope.serverId]),
         { storage: 'active', includeInactive: false, mountedHomeServerIds: [scope.serverId] })) {
         storage.getState().commitSessionListQueryMembership(queryHome.queryKey,
             { serverId: scope.serverId, accountId: scope.accountId, sessionIds: filteredSessionIds, lastKnown: true });

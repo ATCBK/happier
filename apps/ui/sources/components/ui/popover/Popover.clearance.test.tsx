@@ -41,6 +41,7 @@ const CHIP = { left: 300, top: 420, width: 100, height: 32 } as const;
 async function renderChipPicker(
   placement: 'top' | 'bottom',
   withClearance: boolean,
+  options: Readonly<{ chip?: Readonly<{ left: number; top: number; width: number; height: number }>; withinComposerWidth?: boolean }> = {},
 ) {
   const { Popover } = await import('./Popover');
   const { OverlayPortalProvider, OverlayPortalHost } =
@@ -65,8 +66,9 @@ async function renderChipPicker(
         <Popover
           open
           backdrop={false}
-          anchor={{ kind: 'rect', rect: CHIP }}
+          anchor={{ kind: 'rect', rect: options.chip ?? CHIP }}
           clearanceRef={withClearance ? { current: composerNode } : undefined}
+          horizontalBoundaryRef={options.withinComposerWidth ? { current: composerNode } : undefined}
           portal={{
             native: true,
             matchAnchorWidth: false,
@@ -111,6 +113,26 @@ describe('Popover: a clearance view the popover never covers', () => {
         const fromChip = await renderChipPicker('bottom', false);
         const withClearance = await renderChipPicker('bottom', true);
         expect(withClearance.top! - fromChip.top!).toBe(COMPOSER.y + COMPOSER.height - (CHIP.top + CHIP.height));
+    });
+});
+
+describe('Popover: a horizontal boundary narrower than the window', () => {
+    // A 400-wide picker hung from a chip near the composer's right end would run past the composer
+    // (x=900) though the window (1000) has room: the composer's width is the horizontal extent.
+    const RIGHT_END_CHIP = { left: 560, top: 420, width: 100, height: 32 } as const;
+
+    it('hangs a picker from its chip\'s far edge when the near one would run past the boundary, and leaves its vertical room to the window', async () => {
+        const unbounded = await renderChipPicker('top', false, { chip: RIGHT_END_CHIP });
+        const bounded = await renderChipPicker('top', false, { chip: RIGHT_END_CHIP, withinComposerWidth: true });
+        // From the chip's right edge instead of its left: the picker ends where the chip does.
+        expect(unbounded.left - bounded.left).toBe(400 - RIGHT_END_CHIP.width);
+        expect(bounded.bottomEdge).toBe(unbounded.bottomEdge);
+    });
+
+    it('leaves a picker that already fits inside it where it hangs', async () => {
+        const unbounded = await renderChipPicker('top', false);
+        const bounded = await renderChipPicker('top', false, { withinComposerWidth: true });
+        expect(bounded.left).toBe(unbounded.left);
     });
 });
 

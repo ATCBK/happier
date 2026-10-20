@@ -24,6 +24,9 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
+// Compile the real component during collection, after installing the RNW boundary.
+const { PluginTranscriptActivityCard } = await import('./PluginTranscriptActivityCard');
+
 type PluginActivityItem = Extract<ChatListItem, { kind: 'plugin-transcript-activity' }>;
 
 const activity: PluginActivityItem = {
@@ -49,10 +52,8 @@ const activity: PluginActivityItem = {
 
 describe('PluginTranscriptActivityCard web pointer-events ownership', () => {
     it('keeps its progress rail and live status non-interactive without RNW deprecated props', async () => {
-        let phase = 'component import';
+        let phase = 'DOM render';
         onTestFailed(() => console.error(`PluginTranscriptActivityCard DOM last stage: ${phase}`));
-        const { PluginTranscriptActivityCard } = await import('./PluginTranscriptActivityCard');
-        phase = 'DOM render';
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root: Root = createRoot(container);

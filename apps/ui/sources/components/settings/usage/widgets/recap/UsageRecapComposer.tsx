@@ -370,7 +370,9 @@ export function UsageRecapComposer(
 
   const controls = (
     <View style={styles.controls}>
-      <ItemGroup title={t('usage.board.recap.styleLabel')}>
+      {/* The style tiles and the period control are their own surfaces: no sheet around them, which
+          clipped the last tile row's caption and pressed the tiles against its edge. */}
+      <ItemGroup title={t('usage.board.recap.styleLabel')} surface="none">
         <SelectionTiles
           variant="visual"
           density="compact"
@@ -381,7 +383,7 @@ export function UsageRecapComposer(
           accessibilityLabel={t('usage.board.recap.styleLabel')}
         />
       </ItemGroup>
-      <ItemGroup title={t('usage.board.recap.periodLabel')}>
+      <ItemGroup title={t('usage.board.recap.periodLabel')} surface="none">
         <SegmentedTabBar
           testIDPrefix="usage-recap-period"
           compact

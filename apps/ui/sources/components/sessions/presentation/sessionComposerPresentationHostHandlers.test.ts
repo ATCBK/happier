@@ -435,6 +435,7 @@ describe('composer presentation host handlers', () => {
                 composer: sessionRef,
                 attachmentInstanceId: 'host-created-issue-42',
             },
+            observerSignal: cancellation.signal,
         });
         handlers.dispose();
     });

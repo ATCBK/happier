@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
@@ -16,7 +16,7 @@ import nacl from 'tweetnacl';
 
 installSessionFilesViewBoundaries();
 let fixture: Awaited<ReturnType<typeof createSuggestionFixture>>;
-beforeAll(prepareSessionFilesViewTestkit);
+await prepareSessionFilesViewTestkit();
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
 
 function pendingStart(runId: string) {

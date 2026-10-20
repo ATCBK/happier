@@ -139,6 +139,12 @@ const collectionListHost: HappierCollectionListHost = {
 const collectionListPlaneHost: HappierCollectionListHost = { ...collectionListHost, surfaceStyle: styles.plane };
 
 /**
+ * How many items a list holds before its header offers the search field (`search` is "present only when
+ * the list is long enough to need it"). A list whose whole length is not yet known counts as long.
+ */
+export const COLLECTION_LIST_SEARCH_THRESHOLD = 8;
+
+/**
  * The list pane of a list + detail collection. Rows are compact `Item`s with `collectionListStyles.row`.
  * `surface="plane"` is the list as a navigation column on the shell's plane; its rows are
  * {@link CollectionNavigationRow}s (the plane's selected chip).

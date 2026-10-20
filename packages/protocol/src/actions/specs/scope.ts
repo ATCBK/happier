@@ -18,15 +18,15 @@ type ScopeActionSpec = {
 }[keyof typeof ScopeActionInputSchemas];
 export const SCOPE_ACTION_SPECS: readonly ScopeActionSpec[] = [
   { ...clientView, id: 'workflow.library.view.get', approval: {result: 'required'}, title: 'Read Workflow Library view',
-    examples: { voice: { argsExample: '{}' } }, bindings: { sdkMethod: 'workflow.libraryView.get' },
+    examples: { voice: { argsExample: '{}' } }, bindings: { sdkMethod: 'workflow.libraryView.get', voiceClientToolName: 'workflow_library_view_get' },
     description: 'Read the focused mounted Workflow Library view, offered views, search text and visible loaded row keys on this client.', sideEffectClass: 'read',
     inputSchema: ScopeActionInputSchemas['workflow.library.view.get'], outputSchema: ScopeActionOutputSchemas['workflow.library.view.get'] },
   { ...clientView, id: 'workflow.library.view.set', approval: {result: 'required'}, title: 'Change Workflow Library view',
-    examples: { voice: { argsExample: '{"view":"triggered","searchQuery":"release"}' } }, bindings: { sdkMethod: 'workflow.libraryView.set' },
+    examples: { voice: { argsExample: '{"view":"triggered","searchQuery":"release"}' } }, bindings: { sdkMethod: 'workflow.libraryView.set', voiceClientToolName: 'workflow_library_view_set' },
     description: 'Change All, Triggered, Running or search through the focused mounted Workflow Library controller. An unoffered view is unavailable.', sideEffectClass: 'write',
     inputSchema: ScopeActionInputSchemas['workflow.library.view.set'], outputSchema: ScopeActionOutputSchemas['workflow.library.view.set'] },
   { ...clientView, id: 'workflow.library.view.reset', approval: {result: 'required'}, title: 'Reset Workflow Library view',
-    examples: { voice: { argsExample: '{}' } }, bindings: { sdkMethod: 'workflow.libraryView.reset' },
+    examples: { voice: { argsExample: '{}' } }, bindings: { sdkMethod: 'workflow.libraryView.reset', voiceClientToolName: 'workflow_library_view_reset' },
     description: 'Restore All and clear search through the focused mounted Workflow Library controller on this client.', sideEffectClass: 'write',
     inputSchema: ScopeActionInputSchemas['workflow.library.view.reset'], outputSchema: ScopeActionOutputSchemas['workflow.library.view.reset'] },
   { ...clientView, id: 'session.list.view.get', approval: {result: 'required'}, title: 'Read Sessions view',

@@ -50,12 +50,13 @@ export function createEncryptedRpcTestClient(
 
   const call = async <TResponse, TRequest>(method: string, request: TRequest): Promise<TResponse> => {
     const boundMethod = `${options.scopePrefix}:${method}`;
-    const callId = (++requestSequence).toString(16).padStart(32, '0');
+    const sequence = ++requestSequence;
+    const callId = sequence.toString(16).padStart(32, '0');
     const encryptedParams = await socketRpcCodec.encodeParams(content, request, { method: boundMethod, callId });
     const rpcRequest: RpcRequest = {
       method: boundMethod,
       params: encryptedParams,
-      requestId: `${options.scopePrefix}:test-request:${requestSequence}`,
+      requestId: `${options.scopePrefix}:test-request:${sequence}`,
       ...(options.callerAuthority ? { callerAuthority: options.callerAuthority } : {}),
     };
     const encryptedResponse = await manager.handleRequest(rpcRequest);

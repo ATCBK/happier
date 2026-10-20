@@ -1,30 +1,44 @@
-import { ListSessionFollowSourcesResponseSchema, RemoveSessionFollowSourceResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceRequestSchema, SetSessionFollowSourceResponseSchema, SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { GetOtherSessionFollowSourceResponseSchema, ListSessionFollowSourcesResponseSchema, RemoveSessionFollowSourceResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceRequestSchema, SetSessionFollowSourceResponseSchema, SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { parseOtherFollowSourceRefPathV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefPathV1';
 import { SessionFollowSourceProjectionRequestV1Schema, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionFollowObserveInactiveRequestV1Schema, SessionFollowObserveInactiveResponseV1Schema,
-    SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+    SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema,
+    SessionFollowSourceOccurrenceRoutesRequestV1Schema, SessionFollowSourceOccurrenceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { z } from "zod/mini";
 import { FollowListActionOutputV1Schema } from '@happier-dev/protocol/sessions/follow/actions';
+import { FollowListPageQueryV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import {
     listSessionFollowSources,
     listSessionFollowers,
+    listOtherSessionFollowers,
     removeSessionFollowSource,
+    removeOtherSessionFollowSource,
     setSessionFollowSource,
+    setOtherSessionFollowSource,
     projectSessionFollowSourceForRunner,
     observePendingSessionFollowForInactiveDestination,
     observeSessionFollowSourceRoutes,
+    observeFollowSourceOccurrenceRoutes,
+    invalidateRunFollowDestinationsInTx,
     type SessionFollowSourceFailure,
 } from "@/app/session/follow/sessionFollowEdgeService";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
+import { readCurrentExecutionRunFollowSource } from '@/app/session/follow/executionRunFollowSource';
+import { inTx } from '@/storage/inTx';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 
 const destinationParamsSchema = z.strictObject({
     destinationSessionId: z.string().check(z.minLength(1)),
 });
 const occurrenceParamsSchema = z.strictObject({ sourceSessionId: z.string().check(z.minLength(1)) });
+const otherSourceParamsSchema = z.strictObject({ destinationSessionId: z.string().check(z.minLength(1)),
+    sourceRef: z.string().check(z.minLength(1)) });
+const otherFollowersParamsSchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
 
 const sourceParamsSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destinationParamsSchema, {
     sourceSessionId: z.string().check(z.minLength(1)),
@@ -45,6 +59,7 @@ const FAILURE_STATUS: Readonly<Record<SessionFollowSourceFailure, 400 | 403 | 40
     session_not_found: 404,
     account_inactive: 403,
     session_follow_source_forbidden: 403,
+    session_follow_source_unavailable: 409,
     session_archived: 409,
 };
 
@@ -62,18 +77,121 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         { error: "feature_unavailable" },
     );
 
+    app.get(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherFollowers, {
+        preHandler: [app.authenticate, requireFeature],
+        config: { allowApiToken: true, apiTokenSessionAction: 'follow.list', restrictedCredentialBinding: {
+            scope: 'account', allowSessionRuntime: false,
+        } },
+        schema: { params: otherFollowersParamsSchema, querystring: FollowListPageQueryV1Schema,
+            response: { 200: FollowListActionOutputV1Schema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherFollowersParamsSchema.safeParse(request.params);
+        const query = FollowListPageQueryV1Schema.safeParse(request.query);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        if (!source || !query.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await listOtherSessionFollowers({ accountId: request.userId, source,
+            authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
+    app.get(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherSource, {
+        preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'follow.get', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
+        } },
+        schema: { params: otherSourceParamsSchema, response: { 200: GetOtherSessionFollowSourceResponseSchema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        if (!params.success || !source) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await listSessionFollowSources({ accountId: request.userId,
+            destinationSessionId: params.data.destinationSessionId,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+        return reply.send(GetOtherSessionFollowSourceResponseSchema.parse({ source: result.value.sources.find(row => 'source' in row
+            && JSON.stringify(row.source) === JSON.stringify(source)) ?? null }));
+    });
+
+    app.put(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherSource, {
+        preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'follow.set', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
+        } },
+        schema: { params: otherSourceParamsSchema, response: { 200: SetSessionFollowSourceResponseSchema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const body = SetSessionFollowSourceRequestSchema.safeParse(request.body);
+        if (!params.success || !source || !body.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const executionRunFrontier = source.kind === 'execution_run'
+            ? await readCurrentExecutionRunFollowSource({ app, accountId: request.userId,
+                sessionId: source.sessionId, runId: source.runId, authentication }) : null;
+        const result = await setOtherSessionFollowSource({ accountId: request.userId,
+            destinationSessionId: params.data.destinationSessionId, source, policy: body.data.policy,
+            authentication, ...(executionRunFrontier?.ok ? { executionRunFrontier: executionRunFrontier.value } : {}) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
+    app.delete(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherSource, {
+        preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'follow.remove', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
+        } },
+        schema: { params: otherSourceParamsSchema, response: { 200: RemoveSessionFollowSourceResponseSchema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        if (!params.success || !source) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await removeOtherSessionFollowSource({ accountId: request.userId,
+            destinationSessionId: params.data.destinationSessionId, source,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
     app.get(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.followers, {
         preHandler: [app.authenticate, requireFeature],
         config: { apiTokenSessionAction: 'follow.list', restrictedCredentialBinding: {
             scope: 'session', session: 'params.sourceSessionId', allowSessionRuntime: false,
         } },
-        schema: { params: occurrenceParamsSchema, response: { 200: FollowListActionOutputV1Schema, ...errorResponses } },
+        schema: { params: occurrenceParamsSchema, querystring: FollowListPageQueryV1Schema,
+            response: { 200: FollowListActionOutputV1Schema, ...errorResponses } },
     }, async (request, reply) => {
         const params = occurrenceParamsSchema.safeParse(request.params);
-        if (!params.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const query = FollowListPageQueryV1Schema.safeParse(request.query);
+        if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await listSessionFollowers({ accountId: request.userId, sourceSessionId: params.data.sourceSessionId,
-            authentication: readSessionAccessAuthenticationFromRequest(request) });
+            authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
+    app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes, {
+        preHandler: [app.authenticate, requireFeature],
+        schema: { response: { 200: SessionFollowSourceOccurrenceRoutesResponseV1Schema,
+            400: SessionFollowSourceOccurrenceRoutesResponseV1Schema,
+            403: z.union([SessionFollowSourceOccurrenceRoutesResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
+            409: SessionFollowSourceOccurrenceRoutesResponseV1Schema } },
+    }, async (request, reply) => {
+        const body = SessionFollowSourceOccurrenceRoutesRequestV1Schema.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ ok: false, v: 1, error: 'invalid_request' });
+        if (request.externalActionExecutionAuthorized === true
+            || request.authTokenKind !== 'account' && request.authTokenKind !== 'terminal') {
+            return reply.code(403).send({ ok: false, v: 1, error: 'forbidden' });
+        }
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const source = 'original' in body.data ? body.data.original.source : body.data.source;
+        const frontier = source.kind === 'execution_run' ? await readCurrentExecutionRunFollowSource({ app,
+            accountId: request.userId, authentication, sessionId: source.sessionId, runId: source.runId }) : null;
+        const result = await observeFollowSourceOccurrenceRoutes({ accountId: request.userId, authentication, request: body.data,
+            ...(frontier?.ok ? { executionRunFrontier: frontier.value } : {}) });
+        // An exact retained-source notification also wakes foreign receiver
+        // evaluators through the existing content-free Session change feed.
+        // Source-only catch-up reads do not publish another invalidation.
+        if (result.ok && 'original' in body.data && source.kind === 'execution_run') await inTx(async tx => {
+            await acquireSessionAccountCursorLocksInTx(tx, [source.sessionId]);
+            await invalidateRunFollowDestinationsInTx(tx, source);
+        });
+        return result.ok ? reply.send(result) : reply.code(result.error === 'source_unavailable' ? 409 : 403).send(result);
     });
 
     app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.occurrenceRoutes, {
@@ -166,19 +284,22 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false } },
         schema: {
             params: destinationParamsSchema,
+            querystring: FollowListPageQueryV1Schema,
             response: { 200: ListSessionFollowSourcesResponseSchema, ...errorResponses },
         },
     }, async (request, reply) => {
         const params = destinationParamsSchema.safeParse(request.params);
-        if (!params.success) return reply.code(400).send({ error: "invalid_parameters" });
+        const query = FollowListPageQueryV1Schema.safeParse(request.query);
+        if (!params.success || !query.success) return reply.code(400).send({ error: "invalid_parameters" });
 
         const result = await listSessionFollowSources({
             accountId: request.userId,
             destinationSessionId: params.data.destinationSessionId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
+            ...query.data,
         });
         if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
-        return reply.send({ sources: [...result.value] });
+        return reply.send(ListSessionFollowSourcesResponseSchema.parse(result.value));
     });
 
     app.put("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {

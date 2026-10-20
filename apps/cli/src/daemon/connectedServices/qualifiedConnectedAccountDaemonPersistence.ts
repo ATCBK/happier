@@ -227,7 +227,7 @@ export function createAccountSettingsConnectedAccountSecrets(input: Readonly<{
   const readSnapshot = input.operationContext ? () => input.operationContext!.readSnapshot() : getActiveAccountSettingsSnapshot;
   const readMaterial: NonNullable<ConnectedAccountDaemonPersistence['configuration']['secrets']['readMaterial']> = async (secretId, options) => {
     options?.signal?.throwIfAborted();
-    if (input.operationContext && !await input.operationContext.isCurrent()) return null;
+    if (input.operationContext && !await input.operationContext.isCurrent(options?.signal)) return null;
     const snapshot = readSnapshot();
     if (!snapshot || snapshot.scopeKey !== input.expectedScopeKey) return null;
     const resolved = createSavedSecretMaterializerFromSnapshotV1(snapshot, { isCurrent: () => readSnapshot() === snapshot }).resolve(secretId);

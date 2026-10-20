@@ -189,6 +189,144 @@ function boundaries(options: Readonly<{
 }
 
 describe('createDaemonWorkspaceSyncRuntime', () => {
+  it('preserves the idle interval across equal Project refreshes without local relationships', async () => {
+    const harness = boundaries();
+    const foreignRelationships = [{ ...relationship, controllerMachineId: 'machine-2' }];
+    harness.publishSnapshot(snapshot(foreignRelationships));
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    let now = 100;
+    const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!], now: () => now });
+    try {
+      await runtime.start();
+      expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
+      harness.command.mockClear();
+      now = 200;
+      harness.publishSnapshot({ ...snapshot(foreignRelationships), loadedAtMs: 2 });
+      harness.publishSnapshot({ ...snapshot(foreignRelationships, 2), loadedAtMs: 3 });
+      await runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' });
+      expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
+      expect(harness.command).not.toHaveBeenCalled();
+    } finally {
+      inventory.dispose();
+      await runtime.stop();
+    }
+  });
+
+  it('does not advance equal Project settlement past active native Sync work', async () => {
+    const harness = boundaries();
+    harness.publishSnapshot(snapshot());
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const entering = new Promise<void>(resolve => { entered = resolve; });
+    let flushing: Promise<unknown> | undefined;
+    let settling: Promise<void> | undefined;
+    try {
+      await runtime.start();
+      const command = harness.command.getMockImplementation()!;
+      harness.command.mockImplementation(async input => {
+        if (input.t === 'flush') { entered(); await blocked; }
+        return await command(input);
+      });
+      flushing = runtime.managedWorkspaceSync.flush(relationship.relationshipId);
+      await entering;
+      harness.publishSnapshot(snapshot(undefined, 2));
+      let settled = false;
+      settling = runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' })
+        .then(() => { settled = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+      release();
+      await flushing;
+      await settling;
+      expect(settled).toBe(true);
+    } finally {
+      release();
+      await Promise.allSettled([flushing, settling]);
+      await runtime.stop();
+    }
+  });
+
+  it('marks a changed relationship busy until native reconciliation settles', async () => {
+    const harness = boundaries();
+    harness.publishSnapshot(snapshot());
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!] });
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const entering = new Promise<void>(resolve => { entered = resolve; });
+    try {
+      await runtime.start();
+      expect(await inventory.readDecision()).toMatchObject({ kind: 'idle' });
+      const command = harness.command.getMockImplementation()!;
+      harness.command.mockImplementation(async input => {
+        if (input.t === 'list') { entered(); await blocked; }
+        return await command(input);
+      });
+      harness.publishSnapshot(snapshot([{ ...relationship, enabled: false, updatedAtMs: 2 }], 2));
+      await entering;
+      expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['sync'] });
+      release();
+      await runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' });
+      expect(await runtime.managedWorkspaceSync.get(relationship.relationshipId)).toBeNull();
+      expect(await inventory.readDecision()).toMatchObject({ kind: 'idle' });
+    } finally {
+      release();
+      inventory.dispose();
+      await runtime.stop();
+    }
+  });
+
+  it('retries unchanged Project inputs after a failed native reconciliation', async () => {
+    const harness = boundaries();
+    harness.publishSnapshot(snapshot());
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    try {
+      await runtime.start();
+      const command = harness.command.getMockImplementation()!;
+      let fail = true;
+      harness.command.mockImplementation(async input => {
+        if (input.t === 'list' && fail) { fail = false; throw new Error('native read unavailable'); }
+        return await command(input);
+      });
+      const changed = snapshot([{ ...relationship, enabled: false, updatedAtMs: 2 }], 2);
+      harness.publishSnapshot(changed);
+      await expect(runtime.whenProjectsSettled()).rejects.toThrow('native read unavailable');
+      harness.publishSnapshot({ ...changed, loadedAtMs: 3 });
+      await runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' });
+      expect(await runtime.managedWorkspaceSync.get(relationship.relationshipId)).toBeNull();
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('retries equal Project inputs after reconciliation returns an engine error', async () => {
+    const harness = boundaries();
+    harness.activateRelationships();
+    const command = harness.command.getMockImplementation()!;
+    let unavailable = true;
+    harness.command.mockImplementation(async input => {
+      if (unavailable && input.t === 'list') return { sessions: [session({ lastError: 'native unavailable' })], nextCursor: null };
+      if (unavailable && input.t === 'get') return session({ lastError: 'native unavailable' });
+      return await command(input);
+    });
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!] });
+    try {
+      await runtime.start();
+      expect(await inventory.readDecision()).toEqual({ kind: 'unknown', reasons: ['sync'] });
+      unavailable = false;
+      harness.publishSnapshot(snapshot());
+      await runtime.whenProjectsSettled();
+      expect(await inventory.readDecision()).toMatchObject({ kind: 'idle' });
+    } finally {
+      inventory.dispose();
+      await runtime.stop();
+    }
+  });
+
   it('composes the live relationship reader into work summary before graph creation, during withdrawal and after recovery', async () => {
     const harness = boundaries();
     harness.publishSnapshot(snapshot([], 'absent'));
@@ -581,12 +719,11 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
     expect(harness.unsubscribeProjects).toHaveBeenCalledTimes(1);
   });
 
-  it('reconciles the current settings through the controller after a supervised sidecar restart', async () => {
+  it.each([false, true])('reconciles settings after a supervised sidecar restart (changed inputs: %s)', async (changeInputs) => {
     vi.useFakeTimers();
     const harness = boundaries();
-    // Canonical startup requires authoritative Project rows, including an empty
-    // graph. The relationships arrive later, during sidecar crash recovery.
-    let currentSnapshot: ReturnType<typeof snapshot> | null = { ...snapshot(), relationships: [] };
+    // Recovery must reconcile both changed and unchanged successful Project inputs.
+    let currentSnapshot = changeInputs ? { ...snapshot(), relationships: [] } : snapshot();
     const exits: Array<(event: { type: 'exited'; code: number }) => void> = [];
     const brokerEvents: string[] = [];
     const brokerCommands: Array<ReturnType<typeof vi.fn>> = [];
@@ -646,11 +783,13 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
       await runtime.start();
       expect(spawnSidecar).toHaveBeenCalledTimes(1);
       expect(harness.resolveInstalledComponentPaths).toHaveBeenCalledTimes(1);
-      expect(brokerCommands[0]).not.toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), expect.anything());
+      expect(brokerEvents.includes('1:create')).toBe(!changeInputs);
 
       exits[0]?.({ type: 'exited', code: 1 });
-      currentSnapshot = snapshot();
-      harness.activateRelationships();
+      if (changeInputs) {
+        currentSnapshot = snapshot();
+        harness.activateRelationships();
+      }
       const settingsSettled = runtime.whenProjectsSettled();
       await vi.advanceTimersByTimeAsync(20_000);
 

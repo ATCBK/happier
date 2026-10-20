@@ -11,12 +11,29 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { logger } from '@/ui/logger';
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import { createDaemonPluginAvailabilityReporter } from '@/plugins/availability/daemonReporter';
+import { buildPluginProjectionV2 } from '@/plugins/projection/registry/projection/v2';
 import { createDaemonPluginRuntimeOwner } from './runtimeOwner';
+
+// Model a cold daemon with no last-green UI graph at the filesystem boundary.
+// Discovery, runtime construction, source admission and availability stay real.
+vi.mock('node:fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs')>();
+    const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+    const publication = createBundledPluginPublicationFsFixture(actual);
+    return {
+        ...publication,
+        readFileSync: (...args: Parameters<typeof actual.readFileSync>) => (
+            String(args[0]).replaceAll('\\', '/').endsWith('/dist/happier-plugin-ui/ui-artifacts.json')
+                ? JSON.stringify({ version: 2, entries: [] })
+                : publication.readFileSync(...args)
+        ),
+    };
+});
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('daemon release-less declaration publication', () => {
-    it('publishes the admitted Lima declaration without Account storage access or native activation', async () => {
+    it('starts without a last-green UI graph and publishes unaffected declarations without native activation', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-native-declaration-'));
         const manifest = PluginManifestV2Schema.parse(LIMA_MANIFEST);
         expect(manifest.hostAccess.required.some(access => access.capability === 'storage.account')).toBe(false);
@@ -60,6 +77,20 @@ describe('daemon release-less declaration publication', () => {
                     },
                 } });
             await owner.initialize();
+            const runtime = controller.getState().activeRegistry;
+            expect(runtime).not.toBeNull();
+            if (!runtime) throw new Error('Expected a published daemon registry');
+            const projection = buildPluginProjectionV2({ registry: runtime.contributes, generation: 1 });
+            const ui = projection.familiesById.pluginUi;
+            if (ui?.family !== 'pluginUi') throw new Error('Expected the daemon UI projection');
+            expect(Object.values(ui.entriesById)).toEqual(expect.arrayContaining([
+                expect.objectContaining({
+                    pluginId: 'happier.triage', contributionKind: 'reactNativeBundle',
+                    runtime: expect.objectContaining({ state: 'blocked',
+                        decision: expect.objectContaining({ reason: 'generated_react_native_artifact_missing' }),
+                    }),
+                }),
+            ]));
             await vi.waitFor(() => expect(events, JSON.stringify(diagnostics.mock.calls)).toContain('materializations'));
             await vi.waitFor(() => expect(claims).toEqual([{ manifest }]));
             expect(events.indexOf('lima-claim')).toBeGreaterThan(events.indexOf('materializations'));

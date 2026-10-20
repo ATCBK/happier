@@ -25,7 +25,7 @@ export const APP_CONTEXT_PLUGIN = definePlugin({
   description: 'Attach the captured current screen to an Agent message.',
   engines: { happier: '^0.0.0' },
   runtime: { apiVersion: 1 },
-  entrypoints: { daemon: './dist/index.js' },
+  entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [], optional: [] },
   composer: { attachments: { [CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1.localId]: currentScreen } },
 });

@@ -105,6 +105,16 @@ function expectRoute(href: string) {
 }
 
 describe('useNavigateToSession (multi-server)', () => {
+    it('opens the exact committed message route on its Home without requiring a Pending input', async () => {
+        await renderProbe();
+        try {
+            for (const messageId of ['committed-first', 'committed-second']) {
+                await act(async () => { await navigate('source-session', { serverId: otherHome.id, messageId }); });
+                expectRoute('/session/source-session/message/' + encodeURIComponent('server:' + messageId) + '?serverId=' + otherHome.id);
+            }
+        } finally { await settleSwitches(); }
+    });
+
     it('navigates from a hosted session through the owning tab and preserves the exact Home', async () => {
         const { useNavigateToSession } = await import('./useNavigateToSession');
         const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');

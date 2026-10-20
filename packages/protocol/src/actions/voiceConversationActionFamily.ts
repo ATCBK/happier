@@ -160,6 +160,7 @@ const VOICE_CONVERSATION_ACTION_SUMMARIES = {
 
 export const VOICE_CONVERSATION_ACTION_SPECS = VOICE_CONVERSATION_ACTION_IDS.map((id): PreNormalizedActionSpec => ({
   id, approval: { result: 'required' },
+  approvalPolicy: { uiConfirmation: 'direct' },
   ...(id === 'ui.voice_global.set_muted' ? { safetyForInput: (input: unknown) => {
     const parsed = VoiceConversationActionInputSchemas['ui.voice_global.set_muted'].safeParse(input);
     return parsed.success && parsed.data.muted === true ? 'safe' as const : undefined;

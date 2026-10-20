@@ -3,11 +3,8 @@ import { Platform, ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
   HAPPIER_PAGE_METRICS,
-  resolveHappierFutureLocalDateTime,
-  toHappierLocalDateTimeDraft,
-  type HappierLocalDateTimeDraft,
 } from '@happier-dev/plugin-ui/presentation';
-import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
@@ -24,27 +21,22 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
-import { useSessionSelector } from '@/sync/store/hooks';
-import {
-  memoryDocumentActions,
-  readMemoryActionOutcome,
-  readMemoryDuplicateReview,
-} from '@/sync/ops/promptLibrary/memoryDocuments';
+import type { MemoryCreationReceipt } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { t } from '@/text';
 
+import { MemoryDuplicateChoice } from './MemoryDocumentBody';
+import { SaveMemoryDecisionSaved } from './SaveMemoryDecisionSaved';
 import {
-  leadingCandidateId,
-  MemoryDuplicateChoice,
-  type DuplicateChoiceKind,
-  type DuplicateReview,
-} from './MemoryDocumentBody';
-
-/** A fresh date expiry starts a month out; the person picks the real day. */
-const INITIAL_EXPIRY_OFFSET_MS = 30 * 24 * 60 * 60 * 1000;
+  memoryDecisionChosenLabel,
+  memoryDecisionSheetRowStyle,
+  memoryDecisionTargetId,
+  SaveMemoryDecisionTargetChooser,
+} from './SaveMemoryDecisionTarget';
+import { useSaveMemoryDecision } from './useSaveMemoryDecision';
 
 /** What opens the sheet: the exact committed message, and what to prefill from it. */
 export type SaveMemoryDecisionSeed = Readonly<{
-  sourceMessageRef: SessionMessageRefV1;
+  sourceMessageRef: CoordinationMessageRefV1;
   /** The decision as one line; the person edits it before saving. */
   text: string;
   reason?: string;
@@ -54,14 +46,15 @@ type FormProps = Readonly<{
   seed: SaveMemoryDecisionSeed;
   onClose: () => void;
   onSaved: () => void;
+  /** The saved document can be opened/attached through the existing Context flow. */
+  onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
 }>;
 
-type Notice = 'pending' | 'conflict' | 'refused' | null;
 type Expiry = 'never' | 'date';
 
 /** First line of the answer as the decision, the rest as its reason; both stay editable. */
 export function seedMemoryDecisionFromMessage(
-  sourceMessageRef: SessionMessageRefV1,
+  sourceMessageRef: CoordinationMessageRefV1,
   message: string,
 ): SaveMemoryDecisionSeed {
   const trimmed = message.trim();
@@ -78,112 +71,21 @@ export function seedMemoryDecisionFromMessage(
 
 /**
  * Save as decision (lab K2 `S`/`Sd`, C6 §5): the decision, its reason, the exact message it was decided
- * in and an expiry (Never or a date). It saves to the Session's own memory through `memory.decision.save`;
- * a person's save stamps their own approval. When that memory already has something similar, the same
+ * in and an expiry (Never or a date). It saves through `memory.decision.save`: a Session's message to that
+ * Session's own memory, a Discussion's message to the person's own memory; a person's save stamps their own approval. When that memory already has something similar, the same
  * form leads with it and asks Update / Replace / Keep both, keeping everything typed.
  */
 export function SaveMemoryDecisionForm(props: FormProps) {
-  const { seed } = props;
-  const { serverId, sessionId } = seed.sourceMessageRef.session;
-  const metadataVersion = useSessionSelector(
-    sessionId,
-    serverId,
-    (session) => session?.metadataVersion ?? null,
-  );
-  const [text, setText] = React.useState(seed.text);
-  const [reason, setReason] = React.useState(seed.reason ?? '');
-  const [expiry, setExpiry] = React.useState<Expiry>('never');
-  const [nowMs] = React.useState(() => Date.now());
-  const [expiryDraft, setExpiryDraft] =
-    React.useState<HappierLocalDateTimeDraft>(() =>
-      toHappierLocalDateTimeDraft(new Date(nowMs + INITIAL_EXPIRY_OFFSET_MS)),
-    );
-  const [review, setReview] = React.useState<DuplicateReview | null>(null);
-  const [choice, setChoice] = React.useState<DuplicateChoiceKind>('replace');
-  const [candidateId, setCandidateId] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<Notice>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [controller] = React.useState(() => new AbortController());
-  React.useEffect(() => () => controller.abort(), [controller]);
-  const expiresAtMs =
-    expiry === 'date'
-      ? resolveHappierFutureLocalDateTime(expiryDraft, nowMs)
-      : null;
-  const canSave =
-    !busy &&
-    notice !== 'pending' &&
-    text.trim().length > 0 &&
-    reason.trim().length > 0 &&
-    metadataVersion !== null &&
-    (expiry === 'never' || expiresAtMs !== null);
-
-  const save = React.useCallback(async () => {
-    if (!canSave || metadataVersion === null) return;
-    setBusy(true);
-    setNotice(null);
-    const choiceFactId = review
-      ? (candidateId ?? leadingCandidateId(review))
-      : null;
-    try {
-      const result = await memoryDocumentActions.saveDecisionInSession(
-        { sessionId, serverId, expectedMetadataRevision: metadataVersion },
-        {
-          text: text.trim(),
-          reason: reason.trim(),
-          sourceMessageRef: seed.sourceMessageRef,
-          ...(expiresAtMs !== null ? { expiresAtMs } : {}),
-          ...(review
-            ? {
-                reviewedTarget: {
-                  ref: review.ref,
-                  expectedRevision: review.revision,
-                },
-                duplicateChoice:
-                  choice === 'keep_both' || choiceFactId === null
-                    ? {
-                        kind: 'keep_both' as const,
-                        expectedRevision: review.revision,
-                      }
-                    : {
-                        kind: choice,
-                        factId: choiceFactId,
-                        expectedRevision: review.revision,
-                      },
-              }
-            : {}),
-        },
-        controller.signal,
-      );
-      if (controller.signal.aborted) return;
-      const found = readMemoryDuplicateReview(result);
-      if (found) {
-        setReview(found);
-        setCandidateId(leadingCandidateId(found));
-        return;
-      }
-      const outcome = readMemoryActionOutcome(result);
-      if (outcome === 'applied') props.onSaved();
-      else setNotice(outcome === 'review' ? null : outcome);
-    } catch {
-      if (!controller.signal.aborted) setNotice('refused');
-    } finally {
-      if (!controller.signal.aborted) setBusy(false);
-    }
-  }, [
-    canSave,
-    candidateId,
-    choice,
-    controller,
-    expiresAtMs,
-    metadataVersion,
-    props,
-    reason,
-    review,
-    seed.sourceMessageRef,
-    serverId,
-    sessionId,
-    text,
-  ]);
+  const model = useSaveMemoryDecision(props);
+  const { text, setText, reason, setReason, expiry, setExpiry, nowMs, expiryDraft, setExpiryDraft,
+    review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, sessionSource,
+    creationReceipt, selectedTarget, targets } = model;
+  // The decision is persisted but its Context did not take it: the sheet turns to that recovery.
+  const unattached = creationReceipt?.attachment === 'conflict' ? creationReceipt : null;
+  const chosen = selectedTarget
+    ? targets.find(row => memoryDecisionTargetId(row.target) === memoryDecisionTargetId(selectedTarget)) ?? null
+    : null;
+  const chosenLabel = memoryDecisionChosenLabel(model);
 
   const expiryOptions = React.useMemo(
     (): ReadonlyArray<SegmentedChoiceOption<Expiry>> => [
@@ -208,7 +110,15 @@ export function SaveMemoryDecisionForm(props: FormProps) {
           <Text style={styles.heading} accessibilityRole="header">
             {t('memoryContext.memory.sheetTitle')}
           </Text>
-          <Text style={styles.meta}>{t('memoryContext.memory.sheetTarget')}</Text>
+          <Text style={styles.meta}>
+            {selectedTarget?.scope === 'project' && chosenLabel !== null
+              ? t('memoryContext.memory.projectScope', { project: chosenLabel })
+              : t(
+                  sessionSource && !selectedTarget
+                    ? 'memoryContext.memory.sheetTarget'
+                    : 'memoryContext.memory.sheetTargetPerson',
+                )}
+          </Text>
         </View>
       </View>
       <ScrollView
@@ -228,11 +138,31 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             tone="warning"
             reason={t('memoryContext.memory.sheetConflict')}
           />
+        ) : notice === 'disclosure' ? (
+          <SurfaceFreshnessLine
+            testID="save-memory-decision.disclosure"
+            tone="warning"
+            reason={t('memoryContext.memory.sheetDisclosureDenied')}
+          />
+        ) : notice === 'sourceUnavailable' ? (
+          <SurfaceFreshnessLine
+            testID="save-memory-decision.sourceUnavailable"
+            tone="warning"
+            reason={t('memoryContext.memory.sheetSourceUnavailable')}
+          />
         ) : notice === 'refused' ? (
           <SurfaceFreshnessLine
             testID="save-memory-decision.refused"
             tone="warning"
             reason={t('memoryContext.memory.sheetRefused')}
+          />
+        ) : null}
+        {unattached ? (
+          <SaveMemoryDecisionSaved
+            receipt={unattached}
+            workspaceRef={chosen?.workspaceRef ?? null}
+            projectName={chosenLabel ?? ''}
+            onDone={props.onSaved}
           />
         ) : null}
         {review ? (
@@ -270,8 +200,15 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         </FieldItem>
         <View style={styles.source}>
           <Icon name="quotes" size={14} />
-          <Text style={styles.meta}>{t('memoryContext.memory.sheetSource')}</Text>
+          <Text style={styles.meta}>
+            {t(
+              sessionSource
+                ? 'memoryContext.memory.sheetSource'
+                : 'memoryContext.memory.sheetSourceMessage',
+            )}
+          </Text>
         </View>
+        <SaveMemoryDecisionTargetChooser model={model} />
         <SegmentedChoiceItem<Expiry>
           title={t('memoryContext.memory.sheetExpires')}
           options={expiryOptions}
@@ -280,6 +217,7 @@ export function SaveMemoryDecisionForm(props: FormProps) {
           testIDPrefix="save-memory-decision.expiry"
           accessoryLayout="adaptive"
           showDivider={false}
+          style={memoryDecisionSheetRowStyle}
           disabled={busy}
         />
         {expiry === 'date' ? (
@@ -300,21 +238,32 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         <Text style={[styles.meta, styles.approval]} numberOfLines={1}>
           {t('memoryContext.memory.sheetApprovedByYouNow')}
         </Text>
-        <RoundButton
-          testID="save-memory-decision.cancel"
-          size="small"
-          display="inverted"
-          title={notice === 'pending' ? t('common.close') : t('common.cancel')}
-          onPress={props.onClose}
-        />
-        <RoundButton
-          testID="save-memory-decision.save"
-          size="small"
-          title={saveLabel}
-          disabled={!canSave}
-          loading={busy}
-          action={save}
-        />
+        {unattached ? null : (
+          <RoundButton
+            testID="save-memory-decision.cancel"
+            size="small"
+            display="inverted"
+            title={notice === 'pending' ? t('common.close') : t('common.cancel')}
+            onPress={props.onClose}
+          />
+        )}
+        {unattached ? (
+          <RoundButton
+            testID="save-memory-decision.done"
+            size="small"
+            title={t('common.done')}
+            onPress={props.onSaved}
+          />
+        ) : (
+          <RoundButton
+            testID="save-memory-decision.save"
+            size="small"
+            title={saveLabel}
+            disabled={!canSave}
+            loading={busy}
+            action={save}
+          />
+        )}
       </View>
     </View>
   );
@@ -328,6 +277,7 @@ function SaveMemoryDecisionModal(
   return (
     <SaveMemoryDecisionForm
       seed={props.seed}
+      onCreatedMemory={props.onCreatedMemory}
       onSaved={() => {
         props.onSaved();
         props.onClose();
@@ -355,6 +305,7 @@ export function SaveMemoryDecisionSheet(
       props: {
         seed: props.seed,
         onSaved: props.onSaved,
+        onCreatedMemory: props.onCreatedMemory,
         onCancel: props.onClose,
       },
       onRequestClose: props.onClose,
@@ -384,9 +335,10 @@ export function SaveMemoryDecisionSheet(
     >
       {({ maxHeight }) => (
         <FloatingOverlay surfaceChrome="theme" maxHeight={maxHeight}>
-          <View style={styles.popoverBody}>
+          <View style={[styles.popoverBody, { maxHeight }]}>
             <SaveMemoryDecisionForm
               seed={props.seed}
+              onCreatedMemory={props.onCreatedMemory}
               onClose={props.onClose}
               onSaved={props.onSaved}
             />
@@ -429,5 +381,8 @@ const styles = StyleSheet.create((theme) => ({
   popoverBody: {
     width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
     maxWidth: '100%',
+    // A taller review shrinks the form's scroll area; the footer actions stay inside the overlay.
+    flexShrink: 1,
+    minHeight: 0,
   },
 }));

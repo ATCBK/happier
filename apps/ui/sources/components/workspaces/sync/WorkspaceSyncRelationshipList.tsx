@@ -14,6 +14,7 @@ import {
     terminateWorkspaceSyncRelationship,
 } from '@/sync/ops/actions/workspaceSyncRelationshipActions';
 import {
+    presentWorkspaceSyncFailure,
     resolveWorkspaceSyncErrorTranslationKey,
     formatWorkspaceSyncRelationshipTitle,
     resolveWorkspaceSyncModeTranslationKey,
@@ -92,31 +93,42 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
     const runAction = React.useCallback(async (action: 'sync' | 'disable' | 'enable' | 'terminate') => {
         setPendingAction(action);
         setMenuOpen(false);
+        const settled = <T extends Readonly<{ ok: boolean }>>(result: T): Extract<T, { ok: true }> => {
+            if (result.ok) return result as Extract<T, { ok: true }>;
+            const failure = result as unknown as Readonly<{ errorCode?: string; error?: string }>;
+            throw Object.assign(new Error(failure.error), { code: failure.errorCode });
+        };
         try {
             if (action === 'sync') {
-                const result = await flushWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                const result = settled(await flushWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
                 if ('status' in result) setWorkspaceSyncStatus(scope, result.status);
                 return;
             }
             if (action === 'terminate') {
-                const result = await terminateWorkspaceSyncRelationship(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await terminateWorkspaceSyncRelationship(actionInput, null, actionExecution.execute));
                 return;
             }
             if (action === 'disable') {
-                const result = await disableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await disableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
             } else {
-                const result = await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
             }
-        } catch {
-            Modal.alert(t('common.error'), t('errors.operationFailed'));
+        } catch (caught) {
+            // A Stop removes the relationship before it settles, so the list can drop this row and retire its
+            // mounted Action interest mid-flight; that cancelled settle is not a failed Action.
+            if (!actionExecution.isCurrent()) return;
+            Modal.alert(t('common.error'), presentWorkspaceSyncFailure(caught) ?? t('errors.operationFailed'));
         } finally {
             setPendingAction(null);
         }
-    }, [actionExecution.execute, actionInput, scope]);
+    }, [actionExecution.execute, actionExecution.isCurrent, actionInput, scope]);
+
+    // Both folders can live on one machine; the machine alone would then name each action identically.
+    const sameMachine = (props.summary.alpha.machineName ?? props.summary.alpha.name) === (props.summary.beta.machineName ?? props.summary.beta.name);
+    const endpointLabel = React.useCallback((endpoint: typeof props.summary.alpha) => {
+        const machine = endpoint.machineName ?? endpoint.name;
+        return sameMachine ? `${machine} · ${endpoint.name}` : machine;
+    }, [sameMachine]);
 
     const actionItems = React.useMemo<readonly DropdownMenuItem[]>(() => {
         const toggleAction = !props.summary.relationship.enabled
@@ -131,13 +143,13 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
                 ? []
                 : [{ id: 'sync', title: t('workspaceSync.actions.syncNow') }]),
             toggleAction,
-            ...(props.summary.alpha.workspaceRef ? [{ id: 'open-alpha', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.alpha.machineName ?? props.summary.alpha.name }) }] : []),
-            ...(props.summary.beta.workspaceRef ? [{ id: 'open-beta', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.beta.machineName ?? props.summary.beta.name }) }] : []),
-            ...(revealableEndpoint(props.summary.alpha) ? [{ id: 'reveal-alpha', title: t('workspaceSync.actions.openFolder', { label: props.summary.alpha.machineName ?? props.summary.alpha.name }) }] : []),
-            ...(revealableEndpoint(props.summary.beta) ? [{ id: 'reveal-beta', title: t('workspaceSync.actions.openFolder', { label: props.summary.beta.machineName ?? props.summary.beta.name }) }] : []),
+            ...(props.summary.alpha.workspaceRef ? [{ id: 'open-alpha', title: t('workspaceSync.actions.openOnMachine', { machine: endpointLabel(props.summary.alpha) }) }] : []),
+            ...(props.summary.beta.workspaceRef ? [{ id: 'open-beta', title: t('workspaceSync.actions.openOnMachine', { machine: endpointLabel(props.summary.beta) }) }] : []),
+            ...(revealableEndpoint(props.summary.alpha) ? [{ id: 'reveal-alpha', title: t('workspaceSync.actions.openFolder', { label: endpointLabel(props.summary.alpha) }) }] : []),
+            ...(revealableEndpoint(props.summary.beta) ? [{ id: 'reveal-beta', title: t('workspaceSync.actions.openFolder', { label: endpointLabel(props.summary.beta) }) }] : []),
             { id: 'terminate', title: t('workspaceSync.actions.terminate') },
         ];
-    }, [props.summary.alpha, props.summary.beta, props.summary.relationship.enabled, revealableEndpoint]);
+    }, [endpointLabel, props.summary.alpha, props.summary.beta, props.summary.relationship.enabled, revealableEndpoint]);
 
     const handleActionSelect = React.useCallback((action: string) => {
         if (action === 'open-alpha' || action === 'open-beta') {
@@ -160,17 +172,24 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
         }
     }, [props.summary.alpha, props.summary.beta, revealableEndpoint, router, runAction]);
 
+    // One unbreakable unit: a wrapped subtitle moves the whole "Last checked <time>" to the next
+    // line instead of stranding "Last checked" or "PM" alone.
     const lastCheckedLabel = status?.lastCycleObservedAtMs == null
         ? null
         : t('workspaceSync.lastChecked', {
             at: formatWithCachedDateTimeFormatter(status.lastCycleObservedAtMs, undefined, { dateStyle: 'medium', timeStyle: 'short' }),
-        });
+        }).replace(/\s/g, '\u00A0');
+    // Two folders on one machine: the title already tells them apart, so the machine is named once.
+    const alphaMachineId = props.summary.alpha.workspaceRef?.machineId;
+    const bothOnOneMachine = alphaMachineId !== undefined && alphaMachineId === props.summary.beta.workspaceRef?.machineId;
     const machineDirectionLabel = props.summary.alpha.machineName || props.summary.beta.machineName
-        ? formatWorkspaceSyncRelationshipTitle({
-            alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.name,
-            betaLabel: props.summary.beta.machineName ?? props.summary.beta.name,
-            mode: props.summary.relationship.mode,
-        })
+        ? bothOnOneMachine
+            ? props.summary.alpha.machineName ?? props.summary.alpha.name
+            : formatWorkspaceSyncRelationshipTitle({
+                alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.name,
+                betaLabel: props.summary.beta.machineName ?? props.summary.beta.name,
+                mode: props.summary.relationship.mode,
+            })
         : null;
 
     const subtitle = [

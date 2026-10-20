@@ -78,6 +78,10 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     invalidateTarget: (target: TTarget) => void;
     /** Filters exact focused-Home wakes. Content-free secondary/socket wakes stay conservative. */
     matchesWake?: (event: HomeAccountChangeEvent) => boolean;
+    /** A domain may narrow the demanded rows, or discard an already received revision. */
+    prepareWake?: (event: HomeAccountChangeEvent, target: TTarget) => boolean;
+    /** Revalidate from the socket wake even while detailed catch-up is unavailable. */
+    observeCatchUpPending?: boolean;
     /**
      * Handles credential replacement/removal at this same refcounted lifecycle owner. Returning
      * true schedules a refresh; false retains the domain state established by the callback.
@@ -164,7 +168,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                         // would mark the new cleanup dirty and self-trigger forever.
                         // A reader that joined the incumbent still owes that pass;
                         // wakes during this read remain in reloadAfterInFlight.
-                        if (result && incumbentMaintenance && !joinedIncumbentMaintenance) {
+                        if (incumbentMaintenance && !joinedIncumbentMaintenance) {
                             incumbentMaintenance.reloadAfterMaintenance = false;
                         }
                         // A foreground reread can join cleanup already owned by this
@@ -252,13 +256,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         }
     }
 
-    function handleWake(serverId: string): void {
-        const targets = targetsForServer(serverId);
+    function handleWake(event: HomeAccountChangeEvent): void {
+        const targets = targetsForServer(event.serverId).filter(target => params.prepareWake?.(event, target) !== false);
         if (targets.length === 0) return;
         // Mark the exact Home's rows stale first, so a surface can explain
         // itself before the refetch answers. Other Homes are untouched.
-        params.invalidateServer(targets[0]!.serverId);
+        if (!params.prepareWake) params.invalidateServer(targets[0]!.serverId);
         for (const target of targets) {
+            if (params.prepareWake) params.invalidateTarget(target);
             requestReload(target);
         }
     }
@@ -267,8 +272,8 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         if (!unsubscribeWake) {
             unsubscribeWake = subscribeHomeAccountChange((event) => {
                 if (params.matchesWake && !params.matchesWake(event)) return;
-                handleWake(event.serverId);
-            });
+                handleWake(event);
+            }, { includeCatchUpPending: params.observeCatchUpPending });
         }
         if (params.onCredentialMutation && !unsubscribeCredentials) {
             unsubscribeCredentials = subscribeHomeCredentialChange((event) => {

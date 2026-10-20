@@ -505,6 +505,33 @@ describe('workspaceSyncTargetBootstrap', () => {
     await rm(fixture, { recursive: true, force: true });
   });
 
+  it('reports the SCM refusal and leaves a missing Git target absent when materialization fails before binding', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-bootstrap-git-refused-'));
+    const source = join(fixture, 'source');
+    const target = join(fixture, 'target');
+    await mkdir(source);
+    try {
+      await expect(workspaceSyncTargetBootstrap(input({
+        rootPath: target,
+        sourceRootPath: source,
+        materializationDirectory: join(fixture, 'staging'),
+        contentSelection: 'git_worktree',
+        createIfMissing: true,
+        targetBootstrap: 'materialize_from_source_workspace',
+        prepareGitTarget: async (request) => await prepareWorkspaceSyncGitTarget(request, {
+          realizeWorkspaceCheckout: async () => {
+            throw new Error("'target' is a missing but already registered worktree");
+          },
+          inspectWorkspaceLocation: async () => null,
+        }),
+      }))).rejects.toThrow('missing but already registered worktree');
+      await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(join(fixture, 'staging'))).resolves.toEqual([]);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed before creating an empty Git target when no SCM bootstrap owner is supplied', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-bootstrap-'));
     const target = join(fixture, 'target');

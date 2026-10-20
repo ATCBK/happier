@@ -14,6 +14,7 @@ import { projectSessionTurnWaitingCompatibility } from '@/app/clientCompatibilit
 import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
+import { getPrismaConnectionLimit } from '@/storage/prisma';
 import { readSessionDetail } from './registerSessionListingRoutes';
 import { readSessionMessagePage } from './registerSessionMessageRoutes';
 import { readSessionTurns } from './registerSessionTurnMutationRoute';
@@ -36,7 +37,7 @@ export function registerSessionReadBatchRoute(app: Fastify) {
                 return { status: 503 as const, body: { error: databaseError ?? 'session_read_unavailable' } };
             }
         };
-        const results = await Promise.all(request.body.sessionIds.map(async sessionId => {
+        const readSession = async (sessionId: string) => {
             const input = { userId: request.userId, sessionId, authentication };
             const result: SessionReadBatchResultV1 = { sessionId };
             if (request.body.includeSnapshot) {
@@ -62,6 +63,18 @@ export function registerSessionReadBatchRoute(app: Fastify) {
                 });
             }
             return result;
+        };
+        // Each component awaits its own DB work before the next one starts.
+        // Without an explicit pool budget, read sequentially rather than
+        // multiplying the request into an unknown number of acquisitions.
+        const concurrency = getPrismaConnectionLimit() ?? 1;
+        const results = new Array<SessionReadBatchResultV1>(request.body.sessionIds.length);
+        let nextIndex = 0;
+        await Promise.all(Array.from({ length: Math.min(concurrency, results.length) }, async () => {
+            while (nextIndex < results.length) {
+                const index = nextIndex++;
+                results[index] = await readSession(request.body.sessionIds[index]!);
+            }
         }));
         return reply.header('Cache-Control', 'no-store').send({ results });
     });

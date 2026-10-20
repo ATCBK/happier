@@ -15,7 +15,7 @@ import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCata
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionListRenderableSourceMetadata, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
     projectUiSessionRuntimeAwareness,
     isFreshTimestamp,
@@ -40,7 +40,7 @@ import {
 } from '@/sync/ops/sessionMachineTarget';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionListRenderableOwnerMetadataView, readSessionListRenderableSharedMetadata } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
@@ -109,6 +109,8 @@ type SessionStatusColors = Readonly<{
 export type SessionWorkingTextMode = 'animated' | 'static';
 type GetSessionStatusOptions = Readonly<{
     includeTitle?: boolean;
+    /** Work rows already carry an age, while Session-list rows can retain Last seen. */
+    disconnectedTextMode?: 'lastSeen' | 'offline';
     vibingIndex?: number;
     workingTextMode?: SessionWorkingTextMode;
     statusColors?: SessionStatusColors;
@@ -405,6 +407,9 @@ export function presentSessionAwarenessV1(
     options?: Readonly<{
         /** `activeAt` for the "last seen" wording; omit it for a plain disconnected label. */
         lastSeenAtMs?: number | null;
+        disconnectedTextMode?: 'lastSeen' | 'offline';
+        /** Existing process-terminal metadata; unknown values never imply a stop. */
+        lifecycleState?: string;
         /** The caller's already-chosen working wording; omitted callers get the static one. */
         workingLabel?: string;
     }>,
@@ -428,9 +433,13 @@ export function presentSessionAwarenessV1(
         const lastSeenAtMs = options?.lastSeenAtMs;
         return {
             state: 'disconnected',
-            statusText: typeof lastSeenAtMs === 'number'
-                ? t('status.lastSeen', { time: formatLastSeen(lastSeenAtMs, false) })
-                : t('status.disconnected'),
+            statusText: options?.lifecycleState === 'stopped'
+                ? t('sessionWork.states.stopped')
+                : options?.disconnectedTextMode === 'offline'
+                    ? t('status.offline')
+                    : typeof lastSeenAtMs === 'number'
+                        ? t('status.lastSeen', { time: formatLastSeen(lastSeenAtMs, false) })
+                        : t('status.disconnected'),
             quiet: false,
         };
     }
@@ -455,6 +464,14 @@ export function presentSessionAwarenessV1(
     }
 }
 
+/** The authorized metadata view carrying the process fact, for every status-word presenter. */
+export function readSessionStatusLifecycleState(session: SessionStatusSource): string | undefined {
+    if ('metadataUnavailable' in session && session.metadataUnavailable === true) return undefined;
+    const metadata = 'agentState' in session ? readSessionListRenderableSourceMetadata(session) : session.metadata;
+    const lifecycleState = metadata?.lifecycleState;
+    return typeof lifecycleState === 'string' ? lifecycleState : undefined;
+}
+
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
     const resolvedOptions = resolveGetSessionStatusOptions(options);
     const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolvedOptions;
@@ -470,6 +487,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const idx = typeof vibingIndex === 'number' ? vibingIndex : Math.floor(Math.random() * vibingMessages.length);
     const presented = presentSessionAwarenessV1(awareness, {
         lastSeenAtMs: session.activeAt,
+        disconnectedTextMode: resolvedOptions.disconnectedTextMode,
+        lifecycleState: readSessionStatusLifecycleState(session),
         ...(workingTextMode === 'static'
             ? {}
             : { workingLabel: vibingMessages[idx % vibingMessages.length].toLowerCase() + '…' }),
@@ -577,7 +596,16 @@ export function useSessionStatus(session: SessionStatusSource | null, options: U
 export function resolveLockedSessionTitle(title: string): string {
     return title.trim().length > 0 && !isUntitledSessionName(title)
         ? title
-        : t('session.access.lockedTitleFallback');
+        : readLockedSessionName();
+}
+
+/**
+ * What a Session whose content this device cannot read is called when no safe name is held: the
+ * Session list, its header, the Inbox and the activity surfaces all say it the same way. (The Board's
+ * "Encrypted details unavailable" is a widget sentence, not a Session name.)
+ */
+export function readLockedSessionName(): string {
+    return t('session.access.lockedTitleFallback');
 }
 
 /**
@@ -593,7 +621,11 @@ export function isUntitledSessionName(name: string): boolean {
  * Extracts a display name from a session's metadata path.
  * Returns the last segment of the path, or "Untitled session" when nothing names it.
  */
-export function getSessionName(session: SessionDisplayNameSource, serverId?: string | null): string {
+export function getSessionName(
+    session: SessionDisplayNameSource,
+    serverId?: string | null,
+    options?: Readonly<{ snapshotOnly?: boolean }>,
+): string {
     const summaryText = readSessionDisplayTitleField(session).value;
     const ownerMetadata = readDisplayOwnerMetadata(session);
     if (summaryText) {
@@ -605,7 +637,7 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
     }
     // The held row already owns the transcript projection. Full Sessions (headers and notices)
     // reuse its Home-qualified title instead of scanning the transcript or deriving another name.
-    if (session.metadata != null && ('agentState' in session || 'ownerMetadataView' in session)) {
+    if (!options?.snapshotOnly && session.metadata != null && ('agentState' in session || 'ownerMetadataView' in session)) {
         const home = serverId?.trim() || session.serverId?.trim() || getActiveServerId();
         const row = readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, home, session.id);
         const title = readSessionDisplayTitleField(session, {
@@ -619,7 +651,7 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
     }
     if (ownerMetadata) {
         const displayMetadata = ownerMetadata;
-        const displayPath = readPrivateDisplayMachineTarget(session, ownerMetadata, serverId)?.basePath
+        const displayPath = (options?.snapshotOnly ? null : readPrivateDisplayMachineTarget(session, ownerMetadata, serverId))?.basePath
             ?? readDisplayPathForSession({
             sessionId: null,
             metadata: displayMetadata ?? null,
@@ -639,8 +671,13 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
  * say their own generic word (a notification, a warning) rather than the untitled one. The name
  * itself is never decided anywhere else.
  */
-export function readSessionNameIfNamed(session: SessionDisplayNameSource, serverId?: string | null): string | null {
-    const name = getSessionName(session, serverId);
+export function readSessionNameIfNamed(
+    session: SessionDisplayNameSource,
+    serverId?: string | null,
+    /** Exact authorized reads must not borrow another projection's cached title or path. */
+    options?: Readonly<{ snapshotOnly?: boolean }>,
+): string | null {
+    const name = getSessionName(session, serverId, options);
     return isUntitledSessionName(name) ? null : name;
 }
 
@@ -694,7 +731,12 @@ export function getSessionWorkContextParts(session: SessionDisplayNameSource, se
     const machine = machineId ? state.machineListByServerId[home]?.find(item => item.id === machineId)
         ?? (home === getActiveServerId() ? state.machines[machineId] : undefined) : undefined;
     const machineName = getMachineDisplayName(machine) ?? readSessionOwnerHostName(session);
-    const agentId = readSessionPresentationAgentId(session);
+    const agentId = readSessionPresentationAgentId({
+        metadataLayoutVersion: session.metadataLayoutVersion,
+        metadata: 'ownerMetadataView' in session || 'agentState' in session
+            ? session.metadata
+            : readSessionListRenderableSharedMetadata(session),
+    });
     const agent = agentId ? resolveAgentCatalogProjection(agentId, { enabledAgentIds: [] }).title : null;
     const workspace = !machineName && ownerMetadata && readSessionDirectoryKind(ownerMetadata) !== 'managed'
         ? resolveSessionWorkspaceDisplayPresentation({ serverId: home, metadata: ownerMetadata,

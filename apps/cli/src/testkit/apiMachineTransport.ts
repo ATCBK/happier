@@ -8,6 +8,7 @@ export function createApiMachineTransportFixture() {
         onUpdate: vi.fn<ApiMachineClient['onUpdate']>(() => () => {}),
         onAccountSettingsVersionHint: vi.fn<ApiMachineClient['onAccountSettingsVersionHint']>(() => () => {}),
         onAccountProjectRowsChanged: vi.fn<ApiMachineClient['onAccountProjectRowsChanged']>(() => () => {}),
+        onSessionFollowRulesChanged: vi.fn<ApiMachineClient['onSessionFollowRulesChanged']>(() => () => {}),
         onAutomationEventSourcesInvalidated: vi.fn<ApiMachineClient['onAutomationEventSourcesInvalidated']>(() => () => {}),
         onPendingSessionActivationHint: vi.fn<ApiMachineClient['onPendingSessionActivationHint']>(() => () => {}),
         onSessionDeletedChange: vi.fn<ApiMachineClient['onSessionDeletedChange']>(() => () => {}),

@@ -3,6 +3,7 @@ import nacl from 'tweetnacl';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
   accountSettingsParse, normalizeActionsSettingsV1, SessionListQueryV1Schema, SessionListQueryResponseV1Schema,
   FeaturesResponseSchema, type ActionsSettingsV1,
@@ -13,7 +14,8 @@ import { verifyExternalActionMachineRpcExecution } from '../../../../server/sour
 import { parseSessionListQueryActionResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionMetadataOwnerPatchV1Schema,
+  SessionMetadataTuplePatchSuccessV1Schema, type SessionMetadataOwnerPatchV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { auth } from '../../../../server/sources/app/auth/auth';
 import { createAuthenticatedTestApp } from '../../../../server/sources/app/api/testkit/sqliteFastify';
@@ -68,6 +70,8 @@ import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/reso
 import { inheritedCodexInput } from '@/session/actions/sessionSpawnNew.agent.testkit';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionCurrentSessionScopeFailureDetailsV1Schema } from '@happier-dev/protocol/actions/executor/sessionListAccess';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -100,6 +104,8 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   storage.state.publisherBound = true;
   storage.state.revokedAt = null;
   storage.state.publicKey = installation.publicKey;
+  storage.state.sessionIds = new Set([childId]);
+  storage.state.directReportSessionIds = new Set([childId]);
   const token = await auth.createToken(storage.account.id, undefined, { kind: 'account', authority: 'present_user' });
   const credentials = { token, encryption: null };
   const scopeKey = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(credentials));
@@ -134,26 +140,36 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
       bearer: request.headers.authorization !== undefined });
     return payload;
   });
-  const members = new Set([childId]);
+  const members = storage.state.directReportSessionIds;
   let currentnessRefused = false;
   let subtreeRefused: false | true | 'active' | 'archived' = false;
+  const nextSubtreeStatuses = new Map<'active' | 'archived', number>();
   let callerWorkspaceMissing = false;
   let inactive = false;
-  let childArchived = false;
+  const activeSessions = new Set<string>();
+  const archivedSessions = new Set<string>();
+  const ownerTuples = new Map<string, SessionMetadataOwnerPatchV1>();
+  let nestedReportId: string | undefined;
   const lifecycleEffects: string[] = [];
   const row = (id: string) => {
     const metadata = { machineId: storage.state.machineId,
       ...(id === sessionId && callerWorkspaceMissing ? {} : { path: '/workspace' }), flavor: 'codex' };
     const owner = createSessionOwnerMetadataV1({ metadata });
     if (!owner.ok) throw new Error('Invalid caller metadata fixture');
-    return { ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const, share: null, active: !inactive,
-      archivedAt: id === childId && childArchived ? 123 : null,
+    const tuple = ownerTuples.get(id);
+    return { ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const, share: null,
+      active: !inactive || activeSessions.has(id),
+      archivedAt: archivedSessions.has(id) ? 123 : null,
       ...(metadataLayout === 0 ? { metadata: JSON.stringify(metadata) } : {
         metadataLayoutVersion: 1,
         metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata })),
         ownerMetadata: { t: 'plain' as const, v: owner.ownerMetadata },
       }),
-      ...(id === childId ? { manager: { sessionId } } : {}) };
+      ...(tuple ? { metadata: tuple.sharedMetadata.ciphertext, ownerMetadata: tuple.ownerMetadata,
+        metadataVersion: tuple.sharedMetadata.expectedVersion + 1, agentState: tuple.agentState.ciphertext,
+        agentStateVersion: tuple.agentState.expectedVersion + 1 } : {}),
+      ...(id === childId ? { manager: { sessionId } }
+        : id === nestedReportId ? { manager: { sessionId: childId } } : {}) };
   };
   app.get('/v1/account/encryption/currentness', { preHandler: app.authenticate }, async (_request, reply) =>
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
@@ -172,16 +188,35 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     })) }));
   app.post('/v2/sessions/query', { preHandler: app.authenticate }, async (request, reply) => {
     const query = SessionListQueryV1Schema.parse(request.body);
-    expect(query.underSessionId).toBe(sessionId);
+    expect(query.underSessionId === sessionId || (nestedReportId !== undefined && query.underSessionId === childId)).toBe(true);
     await observeSubtreeQuery?.();
+    const nextStatus = nextSubtreeStatuses.get(query.storage);
+    if (nextStatus !== undefined) {
+      nextSubtreeStatuses.delete(query.storage);
+      return reply.code(nextStatus).send({ error: 'private-error-body' });
+    }
     if (subtreeRefused === true) return reply.code(401).send({ error: 'private-error-body' });
     if (subtreeRefused === query.storage) return reply.code(503).send({ error: 'private-error-body' });
-    return SessionListQueryResponseV1Schema.parse({ sessions: query.storage === (childArchived ? 'archived' : 'active') ? [...members].map(row) : [],
+    const candidates = query.underSessionId === childId ? (nestedReportId ? [nestedReportId] : [])
+      : [...members, ...(nestedReportId && members.has(childId) ? [nestedReportId] : [])];
+    return SessionListQueryResponseV1Schema.parse({ sessions: candidates.filter(id =>
+      query.storage === (archivedSessions.has(id) ? 'archived' : 'active')).map(row),
       nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
   });
   app.get('/v2/sessions/:sessionId', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.status.get', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async request => ({ session: row((request.params as { sessionId: string }).sessionId) }));
+  // Persist the native Stop owner's tuple at the HTTP/DB boundary; signing,
+  // metadata projection and Stop-intent admission remain production logic.
+  app.patch('/v2/sessions/:sessionId', { preHandler: app.authenticate,
+    config: { restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
+  }, async request => {
+    const patch = SessionMetadataOwnerPatchV1Schema.parse(request.body);
+    ownerTuples.set((request.params as { sessionId: string }).sessionId, patch);
+    return SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+      sharedMetadata: { version: patch.sharedMetadata.expectedVersion + 1 },
+      agentState: { version: patch.agentState.expectedVersion + 1 } });
+  });
   app.get('/v1/sessions/:sessionId/messages', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.messages.recent.get', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async () => ({ messages: [{ id: 'message-child', seq: 1, localId: null, sidechainId: null, createdAt: 1, updatedAt: 1,
@@ -191,14 +226,14 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     config: { apiTokenSessionAction: 'session.archive', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async request => {
     lifecycleEffects.push(request.url);
-    if ((request.params as { sessionId: string }).sessionId === childId) childArchived = true;
+    archivedSessions.add((request.params as { sessionId: string }).sessionId);
     return { success: true, archivedAt: 123 };
   });
   app.post('/v2/sessions/:sessionId/unarchive', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.unarchive', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async request => {
     lifecycleEffects.push(request.url);
-    if ((request.params as { sessionId: string }).sessionId === childId) childArchived = false;
+    archivedSessions.delete((request.params as { sessionId: string }).sessionId);
     return { success: true, archivedAt: null };
   });
   const restore = installAxiosFastifyAdapter({ app, origin: serverHttpBaseUrl });
@@ -237,13 +272,68 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     },
     setActionsSettings: (actionsSettingsV1: ActionsSettingsV1) => { rawSettings = { actionsSettingsV1 }; publishSettings(); },
     markInactive: () => { inactive = true; },
-    markChildArchived: () => { childArchived = true; },
+    markChildArchived: () => { archivedSessions.add(childId); },
+    addNestedReport: (id: string) => { nestedReportId = id; storage.state.sessionIds.add(id); },
+    markSessionActive: (id: string) => { activeSessions.add(id); },
+    markSessionInactive: (id: string) => { activeSessions.delete(id); },
     refuseCurrentness: () => { currentnessRefused = true; },
     refuseSubtree: (storage?: 'active' | 'archived') => { subtreeRefused = storage ?? true; },
     allowSubtree: () => { subtreeRefused = false; },
+    failNextSubtree: (storage: 'active' | 'archived', status: number) => { nextSubtreeStatuses.set(storage, status); },
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it('admits the addressed reply policy read under its original signed Account root', async () => {
+  const f = await fixture();
+  const discussionId = 'addressed-discussion';
+  const path = `/v1/discussions/${discussionId}/participants`;
+  let answerPolicy: 'when_addressed' | 'drafts_for_approval' = 'when_addressed';
+  // Only the resource database response is fixed. Authentication, Home root
+  // issuance, signatures, HTTP admission and the real reply binder all run.
+  f.app.get('/v1/discussions/:discussionId/participants', { preHandler: f.app.authenticate,
+    config: { allowApiToken: true } }, async () => ({ discussionId, ownerAccountId: storage.account.id,
+    access: 'owner', grants: [], participants: [{ participant: { kind: 'session', sessionId },
+      answerPolicy, createdAt: 1 }] }));
+  try {
+    const input = { discussionId, localId: 'explicit-reply', replyTarget: { kind: 'message', messageId: 'question' },
+      content: { v: 1, parts: [{ t: 'text', text: 'The quoted arithmetic is correct.' }] } };
+    const op = f.operation('discussion.reply', input);
+    const prepared = await f.prepare(op, { v: 1, caller: op.witness.agentStartCaller,
+      sourceTurnId: 'turn', sourceInputId: 'input', callerPermissionMode: null, requestId: op.requestId });
+    if (!prepared) throw new Error('Missing original Discussion reply root');
+    const source = { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' as const,
+      discussionAddressing: { discussionId, messageId: 'question', throughSeq: 2, participantSessionId: sessionId } };
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId,
+      defaultSessionId: sessionId, actionCaller: op.witness.agentStartCaller, sessionInputSource: source,
+      externalActionExecutionAuthorization: prepared.authorization, externalActionTarget: prepared.target };
+    const { discussionAction } = createDiscussionActionDeps({ credentials: f.credentials, serverId,
+      serverHttpBaseUrl, serverIdentityId: storage.state.homeId,
+      externalActionMachineRequestPrivateKey: installation.secretKey,
+      externalActionMachineInstallationId: storage.state.installationId,
+      resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+        features: { sessions: { enabled: true, conversations: { enabled: true } },
+          sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+      }) }),
+    });
+    const bound = await bindDiscussionDraftReply({ actionId: op.actionId, input, context, serverId, discussionAction });
+    const reads = f.observations.filter(row => row.path === path);
+    expect({ bound, reads }).toMatchObject({ bound: { actionId: 'discussion.reply', input, context },
+      reads: [{ method: 'GET', path, status: 200, signed: true, bearer: false }] });
+    expect(bound).not.toHaveProperty('failure');
+    // The original root remains unchanged after the persisted participant
+    // policy changes. A signed recheck must refuse, not normalize new operands
+    // beneath the old signature or reuse the earlier policy observation.
+    answerPolicy = 'drafts_for_approval';
+    const changed = await bindDiscussionDraftReply({ actionId: op.actionId, input, context, serverId, discussionAction });
+    expect(changed).toMatchObject({ actionId: 'discussion.reply', input, context,
+      failure: { ok: false, errorCode: 'discussion_content_unavailable' } });
+    expect(f.observations.filter(row => row.path === path)).toEqual([
+      { method: 'GET', path, status: 200, signed: true, bearer: false },
+      { method: 'GET', path, status: 200, signed: true, bearer: false },
+    ]);
+  } finally { await f.close(); }
+});
 
 it.each([503, 401, 403] as const)('keeps Home mint availability distinct from authorization denial (%s), then recovers', async status => {
   const f = await fixture();
@@ -563,9 +653,9 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
   }, { authorityScope: 'session', actionsSettingsProvider: f.actionsSettingsProvider });
   const client = new Client({ name: 'signed-lifecycle', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const invoke = async (target: string) => {
+  const invoke = async (target: string, alsoArchiveReports?: boolean) => {
     const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
-      arguments: { actionId, input: { sessionId: target } } }));
+      arguments: { actionId, input: { sessionId: target, ...(alsoArchiveReports === undefined ? {} : { alsoArchiveReports }) } } }));
     const content = result.content.find(block => block.type === 'text');
     if (content?.type !== 'text') throw new Error('Missing MCP result');
     return { failed: result.isError === true, value: JSON.parse(content.text) as unknown };
@@ -576,13 +666,59 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     await client.connect(clientTransport);
     expect(effectCount()).toBe(0);
     const admissionStart = f.observations.length;
-    for (const target of [sessionId, childId]) {
+    if (actionId === 'session.archive') {
+      const grandchildId = 'c123456789012345678901232';
+      f.addNestedReport(grandchildId);
+      f.markSessionActive(grandchildId);
+      const stopAdmissions: Array<{ root: string; effect: string; admitted: boolean }> = [];
+      stop.mockImplementation(async request => {
+        if (request.method !== RPC_METHODS.STOP_SESSION) throw new Error('Unexpected cascade machine request');
+        const external = request.externalAction;
+        const authorization = external?.context.externalActionExecutionAuthorization;
+        if (!external || !authorization || !(external.privateKey instanceof Uint8Array)) throw new Error('Missing cascade Stop root');
+        const method = `${request.machineId}:${request.method}`;
+        const requestId = 'archive-cascade-stop';
+        const execution = { v: 1 as const, authorization, effectActionId: external.effectActionId,
+          target: authorization.binding.target, installationId: external.installationId,
+          machineSignature: signExternalActionMachineRpcRequestV1({ authorizationToken: authorization.token,
+            effectActionId: external.effectActionId, target: authorization.binding.target,
+            installationId: external.installationId, method, requestId, params: request.request,
+            privateKey: external.privateKey }) };
+        const admitted = await verifyExternalActionMachineRpcExecution(execution, { method, params: request.request,
+          requestId, resolveCurrentSessionMachine: async () => storage.state.machineId });
+        stopAdmissions.push({ root: authorization.binding.actionId, effect: external.effectActionId, admitted: admitted !== null });
+        expect(admitted).not.toBeNull();
+        f.markSessionInactive(grandchildId);
+        return { status: 'stopped' };
+      });
+      const readEdges = storage.db.sessionFollowEdge.findMany;
+      // Extend only the real database boundary: recursive membership stays with
+      // the Home's canonical subtree reader, including this second-level edge.
+      vi.spyOn(storage.db.sessionFollowEdge, 'findMany').mockImplementation(async query => {
+        const existing = await readEdges(query);
+        return query.where.relation === 'manager' && query.where.destinationSessionId.in.includes(childId)
+          ? [...existing, { sourceSessionId: grandchildId }] : existing;
+      });
+      const cascade = await invoke(sessionId, true);
+      expect(cascade, JSON.stringify(cascade)).toMatchObject({ failed: false, value: { success: true, sessionId,
+        reports: [{ sessionId: childId, status: 'archived' }] } });
+      expect(getActionSpec('session.archive').outputSchema.parse(cascade.value)).toEqual(cascade.value);
+      expect(f.lifecycleEffects).not.toContain(`/v2/sessions/${grandchildId}/archive`);
+      const nestedCascade = await invoke(childId, true);
+      expect(nestedCascade, JSON.stringify({ nestedCascade, observations: f.observations.slice(-12), stopAdmissions })).toMatchObject({ failed: false, value: { success: true, sessionId: childId,
+        reports: [{ sessionId: grandchildId, status: 'archived' }] } });
+      expect(getActionSpec('session.archive').outputSchema.parse(nestedCascade.value)).toEqual(nestedCascade.value);
+      expect(stopAdmissions).toEqual([{ root: 'session.archive', effect: 'session.stop', admitted: true }]);
+      expect(f.lifecycleEffects).toContain(`/v2/sessions/${grandchildId}/archive`);
+    }
+    for (const target of actionId === 'session.stop' ? [childId] : [sessionId, childId]) {
       const result = await invoke(target);
       expect(result.failed, JSON.stringify({ result, diagnostics: lifecycleDiagnostics.mock.calls,
         observations: f.observations.slice(-8) })).toBe(false);
       expect(result.value).toMatchObject(actionId === 'session.stop'
         ? { ok: true, sessionId: target, stopOutcome: { status: 'already_stopped' } }
-        : { ok: true, sessionId: target, archivedAt: actionId === 'session.archive' ? 123 : null });
+        : actionId === 'session.archive' ? { success: true, sessionId: target, archivedAt: 123 }
+        : { ok: true, sessionId: target, archivedAt: null });
     }
     expect(lifecycleDiagnostics.mock.calls).toEqual(expect.arrayContaining([
       ['[external-action-stage]', expect.objectContaining({ actionId,
@@ -631,6 +767,46 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     else process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = previousAuthorityPath;
     await f.close();
   }
+});
+
+it.each(['active', 'archived'] as const)(
+  'retains the native status Action through a transient %s subtree read inside its admitted lifetime', async storage => {
+  const f = await fixture();
+  const controller = new AbortController();
+  f.failNextSubtree(storage, 503);
+  try {
+    const run = () => f.execute(f.operation('session.status.get', { sessionId: childId }),
+      { sessionId, isCurrent: async () => true, signal: controller.signal });
+    expect(await run()).toMatchObject({ ok: true, result: { session: { id: childId } } });
+    const queries = f.observations.filter(row => row.path === '/v2/sessions/query');
+    expect(queries.some(row => row.status === 503)).toBe(true);
+    expect(queries.some(row => row.status === 200)).toBe(true);
+    expect(queries.every(row => row.signed && !row.bearer)).toBe(true);
+    // Recovery observes membership again; an earlier successful read is not a grant.
+    f.members.clear();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'target_outside_led_subtree' } });
+  } finally { controller.abort(); await f.close(); }
+});
+
+it('keeps definitive subtree denial terminal and honours cancellation during observation', async () => {
+  const controller = new AbortController();
+  const f = await fixture(1, async () => { if (cancelRead) controller.abort(); });
+  let cancelRead = false;
+  const run = () => f.execute(f.operation('session.status.get', { sessionId: childId }),
+    { sessionId, isCurrent: async () => true, signal: controller.signal });
+  try {
+    f.failNextSubtree('active', 403);
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'subtree_observation_unavailable' } });
+    const denied = f.observations.filter(row => row.path === '/v2/sessions/query');
+    expect(denied).toHaveLength(2);
+    expect(denied.some(row => row.status === 403)).toBe(true);
+    cancelRead = true;
+    f.failNextSubtree('active', 503);
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(f.lifecycleEffects).toEqual([]);
+  } finally { controller.abort(); await f.close(); }
 });
 
 it.each([false, true])('resolves one lifecycle caller snapshot per Action while reobserving led membership (direct=%s)', async direct => {

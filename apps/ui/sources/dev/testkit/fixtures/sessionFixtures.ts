@@ -8,7 +8,8 @@ import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRe
 import { V2SessionByIdResponseSchema, V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { ABSENT_SESSION_FOLLOW_FACTS_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
-import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol';
+import { projectViewerReadStateV1 } from '@happier-dev/protocol/sessions/personal/readState';
+import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol/sessions/personal/relevance';
 import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1, resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
@@ -102,7 +103,7 @@ export function createSessionFixture(
 
 /** A Home's current plaintext owner row, projected through the real metadata/access owners. */
 export function createPlainV2SessionRecordFixture(overrides: Partial<Pick<V2SessionRecord,
-    'id' | 'seq' | 'createdAt' | 'updatedAt' | 'active' | 'activeAt' | 'archivedAt' | 'metadataVersion' | 'agentStateVersion'
+    'id' | 'seq' | 'createdAt' | 'updatedAt' | 'active' | 'activeAt' | 'archivedAt' | 'metadataVersion' | 'agentStateVersion' | 'manager' | 'managedSessions'
 >> & { metadata?: Session['metadata'] } = {}): V2SessionRecord {
     const base = createSessionFixture({ id: overrides.id ?? 'session-1' });
     const { metadata = base.metadata, ...facts } = overrides;
@@ -158,6 +159,7 @@ export function createPlainSessionByIdResponseFixture(session: Session) {
         id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
         active: session.active, activeAt: session.activeAt, metadata: readSessionOwnerMetadataView(session),
         metadataVersion: session.metadataVersion, agentStateVersion: session.agentStateVersion,
+        manager: session.manager ?? undefined, managedSessions: session.managedSessions ?? undefined,
         responsibleAccountId: session.responsibleAccountId ?? null,
         responsibleAccount: session.responsibleAccount ?? null,
     });
@@ -165,7 +167,8 @@ export function createPlainSessionByIdResponseFixture(session: Session) {
     const access = session.access;
     return V2SessionByIdResponseSchema.parse({ session: {
         ...(access && access.level !== 'owner' ? recipientRecord : record),
-        agentState: session.agentState === null ? null : JSON.stringify(session.agentState),
+        agentState: (access && access.level !== 'owner') || session.agentState === null
+            ? null : JSON.stringify(session.agentState),
         latestTurnStatus: session.latestTurnStatus,
         latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
         lastRuntimeIssue: session.lastRuntimeIssue,

@@ -5,7 +5,7 @@ import { readDiscussionAccountEncryptionInventoryInTx, migrateDiscussionAccountE
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 import { type Fastify } from "../../types";
 import { z } from "zod/mini";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { AccountEncryptionMigrateRequestSchema, AccountEncryptionMigrateSuccessResponseSchema, AccountEncryptionMigrateBadRequestResponseSchema, AccountEncryptionMigrateForbiddenResponseSchema, AccountEncryptionMigrateNotFoundResponseSchema, AccountEncryptionMigrateConflictResponseSchema, AccountEncryptionMigrateInternalResponseSchema, AccountEncryptionMigrateAutomationsInventoryResponseSchema, AccountEncryptionMigrateInvalidParamsReasonSchema, AccountEncryptionMigrateTransitionPrepareRequestSchema, AccountEncryptionMigrateTransitionPrepareResponseSchema, AccountEncryptionMigrateTransitionAuthorizeRequestSchema, AccountEncryptionMigrateTransitionAuthorizeResponseSchema, AccountEncryptionMigrateCollectionInventoryPageRequestSchema, AccountEncryptionMigrateCollectionInventoryPageSchema, AccountEncryptionMigrateCollectionStageBatchRequestSchema, AccountEncryptionMigrateCollectionStageBatchResponseSchema, AccountEncryptionMigrateTransitionCancelRequestSchema, AccountEncryptionMigrateTransitionCancelResponseSchema, AccountEncryptionMigrateTransitionActivateRequestSchema, AccountEncryptionMigrateTransitionActivateResponseSchema, ACCOUNT_ENCRYPTION_MIGRATE_REQUEST_MAX_UTF8_BYTES, createAccountEncryptionMigrateProofSigningInputV1, createAccountEncryptionMigrateRequestBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationProofSigningInputV1, type AccountEncryptionMigrateKeyProof, type AccountEncryptionMigrateRequest, type AccountEncryptionMigrateTransitionAuthorizeRequest } from '@happier-dev/protocol/account/encryptionMigrate';
 import { ArtifactQuotaExceededV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -1722,7 +1722,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                             payload:
                                 buildSessionMetadataRecipientUpdate(
                                     publication.sessionId,
-                                    publication.cursor,
+                                    publication.cursor.resolveCursor(),
                                     randomKeyNaked(12),
                                     publication.projection,
                                 ),
@@ -1970,15 +1970,15 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 afterTx(tx, () => {
                     eventRouter.emitUpdate({
                         userId,
-                        payload: buildAccountSettingsChangedUpdate(nextSettingsVersion, finalized.cursor, randomKeyNaked(12)),
+                        payload: buildAccountSettingsChangedUpdate(nextSettingsVersion, finalized.resolveResult().cursor, randomKeyNaked(12)),
                         recipientFilter: { type: "user-machine-scoped-only" },
                     });
                 });
 
-                return {
+                return transactionResult(() => ({
                     type: "success" as const,
                     mode: toMode,
-                    accountVersion: finalized.version,
+                    accountVersion: finalized.resolveResult().version,
                     settingsVersion: nextSettingsVersion,
                     sessionDraftRecords: sessionDrafts
                         ? sessionDraftMigration.records
@@ -2000,7 +2000,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     workspaceExecutionConfigRows: workspaceExecutionConfig ? workspaceExecutionConfigMigration.rows : undefined,
                     projectRows: projectRows ? projectRowsMigration.rows : undefined,
                     projectTrustRows: projectTrust ? projectTrustMigration.rows : undefined,
-                };
+                }));
             });
 
             if (result.type === "internal-error") return reply.code(500).send({ error: "internal" });

@@ -43,10 +43,14 @@ import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/wor
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { getStorage, selectSessionDisplayNameSource, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
-import { t, type TranslationKeyNoParams } from '@/text';
+import { t, tLoose, type TranslationKeyNoParams } from '@/text';
+import { BUILTIN_WORKFLOW_CATALOG_V1 } from '@happier-dev/protocol/workflows/builtins/catalog';
 import { UNIVERSAL_SEARCH_ROUTE } from '@/components/appShell/search/universalSearchRoutePresentation';
 import {
     buildPluginPanelsRoute,
@@ -1065,6 +1069,13 @@ function subscribeSettingsEntityTitles(listener: () => void): () => void {
     return () => disposers.forEach(dispose => dispose());
 }
 
+/** A built-in Workflow is a protocol catalog entry, never an Account artifact: its tab names the entry. */
+function resolveBuiltinWorkflowTitle(ref: DestinationRef): string | null {
+    if (ref.kind !== 'workflow' || !ref.params.id) return null;
+    const entry = BUILTIN_WORKFLOW_CATALOG_V1.find((candidate) => candidate.id === ref.params.id);
+    return entry ? tLoose(entry.titleKey) : null;
+}
+
 /** Absence is settled by a retirement or a complete owner census, never a scoped cache miss. */
 function resolveKnownMissingInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>): string | null {
     if (!state?.profileScope || (ref.params.serverId
@@ -1080,7 +1091,7 @@ function resolveKnownMissingInstanceTitle(ref: DestinationRef, state: ReturnType
         return resolution.kind !== 'resolved' && resolution.kind !== 'ambiguous' && isProjectAccountRowsCensusComplete(rows)
             ? t('projects.detail.notFoundTitle') : null;
     }
-    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id
+    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id && !resolveBuiltinWorkflowTitle(ref)
         && !state.artifacts[ref.params.id] && state.artifactsLoaded) {
         return t(ref.kind === 'artifacts' ? 'artifacts.notFound' : 'common.unavailable');
     }
@@ -1110,6 +1121,8 @@ function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeo
         return run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata))
             : fallbackTitle ?? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(null));
     }
+    const builtinWorkflowTitle = resolveBuiltinWorkflowTitle(ref);
+    if (builtinWorkflowTitle) return builtinWorkflowTitle;
     if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id) {
         const artifact = state.artifacts[ref.params.id];
         if (artifact) return artifact.isDecrypted ? artifact.title ?? t('common.unavailable') : t('common.unavailable');
@@ -1187,6 +1200,13 @@ export function useDestinationInstanceTitles(
         sessionId: entry.ref.params.id!, serverId: entry.ref.params.serverId ?? null,
     })), [sessionEntries]);
     const sessionTitles = useSessionDisplayNameProjections(addresses, sessionDisplayTitle);
+    // A restored tab's page is not mounted, so its Session is named from content nobody has demanded yet.
+    const activeServerId = useActiveServerSnapshot(addresses.some(address => !address.serverId)).serverId;
+    const demandedSessions = React.useMemo(() => addresses.flatMap(address => {
+        const demanded = normalizeSessionAddress(address.serverId ?? activeServerId, address.sessionId);
+        return demanded ? [demanded] : [];
+    }), [addresses, activeServerId]);
+    useSessionContentDemand(demandedSessions, { tag: 'workspace.hydrateSessionTabs', hydrate: 'unsettled' });
     const discussionEntries = React.useMemo(() => entries.flatMap(entry => {
         if (entry.ref.kind === DISCUSSIONS_DESTINATION_ID && entry.ref.params.discussionId) {
             return [{ key: entry.key, serverId: entry.ref.params.serverId ?? null, discussionId: entry.ref.params.discussionId }];

@@ -13,6 +13,7 @@ import { Typography } from '@/constants/Typography';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { getTranslationValue, t, tLoose } from '@/text';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
+import { presentPluginInstallApprovalRows } from './pluginInstallApprovalFacts';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
@@ -29,6 +30,8 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     anatomy?: 'card' | 'page';
     /** The approval's Home: a value that is one of its sessions (or a Home) reads by its name. */
     serverId?: string | null;
+    /** The exact identity of a Home this device cannot name; its own line never says it, so it waits here. */
+    homeIdentity?: string;
     /** A failure's code the page keeps behind this same disclosure, after the arguments' own lines. */
     failureCode?: string;
     /** The executor's own words for that failure, kept in the same disclosure ahead of its code. */
@@ -37,14 +40,16 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     collapsed?: boolean;
 }>) {
     const [detailsOpen, setDetailsOpen] = React.useState(props.collapsed !== true);
-    const allRows = props.presentation.rows;
+    // A kind with its own human presentation reads through it; its raw structure stays in Technical details.
+    const allRows = React.useMemo(() => presentPluginInstallApprovalRows(props.presentation.rows), [props.presentation.rows]);
     // People read names, choices and values; opaque ids stay present, one disclosure away.
     const rows = React.useMemo(() => allRows.filter((row) => !(row.kind === 'value' && row.technical)), [allRows]);
     const technical = React.useMemo(
         () => [...collectApprovalTechnicalLines(allRows),
             ...(props.failureMessage ? [{ key: 'failure-message', label: t('detailPages.approval.failureTitle'), value: props.failureMessage }] : []),
-            ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : [])],
-        [allRows, props.failureCode, props.failureMessage],
+            ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : []),
+            ...(props.homeIdentity ? [{ key: 'home-identity', label: t('common.home'), value: props.homeIdentity }] : [])],
+        [allRows, props.failureCode, props.failureMessage, props.homeIdentity],
     );
     if (allRows.length === 0 && technical.length === 0) return null;
     const serverId = props.serverId ?? null;

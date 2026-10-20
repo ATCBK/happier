@@ -54,7 +54,7 @@ const HUMAN_PRESENCE: BrowserCopresence = {
 };
 
 function Source(
-  props: Readonly<{ presence: BrowserCopresence; machineName?: string | null; targetTitle?: string | null; aspectRatio?: number }>,
+  props: Readonly<{ presence: BrowserCopresence; machineName?: string | null; targetTitle?: string | null; aspectRatio?: number; agentTitle?: string }>,
 ) {
   const watching = props.presence.kind === 'agent';
   usePublishSessionViewerSourceFacts('computer', {
@@ -68,10 +68,11 @@ function Source(
     () => ({
       presence: props.presence,
       agent: { name: 'Claude' },
+      ...(props.agentTitle ? { agentTitle: props.agentTitle } : {}),
       onTakeControl: () => {},
       onHandBack: () => {},
     }),
-    [props.presence],
+    [props.agentTitle, props.presence],
   );
   usePublishSessionViewerPresence('computer', presence);
   return null;
@@ -90,6 +91,7 @@ function Tree(
     machineName?: string | null;
     targetTitle?: string | null;
     aspectRatio?: number;
+    agentTitle?: string;
   }>,
 ) {
   return (
@@ -100,7 +102,7 @@ function Tree(
       canPresentSource={() => true}
       openDocked={() => {}}
     >
-      <Source presence={props.presence} machineName={props.machineName} targetTitle={props.targetTitle} aspectRatio={props.aspectRatio} />
+      <Source presence={props.presence} machineName={props.machineName} targetTitle={props.targetTitle} aspectRatio={props.aspectRatio} agentTitle={props.agentTitle} />
       <Probe harness={props.harness} />
       <SessionViewerHost sessionId="session-a" serverId="home-a" />
     </SessionViewerControllerProvider>
@@ -164,6 +166,20 @@ describe('SessionViewerHost', () => {
       ).length,
     ).toBeGreaterThan(0);
     await result.unmount();
+  });
+
+  it('says the agent is working on the machine only while it acts; otherwise the source’s own line stands', async () => {
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 800 });
+    const capsuleTitle = () => result.tree.root.findAll(
+      (node) => node.props?.testID === 'session-viewer-presence' && typeof node.props.agentTitle === 'string',
+    )[0]?.props.agentTitle as string | undefined;
+    try {
+      // Shared and allowed, but no action in flight (no turn running): no claim of work.
+      await result.update(<Tree harness={harness} presence={AGENT_PRESENCE} agentTitle="Claude can see Safari" />);
+      expect(capsuleTitle()).toBe('Claude can see Safari');
+      await result.update(<Tree harness={harness} presence={{ ...AGENT_PRESENCE, activity: 'click' }} agentTitle="Claude is using Safari" />);
+      expect(capsuleTitle()).toContain('fly-bot-1');
+    } finally { await result.unmount(); }
   });
 
   it('names what is watched and where, and never ends on a dangling "on" when its source states no machine', async () => {

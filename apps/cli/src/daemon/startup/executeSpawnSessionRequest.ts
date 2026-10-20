@@ -107,7 +107,7 @@ import {
     resolveLaunchProfileSavedSecretEnvironment,
 } from '../agentRuntime/resolveForegroundProfileSavedSecretEnvironment';
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
-import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
+import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 
@@ -117,6 +117,7 @@ type SpawnAccountUsageStore = Parameters<typeof resolveConnectedServiceAuthForSp
 type SpawnAuthGroupSwitchCoordinator = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['authGroupSwitchCoordinator'];
 type SpawnPredictiveSwitchGuard = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['predictiveSwitchGuard'];
 export type ExecuteSpawnSessionRequestParams = Readonly<{
+    signal?: AbortSignal;
     readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     readSpawnFailureLimits?: SpawnFailureLimitsReader;
     checkRegistryUpdates?: () => Promise<void>;
@@ -215,10 +216,8 @@ export async function executeSpawnSessionRequest(
             activateSessionPurposeBindings: requesterRuntime.activateSessionPurposeBindings,
             activatePurposeBindings: requesterRuntime.activatePurposeBindings };
     }
-    if (!await isRequesterLaunchAdmissionCurrent(options)) {
-        return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-            errorMessage: 'Requester Machine admission unavailable' };
-    }
+    const requesterAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+    if (requesterAdmissionFailure) return requesterAdmissionFailure;
     let takeoverAdmission: ReturnType<PersistedTakeoverAdmissionWaiter['getRegistration']> = null;
     try {
         takeoverAdmission = options.persistedTakeoverAdmission
@@ -544,6 +543,7 @@ export async function executeSpawnSessionRequest(
             // runtime, so every refusal this owner can already establish is
             // established first.
             const daemonProviderLaunch = await prepareDaemonProviderLaunch({
+                signal: params.signal,
                 readModelProjection: createAccountScopedProviderModelProjectionReader({
                     serverUrl: requesterRuntime?.bootstrap.savedSecretOperationContext.serverHttpBaseUrl
                         ?? resolveServerHttpBaseUrl(),
@@ -761,10 +761,8 @@ export async function executeSpawnSessionRequest(
             let launchSessionAttachPayload = sessionAttachPayload;
             let launchOptions: SpawnSessionOptions = optionsWithProviderIsolation;
             let committedLaunchSession: CommittedDaemonLaunchSession | null = null;
-            if (!await isRequesterLaunchAdmissionCurrent(options)) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Requester Machine admission unavailable',
-            });
+            const requesterCommitAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+            if (requesterCommitAdmissionFailure) return await refuseSpawn(requesterCommitAdmissionFailure);
             if (
                 !normalizedExistingSessionId
                 && daemonLaunchRequiresCommittedSession(optionsWithProviderIsolation)
@@ -1216,8 +1214,10 @@ export async function executeSpawnSessionRequest(
                 : undefined;
 
             const revalidateLaunchAdmission = async (): Promise<SpawnSessionResult | null> => {
-                const cause = !await isRequesterLaunchAdmissionCurrent(options)
-                    ? 'requester_machine_admission_unavailable'
+                const requesterFailure = await resolveRequesterLaunchAdmissionFailure(options);
+                const cause = requesterFailure
+                    ? requesterFailure.errorDetail?.kind === 'requester_home_unavailable'
+                        ? 'requester_home_unavailable' : 'requester_machine_admission_unavailable'
                     : options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()
                         ? 'session_handoff_launch_custody_unavailable'
                         : null;
@@ -1225,11 +1225,9 @@ export async function executeSpawnSessionRequest(
                 logger.infoFile('[DAEMON RUN] Spawn launch admission refused', {
                     cause, sessionId, elapsedMs: Math.round(performance.now() - startedAt),
                 });
-                return await refuseSpawn({
+                return await refuseSpawn(requesterFailure ?? {
                     type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                    errorMessage: cause === 'requester_machine_admission_unavailable'
-                        ? 'Requester Machine admission unavailable'
-                        : 'Session handoff launch custody unavailable',
+                    errorMessage: 'Session handoff launch custody unavailable',
                 });
             };
             const launchAdmissionRefusal = await revalidateLaunchAdmission();

@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
 
-import { hapticsError, hapticsLight, hapticsSelection, hapticsSuccess } from '@/components/ui/theme/haptics';
+import { hapticsDragStart, hapticsError, hapticsLight, hapticsSelection } from '@/components/ui/theme/haptics';
+
+import { ENTITY_DROP_UNCHANGED_CODES } from '../entityDropNoChange';
 
 import type { EntityDragDropRuntime, EntityDragDropSnapshot } from '../entityDragDropTypes';
 
@@ -34,11 +36,13 @@ export function useEntityDragFeel(runtime: EntityDragDropRuntime): void {
             previous = next;
             setGrabbing(next.phase === 'carrying' && runtime.getPointer() !== null);
             if (Platform.OS === 'web') return;
-            if (next.phase === 'carrying' && before.phase !== 'carrying') void hapticsLight();
-            else if (next.phase === 'carrying' && next.targetId !== before.targetId && next.admission?.status === 'allowed') void hapticsSelection();
+            if (next.phase === 'carrying' && before.phase !== 'carrying') void hapticsDragStart();
+            else if (next.phase === 'carrying' && next.admission?.status === 'allowed'
+                && (before.admission?.status !== 'allowed'
+                    || (next.destinationKey === null ? next.targetId !== before.targetId : next.destinationKey !== before.destinationKey))) void hapticsSelection();
             else if (next.phase === 'settled' && before.phase !== 'settled') {
-                if (next.outcome?.status === 'applied') void hapticsSuccess();
-                else if (next.outcome?.status === 'refused') void hapticsError();
+                if (next.outcome?.status === 'applied') void hapticsLight();
+                else if (next.outcome?.status === 'refused' && !ENTITY_DROP_UNCHANGED_CODES.has(next.outcome.reason.code)) void hapticsError();
             }
         };
         const unsubscribe = runtime.subscribe(onChange);

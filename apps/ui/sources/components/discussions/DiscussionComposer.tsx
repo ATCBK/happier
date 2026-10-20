@@ -4,6 +4,8 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import {
     DISCUSSION_COMPOSER_SUGGESTION_KINDS,
+    resolveComposerSuggestionScope,
+    resolveComposerSuggestionKind,
     type ComposerAccountMentionSource,
 } from '@/components/autocomplete/composerSuggestionKinds';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
@@ -11,6 +13,7 @@ import { matchesComposerSuggestionQuery, type ComposerSuggestionCatalogs } from 
 import type { SessionResponsibilityCandidateV1 } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import { AgentInput } from '@/components/sessions/agentInput';
 import type { AgentInputSendOptions } from '@/components/sessions/agentInput/agentInputSendOptions';
+import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import {
     structuredInputMentionSurvivesText,
     type ComposerStructuredInputMention,
@@ -29,14 +32,19 @@ import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/suggestionSession';
+import { getStorage } from '@/sync/domains/state/storage';
+import { resolveExecutableModelParticipantDisplay } from '@/components/sessions/authoring/useExecutableParticipantLabel';
+import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
+import { formatComposerSuggestionToken, parseComposerSuggestionQuery } from '@/components/autocomplete/composerSuggestionGrammar';
 
 import {
     buildDiscussionContent,
-    buildDiscussionContentFromPendingText,
     discussionComposerMentionsFromSpans,
     discussionMentionSpansFromComposerMentions,
     parseDiscussionMentionSpans,
     type DiscussionMentionSpan,
+    buildDiscussionModelSlotMentionPayload,
+    reconcileDiscussionMentionSpans,
 } from './discussionComposerDocument';
 
 export type DiscussionComposerValue = Readonly<{
@@ -52,9 +60,10 @@ type LatestComposerDocument = Readonly<{
 /**
  * A human discussion's composer: the one composer (`AgentInput`) with the discussion adapter
  * behind it (INT §6 I4 "One pane"). The adapter owns what is human here — who can be mentioned
- * (people and executable Session references, fed by this Discussion's admitted roster), and
+ * (people, executable Sessions and inert reserved-model slots from this Discussion's roster), and
  * an empty draft that stays editable — and serializes the document to the discussion's own wire
- * shape. Nothing an agent composer carries is offered (no engine, conversational Voice or prompt history);
+ * shape, resolving slots to real Session mentions only on Send. Nothing an agent composer carries
+ * is offered (no engine, conversational Voice or prompt history);
  * the person gets `@` as a control and dictation, which only writes words into the field.
  */
 // The composer brings its own side gutter and half of it below; a pane foot adds the other half, so the
@@ -74,8 +83,17 @@ export function DiscussionComposer(props: Readonly<{
     onChange: (value: DiscussionComposerValue) => void;
     disabled: boolean;
     onSend: (content: ReturnType<typeof buildDiscussionContent>) => void;
+    /** Send-only resolution of inert model slots; never called by typing or selection. */
+    prepareParticipantMentions?: (document: DiscussionComposerValue, isCurrent: () => boolean) => Promise<ReturnType<typeof buildDiscussionContent> | null>;
+    /** The page's own composer controls after `@` (a running Discussion's Run…). */
+    extraActionChips?: readonly AgentInputExtraActionChip[];
 }>): React.ReactElement {
     const { scope, availability, disabled, accountLifetime } = props;
+    const currentContext = React.useRef({ accountLifetime, discussionId: props.discussionId, disabled, availability });
+    currentContext.current = { accountLifetime, discussionId: props.discussionId, disabled, availability };
+    const mounted = React.useRef(true);
+    React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    const sending = React.useRef<Readonly<{ accountLifetime: ServerAccountScopeLifetime; discussionId: string | undefined }> | null>(null);
     const client = React.useMemo(() => createDiscussionClient({ scope, availability }), [availability, scope]);
     const composerMentions = React.useMemo(
         () => discussionComposerMentionsFromSpans(props.value.text, props.value.mentions),
@@ -195,22 +213,61 @@ export function DiscussionComposer(props: Readonly<{
             catalogs: { sessions },
             signal,
         });
+        const parsedQuery = parseComposerSuggestionQuery(query);
+        if (outcome?.kind === 'succeeded' && parsedQuery?.trigger === '@') {
+            const scoped = resolveComposerSuggestionScope('@', parsedQuery.query);
+            if (scoped.kind === null || scoped.kind === 'session') {
+                const machines = getStorage().getState().machineListByServerId[scope.serverId] ?? [];
+                const limit = resolveComposerSuggestionKind('session').limit;
+                let sessionCount = suggestions.filter(suggestion => suggestion.kind === 'session').length;
+                for (const participant of outcome.value.participants) {
+                    if (participant.participant.kind !== 'model' || !('launch' in participant) || participant.sessionId) continue;
+                    const display = resolveExecutableModelParticipantDisplay(participant.launch, machines);
+                    if (!matchesComposerSuggestionQuery(display.displayLabel, scoped.scopedQuery)) continue;
+                    if (sessionCount >= limit) break;
+                    suggestions.push({ kind: 'session', key: `discussion-model:${participant.participant.participantSlotId}`,
+                        text: formatComposerSuggestionToken('@', display.displayLabel), label: display.displayLabel,
+                        structuredInput: buildDiscussionModelSlotMentionPayload(participant.participant.participantSlotId, display.displayLabel),
+                        ...(display.agentId ? { icon: <SessionAgentCatalogIdentityIcon agentId={display.agentId}
+                            machineId={participant.launch.executionTarget.machineId} serverId={scope.serverId} size={16} /> } : {}),
+                    });
+                    sessionCount++;
+                }
+            }
+        }
         return accountLifetime.isCurrent() && !signal.aborted ? suggestions : [];
         // `searchRevision` renews the active query after the existing Retry action.
     }, [accountLifetime, availability, client, props.discussionId, scope.serverId, scope.accountId, searchRevision]);
 
     const onSendProp = props.onSend;
-    const send = React.useCallback((options?: AgentInputSendOptions) => {
+    const prepareParticipantMentions = props.prepareParticipantMentions;
+    const send = React.useCallback(async (options?: AgentInputSendOptions) => {
         const latest = latestRef.current;
         const text = options?.inputTextOverride ?? latest.text;
-        if (disabled || text.trim().length === 0) return;
+        const active = sending.current;
+        if (disabled || (active?.accountLifetime === accountLifetime && active.discussionId === props.discussionId)
+            || text.trim().length === 0 || !accountLifetime.isCurrent()) return;
         if (presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
-        onSendProp(buildDiscussionContentFromPendingText({
-            previousText: latest.text,
-            pendingText: text,
-            mentions: parseDiscussionMentionSpans(discussionMentionSpansFromComposerMentions(latest.mentions), latest.text),
-        }));
-    }, [accountLifetime, disabled, onSendProp, presenceTarget]);
+        const mentions = reconcileDiscussionMentionSpans({ previousText: latest.text, nextText: text,
+            mentions: parseDiscussionMentionSpans(discussionMentionSpansFromComposerMentions(latest.mentions), latest.text) });
+        if (!mentions.some(mention => typeof mention.participantSlotId === 'string')) {
+            onSendProp(buildDiscussionContent(text, mentions));
+            return;
+        }
+        if (!prepareParticipantMentions) return;
+        const revision = revisionRef.current;
+        const discussionId = props.discussionId;
+        const attempt = { accountLifetime, discussionId };
+        const isCurrent = () => mounted.current && accountLifetime.isCurrent()
+            && currentContext.current.accountLifetime === accountLifetime && currentContext.current.discussionId === discussionId
+            && !currentContext.current.disabled && currentContext.current.availability === 'available'
+            && revisionRef.current === revision && sending.current === attempt;
+        sending.current = attempt;
+        try {
+            const content = await prepareParticipantMentions({ text, mentions }, isCurrent);
+            if (content && isCurrent()) onSendProp(content);
+        } finally { if (sending.current === attempt) sending.current = null; }
+    }, [accountLifetime, disabled, onSendProp, presenceTarget, prepareParticipantMentions, props.discussionId]);
 
     const placeholder = t('session.collaboration.discussion.messagePlaceholder');
     // `@` as a control and the one-line addressing rule beside send (lab T2-A): the trigger is written into
@@ -236,11 +293,12 @@ export function DiscussionComposer(props: Readonly<{
         write({ text, mentions: latest.mentions });
         requestAnimationFrame(() => focusRequestRef.current?.());
     }, [write]);
+    const pageChips = props.extraActionChips;
     const mentionChips = React.useMemo(() => [createMentionActionChip({
         label: t('session.collaboration.discussion.composer.mention'),
         disabled,
         onMention: insertMention,
-    })], [disabled, insertMention]);
+    }), ...(pageChips ?? [])], [disabled, insertMention, pageChips]);
     const phone = useSurfaceStateSize() === 'phone';
     // A new Discussion's page says how addressing works itself, so the line beside send is for a running thread.
     const addressingHint = phone || !props.discussionId ? undefined : <Text testID="session-discussion-composer-hint" style={styles.hint} numberOfLines={1}>{t('session.collaboration.discussion.composer.mentionHint')}</Text>;

@@ -34,6 +34,17 @@ function seed(overrides: Parameters<typeof createSessionListRenderableSessionFix
 }
 
 describe('workspace session tab presentation', () => {
+    it('labels only an explicitly stopped offline process Stopped and follows its resume', async () => {
+        const metadata = { path: '/repo', lifecycleState: 'stopped' };
+        seed({ active: false, presence: undefined, metadata });
+        const hook = await renderHook(() => useDestinationInstanceTabPresentations(entries));
+        expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'offline', label: 'sessionWork.states.stopped' } });
+        await act(async () => { seed({ active: false, presence: undefined, metadata: { ...metadata, lifecycleState: 'running' } }); });
+        expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'offline', label: 'status.offline' } });
+        await act(async () => { seed({ metadata: { ...metadata, lifecycleState: 'running' }, latestTurnStatus: 'in_progress' }); });
+        expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'working', label: 'status.working' } });
+    });
+
     it('follows the canonical live, attention, failure, offline and idle states', async () => {
         seed({ latestTurnStatus: 'in_progress' });
         const hook = await renderHook(() => useDestinationInstanceTabPresentations(entries));
@@ -43,7 +54,7 @@ describe('workspace session tab presentation', () => {
         await act(async () => { seed({ latestTurnStatus: 'failed' }); });
         expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'failed' } });
         await act(async () => { seed({ latestTurnStatus: 'in_progress', presence: 999_000 }); });
-        expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'offline', label: 'status.disconnected' } });
+        expect(hook.getCurrent().get('tab')).toMatchObject({ status: { tone: 'offline', label: 'status.offline' } });
         await act(async () => { seed({ latestTurnStatus: 'in_progress', archivedAt: Date.now() }); });
         expect(hook.getCurrent().get('tab')).toBeUndefined();
         await act(async () => { seed(); });

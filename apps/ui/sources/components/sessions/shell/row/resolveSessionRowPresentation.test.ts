@@ -93,9 +93,22 @@ describe('resolveSessionRowPresentation', () => {
         });
     });
 
-    it('uses the normal working spinner and precise background copy without replacing actionable indicators', async () => {
+    it('lets background activity speak only for a row with nothing of its own to say', async () => {
         const resolveSessionRowPresentation = await loadRowPresentationResolver();
 
+        expect(resolveSessionRowPresentation({
+            attentionState: 'quiet',
+            backgroundActive: true,
+            density: 'default',
+            requestedSecondaryLineMode: 'path',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'working',
+            titleTone: 'quiet',
+            secondaryLine: 'status',
+            statusTextKey: 'status.backgroundActive',
+        });
+        // An unread reply keeps its marker and is announced; the line still says work is running.
         expect(resolveSessionRowPresentation({
             attentionState: 'unread',
             backgroundActive: true,
@@ -103,11 +116,13 @@ describe('resolveSessionRowPresentation', () => {
             requestedSecondaryLineMode: 'path',
             hasPathSubtitle: true,
         })).toEqual({
-            attentionIndicator: 'working',
+            attentionIndicator: 'unread',
             titleTone: 'emphasized',
             secondaryLine: 'status',
             statusTextKey: 'status.backgroundActive',
+            accessibilityStatusTextKey: 'status.unread',
         });
+        // A finished turn awaiting review is never disguised as work still running.
         expect(resolveSessionRowPresentation({
             attentionState: 'ready',
             backgroundActive: true,
@@ -115,10 +130,11 @@ describe('resolveSessionRowPresentation', () => {
             requestedSecondaryLineMode: 'status',
             hasPathSubtitle: false,
         })).toEqual({
-            attentionIndicator: 'working',
+            attentionIndicator: 'ready',
             titleTone: 'emphasized',
             secondaryLine: 'status',
-            statusTextKey: 'status.backgroundActive',
+            statusTextKey: 'status.readyForReview',
+            accessibilityStatusTextKey: 'status.readyForReview',
         });
         expect(resolveSessionRowPresentation({
             attentionState: 'pending',
@@ -127,10 +143,11 @@ describe('resolveSessionRowPresentation', () => {
             requestedSecondaryLineMode: 'status',
             hasPathSubtitle: false,
         })).toEqual({
-            attentionIndicator: 'working',
+            attentionIndicator: 'pending',
             titleTone: 'emphasized',
             secondaryLine: 'status',
             statusTextKey: 'status.backgroundActive',
+            accessibilityStatusTextKey: 'status.queuedInput',
         });
         expect(resolveSessionRowPresentation({
             attentionState: 'permission_required',
@@ -165,6 +182,7 @@ describe('resolveSessionRowPresentation', () => {
             titleTone: 'emphasized',
             secondaryLine: 'status',
             statusTextKey: 'status.error',
+            accessibilityStatusTextKey: 'status.error',
         });
     });
 

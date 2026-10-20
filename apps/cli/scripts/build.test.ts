@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +19,8 @@ import { syncBundledWorkspacePackages } from '../../../scripts/workspaces/syncBu
 
 import { createTempDirSync } from '../src/testkit/fs/tempDir';
 import { buildCliDist } from './build.mjs';
+import { runPkgrollBuild } from './runPkgrollBuild.mjs';
+import { readHappyCliRuntimeInputFreshness } from '../../stack/scripts/utils/proc/cli_runtime_inputs.mjs';
 
 function writeBuildPackageManifest(packageRoot: string) {
   writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
@@ -28,6 +31,63 @@ function writeBuildPackageManifest(packageRoot: string) {
 }
 
 describe('buildCliDist', () => {
+  it.each([false, true])('captures the real native exit helper across builds without retaining a removed input (private snapshot: %s)', async (skipLock) => {
+    const packageRoot = createTempDirSync('happier-cli-build-native-exit-');
+    try {
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        name: '@happier-dev/build-fixture', version: '0.0.0', main: './dist/index.cjs', module: './dist/index.mjs',
+      }));
+      mkdirSync(join(packageRoot, 'src/terminal/host'), { recursive: true });
+      mkdirSync(join(packageRoot, 'scripts'));
+      const helperPath = join(packageRoot, 'scripts/native_process_exit.cjs');
+      cpSync(fileURLToPath(new URL('./native_process_exit.cjs', import.meta.url)), helperPath);
+      const helperDeclarationPath = join(packageRoot, 'scripts/native_process_exit.d.cts');
+      cpSync(fileURLToPath(new URL('./native_process_exit.d.cts', import.meta.url)), helperDeclarationPath);
+      writeFileSync(join(packageRoot, 'scripts/not-a-runtime-input.cjs'), 'throw new Error("must not be captured");\n');
+      writeFileSync(join(packageRoot, 'src/terminal/host/borrowed.ts'), [
+        "import { isNativeProcessExited } from '../../../scripts/native_process_exit.cjs';",
+        "export const valid = isNativeProcessExited({ type: 'terminal-native-exited', code: 0, signal: null });",
+        "export const invalid = isNativeProcessExited({ type: 'terminal-native-exited', code: null, signal: null });",
+      ].join('\n'));
+      writeFileSync(join(packageRoot, 'src/index.ts'), "export { valid, invalid } from './terminal/host/borrowed';\n");
+      const roots: string[] = [];
+      const initialFreshness = await readHappyCliRuntimeInputFreshness(packageRoot);
+      let capturedHelper = readFileSync(helperPath, 'utf8');
+      const options = {
+        packageRoot, repoRoot: packageRoot, lockPath: join(packageRoot, 'build.lock'), skipLock,
+        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '', HAPPIER_WORKSPACE_BUILD_MODE: 'qa-runtime', npm_lifecycle_event: 'build:compiled' },
+        // Keep the real executable bundler; observe only its admitted source boundary.
+        runPkgrollBuildImpl: async (params: Parameters<typeof runPkgrollBuild>[0]) => {
+          const root = dirname(params.packageJsonPath);
+          roots.push(root);
+          expect(existsSync(join(root, 'scripts/not-a-runtime-input.cjs'))).toBe(false);
+          expect(readFileSync(join(root, 'scripts/native_process_exit.d.cts'), 'utf8'))
+            .toBe(readFileSync(helperDeclarationPath, 'utf8'));
+          if (roots.length === 1) writeFileSync(helperPath, `${capturedHelper}\n// New authored generation after admission.\n`);
+          await runPkgrollBuild(params);
+          expect(readFileSync(join(root, 'scripts/native_process_exit.cjs'), 'utf8')).toBe(capturedHelper);
+        },
+      };
+      await buildCliDist(options);
+      expect(await import(join(packageRoot, 'dist/index.mjs'))).toMatchObject({ valid: true, invalid: false });
+      const firstManifest = JSON.parse(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8'));
+      expect(firstManifest.inputFingerprint).toBe(initialFreshness?.fingerprint);
+      const changedFreshness = await readHappyCliRuntimeInputFreshness(packageRoot);
+      expect(changedFreshness?.fingerprint).not.toBe(initialFreshness?.fingerprint);
+      capturedHelper = readFileSync(helperPath, 'utf8');
+      await buildCliDist(options);
+      expect(JSON.parse(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8')).inputFingerprint)
+        .toBe(changedFreshness?.fingerprint);
+      expect(roots[1] === roots[0]).toBe(!skipLock);
+      rmSync(helperPath);
+      await expect(buildCliDist({ ...options, runPkgrollBuildImpl: async (params: Parameters<typeof runPkgrollBuild>[0]) => {
+        expect(existsSync(join(dirname(params.packageJsonPath), 'scripts/native_process_exit.cjs'))).toBe(false);
+        await runPkgrollBuild(params);
+      } })).rejects.toMatchObject({ code: 'EEXIT', exitCode: 1 });
+      expect(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8')).toContain(changedFreshness!.fingerprint);
+    } finally { rmSync(packageRoot, { recursive: true, force: true }); }
+  });
+
   it.each([false, true])('consumes checked source partitions without another compiler and rejects a missing declaration (%s)', async (missingLeaf) => {
     const packageRoot = createTempDirSync('happier-cli-prepared-declarations-');
     try {

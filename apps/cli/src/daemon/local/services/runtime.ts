@@ -78,7 +78,7 @@ import {
     type HostedWebStaticAssetLifecycleSyncResult,
 } from './plugins/staticAssets/lifecycle';
 
-type LocalServicesScanner = () => Promise<LocalServicesScanResult>;
+type LocalServicesScanner = (options?: Parameters<typeof scanPlatformLocalServices>[0]) => Promise<LocalServicesScanResult>;
 
 type LocalServiceWorkspaceFactsSource = readonly LocalServiceWorkspaceFact[] | LocalServiceWorkspaceFactsSnapshot;
 type LocalServiceWorkspaceFactsProvider =
@@ -293,8 +293,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     const isInventoryEnabled = params.inventoryEnabled ?? (() => resolveDecision().state === 'enabled');
     const summarySubscribers = new Set<(summary: LocalServiceMachineSummaryV1) => void>();
     let summary: LocalServiceMachineSummaryV1 = { v: 1, state: 'unknown' };
-    const unsubscribeInventorySummary = inventoryRegistry.subscribe(() => {
-        const snapshot = inventoryRegistry.getSnapshot();
+    const publishInventorySummary = (snapshot: NormalizedLocalServiceInventorySnapshot): void => {
         let next: LocalServiceMachineSummaryV1;
         if (snapshot.refreshState === 'error') {
             next = {
@@ -317,7 +316,8 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         )) return;
         summary = next;
         for (const subscriber of summarySubscribers) subscriber(summary);
-    });
+    };
+    const unsubscribeInventorySummary = inventoryRegistry.subscribe(() => publishInventorySummary(inventoryRegistry.getSnapshot()));
     // Refresh the cached server-features snapshot from the daemon-supplied provider. Best-effort:
     // a thrown/failed provider keeps the previous snapshot (or none), so the gate stays fail-closed
     // rather than flapping. Skipped entirely when a deterministic `inventoryEnabled` gate is set.
@@ -419,7 +419,19 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 });
             }
         }
-        const result = await scan();
+        // The same native scan can be promoted while it is pending. Its process
+        // census is consumed only by inventory/Guard readers, never a count-only tick.
+        const internalProcessPids = params.internalProcessPids?.() ?? [process.pid];
+        let result = await scan({ includeProcessFacts: false,
+            ...(!needsPresentation() ? { listenerOwnerPids: internalProcessPids } : {}) });
+        if (needsPresentation() && result.listenerOwnersRestricted) {
+            // A reader can join a pending count-only flight. Attribute all listeners before
+            // publishing details; the same refresh owner still coalesces its readers.
+            result = await scan({ includeProcessFacts: false });
+        }
+        if (needsPresentation() && result.readProcessFacts) {
+            result = { ...result, processes: await result.readProcessFacts() };
+        }
         generatedAt = now();
         if (!hasAuthoritativeListenerFacts(result)) {
             const snapshot = nonAuthoritativeInventorySnapshot({
@@ -432,7 +444,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
             inventoryRegistry.replaceSnapshot(snapshot);
             return snapshot;
         }
-        const ownership = params.processOwnershipRuntime
+        const ownership = needsPresentation() && params.processOwnershipRuntime
             ? await params.processOwnershipRuntime.resolveSnapshot(localServiceFactsSnapshot(result.processes, generatedAt), result.listeners)
             : undefined;
         if (ownership?.status === 'unavailable') {
@@ -450,13 +462,13 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
             previous,
             listeners: result.listeners,
             processes: result.processes,
-            processRoleCatalog: readProcessRoleCatalog(),
+            processRoleCatalog: needsPresentation() ? readProcessRoleCatalog() : undefined,
             socketOwnerReadFailures: result.socketOwnerReadFailures,
             workspaces: mergeLocalServiceWorkspaceFacts(daemonWorkspaces, result.workspaces),
             terminalRegistry,
             ...(ownership ? { ownership: ownership.rows } : {}),
             staleAfterMs,
-            internalProcessPids: params.internalProcessPids?.() ?? [process.pid],
+            internalProcessPids,
             internalEndpointUrls: params.internalEndpointUrls?.(),
         });
         let snapshotWithDiagnostics: NormalizedLocalServiceInventorySnapshot = {
@@ -465,8 +477,10 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         };
         onNative(snapshotWithDiagnostics);
         if (!needsPresentation()) {
-            inventoryPresentationPending = endpointEnricher !== null || params.pageTitleEnricher !== undefined;
-            inventoryRegistry.replaceSnapshot(snapshotWithDiagnostics);
+            // A listener count cannot freshen or replace detailed process facts.
+            // Actual readers demand those through this same refresh owner.
+            inventoryPresentationPending = true;
+            publishInventorySummary(snapshotWithDiagnostics);
             return snapshotWithDiagnostics;
         }
         if (endpointEnricher) {

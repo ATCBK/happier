@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 
 export type DiffPresentationStyle = 'unified' | 'split';

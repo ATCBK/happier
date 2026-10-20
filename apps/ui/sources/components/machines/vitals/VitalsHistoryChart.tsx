@@ -16,6 +16,8 @@ import {
 import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useUsageSeriesLens } from '@/components/settings/usage/usageSeriesPresentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 import type { MachineVitalsTimeline } from './machineVitalsPresentation';
 import { formatVitalsPointTime } from './vitalsFormat';
@@ -55,9 +57,15 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
   const { theme } = useUnistyles();
   const pluginTheme = usePluginUiTheme(theme);
   const reducedMotion = useReducedMotionPreference();
+  const presented = useLayoutPresentationActive();
+  const hostViewed = useHostActivelyViewed();
   const [width, setWidth] = React.useState(0);
   const onLayout = React.useCallback(
-    (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width),
+    (event: LayoutChangeEvent) => {
+      // A retained, hidden panel measures zero; keep its chart until a real resize.
+      const measuredWidth = event.nativeEvent.layout.width;
+      if (measuredWidth > 0) setWidth(measuredWidth);
+    },
     [],
   );
   // The range's start is a point of its own, so a range that has only begun is drawn where it lies.
@@ -121,7 +129,7 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
                     sampleKey: props.timeline.end,
                     stepPx,
                     durationMs: Math.max(0, props.timeline.end - previous),
-                    active: fresh,
+                    active: fresh && presented && hostViewed,
                   },
                 }
               : {})}

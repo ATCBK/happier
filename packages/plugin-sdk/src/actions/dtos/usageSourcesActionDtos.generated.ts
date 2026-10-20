@@ -67,6 +67,7 @@ export type UsageSourcesActionResultById = {
             accountingSources?: string[] | undefined;
             captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
+            discoveredFileCount?: number | undefined;
             errorCode?: string | undefined;
         }[];
     };
@@ -91,6 +92,7 @@ export type UsageSourcesActionResultById = {
             accountingSources?: string[] | undefined;
             captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
+            discoveredFileCount?: number | undefined;
             errorCode?: string | undefined;
         }[];
     };
@@ -118,6 +120,7 @@ export type UsageSourcesActionResultById = {
             accountingSources?: string[] | undefined;
             captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
+            discoveredFileCount?: number | undefined;
             errorCode?: string | undefined;
         };
     };
@@ -142,6 +145,7 @@ export type UsageSourcesActionResultById = {
             accountingSources?: string[] | undefined;
             captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
+            discoveredFileCount?: number | undefined;
             errorCode?: string | undefined;
         };
     };
@@ -166,6 +170,7 @@ export type UsageSourcesActionResultById = {
             accountingSources?: string[] | undefined;
             captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
+            discoveredFileCount?: number | undefined;
             errorCode?: string | undefined;
         };
     };

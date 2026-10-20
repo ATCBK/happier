@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { useUnistyles } from 'react-native-unistyles';
 import { projectAccountSessionFollowEditorStateV1, type PersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { SetSessionFollowRequest } from '@happier-dev/protocol/sessions/follow/api';
 import type { FollowPolicyEditorEditV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
@@ -11,14 +10,11 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
-import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
-import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
-import { FollowPolicyEditorBinding } from './FollowPolicyEditorBinding';
+import { FollowPolicyEditorBinding, FollowPolicySection } from './FollowPolicyEditorBinding';
 import { projectAccountSessionFollowPolicyEditor, type AccountSessionFollowEditorSnapshot } from './accountSessionFollowController';
 import type { AccountVoiceFollowReadiness } from './accountVoiceFollowReadiness';
 
@@ -76,16 +72,16 @@ export type AccountSessionFollowEditorProps = Readonly<{
  */
 export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProps) {
     const { state } = props;
-    const { theme } = useUnistyles();
     const isSessionOwner = state.projection?.isSessionOwner === true;
     // Effective state, not the raw row: a Session owner with no stored choice is
     // permanently tracked and Important-eligible at the Home.
     const effective = state.projection
         ? projectAccountSessionFollowEditorStateV1({ follow: state.projection.follow, isSessionOwner })
         : null;
-    const following = effective?.tracked === true;
     // The same canonical projection the controller hook exposes, read from this editor's snapshot.
-    const policyModel = React.useMemo(() => projectAccountSessionFollowPolicyEditor(state).model, [state]);
+    const editorState = React.useMemo(() => projectAccountSessionFollowPolicyEditor(state), [state]);
+    const policyModel = editorState.model;
+    const deliveryEnabled = editorState.deliveryEnabled;
     // Voice is read from the canonical editor projection and written as a policy edit.
     const includeInVoice = state.draft?.includeInVoice ?? effective?.includeInVoice ?? false;
     const canManage = state.projection?.capabilities.manageFollow === true;
@@ -145,7 +141,7 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
         {props.archived && !pending ? <ItemGroup surface="none">
             <Item testID="session-follow-archived" title={t('session.follow.archived')} mode="info" titleLines={0} showChevron={false} />
         </ItemGroup> : null}
-        {following && policyModel ? <>
+        {policyModel ? <>
             <FollowPolicySection>{policyEditor}</FollowPolicySection>
             <ItemGroup>
                 <Item
@@ -179,9 +175,10 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
                 />
             </ItemGroup> : null}
         </> : null}
-        {!following && state.projection && !props.archived ? <>
+        {!policyModel && state.projection && !props.archived ? <>
             <ItemGroup surface="none">
-                <Item testID="session-follow-not-following" title={t('session.follow.editor.notFollowing')} mode="info" titleLines={0} showChevron={false} />
+                <Item testID="session-follow-not-following" title={isSessionOwner ? t('session.follow.editor.suppressed') : t('session.follow.editor.notFollowing')}
+                    mode="info" titleLines={0} showChevron={false} />
             </ItemGroup>
             {onceRow ? <ItemGroup>{onceRow}</ItemGroup> : null}
         </> : null}
@@ -217,10 +214,10 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
         </ItemGroup>
     </>;
 
-    // Unfollow is quiet and leads; Done is the one primary. An owner always follows, so the place
-    // Unfollow would take says why instead. Nothing is offered before the first read.
+    // Owner tracking survives suppression, but the delivery choice is editable in both states.
+    // Nothing is offered before the first read.
     const footer = pending ? null : <SectionButtonRow
-        trailing={!following && !isSessionOwner ? <RoundButton
+        trailing={!deliveryEnabled ? <RoundButton
             testID="session-follow-follow"
             title={t('session.follow.follow')}
             disabled={!state.online || state.saving || !state.projection || !canManage || props.archived}
@@ -230,11 +227,11 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
             }}
         /> : <RoundButton testID="session-follow-done" title={t('common.done')} onPress={() => props.onClose?.()} />}
     >
-        {isSessionOwner ? <Text testID="session-follow-owner-note" variant="meta" style={{ color: theme.colors.text.secondary }}>{t('session.follow.editor.ownerNote')}</Text>
-            : following ? <RoundButton
+        {deliveryEnabled ? <RoundButton
                 testID="session-follow-unfollow"
                 display="inverted"
-                title={t('session.follow.unfollow')}
+                // An owner stays tracked, so what it can do is turn delivery off.
+                title={isSessionOwner ? t('session.follow.editor.turnOff') : t('session.follow.unfollow')}
                 disabled={!state.online || state.saving || !canManage}
                 onPress={props.onRemove}
             /> : null}
@@ -248,18 +245,6 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
         footer,
     };
     return <>{props.frame ? props.frame(parts) : <>{parts.body}{parts.footer}</>}</>;
-}
-
-/**
- * The shared level editor where the body mounts. On a page the scope sits outside the bare section, so the public
- * sections take the column's own inset once. A popover has no column edge: there the public sections draw their
- * own inset, level with the Voice sheet and the footer, and a bare section around them would inset them twice.
- */
-function FollowPolicySection(props: Readonly<{ children: React.ReactNode }>) {
-    const onPage = useListPresentation() === 'page';
-    return <CoreCollectionScope>
-        {onPage ? <ItemGroup surface="none">{props.children}</ItemGroup> : props.children}
-    </CoreCollectionScope>;
 }
 
 type OnceChoice = 'off' | 'turn' | 'attention';

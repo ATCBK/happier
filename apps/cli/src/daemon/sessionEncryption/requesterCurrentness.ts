@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { PluginError, isPluginError } from '@happier-dev/plugin-sdk';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
-import { createBackoff } from '@/utils/time';
+import { resolveOfflineReconnectionBackoffDelayMs } from '@/api/offline/serverConnectionErrors';
+import { delayUnrefAbortable } from '@/utils/time';
 
 import type { WebLatencyTracePoint } from '../externalActions/webLatencyTrace';
 
@@ -26,20 +27,22 @@ export function rethrowRequesterHomeReadFailure(error: unknown): void {
  */
 export async function readRequesterHomeWithinActionLifetime<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return await read();
-  const recover = createBackoff({
-    maxFailureCount: Number.POSITIVE_INFINITY,
-    shouldRetry: (error: unknown) => !signal.aborted && isPluginError(error)
-      && error.code === 'project_requester_home_unavailable' && error.retryable === true,
-  });
-  return await recover(async () => {
+  let failures = 0;
+  while (true) {
     signal.throwIfAborted();
     try { return await read(); }
     catch (error) {
       signal.throwIfAborted();
-      rethrowRequesterHomeReadFailure(error);
+      try { rethrowRequesterHomeReadFailure(error); }
+      catch (classified) {
+        if (!isPluginError(classified) || classified.code !== 'project_requester_home_unavailable'
+          || classified.retryable !== true) throw classified;
+        await delayUnrefAbortable(resolveOfflineReconnectionBackoffDelayMs(++failures), signal);
+        continue;
+      }
       throw error;
     }
-  });
+  }
 }
 
 export type RequesterCurrentnessObservation = Readonly<{ pending: Promise<boolean>; trace?: WebLatencyTracePoint }>;

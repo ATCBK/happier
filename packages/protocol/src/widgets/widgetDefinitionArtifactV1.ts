@@ -28,6 +28,8 @@ export type WidgetDefinitionSummaryV1 = z.infer<typeof WidgetDefinitionSummaryV1
 export const WidgetDefinitionSummaryV1StoredSchema = createStoredReadSchema(WidgetDefinitionSummaryV1Schema);
 export type WidgetDefinitionArtifactPortV1 = Readonly<{
     list(signal?: AbortSignal): Promise<readonly WidgetDefinitionSummaryV1[]>;
+    /** The summaries of exactly the named definitions, by exact read: the cost follows the names, never the Account's artifact count. */
+    summaries(artifactIds: readonly string[], signal?: AbortSignal): Promise<readonly WidgetDefinitionSummaryV1[]>;
     get(artifactId: string, signal?: AbortSignal): Promise<WidgetDefinitionV1 | null>;
     create(definition: WidgetDefinitionV1, signal?: AbortSignal): Promise<WidgetDefinitionV1>;
     update(artifactId: string, patch: WidgetDefinitionPatchV1, signal?: AbortSignal): Promise<WidgetDefinitionV1>;
@@ -80,6 +82,11 @@ export function createWidgetDefinitionArtifactPortV1(transport: WidgetDefinition
         if (artifact && (artifact.artifactId !== artifactId || artifact.ownerAccountId !== options.accountId)) throw new WidgetDefinitionErrorV1('widget_definition_account_mismatch');
         return artifact;
     };
+    // One admission for every header-only summary: this Account's readable definition headers, nothing else.
+    const readOwnedSummary = (artifactId: string, ownerAccountId: string, header: Readonly<Record<string, unknown>>) =>
+        header.kind === WIDGET_DEFINITION_ARTIFACT_KIND_V1 && ownerAccountId === options.accountId
+            && header.v === 1 && typeof header.title === 'string' && header.title.trim()
+            ? readWidgetDefinitionArtifactSummaryV1(artifactId, header) : null;
     const get = async (artifactId: string, signal?: AbortSignal) => {
         const artifact = await fetch(artifactId, signal); return artifact ? readWidgetDefinitionArtifactV1(artifact) : null;
     };
@@ -118,15 +125,19 @@ export function createWidgetDefinitionArtifactPortV1(transport: WidgetDefinition
                 const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal });
                 check(signal);
                 for (const item of page.items) {
-                    if (item.header.kind !== WIDGET_DEFINITION_ARTIFACT_KIND_V1) continue;
-                    if (item.ownerAccountId !== options.accountId) continue;
-                    if (item.header.v !== 1 || typeof item.header.title !== 'string' || !item.header.title.trim()) continue;
-                    const summary = readWidgetDefinitionArtifactSummaryV1(item.artifactId, item.header);
+                    const summary = readOwnedSummary(item.artifactId, item.ownerAccountId, item.header);
                     if (summary) definitions.push(summary);
                 }
                 cursor = page.nextCursor;
             } while (cursor);
             return definitions;
+        },
+        async summaries(artifactIds, signal) {
+            const rows = await Promise.all([...new Set(artifactIds)].map(async artifactId => {
+                check(signal); const artifact = await transport.read(artifactId, { signal }); check(signal);
+                return artifact ? readOwnedSummary(artifact.artifactId, artifact.ownerAccountId, artifact.header) : null;
+            }));
+            return rows.filter(summary => summary !== null);
         },
         async update(artifactId, patch, signal) {
             for (;;) {

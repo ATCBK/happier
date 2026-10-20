@@ -22,6 +22,8 @@ import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/se
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { VoiceConversationActionOutputSchemas } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import { SessionArchiveActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
+import { archiveSessionReports } from './confirmSessionArchive';
 import {
     sessionSetManualReadStateWithServerScope,
 } from '@/sync/ops';
@@ -80,11 +82,13 @@ export async function executeSessionLifecycleAction(
     sessionId: string,
     options?: Readonly<{
         serverId?: string | null;
+        alsoArchiveReports?: boolean;
         presentUserConfirmation?: SessionDeletePresentUserConfirmation;
     }>,
     title?: string,
 ): Promise<SessionActionOperationResult> {
-    const outcome = await executeVoiceAction(actionId, { sessionId, ...(title === undefined ? {} : { title }) }, {
+    const outcome = await executeVoiceAction(actionId, { sessionId, ...(title === undefined ? {} : { title }),
+        ...(actionId === 'session.archive' && options?.alsoArchiveReports !== undefined ? { alsoArchiveReports: options.alsoArchiveReports } : {}) }, {
         surface: 'ui',
         defaultSessionId: sessionId,
         ...(options?.serverId ? { serverId: options.serverId } : {}),
@@ -107,6 +111,10 @@ export async function executeSessionLifecycleAction(
     // The title Action acknowledges a metadata write; lifecycle transports retain
     // their success/recovery envelope for the incumbent stop/archive flow.
     if (actionId === 'session.title.set') return { success: true };
+    if (actionId === 'session.archive') {
+        const archived = SessionArchiveActionResultV1Schema.safeParse(result);
+        return archived.success ? archived.data : { success: false, code: 'invalid_action_output', message: 'invalid_action_output' };
+    }
     if (!result || typeof result !== 'object' || !('success' in result) || typeof result.success !== 'boolean') {
         return { success: false, code: 'invalid_action_output', message: 'invalid_action_output' };
     }
@@ -195,7 +203,12 @@ function resolveStopSession(context: SessionActionExecutionContext | undefined):
 }
 
 function resolveArchiveSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['archiveSession']> {
-    return context?.operations?.archiveSession ?? ((sessionId, options) => executeSessionLifecycleAction('session.archive', sessionId, options));
+    const archive = context?.operations?.archiveSession ?? ((sessionId, options) => executeSessionLifecycleAction('session.archive', sessionId, options));
+    return async (sessionId, options) => {
+        const result = await archive(sessionId, options);
+        if (result.success) await archiveSessionReports({ ...result, serverId: options?.serverId });
+        return result;
+    };
 }
 
 function resolveUnarchiveSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['unarchiveSession']> {
@@ -257,6 +270,7 @@ async function runStopArchiveFlow(params: Readonly<{
     address: SessionAddress;
     context?: SessionActionExecutionContext;
     archiveAfterStop: 'always' | 'never';
+    alsoArchiveReports?: boolean;
 }>): Promise<void> {
     const stopArchiveFlow = resolveStopArchiveFlow(params.context);
     const stopSession = resolveStopSession(params.context);
@@ -274,7 +288,8 @@ async function runStopArchiveFlow(params: Readonly<{
             }
             return result;
         },
-        archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId }),
+        archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId,
+            ...(params.alsoArchiveReports !== undefined ? { alsoArchiveReports: params.alsoArchiveReports } : {}) }),
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
     });
@@ -284,18 +299,20 @@ async function executeArchiveAction(
     target: SessionActionTarget,
     address: SessionAddress,
     context?: SessionActionExecutionContext,
+    alsoArchiveReports?: boolean,
 ): Promise<void> {
     const archiveSession = resolveArchiveSession(context);
 
     if (target.isActive || target.hasRecoverableTerminalHost) {
-        await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always' });
+        await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
         return;
     }
 
-    const result = await archiveSession(address.sessionId, { serverId: address.serverId });
+    const result = await archiveSession(address.sessionId, { serverId: address.serverId,
+        ...(alsoArchiveReports !== undefined ? { alsoArchiveReports } : {}) });
     if (!result.success) {
         if (isSessionActiveArchiveResult(result)) {
-            await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always' });
+            await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
             return;
         }
         throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
@@ -437,7 +454,7 @@ export async function executeSessionAction(params: Readonly<{
             return;
         case SESSION_ACTION_ARCHIVE_ID:
             if (!targetAddress) throwUnsupportedSingleTargetAction();
-            await executeArchiveAction(params.target, targetAddress, params.context);
+            await executeArchiveAction(params.target, targetAddress, params.context, params.input?.alsoArchiveReports);
             return;
         case SESSION_ACTION_UNARCHIVE_ID:
             throwIfFailed(

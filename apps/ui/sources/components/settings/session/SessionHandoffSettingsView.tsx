@@ -17,7 +17,8 @@ import {
     type SessionHandoffDefaultsV1,
     type SessionHandoffWorkspaceMode,
 } from '@/sync/domains/sessionHandoff/sessionHandoffDefaults';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/WorkspaceSyncRelationshipList';
 import { WorkspaceSyncLegacyStateRecovery } from '@/components/workspaces/sync/WorkspaceSyncLegacyStateRecovery';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
@@ -33,9 +34,9 @@ const ADVANCED_SETTINGS = [
 ];
 
 export const SessionHandoffSettingsView = React.memo(function SessionHandoffSettingsView() {
-    const [rawDefaults, setRawDefaults] = useSettingMutable('sessionHandoffDefaultsV1');
+    const rawDefaults = useSetting('sessionHandoffDefaultsV1');
+    const { setSetting } = useSettingActionFeedback();
     const defaults = React.useMemo(() => normalizeSessionHandoffDefaults(rawDefaults), [rawDefaults]);
-    const defaultsRef = React.useRef(defaults);
     const advancedModeActive = defaults.workspaceSyncMode === 'mirror_exactly' || defaults.workspaceSyncMode === 'keep_both_in_sync';
     // Open on arrival when something inside needs attention: an advanced mode is in force,
     // or "Include selected" needs its patterns (a required field is never hidden).
@@ -43,19 +44,6 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
         advancedModeActive
         || defaults.includeIgnoredMode === 'include_selected',
     );
-
-    React.useEffect(() => {
-        defaultsRef.current = defaults;
-    }, [defaults]);
-
-    const updateDefaults = React.useCallback((patch: Partial<SessionHandoffDefaultsV1>) => {
-        const next = {
-            ...defaultsRef.current,
-            ...patch,
-        };
-        defaultsRef.current = next;
-        setRawDefaults(next);
-    }, [setRawDefaults]);
 
     const selectedWorkspaceMode = React.useMemo(
         () => SESSION_HANDOFF_WORKSPACE_SYNC_MODE_OPTIONS.find((option) => option.id === defaults.workspaceSyncMode)
@@ -92,7 +80,7 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
                             description: t(item.subtitleKey),
                         }))}
                         value={defaults.workspaceSyncMode}
-                        onChange={(nextMode) => updateDefaults({ workspaceSyncMode: nextMode })}
+                        onChange={(nextMode) => { void setSetting(HANDOFF_SETTINGS.settings.workspaceMode, nextMode); }}
                     />
                 </SettingAnchor>
                 <SettingAnchor settings={ADVANCED_SETTINGS}><ExpandableItem
@@ -121,7 +109,7 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
                                 description: t(item.subtitleKey),
                             }))}
                             value={defaults.workspaceSyncMode}
-                            onChange={(nextMode) => updateDefaults({ workspaceSyncMode: nextMode })}
+                            onChange={(nextMode) => { void setSetting(HANDOFF_SETTINGS.settings.mode, nextMode); }}
                         />
                     </SettingAnchor>
                     <SettingAnchor setting={HANDOFF_SETTINGS.settings.includeIgnoredMode}>
@@ -138,7 +126,7 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
                                 description: t(item.subtitleKey),
                             }))}
                             value={defaults.includeIgnoredMode}
-                            onChange={(nextMode) => updateDefaults({ includeIgnoredMode: nextMode })}
+                            onChange={(nextMode) => { void setSetting(HANDOFF_SETTINGS.settings.includeIgnoredMode, nextMode); }}
                         />
                     </SettingAnchor>
                     {defaults.includeIgnoredMode === 'include_selected' ? (
@@ -152,7 +140,7 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
                                 value={defaults.ignoredIncludeGlobs.join(', ')}
                                 onCommit={(draft) => {
                                     const patterns = parseSessionHandoffIgnoredIncludeGlobs(draft);
-                                    updateDefaults({ ignoredIncludeGlobs: patterns });
+                                    void setSetting(HANDOFF_SETTINGS.settings.ignoredIncludeGlobs, patterns);
                                     return patterns.join(', ');
                                 }}
                             />
@@ -178,7 +166,7 @@ export const SessionHandoffSettingsView = React.memo(function SessionHandoffSett
                             description: t(item.subtitleKey),
                         }))}
                         value={defaults.directTargetMode}
-                        onChange={(nextMode) => updateDefaults({ directTargetMode: nextMode })}
+                        onChange={(nextMode) => { void setSetting(HANDOFF_SETTINGS.settings.directTargetMode, nextMode); }}
                     />
                 </SettingAnchor>
             </ItemGroup>

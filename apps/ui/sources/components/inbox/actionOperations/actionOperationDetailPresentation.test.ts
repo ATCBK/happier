@@ -29,7 +29,7 @@ describe('action operation detail presentation', () => {
             actionId: 'machines.managed.acquire', state: 'failed', settledAt: 2_000,
             error: { errorCode: 'remote_cli_update_required', error: 'legacy daemon diagnostic' },
         }), 'available');
-        expect(detail.errorSummary).toContainEqual({ label: 'message', value: t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired') });
+        expect(detail.failure?.reason).toBe(t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired'));
     });
 
     it('keeps machine setup output on its exact joined target without inventing a Project', () => {
@@ -193,10 +193,24 @@ describe('action operation detail presentation', () => {
                 error: 'Preview publishing failed',
             },
         }), 'available');
-        expect(failed.errorSummary).toEqual([
-            { label: 'code', value: 'plugin_publish_failed' },
-            { label: 'message', value: 'Preview publishing failed' },
-        ]);
+        // The sentence leads and appears once; the typed code waits for Technical details.
+        expect(failed.failure).toEqual({
+            reason: 'Preview publishing failed',
+            technicalLines: [{ key: 'failure-code', label: t('common.error'), value: 'plugin_publish_failed' }],
+        });
+
+        // A bare machine code is never the words: a failure with no sentence reads neutrally, a busy Home reads as busy.
+        expect(projectActionOperationDetail(operation({
+            state: 'failed', settledAt: 2_000,
+            error: { errorCode: 'plugin_publish_failed', error: 'plugin_publish_failed' },
+        }), 'available').failure?.reason).toBe(t('inbox.actionOperations.failureGeneric'));
+        expect(projectActionOperationDetail(operation({
+            state: 'failed', settledAt: 2_000,
+            error: { errorCode: 'database_transaction_conflict_exhausted', error: 'database_transaction_conflict_exhausted' },
+        }), 'available').failure).toEqual({
+            reason: t('approvals.transientFailure'),
+            technicalLines: [{ key: 'failure-code', label: t('common.error'), value: 'database_transaction_conflict_exhausted' }],
+        });
     });
 
     it('never offers cancellation when the canonical snapshot says it is unsupported', () => {

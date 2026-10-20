@@ -20,6 +20,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from '
 import {
   assertPhysicalPathWithinApprovedRoot,
   assertResolvedRuntimeDependencyMatchesDeclaration,
+  collectBundledPrepublicationAuthorPackageNames,
   collectExternalRuntimeDependencies,
   copyDirDereferenceContainedSync,
   omitWorkspaceSourceCondition,
@@ -970,14 +971,15 @@ function assertMaterializedPrepublicationWorkspaceClosure(params: Readonly<{
 }
 
 /**
- * Materialize marked, flattened prepublication packages into caller-selected
- * transient author roots. Their preserved package manifests declare the internal
- * closure; the host publisher never performs this nesting in its own tree.
+ * Materialize requested public prepublication packages and their satisfying
+ * public runtime dependencies/peers, returning the materialized root names.
+ * Explicit bundled dependencies retain their nested closure; the host publisher
+ * never performs this nesting in its own tree.
  */
 export function materializePrepublicationWorkspacePackageRoots(params: Readonly<{
   bundles: ReadonlyArray<WorkspacePackageBundle>;
   rootPackageNames?: readonly string[];
-}>): void {
+}>): readonly string[] {
   const bundlesByPackageName = new Map(params.bundles.map((bundle) => [bundle.packageName, bundle] as const));
   if (bundlesByPackageName.size !== params.bundles.length) {
     throw new Error('Prepublication materialization received duplicate workspace package bundles');
@@ -988,21 +990,33 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
   if (selectedRootNames && selectedRootNames.size !== params.rootPackageNames?.length) {
     throw new Error('Prepublication materialization received duplicate root package names');
   }
-  const prepublicationRoots = params.bundles
+  const availableRoots = params.bundles
     .map((bundle) => ({ bundle, rawPackageJson: readPrepublicationWorkspacePackageManifest(bundle) }))
     .filter(({ rawPackageJson }) => isPrepublicationAuthorPackage(rawPackageJson))
-    .filter(({ bundle }) => selectedRootNames === null || selectedRootNames.has(bundle.packageName))
     .sort((left, right) => left.bundle.packageName.localeCompare(right.bundle.packageName));
+  const rootsByName = new Map(availableRoots.map((root) => [root.bundle.packageName, root] as const));
   if (selectedRootNames) {
-    const resolvedRootNames = new Set(prepublicationRoots.map(({ bundle }) => bundle.packageName));
-    const unsupportedRootName = params.rootPackageNames?.find((packageName) => !resolvedRootNames.has(packageName));
+    const unsupportedRootName = params.rootPackageNames?.find((packageName) => !rootsByName.has(packageName));
     if (unsupportedRootName) {
       throw new Error(`Bundled host package '${unsupportedRootName}' is not classified for public author use`);
     }
   }
-  if (prepublicationRoots.length === 0) return;
-
-  const rootNames = new Set(prepublicationRoots.map(({ bundle }) => bundle.packageName));
+  const rootNames = selectedRootNames ?? new Set(rootsByName.keys());
+  for (const packageName of rootNames) {
+    const { rawPackageJson } = rootsByName.get(packageName)!;
+    const bundledNames = new Set(readBundledWorkspacePackageNames(rawPackageJson));
+    // Public runtime dependencies and peers need their own pnpm overrides.
+    // Explicit bundled dependencies retain their existing nested custody;
+    // development-only tools do not belong to an installed package's closure.
+    for (const dependencyName of collectBundledPrepublicationAuthorPackageNames({
+      dependencies: rawPackageJson.dependencies,
+      optionalDependencies: rawPackageJson.optionalDependencies,
+      peerDependencies: rawPackageJson.peerDependencies,
+    })) {
+      if (!bundledNames.has(dependencyName) && rootsByName.has(dependencyName)) rootNames.add(dependencyName);
+    }
+  }
+  const prepublicationRoots = availableRoots.filter(({ bundle }) => rootNames.has(bundle.packageName));
   const assignedPackageNames = new Set(rootNames);
   for (const { bundle: rootBundle, rawPackageJson } of prepublicationRoots) {
     const declaredClosureNames = readDeclaredPrepublicationWorkspaceClosureNames(
@@ -1076,6 +1090,7 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
       },
     });
   }
+  return prepublicationRoots.map(({ bundle }) => bundle.packageName);
 }
 
 export function resolveWorkspaceBundlesFromPackageJson(params: Readonly<{

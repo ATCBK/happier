@@ -728,7 +728,7 @@ describe('workflow library summaries and filter', () => {
                 row('10000000-0000-4000-8000-000000000011', 'Release notes'), row('10000000-0000-4000-8000-000000000012', 'Dependency review')] } };
             if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: [
                 { sourceArtifactId: '10000000-0000-4000-8000-000000000011', recent: [{ runId: 'run-live', state: 'running' }],
-                    lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 0, needsYouRunId: null },
+                    lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 1, needsYouRunId: 'run-live' },
                 { sourceArtifactId: '10000000-0000-4000-8000-000000000012', recent: [{ runId: 'run-done', state: inactiveState }],
                     lastRun: { runId: 'run-done', state: inactiveState, createdAt: '2026-10-10T08:00:00.000Z', finishedAt: inactiveState === 'succeeded' ? '2026-10-10T08:05:00.000Z' : null }, needsYouCount: 0, needsYouRunId: null },
             ] } };
@@ -743,6 +743,8 @@ describe('workflow library summaries and filter', () => {
         await screen.tree.pressByTestIdAsync('workflows-home:filter:running');
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000011')).not.toBeNull();
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000012')).toBeNull();
+        await screen.pressByTestIdAsync('workflows-home:row:10000000-0000-4000-8000-000000000011:needsYou');
+        expect(routerPush).toHaveBeenLastCalledWith(`/workflows/runs/run-live?serverId=${encodeURIComponent(httpBoundary!.serverId)}`);
     });
 
     it.each([[390, false], [800, true]] as const)('lays a row out for a %ipx window whether or not navigation chrome shows a title (run strip: %s)', async (width, showsStrip) => {

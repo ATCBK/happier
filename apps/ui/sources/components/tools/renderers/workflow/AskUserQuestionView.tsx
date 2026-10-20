@@ -33,6 +33,14 @@ import {
 } from '@/sync/domains/plugins/settings/askUserQuestionSettings';
 import { resolvePermissionDisabledMessage } from '@/components/tools/shell/permissions/permissionDisabledMessage';
 import { usePendingPromptPrimaryFocus, markTranscriptPromptAnswered } from '@/components/tools/shell/permissions/usePendingPromptPrimaryFocus';
+import { PermissionAnswerUnconfirmedNotice } from '@/components/tools/shell/permissions/PermissionAnswerUnconfirmedNotice';
+import {
+    clearPermissionAnswerUnconfirmed,
+    markPermissionAnswerUnconfirmed,
+    permissionAnswerRequestKey,
+    readPermissionActionDisposition,
+    usePermissionAnswerUnconfirmed,
+} from '@/components/tools/shell/permissions/permissionActionFailure';
 import { toolTextBlock, type ToolDisplayTextProjector } from '../core/toolDisplayTextTypes';
 import { ToolFindText } from '../core/ToolFindText';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -722,6 +730,16 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
             && sourceInteraction.permissionDisabledReason !== 'inactive'
             && interaction?.permissionDisabledReason !== 'inactive';
     const toolCallId = resolvePermissionRequestId(tool);
+    // An answer whose result was lost may already be applied: the form is withheld until a re-read says otherwise.
+    const answerRequestKey = permissionAnswerRequestKey({
+        originId: executionRun === undefined ? `session:${sessionId ?? ''}` : `executionRun:${executionRun.executionRunId}`,
+        serverId: source.serverId,
+        permissionId: toolCallId ?? '',
+    });
+    const answerUnconfirmed = usePermissionAnswerUnconfirmed(answerRequestKey) && isRunning;
+    React.useEffect(() => {
+        if (!isRunning) clearPermissionAnswerUnconfirmed(answerRequestKey);
+    }, [isRunning, answerRequestKey]);
     const activeMatchingRequest = toolCallId ? agentState?.requests?.[toolCallId] : null;
     // An Execution Run's caller vouches for the request by supplying a
     // responder; an answer it still holds keeps the form withdrawn.
@@ -733,6 +751,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
         isRunning &&
         !isSubmitted &&
         !isSubmitting &&
+        !answerUnconfirmed &&
         canApprovePermissions &&
         hasActiveAskUserQuestionRequest;
     const primaryAnswerRef = usePendingPromptPrimaryFocus(toolCallId, executionRun === undefined && canInteract, messageId);
@@ -987,7 +1006,11 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
             }
         } catch (error) {
             setIsSubmitted(false);
-            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
+            if (readPermissionActionDisposition(error) === 'outcomeUnknown') {
+                markPermissionAnswerUnconfirmed(answerRequestKey);
+            } else {
+                Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
+            }
         } finally {
             setIsSubmitting(false);
         }
@@ -1006,6 +1029,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
         input.happierDialog,
         isSubmitting,
         toolCallId,
+        answerRequestKey,
     ]);
 
     // The asker withdrew it: the reason replaces the form; nothing is left to answer.
@@ -1273,7 +1297,15 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                     );
                 })}
 
-                {(canInteract || isSubmitting) && (
+                {answerUnconfirmed ? (
+                    <PermissionAnswerUnconfirmedNotice
+                        requestKey={answerRequestKey}
+                        requestId={toolCallId ?? ''}
+                        actions={executionRun === undefined ? actions : null}
+                        testIDPrefix="ask-user-question"
+                    />
+                ) : null}
+                {(canInteract || isSubmitting || answerUnconfirmed) && (
                     <View style={styles.footer}>
                         <Text testID="ask-user-question.hint" style={styles.footerHint}>{formatFooterHint(footerHint)}</Text>
                         <TouchableOpacity
@@ -1281,16 +1313,16 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                             accessibilityRole="button"
                             accessibilityLabel={t('tools.askUserQuestion.submit')}
                             accessibilityState={{
-                                disabled: !allQuestionsAnswered || isSubmitting,
+                                disabled: !allQuestionsAnswered || isSubmitting || answerUnconfirmed,
                                 busy: isSubmitting,
                             }}
                             style={[
                                 styles.submitButton,
                                 questionV1?.mode === 'continue' && styles.submitButtonQuiet,
-                                (!allQuestionsAnswered || isSubmitting) && styles.submitButtonDisabled,
+                                (!allQuestionsAnswered || isSubmitting || answerUnconfirmed) && styles.submitButtonDisabled,
                             ]}
                             onPress={handleSubmit}
-                            disabled={!allQuestionsAnswered || isSubmitting}
+                            disabled={!allQuestionsAnswered || isSubmitting || answerUnconfirmed}
                             activeOpacity={0.7}
                         >
                             {isSubmitting ? (

@@ -37,6 +37,8 @@ export type ExecutionRunNativeOfferedModelReader = (request: Readonly<{
   modelId: string;
   cwd: string;
   runtimeDescriptorV1?: PortableRuntimeDescriptorV1;
+  connectedServices?: ConnectedServiceBindingsV2 | null;
+  secretReferenceOverlay?: SecretReferenceOverlayV1;
 }>) => Promise<AgentProbeModel | undefined>;
 
 export type ExecutionRunManagerStartParams = Readonly<{
@@ -246,6 +248,8 @@ export type ExecutionRunState = Readonly<{
     secretReferenceOverlay?: SecretReferenceOverlayV1;
   }>;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+  /** Original terminal fact, retained independently of optional parent-report ACK. */
+  terminalOccurrenceId?: string;
   startedAtMs: number;
   finishedAtMs?: number;
   error?: ExecutionRunError;

@@ -13,7 +13,8 @@ import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCo
 import { useProjectRouteRouterRef } from './useProjectRouteRouterRef';
 import { useResolvedRepoWorktreeSelection } from '@/components/workspaces/scm/worktrees/useResolvedRepoWorktreeSelection';
 import { findVisibleRepoWorktreeByPath } from '@/components/workspaces/scm/worktrees/repoWorktreeIdentity';
-import { useLocalSetting, useLocalSettingMutable, usePersistProjectLastMobileSurface, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { useLocalSetting, usePersistProjectLastMobileSurface, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { readProjectSelectionPreference, resolveProjectSelectionPreferenceKeys, writeProjectSelectionPreference } from '@/sync/domains/settings/projectSelectionPersistence';
 
 export const ProjectDestinationBody = React.memo(() => {
@@ -37,8 +38,6 @@ export const ProjectDestinationBody = React.memo(() => {
     const resourcePending = useProjectInitialResource(pane, workspaceRef);
     const roots = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
     const worktreeIds = useLocalSetting('projectLastActiveWorktreeIdByWorkspaceRefId');
-    const [, setRoots] = useLocalSettingMutable('projectLastActiveRootPathByWorkspaceRefId');
-    const [, setWorktreeIds] = useLocalSettingMutable('projectLastActiveWorktreeIdByWorkspaceRefId');
     const persistPage = usePersistProjectLastMobileSurface();
     const fallbackRootPath = workspaceRef?.rootPath ?? readProjectRouteStringParam(params.activeRootPath) ?? '';
     const selection = readProjectRouteWorktreeSelection({
@@ -75,10 +74,17 @@ export const ProjectDestinationBody = React.memo(() => {
     React.useEffect(() => {
         if (!isFocused || !workspaceRef || !preferenceKeys) return;
         persistPage(workspaceRefId, page, workspaceRef.serverId);
-        if (roots?.[preferenceKeys.storageKey] !== activeRootPath) setRoots(writeProjectSelectionPreference(roots, preferenceKeys, activeRootPath));
         const worktreeId = activeWorktreeId ?? PROJECT_ROUTE_ROOT_SENTINEL;
-        if (worktreeIds?.[preferenceKeys.storageKey] !== worktreeId) setWorktreeIds(writeProjectSelectionPreference(worktreeIds, preferenceKeys, worktreeId));
-    }, [activeRootPath, activeWorktreeId, isFocused, page, persistPage, preferenceKeys, roots, setRoots, setWorktreeIds, worktreeIds, workspaceRef, workspaceRefId]);
+        if (roots?.[preferenceKeys.storageKey] === activeRootPath && worktreeIds?.[preferenceKeys.storageKey] === worktreeId) return;
+        getStorage().getState().applyLocalSettings({
+            ...(roots?.[preferenceKeys.storageKey] !== activeRootPath ? {
+                projectLastActiveRootPathByWorkspaceRefId: writeProjectSelectionPreference(roots, preferenceKeys, activeRootPath),
+            } : {}),
+            ...(worktreeIds?.[preferenceKeys.storageKey] !== worktreeId ? {
+                projectLastActiveWorktreeIdByWorkspaceRefId: writeProjectSelectionPreference(worktreeIds, preferenceKeys, worktreeId),
+            } : {}),
+        }, { source: 'ui' });
+    }, [activeRootPath, activeWorktreeId, isFocused, page, persistPage, preferenceKeys, roots, worktreeIds, workspaceRef, workspaceRefId]);
     const setShowWorktrees = React.useCallback((value: boolean) => replaceSelection(activeRootPath, value), [activeRootPath, replaceSelection]);
     const actions = useProjectRouteActions({ workspaceRef, activeRootPath, activeWorktreeId, showWorktrees, pane });
     const screenOptions = useProjectRouteHeaderOptions({

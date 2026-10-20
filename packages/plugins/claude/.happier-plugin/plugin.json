@@ -8,6 +8,9 @@
         "execution": {
           "target": "daemon"
         },
+        "hostAccess": [
+          "claude-session-runtime-control"
+        ],
         "id": "subagent-team-launch",
         "inputHints": {
           "fields": [
@@ -57,7 +60,9 @@
         ],
         "surfaces": [
           "ui",
-          "agent"
+          "agent",
+          "cli",
+          "mcp"
         ],
         "title": "Create agent team"
       },
@@ -67,6 +72,9 @@
         "execution": {
           "target": "daemon"
         },
+        "hostAccess": [
+          "claude-session-runtime-control"
+        ],
         "id": "subagent-member-launch",
         "inputHints": {
           "fields": [
@@ -133,7 +141,9 @@
         ],
         "surfaces": [
           "ui",
-          "agent"
+          "agent",
+          "cli",
+          "mcp"
         ],
         "title": "Launch teammate"
       }

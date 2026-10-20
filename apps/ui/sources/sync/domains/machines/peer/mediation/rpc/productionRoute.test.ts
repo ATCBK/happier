@@ -8,6 +8,7 @@ import {
     type PeerMachineRpcDirectRequestV2,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 
@@ -117,11 +118,7 @@ function createDirectRequest(): PeerMachineRpcDirectRequestV2 {
 }
 
 function responseJson(payload: unknown): Response {
-    return {
-        ok: true,
-        status: 200,
-        json: async () => payload,
-    } as Response;
+    return new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
 }
 
 async function importProductionRoute() {
@@ -390,7 +387,11 @@ describe('production peer mediation machine RPC route adapter', () => {
         getCredentialsForServerUrlSpy
             .mockResolvedValueOnce({ token: TOKEN_A, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64') })
             .mockResolvedValue({ token: replacementToken, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64') });
-        const fetchSpy = vi.fn();
+        // Reachability is checked before the authenticated grant boundary.
+        const fetchSpy = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+            throw new Error('Unexpected grant request');
+        });
         vi.stubGlobal('fetch', fetchSpy);
 
         const module = await importProductionRoute();
@@ -406,7 +407,7 @@ describe('production peer mediation machine RPC route adapter', () => {
             receipt: PEER_MEDIATION_RECEIPTS.routeFallback,
             reasonCode: 'grant_missing',
         });
-        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(fetchSpy.mock.calls.map(([, init]) => init?.method)).toEqual(['OPTIONS']);
     });
 
 
@@ -436,6 +437,76 @@ describe('production peer mediation machine RPC route adapter', () => {
         // The caller signal must reach the actual request transport.
         expect(capturedSignal?.aborted).toBe(true);
         expect(readRpcRequestDisposition(result)).toBe('outcomeUnknown');
+    });
+
+    it.each([
+        { status: 200, contentType: 'text/html', body: '<html>upstream unavailable: private-body</html>',
+            bodyWasJson: false, rpcErrorCode: 'MACHINE_RPC_INVALID_RESPONSE', schemaIssues: [] },
+        { status: 200, contentType: 'application/json', body: 'null', bodyWasJson: true,
+            rpcErrorCode: 'MACHINE_RPC_INVALID_RESPONSE', schemaIssues: [{ code: 'invalid_type', path: [] }] },
+        { status: 200, contentType: 'application/json', body: JSON.stringify({
+            v: 2, ok: true, receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded,
+            requestId: 'request_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS, routeKind: 'loopback_direct',
+            result: { secret: 'private-body' }, commandReceipt: {
+                v: 1, issuer: 'daemon', issuedAtMs: 2000, requestHash: `sha256:${'a'.repeat(64)}`,
+                replayKey: 'request_1', resultHash: 'private-body',
+            },
+        }), bodyWasJson: true, rpcErrorCode: 'MACHINE_RPC_INVALID_RESPONSE',
+            schemaIssues: [{ code: 'invalid_format', path: ['commandReceipt', 'resultHash'] }] },
+        { status: 502, contentType: 'text/html', body: '<html>Bad Gateway: private-body</html>',
+            bodyWasJson: false, rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN, schemaIssues: [] },
+        { status: 504, contentType: 'application/json', body: '{"error":"private-body"}',
+            bodyWasJson: true, rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN, schemaIssues: [] },
+    ])('retains safe direct-response diagnostics for HTTP $status / $contentType / JSON $bodyWasJson', async (vector) => {
+        // HTTP is the boundary: exercise the real decoder and strict consumer.
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(vector.body, {
+            status: vector.status, headers: { 'content-type': vector.contentType },
+        })));
+        const module = await importProductionRoute();
+        if ('importError' in module) throw module.importError;
+        const error: unknown = await module.postProductionMachineRpcDirect({
+            url: 'http://127.0.0.1:46021/peer-mediation/v2/rpc', request: createDirectRequest(),
+        }).catch((failure: unknown) => failure);
+
+        expect(error).toBeInstanceOf(RpcError);
+        expect(error).toMatchObject({
+            rpcErrorCode: vector.rpcErrorCode, httpStatus: vector.status, contentType: vector.contentType,
+            bodyWasJson: vector.bodyWasJson, schemaIssues: vector.schemaIssues,
+        });
+        expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+        // Neither arbitrary response data nor schema prose belongs in diagnostics.
+        expect(JSON.stringify(error)).not.toContain('private-body');
+        expect(String(error)).not.toContain('private-body');
+    });
+
+    it('accepts the canonical direct response even without a content-type header', async () => {
+        const payload = {
+            v: 2, ok: true, receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded,
+            requestId: 'request_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS, routeKind: 'loopback_direct',
+            result: { ready: true },
+        };
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(new TextEncoder().encode(JSON.stringify(payload)))));
+        const module = await importProductionRoute();
+        if ('importError' in module) throw module.importError;
+        await expect(module.postProductionMachineRpcDirect({
+            url: 'http://127.0.0.1:46021/peer-mediation/v2/rpc', request: createDirectRequest(),
+        })).resolves.toEqual(payload);
+    });
+
+    it('preserves a direct body transport failure instead of treating it as malformed JSON', async () => {
+        const failure = new TypeError('Connection terminated');
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({
+            start(controller) { controller.error(failure); },
+        }), { headers: { 'content-type': 'application/json' } })));
+        const module = await importProductionRoute();
+        if ('importError' in module) throw module.importError;
+        const error: unknown = await module.postProductionMachineRpcDirect({
+            url: 'http://127.0.0.1:46021/peer-mediation/v2/rpc', request: createDirectRequest(),
+        }).catch((cause: unknown) => cause);
+
+        expect(error).toBe(failure);
+        expect(error).toMatchObject({ httpStatus: 200, contentType: 'application/json', bodyWasJson: false });
+        expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
     });
 
     it('aborts the direct loopback request when its timeout elapses', async () => {

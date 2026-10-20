@@ -110,11 +110,9 @@ export const SkillDetailScreen = React.memo(function SkillDetailScreen(
   );
 });
 
-/** Why a host-owned skill cannot be edited here: whose it is, and that it follows their version. */
-function hostOwnedNote(provenance: SkillProvenanceV1): string {
-  return provenance.kind === 'plugin'
-    ? t('capabilities.skillDetail.instructions.readOnlyPlugin')
-    : t('capabilities.skillDetail.instructions.readOnly');
+/** Why a plugin's skill cannot be edited here. A built-in one says it once, in its Source row. */
+function hostOwnedNote(provenance: SkillProvenanceV1): string | undefined {
+  return provenance.kind === 'plugin' ? t('capabilities.skillDetail.instructions.readOnlyPlugin') : undefined;
 }
 
 function SavedSkill(props: Readonly<{ skillId: string }>) {
@@ -161,10 +159,11 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
 
   // Never a raw id: until the library answers, the title stays empty (its space is kept).
   const name = read?.name ?? listItem?.name ?? '';
-  const purpose =
+  // A folded YAML description keeps its source newlines; the header reads it as one sentence.
+  const purpose = (
     listItem?.description ??
-    (read ? readSkillFrontmatterV1(read.skillMd).description : undefined) ??
-    undefined;
+    (read ? readSkillFrontmatterV1(read.skillMd).description : undefined)
+  )?.replace(/\s+/g, ' ').trim();
   const facts = React.useMemo(
     () => ({
       ...(provenance
@@ -187,7 +186,8 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         : [],
     [detail.library.usageObservedSince, listItem],
   );
-  const headerStatus = pickMostBlockingCapabilityStatus(statuses, 'header');
+  // "Off" is said once, by Where it's on; the title carries only what that section does not.
+  const headerStatus = pickMostBlockingCapabilityStatus(statuses.filter((status) => status.kind !== 'off'), 'header');
 
   const menuItems = React.useMemo((): readonly PageHeaderMenuAction[] => {
     const items: PageHeaderMenuAction[] = [

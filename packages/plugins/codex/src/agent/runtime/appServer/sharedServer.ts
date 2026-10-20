@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
 
 import type { ExecService, PluginProcessHandle, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
@@ -20,7 +21,7 @@ type CodexAppServerEnv = Readonly<Record<string, string | undefined>>;
 type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 const SHARED_CONTROL_MIN_MINOR_UNIX = 131;
 
-type StartupFailureReason = 'process_exited' | 'process_observation_failed' | 'socket_timeout';
+type StartupFailureReason = 'process_exited' | 'process_observation_failed';
 export type CodexSharedAppServerStartupFailure = Readonly<{
   phase: 'socket_wait';
   reason: StartupFailureReason;
@@ -56,7 +57,7 @@ export class CodexSharedAppServerStartupError extends Error {
 type Dependencies = Readonly<{
   readCodexVersion: (exec: ExecService, env: CodexAppServerEnv, signal?: AbortSignal) => Promise<string>;
   createRuntimeDirectory: () => Promise<string>;
-  waitForSocket: (socketPath: string, process: PluginProcessHandle, timeoutMs: number) => Promise<void>;
+  waitForSocket: (socketPath: string, process: PluginProcessHandle, signal?: AbortSignal) => Promise<void>;
   removeRuntimeDirectory: (directory: string) => Promise<void>;
   createClient: typeof createCodexNativeAppServerClient;
   probeRealtime: typeof probeCodexRealtimeConversationFeature;
@@ -96,23 +97,26 @@ function supportsSharedControl(versionOutput: string, platform: NodeJS.Platform)
 async function waitForSocket(
   socketPath: string,
   process: PluginProcessHandle,
-  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   let result: PluginProcessResult | undefined;
   let observationFailed = false;
   void process.wait().then(value => { result = value; }, () => { observationFailed = true; });
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  // A cold native home backfills its history before publishing the socket.
+  // That work is not an initialize RPC and can outlast its request budget;
+  // killing it leaves Codex's native backfill lease running on the next start.
+  // The opening Session owns cancellation; the process owns terminal failure.
+  while (true) {
+    signal?.throwIfAborted();
     if (result) throw new CodexSharedAppServerStartupError('process_exited', result);
     if (observationFailed) throw new CodexSharedAppServerStartupError('process_observation_failed');
     try {
       await stat(socketPath);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await delay(25, undefined, { signal });
     }
   }
-  throw new CodexSharedAppServerStartupError('socket_timeout');
 }
 
 function defaultDependencies(): Dependencies {
@@ -212,7 +216,7 @@ export async function createCodexSharedAppServer(params: Readonly<{
         await dependencies.waitForSocket(
           socketPath,
           serverProcess,
-          readCodexAppServerStartupRpcTimeoutMs(request.processEnv),
+          params.signal,
         );
         // A published socket is not native SQLite/skill initialization readiness.
         // Reuse this initialized connection for the first admitted runtime client.

@@ -86,6 +86,125 @@ function ownerDeps(storage: WorkflowAccountRunActionDeps['storage']): WorkflowAc
 }
 
 describe('shared Account workflow run owner', () => {
+  it('discovers Discussion runs after an irrelevant first page without forwarding a private origin filter to storage', async () => {
+    const first = runSnapshot();
+    const targetId = '22222222-2222-4222-8222-222222222222';
+    if (!acceptedSnapshotResult.ok) throw new Error('snapshot_fixture_failed');
+    const continuationDefinition = validateWorkflowDefinition({ ...definition, inputs: [
+      { name: 'previousRoundContext', valueType: 'json', required: false },
+    ] }).normalizedDefinition!;
+    const accepted = WorkflowAcceptedSnapshotV1Schema.parse({ ...acceptedSnapshotResult.snapshot,
+      definition: continuationDefinition, authoredDefinition: continuationDefinition,
+      origin: { kind: 'direct', discussion: { discussion: { serverId: 'home', discussionId: 'discussion-1' },
+        messageId: 'question-1', throughSeq: 7 } } });
+    const targetEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: targetId }, acceptedSnapshot: accepted }));
+    const requests: unknown[] = [];
+    const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async operation => {
+      if (operation.operation !== 'list') throw new Error('unexpected_storage_operation');
+      requests.push(operation.request);
+      const next = (operation.request as { cursor?: string }).cursor === 'next-page';
+      const run = next ? { ...first.run, id: targetId } : first.run;
+      return { runs: [run], acceptedEnvelopesByRunId: { [run.id]: next ? targetEnvelope : first.acceptedEnvelope },
+        keyCensusByRunId: { [run.id]: { ...first.keyCensus, runId: run.id } }, ...(next ? {} : { nextCursor: 'next-page' }) };
+    } }));
+    const page = await owner.execute({ actionId: 'workflow.run.list', input: { originDiscussionId: 'discussion-1' },
+      context: { surface: 'ui', serverId: 'home' } });
+    expect(page).toMatchObject({ runs: [{ id: targetId }], supportsAnotherRoundByRunId: { [targetId]: true },
+      callerAccessByRunId: { [targetId]: { canEdit: true } } });
+    expect(requests).toEqual([{}, { cursor: 'next-page' }]);
+    await expect(owner.execute({ actionId: 'workflow.run.list', input: { originDiscussionId: 'discussion-1' },
+      context: { surface: 'ui', serverId: 'other-home' } })).resolves.toMatchObject({ runs: [] });
+  });
+  it.each([
+    { name: 'a lost admission reply', failure: Object.assign(new Error('timeout of 30000ms exceeded'), { code: 'ECONNABORTED' }), code: 'workflow_outcome_unresolved' },
+    { name: 'a received storage refusal', failure: Object.assign(new Error('HTTP 503'), { response: { status: 503, data: { error: 'storage_unavailable' } } }), code: 'storage_unavailable' },
+  ])('reports $name as $code, so only an unconfirmed admission is rejoined instead of claiming failure', async ({ failure, code }) => {
+    const owner = createWorkflowAccountRunActionOwner({ ...ownerDeps({ execute: async operation => {
+      if (operation.operation === 'get') throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+      if (operation.operation !== 'admit') throw new Error('unexpected_storage_operation');
+      throw failure;
+    } }), prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: {
+      machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
+    });
+    await expect(owner.execute({ actionId: 'workflow.run.start',
+      input: WorkflowRunStartRequestV1Schema.parse({ runId, source: { kind: 'inline', definition } }),
+      context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default',
+        externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } },
+    })).rejects.toMatchObject({ code });
+  });
+  it.each([true, false])('freezes an authorized Discussion question across lost-start rejoin and accepted projection (delivery: %s)', async delivers => {
+    const discussion = { serverId: 'home', discussionId: 'discussion-1' };
+    const origin = { kind: 'discussion' as const, discussion, addressingMessageId: 'question-1' };
+    let mayRead = true;
+    let committed: ReturnType<typeof runSnapshot> | undefined;
+    const invocationId = '33333333-3333-4333-8333-333333333333';
+    const admitted: Array<Readonly<Record<string, unknown>>> = [];
+    const owner = createWorkflowAccountRunActionOwner({ ...ownerDeps({ execute: async operation => {
+      if (operation.operation === 'get') {
+        if (committed) return committed;
+        throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+      }
+      if (operation.operation === 'invocations.list') return { invocations: [] };
+      if (operation.operation === 'invocations.get') {
+        const index = { id: invocationId, runId, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0',
+          contentRevision: '0', lifecycle: 'completed', createdAt: runSnapshot().run.createdAt, updatedAt: runSnapshot().run.updatedAt };
+        return { invocation: { index, parentRevision: 0, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(
+          sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'invocation_progress',
+            accountId: 'account-1', runId, recordId: invocationId, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+          progress: { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'work', scope: [] },
+            blockKind: 'step', attempt: '0', logicalInvocationRecordId: invocationId } })) } };
+      }
+      if (operation.operation !== 'admit') throw new Error('unexpected_storage_operation');
+      admitted.push(operation);
+      committed = { ...runSnapshot(), acceptedEnvelope: String(operation.acceptedEnvelope) };
+      return { kind: 'created', run: committed.run };
+    } }), prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: {
+      machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true,
+        readActionContract: async actionId => {
+          const spec = getActionSpec(ActionIdSchema.parse(actionId));
+          return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema)),
+            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema!)) };
+        } } }),
+      // Authorized Discussion transport is the genuine resource boundary.
+      resolveDiscussionOrigin: async () => {
+        if (!mayRead) throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
+        return { discussion, messageId: 'question-1', throughSeq: 7 };
+      },
+    });
+    const authored = { ...definition, blocks: [...definition.blocks, { kind: 'action', id: 'read-source',
+      actionId: 'reviews.comments.list', input: { sessionId: { kind: 'literal', value: 'source-session' } },
+      execution: { conversation: { kind: 'existing_session', sessionId: 'source-session', machineId: 'machine-a' } } }] };
+    const request = WorkflowRunStartRequestV1Schema.parse({ runId, source: { kind: 'inline', definition: authored },
+      origin, ...(delivers ? { onComplete: { kind: 'originating_discussion' } } : {}) });
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', callerPermissionMode: 'default',
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } };
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: request, context })).resolves.toMatchObject({ admission: 'created' });
+    const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      envelope: parseWorkflowStoredContentEnvelopeV1(committed!.acceptedEnvelope)!,
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } });
+    expect(opened).toMatchObject({ kind: 'available', content: {
+      origin: { kind: 'direct', discussion: { discussion, messageId: 'question-1', throughSeq: 7 } },
+      ...(delivers ? { resultDelivery: { kind: 'originating_discussion', discussion, messageId: 'question-1', throughSeq: 7 } } : {}),
+    } });
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: request, context })).resolves.toMatchObject({ admission: 'existing' });
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]).toMatchObject({ discussionTargetSessionIds: [] });
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: { ...request,
+      origin: { ...origin, addressingMessageId: 'different-question' } }, context })).rejects.toMatchObject({ code: 'currentness_conflict' });
+    const get = await owner.execute({ actionId: 'workflow.run.get', input: { runId }, context });
+    expect(get).toMatchObject({ acceptedContext: { origin: { kind: 'direct', discussion: {
+      discussion, messageId: 'question-1', throughSeq: 7,
+    } } } });
+    const invocation = await owner.execute({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId }, context });
+    if (delivers) expect(invocation).toMatchObject({ discussionResultDelivery: { kind: 'originating_discussion', discussion,
+      messageId: 'question-1', throughSeq: 7 } });
+    else expect(invocation).not.toHaveProperty('discussionResultDelivery');
+    mayRead = false;
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: request, context })).rejects.toMatchObject({ code: 'run_access_denied' });
+  });
   it.each(['self', 'other'] as const)('passes frozen participant inputs to the immediate %s wait target check', async scenario => {
     const address = { serverId: 'home', sessionId: 'self' };
     const authored = { version: 1, defaults: {}, inputs: [{ name: 'chosen', valueType: 'json', required: true,
@@ -654,19 +773,30 @@ describe('shared Account workflow run owner', () => {
       try { return await owner.execute(args, { agentTarget, machineId: 'machine-a', directory: '/repo' }); }
       catch (error) { return normalizeWorkflowActionThrownError(error); }
     } });
+    const context = { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', defaultSessionId: 'origin-1',
+      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } },
+    } as const;
+    await expect(executor.execute('workflow.run.start', { runId,
+      source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
+      inputs: { request: 'Plan the change', machineId: 'Machine-other', directory: '/other' },
+    }, context)).resolves.toMatchObject({ ok: false, errorCode: 'invalid_input' });
+    expect(committed).toBeUndefined();
     const result = await executor.execute('workflow.run.start', { runId,
       source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
       inputs: { request: 'Plan the change', ...(withEngines ? { engines: ['agent:happier.agent.codex/codex'] } : {}) },
       roleOverrides: [{ roleId: 'planner', engine: { agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-6.1-sol', effort: 'low' } }],
       onComplete: { kind: 'originating_session' },
-    }, { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', defaultSessionId: 'origin-1',
-      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } },
-    });
+    }, context);
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
     expect(openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       envelope: parseWorkflowStoredContentEnvelopeV1(committed!.acceptedEnvelope),
       binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } }))
-      .toMatchObject({ kind: 'available', content: { materializedLeaves: expect.arrayContaining([
+      .toMatchObject({ kind: 'available', content: {
+        machineId: 'machine-a',
+        workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct', originSessionId: 'origin-1' },
+        inputs: { request: 'Plan the change' },
+        materializedLeaves: expect.arrayContaining([
         expect.objectContaining({ blockId: 'synthesis', selection: expect.objectContaining({ agentTarget,
           modelSelection: expect.objectContaining({ ref: expect.objectContaining({ modelId: 'gpt-6.1-sol' }) }) }) }),
       ]) } });
@@ -2140,6 +2270,45 @@ describe('shared Account workflow run owner', () => {
     const result = await owner.execute({ actionId: 'workflow.run.list', input: { targetSessionId: 'destination' }, context: {} });
     expect(result).toMatchObject({ runs: [{ id: 'habit-run' }, { id: 'account-run' }] });
     expect(requested).toEqual([{ targetSessionId: 'destination' }, { targetSessionId: 'destination', cursor: 'next-page' }]);
+  });
+
+  it('lists Under Runs from complete server subtree membership across Session and Run pages', async () => {
+    const base = runSnapshot();
+    if (!acceptedSnapshotResult.ok) throw new Error('base_fixture_failed');
+    const target = await materializeWorkflowAcceptedSnapshotV1({ definition: { ...definition,
+      defaults: { ...definition.defaults, conversation: { kind: 'existing_session', sessionId: 'leaf', machineId: 'machine-a' } } },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-a', executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
+        authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!target.ok) throw new Error('target_fixture_failed');
+    const envelope = (id: string, acceptedSnapshot: WorkflowAcceptedSnapshotV1) => serializeWorkflowStoredContentEnvelopeV1(
+      sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: id }, acceptedSnapshot }));
+    const originId = '22222222-2222-4222-8222-222222222222';
+    const targetId = '33333333-3333-4333-8333-333333333333';
+    const listSessions = vi.fn(async ({ query }: Parameters<NonNullable<WorkflowAccountRunActionDeps['sessionList']>>[0]) =>
+      markSessionListQueryResultV1({ sessions: query?.cursor ? [{ id: 'leaf', active: false, presence: 'offline', updatedAt: 1 }]
+        : [{ id: 'lead', active: false, presence: 'offline', updatedAt: 1 }],
+      nextCursor: query?.cursor ? null : 'next-session-page', hasNext: !query?.cursor,
+      attentionNextCursor: null, attentionHasNext: false }));
+    const storage = vi.fn(async (operation: Parameters<WorkflowAccountRunActionDeps['storage']['execute']>[0]) => {
+      if (operation.operation !== 'list') throw new Error('unexpected_storage_operation');
+      if (!operation.request?.cursor) return { runs: [base.run], acceptedEnvelopesByRunId: { [runId]: base.acceptedEnvelope },
+        keyCensusByRunId: { [runId]: base.keyCensus }, nextCursor: 'next-run-page' };
+      return { runs: [{ ...base.run, id: originId, origin: { kind: 'direct', originSessionId: 'leaf' } },
+          { ...base.run, id: targetId }],
+        acceptedEnvelopesByRunId: { [originId]: envelope(originId, { ...acceptedSnapshotResult.snapshot, origin: { kind: 'direct', originSessionId: 'leaf' } }),
+          [targetId]: envelope(targetId, target.snapshot) },
+        keyCensusByRunId: { [originId]: { ...base.keyCensus, runId: originId }, [targetId]: { ...base.keyCensus, runId: targetId } } };
+    });
+    const owner = createWorkflowAccountRunActionOwner({ ...ownerDeps({ execute: storage }), sessionList: listSessions });
+    const page = await owner.execute({ actionId: 'workflow.run.list', input: { underSessionId: 'lead' }, context: { serverId: 'home' } });
+    expect(page).toMatchObject({ runs: [{ id: originId }, { id: targetId }] });
+    expect(listSessions).toHaveBeenCalledTimes(4); // active and archived, each through its continuation
+    expect(listSessions.mock.calls.every(([input]) => input.query?.underSessionId === 'lead')).toBe(true);
+    expect(storage.mock.calls.map(([operation]) => operation.request)).toEqual([
+      { underSessionId: 'lead' }, { underSessionId: 'lead', cursor: 'next-run-page' },
+    ]);
   });
 
   it('opens the same authored progress in direct Run detail and the lean list', async () => {

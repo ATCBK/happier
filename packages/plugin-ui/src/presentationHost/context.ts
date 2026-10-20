@@ -25,6 +25,7 @@ import type { SetupBlockGridProps, SetupBlockTileProps } from '../components/Set
 import type { DictationButtonProps, StatusCellProps, VoiceMarkArtProps } from '../components/Voice.js';
 import type { PluginUiScrollActivityTracker } from './scrollActivity.js';
 import type { FindSurfaceRegistrationHost } from '../presentation/find/useFindSurfaceRegistration.js';
+import type { ExecutableParticipantPickerProps } from '../components/ExecutableParticipantPicker.js';
 
 export type PluginUiPopoverPresentation = 'popover' | 'menu' | 'dropdown' | 'context';
 
@@ -316,6 +317,8 @@ export type PluginUiPresentationHost = Readonly<{
    * (isolated tests, hosted-web realms): the author's fallback renders instead.
    */
   renderSessionPart?(input: PluginUiSessionPartPresentation): ReactNode;
+  /** One controlled choice/search presenter; no participant inventory or execution authority. */
+  renderExecutableParticipantPicker?(input: ExecutableParticipantPickerProps): ReactNode;
   /**
    * Render one declared widget area of this page through the host's one widget area owner (the
    * public `WidgetSurface`). Absent where the host cannot present widgets (isolated tests, a

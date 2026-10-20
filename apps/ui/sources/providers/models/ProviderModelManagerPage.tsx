@@ -328,7 +328,6 @@ export function ProviderModelManagerPage(props: Readonly<{
                 }}
                 contentContainerStyle={{ paddingBottom: BASE_CONTENT_PADDING_BOTTOM + bottomChromeHeight }}
                 keyboardShouldPersistTaps="handled"
-                backendPreference="auto"
                 initialNumToRender={4}
                 maxToRenderPerBatch={4}
                 windowSize={7}

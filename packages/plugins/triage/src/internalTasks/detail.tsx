@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { RenderContext, RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import type { PluginActionResultById } from '@happier-dev/plugin-sdk/actions';
 import { TriageDetailSurfaceInputV1Schema } from '@happier-dev/triage-protocol/v1';
-import { defineUiSurface, ErrorState, LoadingState, Stack, Text, usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { defineUiSurface, ErrorState, LoadingState, Stack, Status, Text, usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { sameTriageEntryReference, sameTriageSourceIdentity } from '../corpus/identity/components.js';
 import { INTERNAL_TASK_SOURCE_V1, internalTaskLocalRefV1 } from './source.js';
 
@@ -45,7 +45,8 @@ function InternalTaskDetail(context: RenderContext): React.ReactElement {
   }
   if (!currentRead?.task) return <LoadingState title={text('plugins.triage.internal.loading', 'Reading task…')} />;
   return <Stack gap="medium">
-    {currentRead.failed ? <ErrorState title={text('plugins.triage.internal.unavailable', 'This task could not be read')} /> : null}
+    {/* The last good read stays; a failed refresh over it is one quiet line, not an error card above the notes. */}
+    {currentRead.failed ? <Status tone="warning" label={text('plugins.triage.internal.unavailable', 'This task could not be read')} /> : null}
     {currentRead.task.notes === undefined ? null : <Text variant="reading" value={currentRead.task.notes} />}
     {currentRead.task.labels?.length ? <Text variant="meta" tone="secondary" value={currentRead.task.labels.join(' · ')} /> : null}
     {currentRead.task.links?.map(link => <Text key={link.url} variant="meta" value={link.title ? `${link.title} · ${link.url}` : link.url} />)}

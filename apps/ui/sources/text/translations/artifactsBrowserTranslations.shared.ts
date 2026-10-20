@@ -135,6 +135,10 @@ export type ArtifactsBrowserTranslations = Readonly<{
     facts: Readonly<{
         edited: (params: Readonly<{ age: string }>) => string;
         acceptedEdit: (params: Readonly<{ who: string; age: string }>) => string;
+        version: (params: Readonly<{ n: number }>) => string;
+        sharedWithTeam: (params: Readonly<{ team: string }>) => string;
+        shared: string;
+        onlyYou: string;
     }>;
     passage: Readonly<{
         comment: string;
@@ -146,6 +150,11 @@ export type ArtifactsBrowserTranslations = Readonly<{
         openRevision: (params: Readonly<{ n: number }>) => string;
         count: (params: Readonly<{ count: number }>) => string;
         countUnavailable: string;
+        refineHint: string;
+        threadsTitle: string;
+        refineFailed: string;
+        threadDetail: (params: Readonly<{ who: string; n: number }>) => string;
+        acceptedToast: (params: Readonly<{ n: number }>) => string;
         youAccepted: (params: Readonly<{ name: string }>) => string;
         accepted: (params: Readonly<{ name: string }>) => string;
     }>;
@@ -172,6 +181,8 @@ export type ArtifactsBrowserTranslations = Readonly<{
         undoConflict: string;
         openDocument: string;
         someone: string;
+        askRedo: string;
+        redoRequest: string;
     }>;
 }>;
 
@@ -312,6 +323,10 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         },
         facts: {
             edited: ({ age }) => `Edited ${age}`,
+            version: ({ n }) => `Version ${n}`,
+            sharedWithTeam: ({ team }) => `Shared with ${team}`,
+            shared: 'Shared',
+            onlyYou: 'Only you',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -324,6 +339,11 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             openRevision: ({ n }) => `Open version ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversation' : 'conversations'}`,
             countUnavailable: 'Comment count unavailable',
+            refineHint: 'Select the words to comment on',
+            threadsTitle: 'Conversations',
+            refineFailed: 'Couldn’t place that selection. Select the words again.',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} ${n === 1 ? 'reply' : 'replies'}`,
+            acceptedToast: ({ n }) => `Accepted · version ${n}`,
             youAccepted: ({ name }) => `You accepted ${name}’s edit`,
             accepted: ({ name }) => `${name}’s edit was accepted`,
         },
@@ -350,5 +370,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             undoConflict: 'The document changed after this edit, so Undo can’t restore it. Open its history to pick a version.',
             openDocument: 'Open document',
             someone: 'Someone',
+            askRedo: 'Ask to redo',
+            redoRequest: 'The document changed after your suggestion. Could you suggest it again on the current version?',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "en">;

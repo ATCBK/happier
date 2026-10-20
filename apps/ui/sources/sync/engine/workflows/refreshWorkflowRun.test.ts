@@ -14,7 +14,7 @@ installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { refreshWorkflowRunById } = await import('./refreshWorkflowRun');
+const { refreshWorkflowRunById, refreshWorkflowRunsByIds } = await import('./refreshWorkflowRun');
 const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
@@ -76,8 +76,29 @@ describe('refreshWorkflowRunById through the real Account summary and store owne
         expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]).toMatchObject({ id: run.id,
             summary: { id: run.id, revision: run.revision }, metadata: { kind: 'available', value: { title: 'Review 500 files' } } });
         expect(home.requestsFor(route).map(request => request.input)).toEqual([
-            expect.objectContaining({ operation: 'list', request: { runId: run.id, limit: 1 } }),
+            expect.objectContaining({ operation: 'list', request: { runIds: [run.id], invocationProvenance: [] } }),
         ]);
+    });
+
+    it('refreshes every Run of an Account-change page in one batched read and removes the deleted one', async () => {
+        const second = createWorkflowRunSummaryFixture({ id: 'run-2', ownerAccountId: run.ownerAccountId, origin: { kind: 'direct' } });
+        const deleted = createWorkflowRunSummaryFixture({ id: 'run-3', ownerAccountId: run.ownerAccountId, origin: { kind: 'direct' } });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(deleted)]);
+        const keyCensus = (runId: string) => WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId: run.ownerAccountId,
+            access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+            ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        home.answer(serverId, route, { body: { runs: [run, second],
+            acceptedEnvelopesByRunId: { [run.id]: '{}', [second.id]: '{}' },
+            keyCensusByRunId: { [run.id]: keyCensus(run.id), [second.id]: keyCensus(second.id) } } });
+
+        await refreshWorkflowRunsByIds([run.id, second.id, deleted.id]);
+
+        const rows = storage.getState().workflowRunsById;
+        expect(rows[workflowRunStoreKey(run.id)]).toMatchObject({ id: run.id });
+        expect(rows[workflowRunStoreKey(second.id)]).toMatchObject({ id: second.id });
+        expect(rows[workflowRunStoreKey(deleted.id)]).toBeUndefined();
+        // One Account read serves the page; a read per Run multiplies Account currentness and storage traffic.
+        expect(home.requestsFor(route)).toHaveLength(1);
     });
 
     it('keeps readable accepted content without an authored title unnamed', async () => {

@@ -69,6 +69,8 @@ import { WorkflowDefinitionEditRequestV1Schema, WorkflowDefinitionEditResultV1Sc
 import { WorkflowDocumentV1Schema, WorkflowDocumentParseFailureV1Schema } from './workflowDocumentSchemasV1.js';
 import { WorkflowDefinitionRefV1StringSchema, parseWorkflowDefinitionRefV1 } from './workflowDefinitionRefV1.js';
 import { WorkflowPluginSourceV1Schema } from './workflowPluginSourceContractV1.js';
+import { DiscussionAddressV1Schema, DiscussionMessageIdSchema } from '../discussions/references.js';
+import { WorkflowDiscussionOriginV1Schema, WorkflowRunOnCompleteV1Schema, WorkflowDiscussionResultDeliveryV1Schema } from './workflowDestinationsV1.js';
 export { WorkflowDefinitionEditRequestV1Schema, WorkflowDefinitionEditResultV1Schema } from './workflowDefinitionEditV1.js';
 
 const CursorSchema = OPAQUE_CURSOR_SCHEMA;
@@ -148,7 +150,9 @@ export const WorkflowRunStartRequestV1Schema = lazyZodSchema(() => z.strictObjec
   inputs: z.optional(WorkflowInputsV1Schema),
   executionTarget: zMini.optional(WorkflowRunExecutionTargetV1Schema),
   roleOverrides: zMini.optional(WorkflowRoleOverridesV1Schema),
-  onComplete: z.optional(z.strictObject({ kind: z.literal('originating_session') })),
+  origin: z.optional(z.strictObject({ kind: z.literal('discussion'), discussion: DiscussionAddressV1Schema,
+    addressingMessageId: DiscussionMessageIdSchema })),
+  onComplete: z.optional(WorkflowRunOnCompleteV1Schema),
 }));
 export const WorkflowRunStartResultV1Schema = lazyZodSchema(() => z.strictObject({
   run: WorkflowRunSummaryV1Schema,
@@ -197,7 +201,11 @@ export const WorkflowRunListRequestV1Schema = lazyZodSchema(() => z.strictObject
   states: z.optional(z.array(WorkflowRunStateV1Schema).check(z.minLength(1))),
   attention: z.optional(WorkflowRunAttentionFilterV1Schema),
   originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+  /** Private accepted-origin filter; the Action owner opens authorized pages before matching. */
+  originDiscussionId: z.optional(DiscussionAddressV1Schema.shape.discussionId),
   targetSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+  /** Server-proved root and readable descendants of this managed Session. */
+  underSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   automationId: zMini.optional(preservedBoundedNfcString(191, 'Automation ids')),
   machineId: zMini.optional(WorkflowMachineIdV1Schema),
 }));
@@ -206,8 +214,12 @@ export const WorkflowRunPrivateMetadataV1Schema = lazyZodSchema(() => z.discrimi
   z.strictObject({ kind: z.literal('unavailable'), reason: WorkflowOperationErrorCodeV1Schema }),
 ]));
 export type WorkflowRunPrivateMetadataV1 = z.infer<typeof WorkflowRunPrivateMetadataV1Schema>;
+export const WorkflowRunCallerAccessV1Schema = lazyZodSchema(() => z.strictObject({ canEdit: z.boolean() }));
 export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject({
   runs: z.array(WorkflowRunSummaryV1Schema),
+  /** Private authored support opened with the page; this grants no start/control authority. */
+  supportsAnotherRoundByRunId: z.optional(z.record(z.string(), z.boolean())),
+  callerAccessByRunId: z.optional(z.record(z.string(), WorkflowRunCallerAccessV1Schema)),
   /** Account-private metadata opened from the accepted snapshots for this page. */
   metadataByRunId: z.record(z.string(), WorkflowRunPrivateMetadataV1Schema),
   /** Only requested private display facts; no invocation history, output or recovery content. */
@@ -230,6 +242,14 @@ export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject(
         message: 'Workflow Run metadata must belong to a Run in the same page',
       });
     }
+  }
+  for (const runId of Object.keys(value.supportsAnotherRoundByRunId ?? {})) {
+    if (!pageRunIds.has(runId)) context.addIssue({ code: 'custom', path: ['supportsAnotherRoundByRunId', runId],
+      message: 'Continuation support must belong to a Run in the same page' });
+  }
+  for (const runId of Object.keys(value.callerAccessByRunId ?? {})) {
+    if (!pageRunIds.has(runId)) context.addIssue({ code: 'custom', path: ['callerAccessByRunId', runId],
+      message: 'Caller access must belong to a Run in the same page' });
   }
 })));
 export const WorkflowRunGetRequestV1Schema = lazyZodSchema(() => z.strictObject({ runId: WorkflowRunIdV1Schema }));
@@ -292,6 +312,7 @@ export const WorkflowRunAcceptedContextV1Schema = lazyZodSchema(() => z.union([
     origin: z.strictObject({
       kind: z.literal('direct'),
       originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+      discussion: z.optional(WorkflowDiscussionOriginV1Schema),
     }),
   }),
 ]).check(z.superRefine((value, context) => {
@@ -307,7 +328,7 @@ export type WorkflowRunAcceptedContextV1 = z.infer<typeof WorkflowRunAcceptedCon
 export const WorkflowRunGetResultV1Schema = lazyZodSchema(() => z.strictObject({
   run: WorkflowRunSummaryV1Schema,
   /** Effective caller capabilities from the server's live Run access owner. */
-  callerAccess: z.strictObject({ canEdit: z.boolean() }),
+  callerAccess: WorkflowRunCallerAccessV1Schema,
   definition: WorkflowDefinitionV1Schema,
   acceptedContext: WorkflowRunAcceptedContextV1Schema,
   /** Authenticated authored source before role/selection materialization; used for semantic rejoin. */
@@ -372,7 +393,11 @@ export const WorkflowInvocationListResultV1Schema = lazyZodSchema(() => z.strict
   invocationDetails: z.optional(z.array(WorkflowInvocationDetailV1Schema)),
 }));
 export const WorkflowInvocationGetRequestV1Schema = lazyZodSchema(() => z.strictObject({ runId: WorkflowRunIdV1Schema, invocationId: WorkflowInvocationRecordIdSchema }));
-export const WorkflowInvocationGetResultV1Schema = lazyZodSchema(() => z.strictObject({ invocation: WorkflowInvocationDetailV1Schema }));
+export const WorkflowInvocationGetResultV1Schema = lazyZodSchema(() => z.strictObject({
+  invocation: WorkflowInvocationDetailV1Schema,
+  /** Opened from this Run's accepted snapshot, never inferred from origin or caller content. */
+  discussionResultDelivery: z.optional(WorkflowDiscussionResultDeliveryV1Schema),
+}));
 export const WorkflowInvocationRetryResultV1Schema = lazyZodSchema(() => z.strictObject({
   run: WorkflowRunSummaryV1Schema, invocation: WorkflowRunInvocationIndexV1Schema,
   disposition: z.enum(['accepted', 'ineligible', 'conflict']),

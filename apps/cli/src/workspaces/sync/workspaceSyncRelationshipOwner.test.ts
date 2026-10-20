@@ -439,6 +439,20 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     expect(harness.terminateRelationshipRuntime).toHaveBeenCalledWith(expect.objectContaining({ relationshipId: 'relationship_1' }));
   });
 
+  it('restores a reused paused relationship when a later create is refused during preparation', async () => {
+    const harness = createHarness();
+    const first = await harness.owner.prepareCreate(createInput);
+    await first.commit();
+    await harness.owner.setEnabled('relationship_1', false);
+    harness.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('refused'), { code: 'target_bootstrap_required' }));
+
+    await expect(harness.owner.prepareCreate(createInput)).rejects.toMatchObject({ code: 'target_bootstrap_required' });
+
+    expect(harness.read().relationships).toEqual([
+      expect.objectContaining({ relationshipId: 'relationship_1', enabled: false }),
+    ]);
+  });
+
   it('restores a reused disabled relationship when target commit fails after temporary publication', async () => {
     const harness = createHarness();
     const first = await harness.owner.prepareCreate(createInput);
@@ -561,6 +575,28 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['resume', true],
+    ['pause', false],
+  ] as const)('reports a committed %s as done while the sync agent is still reconciling', async (_label, enabled) => {
+    for (const code of ['peer_unavailable', 'relationship_not_ready', 'agent_unavailable']) {
+      const harness = createHarness();
+      const prepared = await harness.owner.prepareCreate(createInput);
+      await prepared.commit();
+      if (enabled) await harness.owner.setEnabled('relationship_1', false);
+      harness.waitForProjectReconciliation.mockClear();
+      harness.waitForProjectReconciliation
+        .mockRejectedValueOnce(Object.assign(new Error('agent restarting'), { code }));
+
+      await expect(harness.owner.setEnabled('relationship_1', enabled)).resolves.toBeUndefined();
+
+      expect(harness.read().relationships).toEqual([
+        expect.objectContaining({ relationshipId: 'relationship_1', enabled }),
+      ]);
+      expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('keeps a settled stop intent when runtime reconciliation fails', async () => {
     const harness = createHarness();
     const prepared = await harness.owner.prepareCreate(createInput);
@@ -576,6 +612,21 @@ describe('WorkspaceSyncRelationshipOwner', () => {
 
     expect(harness.read().relationships).toEqual([]);
     expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a committed stop as done while the sync agent is still reconciling', async () => {
+    for (const code of ['peer_unavailable', 'relationship_not_ready', 'agent_unavailable']) {
+      const harness = createHarness();
+      const prepared = await harness.owner.prepareCreate(createInput);
+      await prepared.commit();
+      harness.waitForProjectReconciliation.mockClear();
+      harness.waitForProjectReconciliation.mockRejectedValueOnce(Object.assign(new Error('agent restarting'), { code }));
+
+      await expect(harness.owner.stop('relationship_1')).resolves.toBeUndefined();
+
+      expect(harness.read().relationships).toEqual([]);
+      expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('leaves indeterminate durable intent in place without unsafe compensation', async () => {
@@ -615,6 +666,8 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     determinate.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('rejected'), { code: 'target_unavailable' }));
     await expect(determinate.owner.prepareCreate(createInput)).rejects.toMatchObject({ code: 'target_unavailable' });
     expect(determinate.terminateRelationshipRuntime).toHaveBeenCalledWith(expect.objectContaining({ relationshipId: 'relationship_1' }));
+    // A create refused before the first commit leaves no paused link that can never resume.
+    expect(determinate.read().relationships).toEqual([]);
 
     const indeterminate = createHarness();
     indeterminate.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('unknown'), { code: 'indeterminate' }));

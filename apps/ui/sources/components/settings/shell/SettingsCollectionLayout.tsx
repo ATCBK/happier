@@ -2,8 +2,8 @@ import * as React from 'react';
 import { Stack, usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 import {
-    HAPPIER_COLLECTION_RAIL_WIDTH_PX,
     HappierListDetailLayout,
     useHappierCollectionLayout,
     type HappierCollectionRailWidth,

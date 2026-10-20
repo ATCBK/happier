@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createPluginContributedActionController } from './pluginContributedActionController';
 
 import type {
     PluginContributedActionController,
@@ -101,7 +102,7 @@ describe('openPluginContributedAction', () => {
         expect(actionForm.retire).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps direct execution in the controller and gives only generic host feedback for a failed outcome', async () => {
+    it('preserves a failed dispatch outcome and presents failure rather than startup feedback', async () => {
         const descriptor = { ...action(), inputHints: null, kind: 'direct' as const };
         const controller = {
             list: () => [],
@@ -125,14 +126,14 @@ describe('openPluginContributedAction', () => {
         expect(Modal.show).not.toHaveBeenCalled();
         expect(Modal.alert).toHaveBeenCalledWith(
             t('common.error'),
-            t('pluginRuntime.unavailableGeneric'),
+            t('pluginRuntime.actionFailed'),
         );
     });
 
     it.each([
-        ['stale', { kind: 'stale' as const, reason: 'action_retired' as const }],
-        ['unavailable', { kind: 'unavailable' as const, reason: 'host_unavailable' as const }],
-    ] as const)('returns and surfaces a controller-owned %s outcome instead of silently dropping a picker selection', async (_kind, expected) => {
+        ['stale', { kind: 'stale' as const, reason: 'action_retired' as const }, 'pluginRuntime.actionStale'],
+        ['unavailable', { kind: 'unavailable' as const, reason: 'host_unavailable' as const }, 'pluginRuntime.actionUnavailable'],
+    ] as const)('returns and surfaces a controller-owned %s outcome instead of silently dropping a picker selection', async (_kind, expected, copyKey) => {
         const descriptor = { ...action(), inputHints: null, kind: 'direct' as const };
         const controller = {
             list: () => [],
@@ -149,8 +150,25 @@ describe('openPluginContributedAction', () => {
         await expect(openPluginContributedAction({ controller, action: descriptor })).resolves.toEqual(expected);
         expect(Modal.alert).toHaveBeenCalledWith(
             t('common.error'),
-            t('pluginRuntime.unavailableGeneric'),
+            t(copyKey),
         );
+    });
+
+    it('presents an unexpected native presentation failure without exposing its raw error or claiming startup is pending', async () => {
+        const descriptor = { ...action(), inputHints: null, kind: 'direct' as const };
+        const controller = createPluginContributedActionController({
+            resolveCurrent: () => null,
+        });
+        const { Modal } = await import('@/modal');
+        const { t } = await import('@/text');
+        // Native presentation is an external boundary; the real controller
+        // normalizes an absent host before presentation begins.
+        vi.mocked(Modal.alert).mockImplementationOnce(() => { throw new Error('private native details'); });
+
+        await expect(openPluginContributedAction({ controller, action: descriptor })).resolves.toEqual({
+            kind: 'unavailable', reason: 'host_unavailable',
+        });
+        expect(Modal.alert).toHaveBeenLastCalledWith(t('common.error'), t('pluginRuntime.actionOpenFailed'));
     });
 
     it('does not surface a direct outcome that arrives after the composer scope retires', async () => {

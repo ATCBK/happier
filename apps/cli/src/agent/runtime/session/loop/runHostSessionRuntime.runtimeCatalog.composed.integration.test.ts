@@ -1,3 +1,4 @@
+import type { AgentSessionRuntimeEventV1 } from '@happier-dev/protocol/runtime';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -33,6 +34,8 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { prepareSessionRunnerRestartAdmission } from '../input/sessionProviderInputAdmissionRpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
 import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints';
 
@@ -907,6 +910,37 @@ async function useShellBridgeRuntimeFixture(config: HostSessionRuntimeConfig) {
 }
 
 describe('runHostSessionRuntime', () => {
+  it('binds restart admission to the receiving RPC manager rather than the lifecycle registrar', async () => {
+    const harness = createHarness();
+    const rpc = new RpcHandlerManager({ scopePrefix: harness.session.sessionId, encryptionMode: 'plain', logger: () => {} });
+    harness.session.rpcHandlerManager = rpc;
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => ({ started: true }));
+    delete harness.deps.runPermissionModePromptLoopFn;
+    harness.config.startRuntimeBeforeFirstPrompt = true;
+    let stop: (() => Promise<void>) | undefined;
+    let stopping: Promise<void> | undefined;
+    let observed = false;
+    // Real host termination reaches the OS; only process exit is substituted here.
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.config.onRuntimeStopReady = (requestStop: () => Promise<void>) => { stop = requestStop; };
+    harness.config.onAfterStart = async () => {
+      try {
+        const release = await prepareSessionRunnerRestartAdmission({ expectedPid: process.pid, signal: new AbortController().signal,
+          callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
+        expect(release).not.toBeNull();
+        await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}))
+          .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+        await release?.();
+        await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ started: true });
+        observed = true;
+      } finally { stopping = stop?.(); void stopping?.catch(() => undefined); }
+    };
+    try {
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await stopping;
+      expect(observed).toBe(true);
+    } finally { exit.mockRestore(); }
+  });
   it.each([
     { name: 'legacy void', outcome: undefined, warns: false },
     { name: 'applied', outcome: { status: 'applied' as const }, warns: false },
@@ -5535,6 +5569,55 @@ describe('runHostSessionRuntime', () => {
     expect(runSessionLoopLifecycleFn).not.toHaveBeenCalled();
   });
 
+  it('preserves native return identity when Stop arrives during MCP preparation before Agent admission', async () => {
+    const harness = createHarness();
+    const home = await mkdtemp(join(tmpdir(), 'native-return-stopped-startup-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    const mcpStarted = createDeferred<void>();
+    const releaseMcp = createDeferred<void>();
+    let requestStop!: () => Promise<void>;
+    const resumeId = 'native-return-before-admission';
+    const createSessionRuntime = vi.fn(harness.config.createSessionRuntime!);
+    harness.config.flavor = 'claude';
+    harness.config.policyAgentId = 'claude';
+    harness.config.providerSessionMetadataKey = 'claudeSessionId';
+    harness.opts.resume = resumeId;
+    harness.config.createSessionRuntime = createSessionRuntime;
+    harness.config.onRuntimeStopReady = stop => { requestStop = stop; };
+    harness.deps.resolveRunnerMcpServersFn = async () => {
+      mcpStarted.resolve();
+      await releaseMcp.promise;
+      return { happierMcpServer: { stop() {} }, mcpServers: {} };
+    };
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      const { createLocalAgentNativeResumeRecordStore } = await import('@/session/agentTransition/agentNativeReturn');
+      const { resolveVendorResumeIdForExistingSession } = await import('@/daemon/spawn/resolveVendorResumeIdForExistingSession');
+      const store = createLocalAgentNativeResumeRecordStore();
+      const key = { happierSessionId: harness.session.sessionId, agentId: 'claude' as const };
+      const record = { identity: { v: 1 as const, vendorResumeId: resumeId }, departureSeqInclusive: 12 };
+      await store.writeAgentNativeResumeRecord({ ...key, ...record });
+      await harness.session.updateMetadata((metadata: Metadata) => ({ ...metadata, flavor: 'claude', claudeSessionId: resumeId }));
+      const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await mcpStarted.promise;
+      const stopping = requestStop();
+      releaseMcp.resolve();
+      await Promise.all([running, stopping]);
+      expect(createSessionRuntime).not.toHaveBeenCalled();
+      expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+      expect(harness.session.getMetadataSnapshot().claudeSessionId).toBe(resumeId);
+      expect(resolveVendorResumeIdForExistingSession({ agent: 'claude', credentials: null,
+        rawSession: {}, metadataRecord: harness.session.getMetadataSnapshot() })).toBe(resumeId);
+      await expect(store.readAgentNativeResumeRecord(key)).resolves.toEqual(record);
+    } finally {
+      releaseMcp.resolve();
+      envScope.restore();
+      reloadConfiguration();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('releases pre-runtime durable custody when the provider runtime factory fails', async () => {
     loggerDebugMock.mockClear();
     const harness = createHarness();
@@ -7200,9 +7283,117 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
-  it('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed', async () => {
+  it.each(['plugin_generation_stale', 'AGENT_RESUME_PROVIDER_STATE_MISSING', 'native_agent_session_mode_unavailable'])(
+    'preserves startup cleanup for a plugin error without host-proven input refusal (%s)', async code => {
+      const { PluginError } = await import('@happier-dev/plugin-sdk');
+      const harness = createHarness();
+      const failure = new PluginError({ code, message: 'Startup failed', retryable: false });
+      setSessionRuntimeFactory(harness.config, () => { throw failure; });
+      await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+      expect(harness.session.close).toHaveBeenCalledOnce();
+      expect(harness.session.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(harness.metrics.defaultReadyCalls).toBe(0);
+    },
+  );
+
+  it('settles Stop while a typed native startup refusal is publishing', async () => {
+    const { SessionStartupInputRefusalError } = await import('@/agent/runtime/session/input/sessionStartupInputRefusal');
     const harness = createHarness();
-    const failure = Object.assign(new Error('Session metadata tuple result is ambiguous'), {
+    const publicationEntered = createDeferred<void>();
+    const releasePublication = createDeferred<void>();
+    let stop: (() => Promise<void>) | undefined;
+    harness.config.onRuntimeStopReady = value => { stop = value; };
+    harness.session.enqueueSessionTurnMutation = async (mutation: unknown) => {
+      if (SessionTurnMutationV1Schema.parse(mutation).action === 'fail') {
+        publicationEntered.resolve();
+        await releasePublication.promise;
+      }
+    };
+    setSessionRuntimeFactory(harness.config, () => {
+      throw new SessionStartupInputRefusalError({ code: 'native_agent_session_mode_unavailable', message: 'Mode unavailable' });
+    });
+    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps).then(() => null, error => error);
+    await publicationEntered.promise;
+    const stopping = stop?.();
+    releasePublication.resolve();
+    await running;
+    expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+    await stopping;
+    expect(harness.metrics.defaultReadyCalls).toBe(0);
+  });
+
+  it('settles late originals after a typed native startup refusal without reporting Ready or dispatching them', async () => {
+    const harness = createHarness();
+    let contextReadyObservations = 0;
+    harness.session.waitForExecutionRunWorkerUpdateChange = async () => {
+      // A ready worker remains ready until taken. Fail promptly if the failed
+      // host repeats that readiness wake rather than serving Pending originals.
+      if (++contextReadyObservations > 1) throw new Error('Unconsumed worker readiness was observed again');
+      return true;
+    };
+    const [{ assertNativeAgentSessionModeAvailable }, { createNativeAgentSessionPublications }] = await Promise.all([
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications'),
+    ]);
+    const startupFailed = createDeferred<void>();
+    let stop: (() => Promise<void>) | undefined;
+    harness.config.onRuntimeStopReady = value => { stop = value; };
+    const pending = new Set<string>();
+    harness.session.hasPendingProviderInput = (localId?: string) => localId === undefined ? pending.size > 0 : pending.has(localId);
+    const rejected: unknown[] = [];
+    harness.session.observeProviderInputSettlement = async (outcome: import('@/agent/runtime/session/input/providerInputOutcome').SessionProviderInputOutcome) => {
+      rejected.push(outcome);
+      if (outcome.kind === 'rejected_before_effect' && !outcome.retryable) pending.delete(outcome.localId);
+      return false;
+    };
+    harness.session.enqueueSessionTurnMutation = vi.fn(async (mutation: unknown) => {
+      const parsed = SessionTurnMutationV1Schema.parse(mutation);
+      if (parsed.action === 'fail') {
+        expect(parsed.issue.code).toBe('native_agent_session_mode_unavailable');
+        startupFailed.resolve();
+      }
+    });
+    setSessionRuntimeFactory(harness.config, () => {
+      const publications = createNativeAgentSessionPublications({ agentId: 'acme.external', session: null,
+        signal: new AbortController().signal, isCurrent: () => true, supportsInFlightSteer: false });
+      // The external Agent publishes its real catalog; the host owns refusal.
+      publications.services.modes.bind({ read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+        subscribe: () => ({ dispose() {} }) });
+      assertNativeAgentSessionModeAvailable({ mode: { value: 'default', updatedAtMs: 1 },
+        model: { value: null, updatedAtMs: 0 }, permissionIntent: { value: null, updatedAtMs: 0 }, options: {} }, publications);
+      throw new Error('Expected the real native mode refusal');
+    });
+    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    // Observe early rejection without allowing an unhandled promise in RED.
+    let finished = false;
+    const result = running.then(() => { finished = true; return null; }, error => { finished = true; return error; });
+    try {
+      await Promise.race([startupFailed.promise, running]);
+      for (const localId of ['late-protected-original', 'another-protected-original']) {
+        pending.add(localId);
+        harness.queue.pushIsolate({ text: 'Must not execute', localId }, { permissionMode: 'default' });
+        await vi.waitFor(() => expect(rejected).toContainEqual(expect.objectContaining({
+          localId, kind: 'rejected_before_effect', retryable: false,
+          reason: 'provider_rejected_before_acceptance', diagnostic: { code: 'native_agent_session_mode_unavailable', severity: 'error' },
+        })));
+      }
+      expect(pending.size).toBe(0);
+      expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+      expect(harness.metrics.defaultReadyCalls).toBe(0);
+      expect(harness.metrics.onAfterStartCalls).toBe(0);
+      expect(harness.session.close).not.toHaveBeenCalled();
+    } finally {
+      if (!finished) await stop?.();
+      await result;
+    }
+    expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+    expect(contextReadyObservations).toBe(0);
+  });
+
+  it.each(['metadata', 'home-http'] as const)('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed (%s)', async source => {
+    const harness = createHarness();
+    const { createHttpStatusError } = await import('@/api/client/httpStatusError');
+    const failure = source === 'home-http' ? createHttpStatusError(500, 'Private Home failure') : Object.assign(new Error('Session metadata tuple result is ambiguous'), {
       code: 'metadata_tuple_ambiguous', retryable: false,
     });
     // The Session HTTP boundary has exhausted its reconciliation budget. Host
@@ -8664,6 +8855,35 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
+  it('exposes native activity through the production input consumer and activity RPC independently of child runs', async () => {
+    const harness = createHarness();
+    harness.config.runtimeActivityApplicability = 'supported';
+    const handlers = new Set<(event: AgentSessionRuntimeEventV1) => void>();
+    harness.runtime.subscribeRuntimeEvents = vi.fn((handler: (event: AgentSessionRuntimeEventV1) => void) => {
+      handlers.add(handler);
+      return () => { handlers.delete(handler); };
+    });
+    harness.session.subscribeExecutionRunActivitySnapshots = (observe: (count: number) => void) => {
+      observe(3);
+      return () => undefined;
+    };
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const read = async () => await harness.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'unknown' });
+      for (const handler of handlers) handler({ kind: 'runtime-activity-snapshot',
+        sessionId: 'session-1', sequence: 1, emittedAtMs: 1, state: 'active', activeCount: 1 });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
+      for (const handler of handlers) handler({ kind: 'runtime-activity-snapshot',
+        sessionId: 'session-1', sequence: 2, emittedAtMs: 2, state: 'idle', activeCount: 0 });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'settled' });
+      await vi.waitFor(() => expect(harness.session.enqueueRegisteredSessionStateFieldMutation)
+        .toHaveBeenLastCalledWith(expect.objectContaining({
+          op: { kind: 'set', value: { state: 'active', activeCount: 3 } },
+        })));
+    };
+    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+  });
+
   it('retains Activity slot truth across a same-session client swap', async () => {
     const harness = createHarness();
     harness.config.runtimeActivityApplicability = 'supported';
@@ -8753,18 +8973,19 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
-  it('rebinds Activity across a different-session client swap and fences the retired subscriber', async () => {
+  it('rebinds Activity to a different session while retaining the native runtime source', async () => {
     const harness = createHarness();
     harness.config.runtimeActivityApplicability = 'supported';
     const initialSession = harness.session;
-    const replacement = harness.createSessionFixture('session-2').session;
+    const replacementFixture = harness.createSessionFixture('session-2');
+    const replacement = replacementFixture.session;
     const subscriptions: Array<{
       handler: (event: any) => void;
       unsubscribe: ReturnType<typeof vi.fn>;
     }> = [];
     harness.runtime.subscribeRuntimeEvents = vi.fn((handler: (event: any) => void) => {
-      // A retired subscriber can still deliver one in-flight event while it is
-      // being disposed; logical fencing, not disposal order, must drop it.
+      // The native runtime keeps its original source Session identity after
+      // the host swaps the destination Session client.
       const unsubscribe = vi.fn(() => {
         handler({
           kind: 'runtime-activity-snapshot',
@@ -8788,9 +9009,8 @@ describe('runHostSessionRuntime', () => {
         attachedToExistingSession: false,
       };
     };
-    // A real runtime fans every event out to all of its registered consumers
-    // (Activity, runtime publication, session loop), so the case drives whole
-    // registration generations instead of pinning one consumer's index.
+    // Fan events out as the retained native runtime does, without pinning
+    // the Activity consumer's position among the lifecycle subscribers.
     const emitToAll = (
       registrations: readonly Readonly<{ handler(event: any): void }>[],
       event: Readonly<Record<string, unknown>>,
@@ -8798,9 +9018,9 @@ describe('runHostSessionRuntime', () => {
       for (const registration of registrations) registration.handler(event);
     };
     harness.deps.runPermissionModePromptLoopFn = async () => {
-      const retiredGeneration = [...subscriptions];
-      expect(retiredGeneration.length).toBeGreaterThan(0);
-      emitToAll(retiredGeneration, {
+      const runtimeSubscribers = [...subscriptions];
+      expect(runtimeSubscribers.length).toBeGreaterThan(0);
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 1,
         sessionId: 'session-1',
@@ -8813,10 +9033,13 @@ describe('runHostSessionRuntime', () => {
           op: { kind: 'set', value: { state: 'active', activeCount: 1 } },
         })));
 
+      await expect(harness.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
       const initialCallsBeforeSwap = initialSession.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
       await swapSession?.(replacement);
-      const reboundGeneration = subscriptions.slice(retiredGeneration.length);
-      expect(reboundGeneration.length).toBeGreaterThan(0);
+      await expect(replacementFixture.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'unknown' });
+      expect(subscriptions).toHaveLength(runtimeSubscribers.length);
       expect(initialSession.enqueueRegisteredSessionStateFieldMutation.mock.calls
         .slice(initialCallsBeforeSwap)).not.toContainEqual([
         expect.objectContaining({
@@ -8824,8 +9047,8 @@ describe('runHostSessionRuntime', () => {
         }),
       ]);
 
-      const callsBeforeLateOldCallback = replacement.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
-      emitToAll(retiredGeneration, {
+      const callsBeforeForeignSource = replacement.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 2,
         sessionId: 'session-2',
@@ -8835,9 +9058,9 @@ describe('runHostSessionRuntime', () => {
       });
       await Promise.resolve();
       expect(replacement.enqueueRegisteredSessionStateFieldMutation)
-        .toHaveBeenCalledTimes(callsBeforeLateOldCallback);
+        .toHaveBeenCalledTimes(callsBeforeForeignSource);
 
-      emitToAll(reboundGeneration, {
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 3,
         sessionId: 'session-1',
@@ -8845,6 +9068,8 @@ describe('runHostSessionRuntime', () => {
         state: 'active',
         activeCount: 2,
       });
+      await expect(replacementFixture.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
       await vi.waitFor(() => expect(replacement.enqueueRegisteredSessionStateFieldMutation)
         .toHaveBeenLastCalledWith(expect.objectContaining({
           op: { kind: 'set', value: { state: 'active', activeCount: 2 } },
@@ -8852,7 +9077,6 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
-    expect(subscriptions.length).toBeGreaterThan(1);
     for (const registration of subscriptions) {
       expect(registration.unsubscribe).toHaveBeenCalledOnce();
     }
@@ -9307,7 +9531,7 @@ describe('runHostSessionRuntime', () => {
   });
 
   it.each([
-    ['Role', 503], ['Role', 403], ['Project', 503], ['Project', 403],
+    ['Role', 503], ['Role', 403], ['Project', 503], ['Project', 403], ['Account currentness', 503],
   ] as const)('classifies a Home %s startup read and lets existing respawn recover only transient failures (HTTP %s)', async (source, status) => {
     let preparationReads = 0;
     const requests: string[] = [];
@@ -9315,7 +9539,8 @@ describe('runHostSessionRuntime', () => {
       request.resume();
       const path = new URL(request.url ?? '/', 'http://localhost').pathname;
       requests.push(path);
-      const preparationPath = source === 'Role' ? '/v1/artifacts' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
+      const preparationPath = source === 'Role' ? '/v1/artifacts' : source === 'Account currentness'
+        ? '/v1/account/encryption/currentness' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
       const unavailable = path === preparationPath && ++preparationReads === 1;
       response.statusCode = unavailable ? status : 200;
       response.setHeader('content-type', 'application/json');
@@ -9323,6 +9548,8 @@ describe('runHostSessionRuntime', () => {
         : path === '/v1/artifacts' ? []
         : path === '/v1/account/encryption' ? { mode: 'plain', updatedAt: 1 }
         : path === '/v1/account/encryption/currentness' ? { mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }
+        : path === '/v1/account/entity-rows/mcp' ? { status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } } }
         : path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` ? ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] })
         : {}));
     });
@@ -9331,7 +9558,8 @@ describe('runHostSessionRuntime', () => {
     if (!address || typeof address === 'string') throw new Error('Expected Home listener');
     const serverUrl = `http://127.0.0.1:${address.port}`;
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'role-start-account' })).toString('base64url')}.signature`, encryption: null };
-    const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
+    const snapshot = { source: 'network' as const,
+      settings: accountSettingsParse(source === 'Account currentness' ? { mcpServersStrictMode: true } : {}), rawSettings: {},
       scopeKey: resolveAccountSettingsScopeKey(credentials), settingsVersion: 1, loadedAtMs: 1,
       settingsSecretsReadKeys: [], whenRefreshed: null,
       promptLibraryCatalog: { status: 'ready' as const, rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ revision: 1,
@@ -9347,6 +9575,7 @@ describe('runHostSessionRuntime', () => {
       attempts.push(harness);
       harness.opts.credentials = credentials;
       harness.opts.accountSettingsContext = snapshot;
+      if (source === 'Account currentness') delete harness.deps.resolveRunnerMcpServersFn;
       const metadata = harness.session.getMetadataSnapshot();
       harness.session.getMetadataSnapshot = () => ({ ...metadata, work: { sessionRolesV1: {
         roleId: 'builder', overrides: {}, sessionRoles: {}, notes: '',
@@ -9371,8 +9600,10 @@ describe('runHostSessionRuntime', () => {
     });
     try {
       const failureError: unknown = await start().catch((error: unknown) => error);
-      expect(failureError).toMatchObject({ code: status === 503 ? 'preparation_pending' : 'attachment_unavailable',
-        reason: status === 503 ? 'unavailable' : 'locked' });
+      expect(failureError).toMatchObject(source === 'Account currentness'
+        ? { code: 'mcp_catalog_unavailable', reason: 'unreachable' }
+        : { code: status === 503 ? 'preparation_pending' : 'attachment_unavailable',
+          reason: status === 503 ? 'unavailable' : 'locked' });
       expect(preparationReads).toBe(1);
       expect(admitted).toEqual([]);
       expect(pendingInitialInput).toBe(true);
@@ -9381,7 +9612,7 @@ describe('runHostSessionRuntime', () => {
       if (!failure || failure.action !== 'fail') throw new Error('Expected published startup failure');
       expect(failure.issue).toMatchObject({ code: status === 503 ? 'preparation_pending' : 'attachment_unavailable', source: 'dependency_failure' });
       expect(JSON.stringify(failure)).not.toContain('PRIVATE_RESPONSE');
-      expect(diagnostics.mock.calls).toContainEqual(['[Session] Home preparation read failed', expect.objectContaining({
+      if (source !== 'Account currentness') expect(diagnostics.mock.calls).toContainEqual(['[Session] Home preparation read failed', expect.objectContaining({
         kind: status === 503 ? 'server_error' : 'auth_failed', statusCode: status, retryable: status === 503,
       })]);
       let respawned = false;
@@ -9406,7 +9637,8 @@ describe('runHostSessionRuntime', () => {
         expect(terminal).toEqual(['startup_dependency_failure']);
         expect(preparationReads).toBe(1);
       }
-      expect(requests).toContain(source === 'Role' ? '/v1/artifacts' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
+      expect(requests).toContain(source === 'Role' ? '/v1/artifacts' : source === 'Account currentness'
+        ? '/v1/account/entity-rows/mcp' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
       manager.markStopRequested('session-1', { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
     } finally {
       cancellation.abort();

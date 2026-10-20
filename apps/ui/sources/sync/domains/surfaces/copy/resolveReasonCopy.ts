@@ -1,5 +1,6 @@
 import type { BrowserSurfaceUnavailableReason } from '@/components/browser/surfaces/BrowserSurfaceFallback';
 import type { BrowserAdapterUnavailableReasonCode } from '@/sync/domains/browser/adapters/availability';
+import type { BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 import { t } from '@/text';
 import type { PluginMachineOriginRejectionReasonV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { LocalServiceNativePrerequisiteV1, LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -20,7 +21,8 @@ export type ReasonCopyKind =
     | 'simulatorPreview' // simulator preview availability reason codes
     | 'streamPlayer' // live-stream player error/diagnostic reason codes
     | 'pluginRuntime' // plugin runtime load/fallback diagnostic codes
-    | 'widget'; // native/authored widget host admission, not plugin-runtime availability
+    | 'widget' // native/authored widget host admission, not plugin-runtime availability
+    | 'browserDiagnosticsInteraction'; // why the diagnostics drawer's interactive tools are off
 
 export type ResolvedReasonCopy = Readonly<{
     /** Localized card title for terminal-state surfaces. */
@@ -154,11 +156,26 @@ const BROWSER_REASON_KEYS = {
     owner_disconnected: 'browserShell.unavailable.ownerDisconnected',
     browser_context_annotation_iframe_capture_unavailable: 'browserShell.unavailable.annotationIframeCaptureUnavailable',
     browser_context_annotation_capture_unavailable: 'browserShell.unavailable.annotationCaptureUnavailable',
+    preview_ended: 'browserShell.unavailable.previewEnded',
+    preview_transport_unavailable: 'browserShell.unavailable.previewTransportUnavailable',
 } as const satisfies Record<
     BrowserAdapterUnavailableReasonCode | 'managed_package_missing' | 'browser_runtime_provisioning_failed' | 'sandbox_unavailable' | 'browser_profile_missing' | 'hosted_plugin_security_policy_blocked' | 'invalid_url' | 'owner_disconnected'
-    | 'browser_context_annotation_iframe_capture_unavailable' | 'browser_context_annotation_capture_unavailable',
+    | 'browser_context_annotation_iframe_capture_unavailable' | 'browser_context_annotation_capture_unavailable'
+    | BrowserPreviewRefusalReasonCode,
     BrowserMessageKey
 >;
+
+const BROWSER_DIAGNOSTICS_INTERACTION_KEYS = {
+    adapter_unavailable: 'browserDiagnostics.host.interaction.unavailableReason.adapter',
+    collector_unavailable: 'browserDiagnostics.host.interaction.unavailableReason.collector',
+    policy_denied: 'browserDiagnostics.host.interaction.unavailableReason.policy',
+} as const;
+
+/** A relay preview's refusals name what happened to the page, not that a surface is unavailable. */
+const BROWSER_FRAME_TITLE_KEYS = {
+    preview_ended: 'browserShell.unavailable.previewEndedTitle',
+    preview_transport_unavailable: 'browserShell.unavailable.previewTransportUnavailableTitle',
+} as const satisfies Record<BrowserPreviewRefusalReasonCode, string>;
 
 const BROWSER_SURFACE_KEYS = {
     disabled: 'browserShell.unavailable.surface.disabled',
@@ -279,7 +296,9 @@ type BrowserMessageKey =
     | 'browserShell.unavailable.invalidUrl'
     | 'browserShell.unavailable.ownerDisconnected'
     | 'browserShell.unavailable.annotationIframeCaptureUnavailable'
-    | 'browserShell.unavailable.annotationCaptureUnavailable';
+    | 'browserShell.unavailable.annotationCaptureUnavailable'
+    | 'browserShell.unavailable.previewEnded'
+    | 'browserShell.unavailable.previewTransportUnavailable';
 
 type BrowserSurfaceMessageKey =
     | 'browserShell.unavailable.surface.disabled'
@@ -482,6 +501,42 @@ export function resolvePluginExecutionOriginReasonDetail(reason: PluginMachineOr
 }
 
 /**
+ * One honest sentence for a plugin that Administration found on a Machine but could not use, and
+ * whether the way forward is the plugin's own page. `machine` is the one Machine that refused, or
+ * `undefined` when several did. Returns `null` when nothing is installed (the caller leads to installing)
+ * so "install it" is only ever said when it is true.
+ */
+export function describePluginExecutionOriginRefusal(params: Readonly<{
+    reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
+    plugin: string;
+    machine: string | undefined;
+}>): Readonly<{ sentence: string; manage: boolean }> | null {
+    const reasons = params.reasons.filter((reason): reason is PluginMachineOriginRejectionReasonV1 => reason !== 'no_materialization' && reason !== 'missing');
+    if (reasons.length === 0) return null;
+    if (params.machine === undefined) {
+        return { sentence: t('settingsPlugins.surfaces.pluginNotReadyAnywhere', { plugin: params.plugin }), manage: true };
+    }
+    const groupOf = (reason: PluginMachineOriginRejectionReasonV1) => {
+        switch (reason) {
+            case 'activation_refused':
+            case 'daemon_unsupported':
+            case 'daemon_invalid_response': return 'start';
+            case 'offline':
+            case 'stale':
+            case 'home_unreachable':
+            case 'daemon_unavailable': return 'unreachable';
+            default: return 'notReady';
+        }
+    };
+    // Mixed causes have no single next step: lead to the plugin's page, where each Machine's state is shown.
+    const groups = new Set(reasons.map(groupOf));
+    const values = { plugin: params.plugin, machine: params.machine };
+    if (groups.size === 1 && groups.has('start')) return { sentence: t('settingsPlugins.surfaces.pluginCouldNotStart', values), manage: false };
+    if (groups.size === 1 && groups.has('unreachable')) return { sentence: t('settingsPlugins.surfaces.pluginMachineUnreachable', values), manage: false };
+    return { sentence: t('settingsPlugins.surfaces.pluginNotReady', values), manage: true };
+}
+
+/**
  * The one reason → next-step classification for plugin surfaces.
  *
  * - `retry`: transient — asking again can change the answer (transport,
@@ -611,6 +666,8 @@ function resolveGenericMessage(kind: ReasonCopyKind): string {
             return t('pluginRuntime.unavailableGeneric');
         case 'widget':
             return t('common.unavailable');
+        case 'browserDiagnosticsInteraction':
+            return t('browserDiagnostics.host.interaction.unavailableReason.generic');
         case 'browserFrame':
         case 'browserStatus':
         case 'browserSurface':
@@ -638,6 +695,8 @@ function resolveTitle(kind: ReasonCopyKind): string {
         case 'browserLaunchpad':
         case 'localServiceLauncher':
             return t('common.unavailable');
+        case 'browserDiagnosticsInteraction':
+            return t('browserDiagnostics.host.interaction.title');
     }
 }
 
@@ -645,6 +704,10 @@ function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string |
     switch (kind) {
         case 'widget':
             return null;
+        case 'browserDiagnosticsInteraction': {
+            const key = BROWSER_DIAGNOSTICS_INTERACTION_KEYS[reasonCode as keyof typeof BROWSER_DIAGNOSTICS_INTERACTION_KEYS];
+            return key ? t(key) : null;
+        }
         case 'browserFrame':
         case 'browserStatus': {
             const key = BROWSER_REASON_KEYS[reasonCode as keyof typeof BROWSER_REASON_KEYS];
@@ -702,7 +765,9 @@ export function resolveReasonCopy(input: Readonly<{
     machineName?: string;
 }>): ResolvedReasonCopy {
     const rawCode = input.reasonCode ?? null;
-    const title = resolveTitle(input.kind);
+    const frameTitleKey = input.kind === 'browserFrame' && rawCode
+        ? BROWSER_FRAME_TITLE_KEYS[rawCode as keyof typeof BROWSER_FRAME_TITLE_KEYS] : undefined;
+    const title = frameTitleKey ? t(frameTitleKey) : resolveTitle(input.kind);
     if (rawCode === null || rawCode === '') {
         const body = resolveGenericMessage(input.kind);
         return {

@@ -1,5 +1,5 @@
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
-import type { Settings, SettingsWriteDelta } from '@/sync/domains/settings/settings';
+import type { Settings } from '@/sync/domains/settings/settings';
 
 import {
     EMPTY_PERSONALIZE_PROGRESS,
@@ -12,6 +12,7 @@ import {
     type PersonalizePageId,
     type PersonalizeProgress,
     type PersonalizeStepId,
+    type PersonalizeSettingWrite,
     type StartingStyleId,
     type ThemeModeChoice,
 } from './personalizeFlowModel';
@@ -20,9 +21,8 @@ import {
 export type PersonalizeFlowPorts = Readonly<{
     readAccount: () => Settings;
     readLocal: () => LocalSettings;
-    /** The Account settings writer. Throws when the write cannot be queued (another Account is current). */
-    writeAccount: (delta: SettingsWriteDelta) => void;
-    writeLocal: (delta: Partial<LocalSettings>) => void;
+    /** The declared settings owner reports success only after Action admission and commit. */
+    writeSetting: (write: PersonalizeSettingWrite) => Promise<boolean>;
     /** The theme owner: stores the mode and applies it to the running app. */
     applyTheme: (mode: ThemeModeChoice) => void | boolean | Promise<void | boolean>;
     readProgress: () => PersonalizeProgress;
@@ -44,8 +44,9 @@ export function createPersonalizeFlowActions(ports: PersonalizeFlowPorts) {
         async saveStep(step: PersonalizeStepId, draft: PersonalizeChoices): Promise<PersonalizeSaveResult> {
             try {
                 const write = resolvePersonalizeStepWrite(step, draft, ports.readAccount(), ports.readLocal());
-                if (write.account) ports.writeAccount(write.account);
-                if (write.local) ports.writeLocal(write.local);
+                for (const setting of write.settings) {
+                    if (!await ports.writeSetting(setting)) return { ok: false, error: null };
+                }
                 if (write.theme && await ports.applyTheme(write.theme) === false) return { ok: false, error: null };
                 ports.writeProgress(recordPersonalizeStepSaved(ports.readProgress(), step));
             } catch (error) {

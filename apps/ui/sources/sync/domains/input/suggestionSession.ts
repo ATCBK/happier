@@ -1,4 +1,5 @@
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionListRenderableSharedMetadata } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { selectSessionDisplayNameSource, storage } from '@/sync/domains/state/storage';
@@ -123,7 +124,8 @@ function projectSession(
         // Layout-specific identity interpretation belongs to the shared Session
         // presentation reader. In particular, layout-v1 reads only the strict
         // shared Agent presentation envelope rather than owner-only flavor data.
-        agentId: readSessionPresentationAgentId(session),
+        agentId: readSessionPresentationAgentId({ metadataLayoutVersion: session.metadataLayoutVersion,
+            metadata: readSessionListRenderableSharedMetadata(session) }),
         machineId: normalizeTrimmed(metadata?.machineId),
         serverId,
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : 0,

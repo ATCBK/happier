@@ -19,7 +19,8 @@ export function createCredentialedTargetActionCurrentIntent(
       }));
     return await runWithServerHttpBaseUrl(serverUrl, () => createTargetActionCurrentIntentAdapter({
       create: request => store.targetActionApprovalsCreate({ request }),
-      read: artifactId => store.targetActionApprovalsGet({ artifactId }),
+      read: artifactId => runWithServerHttpBaseUrl(serverUrl, () => store.targetActionApprovalsGet({ artifactId })),
+      update: args => runWithServerHttpBaseUrl(serverUrl, () => store.targetActionApprovalsUpdate(args)),
       subscribeChanges: (artifactId, onChange, onError) => observeAccountChanges({
         token: credentials.token,
         serverUrl,

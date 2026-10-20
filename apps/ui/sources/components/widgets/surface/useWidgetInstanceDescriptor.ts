@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, readWidgetDefinitionArtifactSummaryV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { useShallow } from 'zustand/react/shallow';
-import { describeAuthoredWidgetDefinitionV1, describeWidgetDefinitionSummaryV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { describeAuthoredWidgetDefinitionV1, describeBuiltinWidgetInstance, describeWidgetDefinitionSummaryV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { storage, useActiveServerAccountScope, useArtifact } from '@/sync/domains/state/storage';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -12,7 +12,7 @@ function resolveWidgetInstanceDescriptor(scope: AccountScope, viewer: AccountSco
     candidate: WidgetCandidate | null | undefined, artifact: DecryptedArtifact | null | undefined): WidgetCandidate | null {
     if (!instance) return null;
     if (instance.definition.kind === 'inline') return describeAuthoredWidgetDefinitionV1(instance.definition.definition, instance.definition, candidate);
-    if (instance.definition.kind !== 'artifact') return candidate ?? null;
+    if (instance.definition.kind !== 'artifact') return candidate ? describeBuiltinWidgetInstance(candidate, instance) : null;
     if (!scope || !areServerAccountScopesEqual(viewer, scope)) return null;
     if (!artifact?.isDecrypted || artifact.ownerAccountId !== scope.accountId || !artifact.rawHeader) return null;
     const summary = readWidgetDefinitionArtifactSummaryV1(instance.definition.artifactId, artifact.rawHeader);

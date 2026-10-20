@@ -12,7 +12,7 @@ import {
     type NearViewportSpan,
     type NearViewportTracker,
 } from '@/components/widgets/nearViewport';
-import { isBuiltinWidgetSwitchedOff, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { isBuiltinWidgetSwitchedOff, readWidgetSourcePluginName, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { useAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 import { t } from '@/text';
 
@@ -73,7 +73,8 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     const focused = useIsFocused();
     const phone = !useIsTablet();
     const descriptor = props.widget ?? null;
-    const pluginName = descriptor?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
+    const appRuntime = useAppShellPluginUiProjection();
+    const pluginName = readWidgetSourcePluginName(appRuntime.pluginUiProjection, descriptor) ?? t('sessionBoard.item.pluginUnavailable.title');
     const frameTitle = useWidgetFrameTitle(props.instance, descriptor);
     // Copies are named by what they are bound to, in the source slot (lab dbind H, N1).
     const bindingLabel = useWidgetInstanceBindingLabel(props.instance, descriptor);

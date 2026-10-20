@@ -34,7 +34,7 @@ type Held = Readonly<{ context: Context;
 export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: string; controller?: PluginReloadController;
   resolveProviderPreparation?(request: ExecutionRunProviderLaunchRequest, context: Context): Promise<RunnerExecutionRunProviderPreparation | null>;
   withNativeModelAccount?<T>(context: Context, read: (account: Pick<Parameters<typeof readNativeExecutionRunOfferedModel>[0],
-    'accountSettings' | 'promptCredentials'>) => Promise<T>): Promise<T>;
+    'accountSettings' | 'promptCredentials' | 'preflightDependencies'>) => Promise<T>): Promise<T>;
 }>) {
   const held = new Map<string, Held>();
   const unavailable = () => { throw new PluginError({ code: 'execution_run_contribution_snapshot_unavailable',
@@ -108,6 +108,8 @@ export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: s
           ...operation, backendTarget: convertBackendTargetRefV2ToV1(operation.backendTarget),
           ...account, catalogEntry, registrySnapshot: retained.snapshot.runtimeRegistry.contributes,
           runtimeCacheKey: retained.snapshot.runtimeRegistry.readPluginOccurrenceId?.(agent.binding.pluginId) ?? undefined,
+          createAgentInvocationServices: retained.snapshot.runtimeRegistry.createAgentInvocationServices,
+          isCurrent: () => read(snapshotId!, context) === retained && registration?.isCurrent() === true,
           ...(context.signal ? { signal: context.signal } : {}),
         }));
         if (!await isCurrent()) return unavailable();
@@ -130,7 +132,7 @@ export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: s
         if (operation.kind === 'execution_run.provider.revalidate_v1') {
           if (!provider.preparation) return unavailable();
           const prepared = await provider.preparation;
-          const result = await prepared.revalidateBeforeCommit();
+          const result = await prepared.revalidateBeforeCommit(context.signal);
           if (read(snapshotId!, context) !== retained || !await context.isCurrent()) return unavailable();
           return { ok: true as const, result: { kind: 'execution_run.provider.revalidated' as const, result } };
         }
@@ -142,7 +144,7 @@ export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: s
           resolvePreparation: async value => {
             const preparation = await input.resolveProviderPreparation!(value, context);
             if (!preparation) return null;
-            return { ...preparation, isCurrent: async () => !provider.retired && read(snapshotId!, context) === retained
+            return { ...preparation, signal: context.signal, isCurrent: async () => !provider.retired && read(snapshotId!, context) === retained
               && await context.isCurrent() && await preparation.isCurrent() };
           },
         });

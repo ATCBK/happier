@@ -1,6 +1,6 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import { readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue } from '@happier-dev/protocol/inputs/runtime';
+import { readInputFieldOptionsConstraint, readInputFieldSelectedValues, validateInputFieldSchema, validateInputFieldValue } from '@happier-dev/protocol/inputs/runtime';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { readInputPath, resolveEffectiveInputFields, type InputFieldHint, type InputOption } from '@happier-dev/protocol/inputs';
 import { readWidgetInputTargetV1, composeWidgetGroupContextV1, inheritWidgetGroupViewerBindingsV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, resolveWidgetViewerPurposeValuesV1, isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetInputIssueV1 } from '@happier-dev/protocol/widgets';
@@ -135,9 +135,10 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
         return entry?.occurrenceId ? { identity: { pluginId: entry.pluginId, localId: entry.definition.id },
             occurrenceId: entry.occurrenceId, definition: entry.definition } : null;
     };
+    const optionReadsDemanded = currentViewer && currentDefinition && bound.status === 'ready'
+        && (builtin ? targetDeclaration.kind !== 'session' || selectedCanRead : executableRuntime.phase === 'current' && executableRuntime.interactionEnabled);
     const optionReads = useInputFieldOptions({
-        enabled: input.enabled !== false && currentViewer && currentDefinition && bound.status === 'ready'
-            && (builtin ? targetDeclaration.kind !== 'session' || selectedCanRead : executableRuntime.phase === 'current' && executableRuntime.interactionEnabled),
+        enabled: input.enabled !== false && optionReadsDemanded,
         serverId: input.scope.serverId,
         machineId: targetDeclaration.kind === 'session' ? selectedRuntime.machineId : input.appRuntime.machineId,
         pluginUiProjection: executableRuntime.pluginUiProjection,
@@ -152,7 +153,10 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
             input.instance.bindings[field.path]?.kind === 'viewer', {
                 contextBound: input.instance.bindings[field.path]?.kind === 'context',
                 value: readInputPath(draftInput, field.path) as JsonValue | undefined,
-            }).kind === 'dynamic').map(field => ({ field, consumer, draftInput })),
+            }).kind === 'dynamic').map(field => ({ field, consumer, draftInput,
+                // A saved value only needs its own choice checked, never the whole inventory.
+                ...(readInputPath(draftInput, field.path) !== undefined
+                    ? { values: readInputFieldSelectedValues(field, readInputPath(draftInput, field.path) as JsonValue) } : {}) })),
     });
     const sessionRefusal = (status: WidgetInputIssueV1['status'], reasonCode: string): ConfiguredWidgetTargetResolution => withWidgetInputRepairOutcome({ status, reasonCode,
         ...(sessionPath ? { fields: [{ path: sessionPath, status, reasonCode }] } : {}) }, {
@@ -204,9 +208,15 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
         const constraint = readInputFieldOptionsConstraint(field, type, input.instance.bindings[field.path]?.kind === 'viewer', { contextBound, value: value as JsonValue });
         let options: readonly InputOption[] | undefined;
         if (constraint.kind === 'dynamic') {
-            const state = optionReads.state(field, { consumer, draftInput });
+            const state = optionReads.state(field, { consumer, draftInput, values: readInputFieldSelectedValues(field, value as JsonValue) });
             if (state.status !== 'ready') {
-                if (state.status === 'loading') return { status: 'loading', reasonCode: 'widget_input_options_loading' };
+                if (state.status === 'loading') {
+                    // No choices read is demanded while the executable runtime is not current, so none will ever
+                    // answer. An establishing runtime still settles by itself; a settled one is this card's answer.
+                    if (!optionReadsDemanded && executableRuntime.phase !== 'establishing') return { status: 'unavailable',
+                        reasonCode: executableRuntime.unavailableReasonCode ?? `widget_runtime_${executableRuntime.phase}` };
+                    return { status: 'loading', reasonCode: 'widget_input_options_loading' };
+                }
                 const reasonCode = state.errorCode ?? 'widget_input_options_loading';
                 return { status: 'unavailable', reasonCode, fields: [{ path: field.path, status: 'unavailable', reasonCode }], retry: optionReads.retry };
             }

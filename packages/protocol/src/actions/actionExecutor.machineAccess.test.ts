@@ -8,10 +8,16 @@ import { listActionSpecsForCatalogSurface } from './actionCatalog.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { MachineAccessGrantsListResponseV1Schema } from '../machines/machineAccessV1.js';
 
 const target = { serverId: 'home', machineId: 'machine' };
 const principal = { kind: 'account', accountId: 'bob' } as const;
 const saved = { kind: 'saved', grant: { machineId: 'machine', principal, level: 'view' }, readiness: 'ready', canPrepareKeys: false } as const;
+const currentAccess = MachineAccessGrantsListResponseV1Schema.parse({ machineId: 'machine',
+  custodian: { accountId: 'alice', displayName: 'Alice' },
+  access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+  canManage: true, ownDirectGrant: false, ownAccessSources: [], grants: [],
+});
 const cases = [
   ['machines.access.grants.list', target, { kind: 'refused', code: 'access_denied' }],
   ['machines.access.grant.set', { ...target, principal, level: 'view' }, saved],
@@ -27,7 +33,11 @@ describe('Machine access Action front door', () => {
       let dispatches = 0;
       const executor = createActionExecutor({
         resolveServerProfileScopeId,
-        machineAccessAction: async () => { dispatches++; return output; },
+        machineAccessAction: async (args: Parameters<NonNullable<ActionExecutorDeps['machineAccessAction']>>[0]) => {
+          if (args.actionId === 'machines.access.grants.list' && id !== args.actionId) return currentAccess;
+          dispatches++;
+          return output;
+        },
         isActionApprovalRequired: () => false,
       } as unknown as ActionExecutorDeps);
       const context = { surface: 'ui', authority: 'present_user', serverId: 'decider', serverIdentityId: 'srv_same_home' } as const;
@@ -79,7 +89,11 @@ describe('Machine access Action front door', () => {
         expect(listActionSpecsForCatalogSurface({ surface }).some(spec => spec.id === id)).toBe(true);
         // The family port is the authenticated server/crypto transport boundary.
         const executor = createActionExecutor({
-          machineAccessAction: async (args: { input: unknown }) => {
+          machineAccessAction: async (args: { actionId: string; input: unknown }) => {
+            if (args.actionId === 'machines.access.grants.list' && id !== args.actionId) {
+              expect(args.input).toEqual(target);
+              return currentAccess;
+            }
             expect(args.input).toEqual(input);
             return output;
           },

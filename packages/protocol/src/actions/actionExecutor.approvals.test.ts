@@ -224,6 +224,34 @@ function sharedRequesterCurrentUiContext(input: unknown): ActionExecutorContext 
 }
 
 describe('createActionExecutor (approvals)', () => {
+  it.each(['policy', 'explicit'] as const)('keeps unknown requester attribution while awaiting ordinary %s consent', async route => {
+    const requests: ApprovalRequest[] = [];
+    const effects: ActionExecutorContext[] = [];
+    const executor = createExecutor({
+      approvalsCreate: async ({ request }) => { requests[0] = ApprovalRequestV2Schema.parse(request); return { artifactId: 'unknown-requester' }; },
+      approvalsGet: async () => requests[0] ?? null,
+      approvalsUpdate: async ({ request }) => { requests[0] = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      sessionSendMessage: async ({ context }) => { effects.push(context); return { status: 'accepted', localId: 'unknown-input' }; },
+    });
+    const input = { sessionId: 's1', message: 'hello' };
+    const source = sharedRequesterContext('session.message.send', input);
+    const context = { ...source, actionRequestAttributionV1: { ...source.actionRequestAttributionV1!, requester: null } };
+    const created = route === 'policy'
+      ? await executor.execute('session.message.send', input, context)
+      : await executor.execute('approval.request.create', { actionId: 'session.message.send', actionArgs: input,
+        summary: 'Send message', createdBy: { surface: 'agent' } }, context);
+    expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { artifactId: 'unknown-requester' } });
+    expect(requests[0]).toMatchObject({ status: 'open', executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
+    expect(requests[0]).not.toHaveProperty('requesterConfirmation');
+    expect(effects).toEqual([]);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'unknown-requester', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'server-1',
+      serverIdentityId: 'stable-home', runtimeAccountId: 'alice',
+    })).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(effects).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
+  });
+
   it('defaults the admitted shared request outward effect to requester confirmation and respects its Action waiver', async () => {
     let stored: ApprovalRequest | null = null;
     const effects: ActionExecutorContext[] = [];
@@ -310,6 +338,14 @@ describe('createActionExecutor (approvals)', () => {
     if (!executionOriginV1) throw new Error('Expected signed shared origin');
     let request: ApprovalRequest = ApprovalRequestV2Schema.parse({ ...original, requestedSurface: 'agent', executionOriginV1, requesterConfirmation });
     const effects: Array<{ message: string; accountId: string | undefined }> = [];
+    const credentialUses = [{ v: 1 as const, kind: 'connected_account' as const, label: 'Personal GitHub',
+      owner: { kind: 'account' as const, accountId: 'alice' }, service: { pluginId: 'example.service', localId: 'github' },
+      why: { kind: 'purpose_binding' as const, purpose: { consumer: { pluginId: 'example.worker', localId: 'publish' }, purpose: 'repository-write' }, target: 'account' as const },
+      currentness: { kind: 'current_at_materialization' as const } },
+      { v: 1 as const, kind: 'team_resource' as const, label: 'Acme GitHub',
+        owner: { kind: 'team' as const, teamId: 'acme' }, service: { pluginId: 'example.service', localId: 'github' },
+        why: { kind: 'purpose_binding' as const, purpose: { consumer: { pluginId: 'example.worker', localId: 'publish' }, purpose: 'repository-write' }, target: 'account' as const },
+        currentness: { kind: 'current_at_materialization' as const, resourceRevision: 7 } }];
     let entitled = true;
     const executor = createExecutor({ approvalsGet: async () => request,
       approvalsUpdate: async ({ request: next }) => {
@@ -319,6 +355,9 @@ describe('createActionExecutor (approvals)', () => {
         return { ok: true };
       },
       sessionSendMessage: async ({ message, context }) => {
+        // Session transport is this Protocol executor's external effect port;
+        // CLI owner tests prove these events come from actual credential admission.
+        for (const use of credentialUses) context?.recordOperationCredentialUse?.(use);
         effects.push({ message, accountId: context?.runtimeAccountId });
         return { status: 'accepted', localId: 'one-effect' };
       },
@@ -349,6 +388,9 @@ describe('createActionExecutor (approvals)', () => {
     const decided = await executor.execute('approval.request.decide', input, decisionContext('bob'));
     expect(decided).toMatchObject({ ok: true, result: { status: 'executed' } });
     expect(request).toMatchObject({ decision: { authority: 'present_user', decidingAccountId: 'bob' } });
+    expect(request.execution).toMatchObject({ operationCredentialUses: credentialUses });
+    expect(decided).toMatchObject({ result: { execution: { operationCredentialUses: credentialUses } } });
+    expect(request.executionOriginV1.actionRequestAttributionV1).toEqual(executionOriginV1.actionRequestAttributionV1);
     expect(effects).toEqual([{ message: 'hello', accountId: 'alice' }]);
     expect(await executor.execute('approval.request.decide', input, decisionContext('bob'))).toEqual(decided);
     expect(effects).toHaveLength(1);

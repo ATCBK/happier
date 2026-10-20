@@ -142,7 +142,8 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
         return keyboardCarry.current !== null && snapshot.sourceId === sourceId && snapshot.phase === 'carrying' && runtime.getPointer() === null;
     };
     const rowOperation = {
-        id: 'entity.move', label, disabled: !enabled,
+        // A row menu item: the menu already names its row, so the verb alone (the grip keeps the full name).
+        id: 'entity.move', label: t('commandPalette.hints.move'), disabled: !enabled,
         onSelect: () => { if (!isKeyboardCarrying()) handleStagedKey(' ', false); },
         onKeyDown: (key: string, event: unknown) => {
             const input = event as Readonly<{ repeat?: boolean }>;

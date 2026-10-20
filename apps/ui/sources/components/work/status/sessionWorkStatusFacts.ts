@@ -37,12 +37,12 @@ export function readSessionWorkStatusFacts(
     session: Parameters<typeof getSessionStatus>[0] & SessionReportCounts,
     nowMs: number,
 ): SessionWorkStatusFacts {
-    const status = getSessionStatus(session, nowMs, { workingTextMode: 'static', includeTitle: false });
-    // These rows carry their own time, so a detached Session's word says only that it is offline;
-    // "Last seen 1 day ago" beside "1d" would say the same thing twice.
-    return sessionWorkStatusFactsFromStatus(session, status.state === 'disconnected'
-        ? { ...status, statusText: t('status.offline') }
-        : status);
+    // These rows carry their own time, so a detached Session's word never says when it was last seen;
+    // the shared presenter still owns whether explicit process-terminal evidence says Stopped.
+    const status = getSessionStatus(session, nowMs, {
+        workingTextMode: 'static', includeTitle: false, disconnectedTextMode: 'offline',
+    });
+    return sessionWorkStatusFactsFromStatus(session, status);
 }
 
 /**

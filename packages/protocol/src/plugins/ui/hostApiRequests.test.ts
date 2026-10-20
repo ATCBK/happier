@@ -814,6 +814,11 @@ describe('plugin UI open and Action components', () => {
       service: { pluginId: 'com.acme.github', localId: 'account' },
       route: '/settings/connected-services',
     }).success).toBe(false);
+    const sourceSetup = {
+      service: { pluginId: 'acme.source', localId: 'account' },
+      purpose: { consumer: { pluginId: 'acme.source', localId: 'discover' }, purpose: 'source-api' },
+    };
+    expect(PluginUiOpenConnectedAccountsRequestV1Schema.parse(sourceSetup)).toEqual(sourceSetup);
   });
 
   it('keeps declarative selectors and mounted concrete requests distinct', () => {

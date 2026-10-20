@@ -163,6 +163,7 @@ export async function finishExecutionRun(args: Readonly<{
 
   let updated: ExecutionRunState = {
     ...existing,
+    terminalOccurrenceId: terminalEventId,
     ...(inputTurns ? { inputTurns } : {}),
     status: materialization && materialization.status !== 'materialized' ? 'failed' : args.next.status,
     summary: args.next.summary ?? existing.summary,

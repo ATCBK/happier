@@ -1,6 +1,7 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { HAPPIER_META_COLUMN_STYLE, HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import React from 'react';
 import {
     Platform,
@@ -1405,6 +1406,7 @@ const SessionItemContent = React.memo(
                             : undefined;
         const normalizedReportsDepth = Math.min(Math.max(Math.trunc(reportsDepth ?? 0), 0), 3);
         const reportsCollapsed = reportsDisclosure === 'collapsed';
+        const liveReportCount = readSessionLiveManagedSessionCountV1(resolvedSession.managedSessions);
         const reportsChip = resolvedSession.managedSessions && (reportsCollapsed || hasSessionRowReportsChip(resolvedSession.managedSessions))
             ? <SessionRowReportsChip sessionId={resolvedSession.id} reports={resolvedSession.managedSessions} collapsed={reportsCollapsed} />
             : null;
@@ -1413,15 +1415,15 @@ const SessionItemContent = React.memo(
                 sessionId={resolvedSession.id}
                 nodeId={buildSessionListIndexNodeId({ type: 'session', serverId, sessionId: resolvedSession.id })}
                 name={sessionNameResolved}
-                count={resolvedSession.managedSessions?.total ?? 0}
+                count={liveReportCount}
                 collapsed={reportsCollapsed}
                 onSetCollapsed={onSetReportsCollapsed}
             />
         ) : null;
         const reportsAccessibilityLabel = [
             normalizedReportsDepth > 0 ? t('sessionWork.list.level', { level: normalizedReportsDepth + 1 }) : null,
-            (resolvedSession.managedSessions?.total ?? 0) > 0
-                ? t('sessionWork.list.subSessions', { count: resolvedSession.managedSessions?.total ?? 0 })
+            liveReportCount > 0
+                ? t('sessionWork.list.subSessions', { count: liveReportCount })
                 : null,
         ].filter(Boolean).join('. ');
         const rowAccessibilityLabel = [sessionNameResolved, reportsAccessibilityLabel, rowAttentionAccessibilityLabel]

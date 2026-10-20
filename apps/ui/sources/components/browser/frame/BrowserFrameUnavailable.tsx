@@ -14,9 +14,12 @@ export function BrowserFrameUnavailable(props: Readonly<{
      * `openBrowserExternalTabSelection` path, so this card never learns how an OS tab is opened.
      */
     onOpenInSystemBrowser?: () => void;
+    /** A terminal page (an ended preview) offers to close its tab; the escape above wins when both exist. */
+    onClosePage?: () => void;
 }>): React.ReactElement {
     const copy = resolveReasonCopy({ reasonCode: props.reasonCode, kind: 'browserFrame' });
     const onOpenInSystemBrowser = props.onOpenInSystemBrowser;
+    const onClosePage = props.onClosePage;
     return (
         <SurfaceStateCard
             testID={`${props.testID}-unavailable`}
@@ -27,6 +30,9 @@ export function BrowserFrameUnavailable(props: Readonly<{
             action={onOpenInSystemBrowser ? {
                 label: t('browserShell.nonFramable.openInSystemBrowser'),
                 onPress: onOpenInSystemBrowser,
+            } : onClosePage ? {
+                label: t('browserShell.unavailable.closeTab'),
+                onPress: onClosePage,
             } : undefined}
         />
     );

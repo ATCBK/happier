@@ -178,6 +178,35 @@ export type SettingsDeclarationsActionInputById = {
         mode: 'default' | 'allowed' | 'ask_first' | 'off';
         actionId: string;
         audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    } | {
+        actionId: string;
+        change: {
+            kind: 'enabled';
+            enabled: boolean;
+        } | {
+            kind: 'audience_enabled';
+            audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+            enabled: boolean;
+        } | {
+            kind: 'placement';
+            placement: 'command_palette' | 'browser_context' | 'agent_input_chips' | 'session_header' | 'session_info' | 'session_action_menu' | 'pending_messages' | 'slash_command' | 'voice_panel' | 'run_list' | 'run_card';
+            enabled: boolean;
+        } | {
+            kind: 'placement_policy';
+            placement: 'slash_command';
+            mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        } | {
+            kind: 'tool_exposure';
+            surface: 'agent' | 'mcp' | 'cli';
+            mode: 'default' | 'direct' | 'discoverable_only';
+        };
+    } | {
+        actionId: 'capture.view';
+        change: {
+            kind: 'plugin_host_capture';
+            pluginId: string;
+            approvalRequired: boolean;
+        };
     };
     readonly "actions.policy.reset": {
         actionId: string;
@@ -328,6 +357,35 @@ export type SettingsDeclarationsActionResultById = {
         enabled: boolean;
         actionId: string;
         audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    } | {
+        actionId: string;
+        change: {
+            kind: 'enabled';
+            enabled: boolean;
+        } | {
+            kind: 'audience_enabled';
+            audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+            enabled: boolean;
+        } | {
+            kind: 'placement';
+            placement: 'command_palette' | 'browser_context' | 'agent_input_chips' | 'session_header' | 'session_info' | 'session_action_menu' | 'pending_messages' | 'slash_command' | 'voice_panel' | 'run_list' | 'run_card';
+            enabled: boolean;
+        } | {
+            kind: 'placement_policy';
+            placement: 'slash_command';
+            mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        } | {
+            kind: 'tool_exposure';
+            surface: 'agent' | 'mcp' | 'cli';
+            mode: 'default' | 'direct' | 'discoverable_only';
+        };
+    } | {
+        actionId: 'capture.view';
+        change: {
+            kind: 'plugin_host_capture';
+            pluginId: string;
+            approvalRequired: boolean;
+        };
     };
     readonly "actions.policy.reset": {
         mode: 'default' | 'allowed' | 'ask_first' | 'off';

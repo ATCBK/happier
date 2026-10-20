@@ -15,7 +15,7 @@ export type RunnerCreatorCurrentness =
     | Readonly<{ status: 'ready'; creatorTokenEpoch: number; endpointFactsRecipient: RunnerEndpointFactsRecipientV1 }>
     | Readonly<{ status: 'creator_unavailable' | 'recipient_mismatch' }>;
 
-/** Observing a waiting attempt acknowledges revocation/expiry under the Account-first fence. */
+/** Observing a locked waiting attempt acknowledges revocation/expiry under Account admission. */
 export async function reconcileRunnerActivationCurrentnessInTx(tx: Tx, row: ActivationRow, current: RunnerCreatorCurrentness): Promise<ActivationRow> {
     if (!PREMATERIALIZED_RUNNER_ACTIVATION_STATES.includes(row.state)) return row;
     const reason = current.status !== 'ready' || current.creatorTokenEpoch !== row.creatorTokenEpoch
@@ -27,7 +27,7 @@ export async function reconcileRunnerActivationCurrentnessInTx(tx: Tx, row: Acti
     return { ...row, state: 'closed', closeReason: reason };
 }
 
-/** Adapts the existing Account authority while the caller holds its Account-first fence. */
+/** Adapts the existing Account authority while the caller holds Account admission. */
 export async function readRunnerCreatorCurrentnessInTx(tx: Tx, creatorAccountId: string): Promise<RunnerCreatorCurrentness> {
     const account = await tx.account.findUnique({ where: { id: creatorAccountId },
         select: { id: true, status: true, tokenEpoch: true, encryptionMode: true, publicKey: true, contentPublicKey: true, contentPublicKeySig: true } });
@@ -53,7 +53,7 @@ export async function readRunnerCreatorCurrentnessInTx(tx: Tx, creatorAccountId:
 /** Authenticated creator projection of the existing Account encryption authority. */
 export async function readRunnerCreatorRecipient(creatorAccountId: string): Promise<RunnerEndpointFactsRecipientV1 | null> {
     return inTx(async (tx) => {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, creatorAccountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, creatorAccountId, "content");
         const current = await readRunnerCreatorCurrentnessInTx(tx, creatorAccountId);
         return current.status === 'ready' ? current.endpointFactsRecipient : null;
     }).catch((error: unknown) => {

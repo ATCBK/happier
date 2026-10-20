@@ -6,7 +6,7 @@ import { AgentInstallJobRpcError } from './api';
 /** Transport and lookup failures do not establish an installer outcome. */
 export function presentAgentInstallJobRpcFailure(error: unknown): Readonly<{ code: string; title: string; body: string }> {
     const code = error instanceof AgentInstallJobRpcError ? error.code : 'unknown';
-    if (code === 'unavailable' || code === 'install_unavailable') {
+    if (code === 'unavailable') {
         return { code, title: t('agentInstallJob.jobUnavailable'), body: t('agentInstallJob.jobUnavailableBody') };
     }
     if (code === 'request_failed') {
@@ -15,7 +15,7 @@ export function presentAgentInstallJobRpcFailure(error: unknown): Readonly<{ cod
     if (code === 'job_not_found') {
         return { code, title: t('agentInstallJob.jobMissing'), body: t('agentInstallJob.jobMissingBody') };
     }
-    return { code, title: t('agentInstallJob.failed'), body: t('agentInstallJob.failedBody') };
+    return { code, title: t('agentInstallJob.jobUnavailable'), body: t('agentInstallJob.jobMissingBody') };
 }
 
 /** Display uncertainty is not a daemon installer outcome. */

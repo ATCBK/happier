@@ -14,7 +14,7 @@ afterEach(() => {
 describe('web latency request correlation', () => {
     it('links nested database spans and records safe failure outcomes without exception content', async () => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
-        const sink = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         const requestId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
         const failure = Object.assign(new Error('private database input'), { code: 'P2010', meta: { code: '40P01' } });
         await expect(withWebLatencyTrace(requestId, () => timeWebLatencyPhase('db.transaction.attempt',
@@ -33,7 +33,7 @@ describe('web latency request correlation', () => {
 
     it('correlates ordinary concurrent HTTP reads through the real monitoring hooks', async () => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
-        const sink = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         const app = Fastify().withTypeProvider<ZodTypeProvider>();
         enableMonitoring(app);
         app.addHook('preHandler', async () => {
@@ -72,7 +72,7 @@ describe('web latency request correlation', () => {
     it.each(['', 'new-session-attempt-'])('retains the existing %s request identity across asynchronous dispatch', async (prefix) => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         // Pino is the logging output boundary; dispatch and context propagation remain real.
-        const sink = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         const requestId = `${prefix}23b2ed82-2ef7-4e4e-af0f-f64d599a08c6`;
         const failure = new Error('dispatch failed');
 
@@ -86,8 +86,24 @@ describe('web latency request correlation', () => {
         }), '[web-latency]');
     });
 
+    it('keeps per-attempt diagnostics at debug severity, including failed attempts', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const debug = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        await timeWebLatencyPhase('db.transaction.attempt', () => 'ok');
+        const failure = Object.assign(new Error('private database input'), { code: 'P2024' });
+        await expect(timeWebLatencyPhase('db.transaction.attempt', () => { throw failure; })).rejects.toBe(failure);
+        expect(debug).toHaveBeenCalledWith(expect.objectContaining({
+            module: 'web-latency', phase: 'db.transaction.attempt', status: 'completed',
+        }), '[web-latency]');
+        expect(debug).toHaveBeenCalledWith(expect.objectContaining({
+            module: 'web-latency', phase: 'db.transaction.attempt', status: 'failed', code: 'P2024',
+        }), '[web-latency]');
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it('omits arbitrary input and leaves tracing disabled unless requested', async () => {
-        const sink = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         await withWebLatencyTrace('private free-form input', () => timeWebLatencyPhase('dispatch', () => 'ok'));
         expect(sink).toHaveBeenCalledWith(expect.not.objectContaining({ requestId: expect.anything() }), '[web-latency]');

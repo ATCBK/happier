@@ -67,6 +67,8 @@ export interface MachineSelectorProps {
      * so a persisted target does not disappear while unavailable.
      */
     includeSelectedUnavailableMachine?: boolean;
+    /** A short fact about one machine ("This machine"), shown in the dropdown row's subtitle. */
+    describeMachine?: (machine: Machine) => string | null;
     dropdownTitle?: string;
     dropdownSubtitle?: string | null;
     dropdownTestID?: string;
@@ -99,6 +101,7 @@ export function MachineSelector({
     testIdPrefix,
     disableOfflineMachines = true,
     includeSelectedUnavailableMachine = false,
+    describeMachine,
     dropdownTitle,
     dropdownSubtitle,
     dropdownTestID,
@@ -205,7 +208,7 @@ export function MachineSelector({
             id: machine.id,
             testID: getMachineOptionTestID(machine),
             title: machineName(machine),
-            subtitle: [describeMachineSharedOwnership(machine), describeMachineDestinationEligibility(eligibility, machine)
+            subtitle: [describeMachine?.(machine), describeMachineSharedOwnership(machine), describeMachineDestinationEligibility(eligibility, machine)
                 ?? (unavailable ? t('common.unavailable') : t('status.online'))].filter(Boolean).join(' · '),
             category,
             disabled: !purposeEligible || (disableOfflineMachines && unavailable),
@@ -218,7 +221,7 @@ export function MachineSelector({
             ),
             rightElement: renderFavoriteToggle(machine, isFavorite),
         };
-    }, [disableOfflineMachines, getMachineOptionTestID, purpose, reachabilityRevision, resolveMachinePlacementFacts, serverId, scope, renderFavoriteToggle, theme.colors.text.secondary]);
+    }, [describeMachine, disableOfflineMachines, getMachineOptionTestID, purpose, reachabilityRevision, resolveMachinePlacementFacts, serverId, scope, renderFavoriteToggle, theme.colors.text.secondary]);
 
     const dropdownItems = React.useMemo(() => {
         const favoriteItems = showFavorites
@@ -279,6 +282,7 @@ export function MachineSelector({
                     variant="selectable"
                     search={showSearch}
                     searchPlaceholder={searchPlaceholder}
+                    emptyLabel={noItemsMessage}
                     showCategoryTitles={showFavorites || showRecent || visibleAllMachines.some((machine) => machine.isShared)}
                     matchTriggerWidth
                     connectToTrigger

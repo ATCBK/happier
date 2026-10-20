@@ -4,6 +4,9 @@ import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveU
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useSessionListRowsByServerId } from '@/sync/store/hooks';
+import { useAllMachines } from '@/sync/domains/state/storage';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { formatUsageCalendarDate } from '@/sync/domains/usage/usageCalendarPresentation';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
@@ -16,6 +19,12 @@ import { useUsageAnalyticsView, useUsageProjectLabels } from './usageBodyKit';
 import { readUsageWidgetPageScope, readUsageWidgetQueryOverrides } from '../usageWidgetPageContext';
 import { buildUsageRouteParams } from '../usageRouteParams';
 import { usageCostKindPhrase } from '../usageCostPresentation';
+
+function countLabels(labels: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return counts;
+}
 
 const summaries = new WeakMap<object, Map<string, UsageWorkSummary>>();
 
@@ -70,24 +79,43 @@ export function useUsageWork(
     [format, query.metric, summary?.moneyBasis]);
   const basisLabel = React.useCallback((moneyBasis: UsageWorkMoneyBasis | null) => moneyBasis
     ? `${usageCostKindPhrase(moneyBasis.kind)} · ${moneyBasis.currency}` : undefined, []);
-  const projectLabel = React.useCallback(
-    (projectKey: string | null) =>
-      projectKey === null
-        ? t('usage.board.work.unknownProject')
-        : (projectLabels.get(projectKey) ?? t('usage.board.work.unknownProject')),
-    [projectLabels],
-  );
+  const machines = useAllMachines();
+  const machineNames = React.useMemo(() => resolveMachineDisplayNames([...machines,
+    ...(summary?.projects ?? []).flatMap(row => row.machineIds).concat((summary?.sessions ?? []).flatMap(row => row.machineIds))
+      .filter(id => !machines.some(machine => machine.id === id)).map(id => ({ id, absence: 'unlisted' as const }))]), [machines, summary]);
+  const machineWords = React.useCallback((ids: readonly string[]) => ids.map(id => machineNames.get(id) ?? id).join(', '), [machineNames]);
+  // Two rows never read alike: a Project name several share keeps its name whole; where it ran is a separate fact the
+  // row carries on its own line, so a narrow screen never truncates the part that tells the rows apart.
+  const projectName = React.useCallback((projectKey: string | null) => projectKey === null
+    ? t('usage.board.work.unknownProject') : projectLabels.get(projectKey) ?? t('usage.board.work.unknownProject'), [projectLabels]);
+  const projectPlaces = React.useMemo(() => {
+    const counts = countLabels((summary?.projects ?? []).map(row => projectName(row.projectKey)));
+    return new Map((summary?.projects ?? []).map(row => [row.projectKey, counts.get(projectName(row.projectKey))! > 1
+      ? machineWords(row.machineIds) : ''] as const));
+  }, [summary, projectName, machineWords]);
+  const projectPlace = React.useCallback((projectKey: string | null) => projectPlaces.get(projectKey) ?? '', [projectPlaces]);
   const sessionHomes = React.useMemo(() => [serverId], [serverId]);
   const renderablesByHome = useSessionListRowsByServerId(sessionHomes);
   const renderables = renderablesByHome[serverId];
-  const sessionLabel = React.useCallback(
-    (sessionId: string) => {
+  const displaySessionLabels = React.useMemo(() => {
+    const base = (sessionId: string) => {
       const renderable = renderables?.[sessionId];
-      return renderable
-        ? getSessionName(renderable, serverId)
-        : t('session.untitled');
-    },
-    [renderables, serverId],
+      return renderable ? getSessionName(renderable, serverId) : t('session.untitled');
+    };
+    const rows = summary?.sessions ?? [];
+    const counts = countLabels(rows.map(row => base(row.sessionId)));
+    return new Map(rows.map(row => {
+      const label = base(row.sessionId);
+      if (counts.get(label)! < 2) return [row.sessionId, label] as const;
+      const when = row.lastObservedAtMs > 0 ? formatUsageCalendarDate(row.lastObservedAtMs, query.timeZoneOffsetMinutes ?? 0,
+        { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+      return [row.sessionId, [label, when, machineWords(row.machineIds)].filter(Boolean).join(' · ')] as const;
+    }));
+  }, [summary, renderables, serverId, machineWords, query.timeZoneOffsetMinutes]);
+  const sessionLabel = React.useCallback(
+    (sessionId: string) => displaySessionLabels.get(sessionId)
+      ?? (renderables?.[sessionId] ? getSessionName(renderables[sessionId]!, serverId) : t('session.untitled')),
+    [displaySessionLabels, renderables, serverId],
   );
   const router = useRouter();
   const openSession = React.useCallback(
@@ -104,5 +132,5 @@ export function useUsageWork(
     },
     [router, serverId, query],
   );
-  return { summary, format, cell, basisLabel, projectLabel, sessionLabel, openSession };
+  return { summary, format, cell, basisLabel, projectLabel: projectName, projectPlace, sessionLabel, openSession };
 }

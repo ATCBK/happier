@@ -33,7 +33,7 @@ import {
 } from "./teamIdentityConnectionLifecycle";
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
-import { authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
+import { acquireTeamIdentityConnectionMutationAdmissionInTx, authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
 import { projectCurrentTeamIdentityConnectionV1InTx, projectIdentityConnectionResult, type ScopedIdentityConnectionV1 as IdentityConnectionV1 } from "./teamIdentityConnectionProjection";
 import { resolveTeamIdentityConnectionReturnUrl } from "./teamIdentityConnectionUrls";
 
@@ -131,6 +131,14 @@ export async function createTeamWorkosConnection(
     dependencies: WorkosAdministrationDependencies = {},
 ): Promise<Result<IdentityConnectionV1>> {
     return await inTx(async (tx) => {
+        const unboundProvider = await tx.identityProviderInstance.findFirst({
+            where: { ownerTeamId: input.teamId, kind: "workos_sso", connections: { none: {} } },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: { id: true },
+        });
+        const recheckAdmission = await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, {
+            ...input, providerInstanceId: unboundProvider?.id,
+        });
         const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
         if (!authority.ok) return authority;
         const [home, team] = await Promise.all([
@@ -156,6 +164,7 @@ export async function createTeamWorkosConnection(
                 select: { id: true },
             });
         }
+        await recheckAdmission();
         // Home creators read the same scope predicate in the canonical
         // serializable transaction; a competing writer retries with its draft.
         if (input.teamId === null && !input.displayName?.trim()) {
@@ -185,11 +194,6 @@ export async function createTeamWorkosConnection(
 
         // Each Team connection owns exactly one provider instance (unique per
         // Team). Reuse only a Team-owned WorkOS instance no connection carries.
-        const unboundProvider = await tx.identityProviderInstance.findFirst({
-            where: { ownerTeamId: input.teamId, kind: "workos_sso", connections: { none: {} } },
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-            select: { id: true },
-        });
         const provider = unboundProvider
             ? await readIdentityProviderInstanceInTx(tx, {
                 id: unboundProvider.id,

@@ -800,7 +800,7 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
   const userDraftPresent = hasComposer
     && composerContent.length > 0
     && !composerHasSlash
-    && visibleDialogSelection?.kind !== 'focused';
+    && (activeComposerOwnsInput || visibleDialogSelection?.kind !== 'focused');
 
   // Known matchers already establish the dialog class, so bind their mutable visible context/options
   // from the active tail instead of unrelated numbered scrollback. Unknown dialogs remain stricter:

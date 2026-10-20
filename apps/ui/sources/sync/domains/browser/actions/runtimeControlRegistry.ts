@@ -43,6 +43,35 @@ export function registerBrowserRuntimeWorkspaceOpeningAdapter(owner: BrowserRunt
     return () => { retirement.dispose(); dispose(); };
 }
 
+/** The pane column a UI open came from; Details is kept off it (drawer over a side list). */
+export type BrowserWorkspaceOpenerRegion = 'main' | 'side';
+
+// The scope's current opener keeps deciding every open (platform, policy, tab). A UI caller in
+// another pane column only lends the region it opened from, for the duration of its own command.
+// Agents and external callers lend nothing, so their opens keep the owner's own region.
+const claimedWorkspaceOpenRegions = new Map<string, BrowserWorkspaceOpenerRegion>();
+
+function workspaceOpenCommandKey(scope: ServerAccountScope, scopeId: string, commandId: string): string {
+    return JSON.stringify([serverAccountScopedResourceKey(scope, scopeId), commandId]);
+}
+
+/** Records, for one open command's duration, the pane column its UI caller sits in. */
+export function claimBrowserRuntimeWorkspaceOpenRegion(
+    input: Readonly<{ scope: ServerAccountScope; scopeId: string; commandId: string; region: BrowserWorkspaceOpenerRegion }>,
+): () => void {
+    const key = workspaceOpenCommandKey(input.scope, input.scopeId, input.commandId);
+    claimedWorkspaceOpenRegions.set(key, input.region);
+    return () => { claimedWorkspaceOpenRegions.delete(key); };
+}
+
+export function readClaimedBrowserRuntimeWorkspaceOpenRegion(
+    scope: ServerAccountScope,
+    scopeId: string,
+    commandId: string,
+): BrowserWorkspaceOpenerRegion | null {
+    return claimedWorkspaceOpenRegions.get(workspaceOpenCommandKey(scope, scopeId, commandId)) ?? null;
+}
+
 export function readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(
     scope: ServerAccountScope,
     scopeId: string,
@@ -118,4 +147,5 @@ export function readRegisteredBrowserRuntimeDiagnosticsAdapter(browserSessionId:
 export function clearBrowserRuntimeControlRegistryForTests(): void {
     registrationsBySessionId.clear();
     workspaceOpeners.clear();
+    claimedWorkspaceOpenRegions.clear();
 }

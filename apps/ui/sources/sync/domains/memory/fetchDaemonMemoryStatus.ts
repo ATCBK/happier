@@ -42,7 +42,7 @@ export type MemoryDocumentSummary = Readonly<{
   state: 'pending' | 'unavailable';
   /** Summary availability, not a deadline or a claim that the remote request stopped. */
   cause?: Readonly<{
-    reason: 'status_pending' | 'coverage_pending' | 'status_failed';
+    reason: 'machine_unavailable' | 'status_pending' | 'coverage_pending' | 'status_failed';
     target: Readonly<{ serverId: string; machineId: string }>;
     errorCode?: string;
   }>;

@@ -554,6 +554,45 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         transcriptNavigationPaneStore.set('session-1', null);
     });
 
+    it('elects a demanded inline runner for visible classic chat independently of native scene and keyboard focus', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const screen = await renderScreen(<AppPaneProvider>
+            <DestinationInstanceHost tabId="visual-session" ref={{ kind: 'session', params: { id: 'session-1', serverId: 'server-1' } }}
+                pathname="/session/session-1" focused={false} visible navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <CockpitNavigatorFocusContext.Provider value={false}>
+                <SessionCockpitSurfaceScreen experience="classic" sessionId="session-1" routeServerId="server-1"
+                    scopeId="session:session-1" surface="chat" surfaceFocusedOverride={false} surfaceVisibleOverride />
+            </CockpitNavigatorFocusContext.Provider>
+            </DestinationInstanceHost>
+        </AppPaneProvider>);
+        const resolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as
+            import('@/components/sessions/board/sessionBoardHostVisibility').SessionBoardPlacementPrimaryMountResolver;
+        expect(resolve('visual', undefined, { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true })).toBe('inlineTranscript');
+        const pane = screen.tree.findByType('SessionView' as never).props.pane as
+            import('@/components/appShell/panes/hooks/useAppPaneScope').AppPaneScopeApi;
+        await act(async () => { pane.openRight({ tabId: 'board' }); });
+        const boardResolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as typeof resolve;
+        const bodyFacts = { drawnBySelectedBoardView: true, inlineTranscriptDemanded: true, bodyEligibleHosts: ['sidebar'] as const };
+        expect(boardResolve('visual', undefined, bodyFacts)).toBe('sidebar');
+        expect(boardResolve('visual', undefined, { ...bodyFacts, inlineTranscriptPreferred: true })).toBe('inlineTranscript');
+        expect(boardResolve('visual', undefined, { ...bodyFacts, bodyEligibleHosts: [] })).toBe('inlineTranscript');
+        await act(async () => { pane.closeRight(); });
+        expect(screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost('visual', undefined, bodyFacts)).toBe('inlineTranscript');
+        await screen.update(<AppPaneProvider>
+            <DestinationInstanceHost tabId="visual-session" ref={{ kind: 'session', params: { id: 'session-1', serverId: 'server-1' } }}
+                pathname="/session/session-1" focused={false} visible={false} navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <CockpitNavigatorFocusContext.Provider value={false}>
+                <SessionCockpitSurfaceScreen experience="classic" sessionId="session-1" routeServerId="server-1"
+                    scopeId="session:session-1" surface="chat" surfaceFocusedOverride={false} surfaceVisibleOverride={false} />
+            </CockpitNavigatorFocusContext.Provider>
+            </DestinationInstanceHost>
+        </AppPaneProvider>);
+        const hiddenResolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as typeof resolve;
+        expect(hiddenResolve('visual', undefined, { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true })).toBeNull();
+    });
+
     it('presents pane opens and repeated Details reveals through the retained phone navigator', async () => {
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');

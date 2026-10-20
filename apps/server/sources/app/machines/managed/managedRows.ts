@@ -13,13 +13,13 @@ import type { MachineProvisionerContributionV1 } from "@happier-dev/protocol/plu
 import type { PluginJsonSchemaV2 } from "@happier-dev/protocol/plugins/contributions/jsonSchema";
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { pluginJsonValuesEqual } from "@happier-dev/protocol/plugins/actions/protocol-composable-schema";
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { resolveCurrentMachineRecipientAccountIdsInTx, resolveMachineAccessInTx } from "@/app/machines/machineAccess";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { resolveCurrentClaimablePluginMachineMaterializationsTx } from "@/app/plugins/availability/operations";
 import { resolveCurrentPluginDeclarationTx } from "@/app/plugins/availability/currentDeclaration";
-import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionReplayRequiredError, type ResolvedTransactionResult, type Tx } from "@/storage/inTx";
 import { buildUpdateMachineUpdate, eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -177,15 +177,18 @@ export async function readManagedMachineInTx(tx: Tx, input: Readonly<{ homeId: s
 
 /** Reuse publication's ordered locks; an expanded audience restarts the owning transaction. */
 async function fenceManagedMachinePublicationInTx<T extends Readonly<{ accountIds: readonly string[] }>>(
-    tx: Tx, read: () => Promise<T>,
+    tx: Tx, read: () => Promise<T>, intent: 'content' | 'exclusive' = 'content',
 ): Promise<T> {
     const captured = await read();
-    await acquireAccountChangePublicationLocksInTx(tx, captured.accountIds, { includeSingleAccount: true });
+    await acquireAccountChangePublicationLocksInTx(tx, captured.accountIds, { includeSingleAccount: true, intent });
     const current = await read();
     const locked = new Set(captured.accountIds);
     if (current.accountIds.some(accountId => !locked.has(accountId))) {
         throw new TransactionReplayRequiredError('transaction-account-audience-changed');
     }
+    beforeAccountChangePublication(tx, captured.accountIds, async () => {
+        assertAccountChangePublicationAudienceInTx(tx, (await read()).accountIds);
+    });
     return current;
 }
 
@@ -194,23 +197,40 @@ async function fenceManagedMachinePublicationInTx<T extends Readonly<{ accountId
  * the audience afresh on each attempt, then recheck it before authority/domain
  * reads; growth replays instead of extending an acquired lock set out of order.
  */
+type ManagedPublicationTarget = Readonly<{ homeId: string; managedId: string; nextControllerMachineId?: string }>
+    | Readonly<{ controllerMachineId: string }>;
+
+/** The same pure census serves managed endpoints and ordinary enrollment before Machine writes. */
+export async function readManagedMachinePublicationAudienceInTx(tx: Tx, target: ManagedPublicationTarget,
+    additionalMachineIds: readonly string[] = []): Promise<string[]> {
+    let machineIds: string[];
+    if ('controllerMachineId' in target) machineIds = [target.controllerMachineId];
+    else {
+        const row = await readManagedMachineInTx(tx, target);
+        machineIds = [row.controllerMachineId, row.enrolledMachineId, target.nextControllerMachineId]
+            .filter((id): id is string => typeof id === 'string');
+    }
+    const audiences = await Promise.all([...new Set([...machineIds, ...additionalMachineIds])]
+        .map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
+    return [...new Set(audiences.flat())];
+}
+
+export async function acquireManagedMachinePublicationAccountsInTx(tx: Tx, target: ManagedPublicationTarget,
+    admission?: Readonly<{ intent?: 'content' | 'exclusive'; additionalAccountIds?: readonly string[]; additionalMachineIds?: readonly string[] }>,
+): Promise<void> {
+    await fenceManagedMachinePublicationInTx(tx, async () => ({ accountIds: [
+        ...await readManagedMachinePublicationAudienceInTx(tx, target, admission?.additionalMachineIds),
+        ...admission?.additionalAccountIds ?? [],
+    ] }), admission?.intent);
+}
+
 export async function inManagedMachinePublicationTx<T>(
-    target: Readonly<{ homeId: string; managedId: string; nextControllerMachineId?: string }> | Readonly<{ controllerMachineId: string }>,
+    target: ManagedPublicationTarget,
     write: (tx: Tx) => Promise<T>,
-): Promise<T> {
-    const readAudience = async (tx: Tx) => {
-        let machineIds: string[];
-        if ('controllerMachineId' in target) machineIds = [target.controllerMachineId];
-        else {
-            const row = await readManagedMachineInTx(tx, target);
-            machineIds = [...new Set([row.controllerMachineId, row.enrolledMachineId, target.nextControllerMachineId]
-                .filter((id): id is string => typeof id === 'string'))];
-        }
-        const audiences = await Promise.all(machineIds.map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
-        return [...new Set(audiences.flat())];
-    };
+    admission?: Readonly<{ intent: 'content' | 'exclusive'; additionalAccountIds?: readonly string[] }>,
+): Promise<ResolvedTransactionResult<T>> {
     return inTx(async tx => {
-        await fenceManagedMachinePublicationInTx(tx, async () => ({ accountIds: await readAudience(tx) }));
+        await acquireManagedMachinePublicationAccountsInTx(tx, target, admission);
         return write(tx);
     });
 }
@@ -329,11 +349,12 @@ export async function invalidateManagedMachineInTx(tx: Tx, row: StoredManagedMac
     await markAccountsChanged(tx, { accountIds: controllerAccountIds, kind: "account", entityId: row.id });
     for (const { machineId, child, accountIds: childAccountIds } of children) {
         const cursors = await markAccountsChanged(tx, { accountIds: childAccountIds, kind: 'machine', entityId: machineId });
-        for (const { accountId, cursor } of cursors) {
+        for (const publication of cursors) {
+            const { accountId } = publication;
             const access = await resolveMachineAccessInTx(tx, { actorAccountId: accountId, machineId });
             const devcontainerChild = access?.accessState === 'ready' ? child : null;
             afterTx(tx, () => eventRouter.emitUpdate({ userId: accountId,
-                payload: buildUpdateMachineUpdate(machineId, cursor, randomKeyNaked(12), undefined, undefined, { devcontainerChild }),
+                payload: buildUpdateMachineUpdate(machineId, publication.resolveCursor(), randomKeyNaked(12), undefined, undefined, { devcontainerChild }),
                 recipientFilter: { type: 'machine-scoped-only', machineId } }));
         }
     }

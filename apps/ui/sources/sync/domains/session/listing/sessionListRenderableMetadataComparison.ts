@@ -28,6 +28,7 @@ export type SessionListRenderableExternalSessionIdentity = Readonly<{
 }>;
 
 export type SessionListRenderableMetadataComparison = Readonly<{
+    lifecycleState?: string;
     projectId?: string | null;
     workspaceId?: string | null;
     bot?: SessionBotV1;
@@ -52,6 +53,7 @@ export type SessionListRenderableMetadataComparison = Readonly<{
 }>;
 
 type SessionListRenderableMetadataComparisonSnapshot = Readonly<{
+    lifecycleState?: string;
     projectId?: string | null;
     workspaceId?: string | null;
     bot?: unknown;
@@ -203,7 +205,8 @@ function isSessionListRenderableMetadataComparisonSnapshotEqual(
     nextExternalAgentObservationV1: SessionListRenderableMetadataComparison['externalAgentObservationV1'],
     nextReadStateV1: SessionListRenderableMetadataComparison['readStateV1'],
 ): boolean {
-    return previous.name === snapshot.name
+    return previous.lifecycleState === snapshot.lifecycleState
+        && previous.name === snapshot.name
         && (previous.projectId ?? null) === (snapshot.projectId ?? null)
         && (previous.workspaceId ?? null) === (snapshot.workspaceId ?? null)
         && (readSessionBotV1(previous.bot)?.kind ?? null) === (readSessionBotV1(snapshot.bot)?.kind ?? null)
@@ -266,6 +269,7 @@ export function normalizeSessionListRenderableMetadataComparison(
     }
 
     const next: SessionListRenderableMetadataComparison = {
+        ...(normalizedSnapshot.lifecycleState === undefined ? {} : { lifecycleState: normalizedSnapshot.lifecycleState }),
         ...(normalizedSnapshot.projectId === undefined ? {} : { projectId: normalizedSnapshot.projectId }),
         ...(normalizedSnapshot.workspaceId === undefined ? {} : { workspaceId: normalizedSnapshot.workspaceId }),
         ...(nextBot ? { bot: previous?.bot ?? nextBot } : {}),
@@ -297,6 +301,7 @@ export function readSessionListRenderableMetadataComparison(
     if (metadata.bot !== undefined && readSessionBotV1(metadata.bot) === null) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        lifecycleState: typeof metadata.lifecycleState === 'string' ? metadata.lifecycleState : undefined,
         projectId: typeof metadata.projectId === 'string' || metadata.projectId === null ? metadata.projectId : undefined,
         workspaceId: typeof metadata.workspaceId === 'string' || metadata.workspaceId === null ? metadata.workspaceId : undefined,
         bot: metadata.bot,
@@ -323,6 +328,7 @@ export function readSessionListRenderableMetadataComparisonFromRenderable(
     if (!metadata) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        lifecycleState: metadata.lifecycleState,
         projectId: metadata.projectId,
         workspaceId: metadata.workspaceId,
         bot: metadata.bot,
@@ -360,7 +366,8 @@ export function areSessionListRenderableMetadataComparisonsEqual(
     if (previous === next) return true;
     if (!previous || !next) return previous === next;
 
-    return previous.name === next.name
+    return previous.lifecycleState === next.lifecycleState
+        && previous.name === next.name
         && (previous.projectId ?? null) === (next.projectId ?? null)
         && (previous.workspaceId ?? null) === (next.workspaceId ?? null)
         && (previous.bot?.kind ?? null) === (next.bot?.kind ?? null)

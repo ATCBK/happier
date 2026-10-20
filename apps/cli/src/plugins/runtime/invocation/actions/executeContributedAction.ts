@@ -9,7 +9,7 @@ import { runTracedExternalActionStage } from '@/daemon/externalActions/externalA
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent, pluginActionDeclarationRequiresConfirmationForInput } from '@happier-dev/protocol/plugins/actions/invocation';
 import { buildApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
-import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
+import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, MessageActionReferenceV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
@@ -449,6 +449,8 @@ export async function executeContributedAction(params: Readonly<{
    * materialization. Cold bundled contributors never manufacture this value.
    */
   expectedContributorMaterializationId?: string;
+  /** Untrusted committed identity; the answering client resolves it after Action admission. */
+  messageActionReference?: MessageActionReferenceV1;
   /** Opaque target-operation evidence forwarded only by the original handle owner. */
   admittedTargetedOperation?: AdmittedTargetedOperationExecutionRequest;
   /** Private current managed-resource admission; never an SDK or Action-input field. */
@@ -521,6 +523,12 @@ export async function executeContributedAction(params: Readonly<{
     && 'target' in action.definition.execution
     && action.definition.execution.target === 'client'
   );
+  if (params.messageActionReference && !clientTarget) {
+    return { matched: true, result: actionHandlerNotStartedFailure(
+      'plugin_message_action_unavailable',
+      'This Action cannot resolve an explicit client Message reference',
+    ) };
+  }
   // Only authenticated host automated origins can use the reverse channel.
   // Plugin provenance and host-private execution bindings cannot be flattened
   // into a host invocation on another process. An ordinary root invocation's
@@ -662,6 +670,7 @@ export async function executeContributedAction(params: Readonly<{
     const request = UiContributedActionExecuteRequestV1Schema.safeParse({
       v: 1, action: { pluginId, localId: action.definition.id },
       input: params.input ?? null, surface: invocationSurface,
+      ...(params.messageActionReference ? { messageActionReference: params.messageActionReference } : {}),
       expectedContributorOccurrenceId: contributorOccurrenceId,
       ...(params.context.defaultSessionId === undefined ? {} : { defaultSessionId: params.context.defaultSessionId }),
       ...(params.requiredDangerLevel === undefined ? {} : { requiredDangerLevel: params.requiredDangerLevel }),

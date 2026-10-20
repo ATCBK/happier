@@ -10,6 +10,7 @@ import {
 } from "./encryptor";
 import { encodeHex } from "@/encryption/hex";
 import { EncryptionCache } from "./encryptionCache";
+import { createUiAccountKvCipher } from './accountKvCipher';
 import { mapCryptoBatchWithYield } from "./cryptoBatchYield";
 import { SessionEncryption } from "./sessionEncryption";
 import { areMachineEncryptionContextInputsEqual, MachineEncryption } from "./machineEncryption";
@@ -195,6 +196,7 @@ export class Encryption {
     // data key are sealed with it, so it is also their input-equality material.
     private readonly masterSecret: Uint8Array;
     private readonly accountScopedCryptoMaterial: AccountScopedCryptoMaterial;
+    private readonly rawAccountCipher: ReturnType<typeof createUiAccountKvCipher>;
     readonly anonID: string;
     readonly contentDataKey: Uint8Array;
 
@@ -246,6 +248,7 @@ export class Encryption {
         this.accountScopedCryptoMaterial = useDataKeyFallback
             ? { type: 'dataKey', machineKey: masterSecret }
             : { type: 'legacy', secret: masterSecret };
+        this.rawAccountCipher = createUiAccountKvCipher('e2ee', this.accountScopedCryptoMaterial);
         this.fallbackEncryption = useDataKeyFallback
             ? new AES256Encryption(masterSecret, {
                 nativeCryptoWorker: this.createNativeJsonDecryptWorkerBinding(),
@@ -636,29 +639,27 @@ export class Encryption {
     }
 
     //
-    // Legacy methods for machine metadata (temporary until machines are migrated)
+    // Raw Account JSON. Session/Machine fallback encryption is separately owned.
     //
 
-    async encryptRaw(data: any): Promise<string> {
+    async encryptRaw(data: unknown): Promise<string> {
         return syncPerformanceTelemetry.measureAsync(
             'sync.encryption.account.encryptRaw',
             { items: 1 },
             async () => {
-                const encrypted = await this.fallbackEncryption.encrypt([data]);
-                return encodeBase64(encrypted[0], 'base64');
+                return await this.rawAccountCipher.seal(data);
             },
         );
     }
 
     async decryptRaw(encrypted: string): Promise<any | null> {
         try {
-            const encryptedData = decodeBase64(encrypted, 'base64');
-            const decrypted = await syncPerformanceTelemetry.measureAsync(
+            const opened = await syncPerformanceTelemetry.measureAsync(
                 'sync.encryption.account.decryptRaw',
                 { items: 1 },
-                async () => this.fallbackEncryption.decrypt([encryptedData]),
+                async () => this.rawAccountCipher.open(encrypted),
             );
-            return decrypted[0] || null;
+            return opened.value;
         } catch (error) {
             return null;
         }

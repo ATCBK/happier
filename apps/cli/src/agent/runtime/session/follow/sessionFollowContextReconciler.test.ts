@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   SessionFollowUpdateEnvelopeV1Schema,
+  type SessionFollowUpdateEnvelopeV1,
   type SessionFollowFrontierV1,
 } from '@happier-dev/protocol';
 
@@ -29,7 +30,7 @@ const frontier = {
 
 const zeroFrontier = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };
 
-function envelopeFor(observation: { sourceSessionId: string; destinationSessionId: string; observed: typeof frontier }) {
+function envelopeFor(observation: { sourceSessionId: string; destinationSessionId: string; observed: typeof frontier }): SessionFollowUpdateEnvelopeV1 {
   return {
     v: 1 as const,
     kind: 'session_follow_update' as const,
@@ -64,7 +65,7 @@ function originalInputFixture(texts: readonly string[]) {
   const state = { publisherGeneration: '1', sourceAvailable: true, sourceError: null as Error | null, revoked: false, corruptSeq: 0,
     afterFetch: () => {} };
   const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-    runSessionFollowSourceRequest: async ({ request }) => await request(),
+    runSessionFollowSourceRequest: ({ request }) => request(),
     observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination',
       publisherGeneration: state.publisherGeneration, currentSourceSessionIds: state.revoked ? [] : ['source'],
       observations: state.revoked ? [] : deliveries.map(({ delivery, localInputId }, index) => ({
@@ -74,6 +75,7 @@ function originalInputFixture(texts: readonly string[]) {
       })),
     }),
     acknowledgeSessionFollow: async request => { acknowledgements.push(request);
+      if (!('consumed' in request)) throw new Error('Expected a Session original acknowledgement');
       return { ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: request.consumed }; },
   } });
   const material = createSessionFollowSourceMaterialResolver();
@@ -184,7 +186,7 @@ describe('Session Follow context reconciler', () => {
         attachedAt: 1, policy: { preset: 'everything' as const }, delivered: zeroFrontier, observed },
     ];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async options => ({ ok: true, v: 1, sessionId: 'destination',
         publisherGeneration: '1', currentSourceSessionIds: ['source'], observations: [...routes,
           ...(options?.inputLocalIds?.includes('accepted-follow') ? [{ kind: 'admitted_input' as const,
@@ -220,11 +222,16 @@ describe('Session Follow context reconciler', () => {
         followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17 }] });
       expect(omitted?.representedFollowLocalInputIds ?? []).toEqual([]);
       const prepared = await reconcile({ signal,
-        followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17 }] });
+        followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17,
+          followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' }],
+        }] });
       expect(prepared?.representedFollowLocalInputIds).toEqual(['accepted-follow']);
       expect(prepared?.workerUpdates).toEqual([expect.objectContaining({ ownerState: 'published',
         result: 'One committed report', deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: 'result.md' }],
         transcriptPointer: { kind: 'session', sessionId: 'source', seq: 1 } })]);
+      expect(prepared?.workerUpdateEvents).toMatchObject([{ followInputLocalId: 'accepted-follow', followMatches: [
+        { kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' },
+      ] }]);
       const representationCount = (prepared?.updates.length ?? 0) + (prepared?.workerUpdates?.length ?? 0);
       prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'accepted-follow', userMessageSeq: 17 });
       await vi.waitFor(() => expect(acknowledgements.length).toBeGreaterThan(0));
@@ -232,7 +239,8 @@ describe('Session Follow context reconciler', () => {
       // transcript intake after the accepted Pending is no longer presented.
       expect(await reconcile({ signal })).toBeNull();
       expect(representationCount).toBe(1);
-      expect(acknowledgements).toHaveLength(1);
+      expect(acknowledgements).toHaveLength(2);
+      expect(acknowledgements[1]).toEqual(acknowledgements[0]);
       expect(acknowledgements[0]).toMatchObject({ localInputId: 'accepted-follow',
         acceptance: { localInputId: 'accepted-follow', userMessageSeq: 17 } });
     } finally { material.dispose(); }
@@ -251,14 +259,16 @@ describe('Session Follow context reconciler', () => {
     let delivered: SessionFollowFrontierV1 = zeroFrontier;
     const acknowledgements: SessionFollowFrontierV1[] = [];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination',
         publisherGeneration: '1', currentSourceSessionIds: ['source'], observations: [{
           relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
           policy: { preset: 'important' }, delivered,
-          observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+          observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+            agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
         }] }),
       acknowledgeSessionFollow: async input => {
+        if (!('consumed' in input)) throw new Error('Expected a Session original acknowledgement');
         delivered = input.consumed;
         acknowledgements.push(delivered);
         return { ok: true, v: 1, sourceSessionId: 'source', destinationSessionId: 'destination',
@@ -274,7 +284,8 @@ describe('Session Follow context reconciler', () => {
     const waitingSource = await hydrateObservation({ signal, observation: {
       relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
       policy: { preset: 'important' }, delivered,
-      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+        agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
     } });
     expect(waitingSource?.awareness).toMatchObject({ runtime: 'waiting',
       operational: { primary: 'action_required' } });
@@ -284,6 +295,7 @@ describe('Session Follow context reconciler', () => {
     expect(waiting?.workerUpdates).toEqual([expect.objectContaining({ workerKind: 'session',
       ownerState: 'needs_input', wake: 'needs_you' })]);
     expect(waiting?.wakeEventLocalId).toBeDefined();
+    expect(waiting?.workerUpdateEvents).toMatchObject([{ followMatches: [{ kind: 'relation', relation: 'manager' }] }]);
     waiting!.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: waiting!.wakeEventLocalId! });
     await vi.waitFor(() => expect(acknowledgements).toHaveLength(1));
     expect(await reconcile({ signal, deliveryIntent: 'wake' })).toBeNull();
@@ -294,7 +306,8 @@ describe('Session Follow context reconciler', () => {
     const next = await hydrateObservation({ signal, observation: {
       relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
       policy: { preset: 'important' }, delivered,
-      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+        agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
     } });
     expect(next?.awareness).toMatchObject({ lifecycle: 'active', runtime: 'working' });
     expect(next?.workerUpdate).toBeUndefined();
@@ -309,7 +322,7 @@ describe('Session Follow context reconciler', () => {
     const questionObserved = { ...zeroFrontier, agentStateVersion: 1 };
     const managerObserved = { ...questionObserved, turn: { id: 'waiting-turn', status: 'waiting' as const } };
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1',
         currentSourceSessionIds: ['source'], observations: [
           { sourceSessionId: 'source', destinationSessionId: 'destination', relation: 'manager', attachedAt: 1,
@@ -345,10 +358,10 @@ describe('Session Follow context reconciler', () => {
     const source = { ...envelopeFor(observation), workerUpdate: { v: 1 as const, workerKind: 'session' as const,
       workerId: 'source', ownerState: 'settled' as const, wake: 'finished' as const, headline: 'Done', canInspect: true } };
     expect(shouldWakeForSessionFollowObservation(observation, source)).toBe(false);
-    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'everything' } }, source)).toBe(true);
+    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'everything' as const } }, source)).toBe(true);
     const failed = { ...source, workerUpdate: { ...source.workerUpdate, ownerState: 'failed' as const } };
     expect(shouldWakeForSessionFollowObservation(observation, failed)).toBe(true);
-    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'quiet' } }, failed)).toBe(false);
+    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'quiet' as const } }, failed)).toBe(false);
     expect(shouldWakeForSessionFollowObservation(observation, { ...failed, reason: 'source_unavailable' })).toBe(false);
     const humanPolicy = { preset: 'custom' as const, events: { person_wrote: { delivery: 'interrupt' as const } } };
     const ordinary = { ...observation, relation: 'follower' as const, attachedAt: undefined, policy: humanPolicy };
@@ -357,7 +370,12 @@ describe('Session Follow context reconciler', () => {
     expect(shouldWakeForSessionFollowObservation(observation, { ...envelopeFor(observation), pendingHumanIngress: true })).toBe(false);
   });
 
-  it.each(['message', 'request'] as const)('binds a represented public original (%s) to its own admitted input without private rule references', async kind => {
+
+  it.each([
+    { kind: 'message', retirePreparation: false },
+    { kind: 'request', retirePreparation: false },
+    { kind: 'message', retirePreparation: true },
+  ] as const)('binds a represented public original ($kind, retired preparation $retirePreparation) to its own admitted input without private rule references', async ({ kind, retirePreparation }) => {
     const delivery = SessionFollowInputV1Schema.parse(kind === 'message' ? { v: 1, delivery: 'next_turn',
       original: { sourceSessionId: 'source', sourceMessage: { localId: 'original', seq: 4 } }, event: { kind: 'update_posted' } }
       : { v: 1, delivery: 'wake', original: { sourceSessionId: 'source', sourceRequests: {
@@ -369,7 +387,7 @@ describe('Session Follow context reconciler', () => {
     const observations: unknown[] = [];
     const sourceRequests: unknown[] = [];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async options => {
         observations.push(options);
         return { ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: ['source'],
@@ -378,6 +396,7 @@ describe('Session Follow context reconciler', () => {
       },
       acknowledgeSessionFollow: async input => {
         acknowledgements.push(input);
+        if (!('consumed' in input)) throw new Error('Expected a Session original acknowledgement');
         return {  ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: input.consumed };
       },
     } });
@@ -395,8 +414,9 @@ describe('Session Follow context reconciler', () => {
           content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Retained original report' } } } }] : [], hasMore: false });
       } } });
     try {
+      const preparation = new AbortController();
       const prepared = await createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 })({
-        signal: new AbortController().signal,
+        signal: preparation.signal,
         followDeliveries: [{ delivery, localInputId: 'rule-input', userMessageSeq: 17 }],
       });
       expect(prepared?.representedFollowLocalInputIds).toEqual(['rule-input']);
@@ -407,9 +427,14 @@ describe('Session Follow context reconciler', () => {
       expect(acknowledgements).toEqual([]);
       prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 18 });
       expect(acknowledgements).toEqual([]);
-      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 17 });
-      expect(acknowledgements).toMatchObject([{ localInputId: 'rule-input',
-        acceptance: { localInputId: 'rule-input', userMessageSeq: 17 }, consumed: observed }]);
+      let release!: () => void;
+      const pendingSettlement = retirePreparation ? new Promise<void>(resolve => { release = resolve; }) : undefined;
+      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 17 }, pendingSettlement);
+      // Acceptance is captured before cancellation; the already accepted ACK
+      // must survive retirement while its Pending write is still settling.
+      if (retirePreparation) { preparation.abort(); release(); }
+      await vi.waitFor(() => expect(acknowledgements).toMatchObject([{ localInputId: 'rule-input',
+        acceptance: { localInputId: 'rule-input', userMessageSeq: 17 }, consumed: observed }]));
       expect(acknowledgements[0]).not.toHaveProperty('rule');
       expect(acknowledgements[0]).not.toHaveProperty('policy');
     } finally { material.dispose(); }

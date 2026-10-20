@@ -49,7 +49,7 @@ import {
   INITIAL_MEMORY_INVENTORY_STATE,
   refreshMemoryInventoryOnce,
   resolveMemoryInventorySessionEligibility,
-  isMemorySessionOnMachine,
+  createMemorySessionLocalityReader,
   type MemoryInventoryRefresh,
   type MemoryInventoryPage,
   type MemoryInventoryScope,
@@ -183,10 +183,11 @@ export async function startMemoryWorker(params: Readonly<{
   const observedUpdatedAtBySessionId = new Map<string, number>();
   const editedSessionIds = new Set<string>();
   const externalSources = createMemoryExternalTranscriptSources({ credentials: params.credentials,
-    onChange: () => { externalSourcesNeedRefresh = true; workLoop?.trigger(); } });
+    onChange: refreshSources => { externalSourcesNeedRefresh ||= refreshSources; workLoop?.trigger(); } });
   let externalSourcesNeedRefresh = true;
   let externalSyncPromise: Promise<void> | null = null;
   const sessionCryptoContextCache = new Map<string, SessionStoredContentCryptoContext>();
+  const sessionLocality = createMemorySessionLocalityReader(params);
   const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
   const embeddingsProviderCache = createEmbeddingsProviderCache();
   let embeddingsResolutionEpoch: Readonly<{
@@ -435,12 +436,16 @@ export async function startMemoryWorker(params: Readonly<{
       inventoryLoopToStop?.stop(),
       workLoopToStop?.stop(),
     ]);
+    sessionLocality.clear();
   };
 
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
       stopped = true;
+      // RPC settings acknowledgement may precede its queued reconciliation.
+      // Drain that existing owner before disposing its sources and indexes.
+      await settingsOperation;
       await stopLoop();
       await externalSources.dispose();
       for (const operation of activeIndexOperations) operation.controller.abort();
@@ -506,8 +511,7 @@ export async function startMemoryWorker(params: Readonly<{
       seenSessionIds: inventorySeenSessionIds,
       fetchSessionsPage: fetchMemoryInventoryPage,
       isSessionEligible: session => {
-        const eligible = isMemorySessionOnMachine({ session, machineId: params.machineId,
-          credentials: params.credentials, accountEncryptionMode });
+        const eligible = sessionLocality.isOnMachine(session, accountEncryptionMode);
         if (!eligible && typeof session.id === 'string') excludedScopeSessionIds.add(session.id);
         return eligible;
       },
@@ -555,6 +559,7 @@ export async function startMemoryWorker(params: Readonly<{
   const forgetWorkerSessionState = (sessionIds: readonly string[]): void => {
     const doomed = new Set(sessionIds);
     if (doomed.size === 0) return;
+    sessionLocality.forget(sessionIds);
     candidateSessionIds = candidateSessionIds.filter((id) => !doomed.has(id));
     candidateCursor = candidateSessionIds.length === 0
       ? 0
@@ -648,8 +653,7 @@ export async function startMemoryWorker(params: Readonly<{
         ...(signal ? { signal } : {}),
       }).then(async page => {
         const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-        return { ...page, sessions: page.sessions.filter(session => isMemorySessionOnMachine({ session,
-          machineId: params.machineId, credentials: params.credentials, accountEncryptionMode })) };
+        return { ...page, sessions: page.sessions.filter(session => sessionLocality.isOnMachine(session, accountEncryptionMode)) };
       }),
     });
     signal?.throwIfAborted();
@@ -1420,8 +1424,7 @@ export async function startMemoryWorker(params: Readonly<{
       ...(signal ? { signal } : {}),
     });
     const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-    const eligibility = session && isMemorySessionOnMachine({ session, machineId: params.machineId,
-      credentials: params.credentials, accountEncryptionMode })
+    const eligibility = session && sessionLocality.isOnMachine(session, accountEncryptionMode)
       ? resolveMemoryInventorySessionEligibility({
           session,
           backfillPolicy: settings.backfillPolicy,

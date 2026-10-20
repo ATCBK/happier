@@ -1,4 +1,5 @@
 import { afterTx, type Tx } from "@/storage/inTx";
+import type { AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
@@ -108,7 +109,7 @@ export function scheduleReleasedDirectShareEvent(
     tx: Tx,
     params: Readonly<{
         recipientAccountId: string;
-        cursor: number;
+        publication: AccountChangePublication | undefined;
         event: ReleasedDirectShareEvent | null;
         sharedByUser: ReleasedDirectShareSenderProfile | null;
     }>,
@@ -131,11 +132,12 @@ export function scheduleReleasedDirectShareEvent(
     }
 
     afterTx(tx, () => {
+        const cursor = params.publication?.resolveCursor() ?? 0;
         const payload = event.kind === "revoked"
             ? buildSessionShareRevokedUpdate(
                 event.shareId,
                 event.sessionId,
-                params.cursor,
+                cursor,
                 eventId,
             )
             : event.kind === "shared"
@@ -153,7 +155,7 @@ export function scheduleReleasedDirectShareEvent(
                         canApprovePermissions: event.share.canApprovePermissions,
                         createdAt: event.share.createdAt,
                     },
-                    params.cursor,
+                    cursor,
                     eventId,
                 )
                 : buildSessionShareUpdatedUpdate(
@@ -162,7 +164,7 @@ export function scheduleReleasedDirectShareEvent(
                     event.share.accessLevel,
                     event.share.canApprovePermissions,
                     event.share.updatedAt,
-                    params.cursor,
+                    cursor,
                     eventId,
                 );
 

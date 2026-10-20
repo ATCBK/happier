@@ -1,8 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import type { SessionRunnerRuntimeStateV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
-import { RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
+import { createSessionFixture } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
 
 // Real Home/Account routing and response decoding; only network/device credentials are replaced.
 const boundary = await installSessionOpsNetworkBoundary();
@@ -13,12 +19,17 @@ const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtim
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const ops = await import('./sessionRunnerRestart');
+const { storage } = await import('@/sync/domains/state/storage');
+const { Modal } = await import('@/modal');
 let home: Awaited<ReturnType<typeof boundary.addHome>>;
 let response: (method: string) => unknown | Promise<unknown>;
 const decodedRequests: Array<{ method: string; payload: unknown }> = [];
 
 beforeEach(async () => {
     boundary.resetRequests();
+    storage.setState({ sessions: {} });
+    vi.mocked(Modal.confirm).mockReset();
+    vi.mocked(Modal.confirm).mockResolvedValue(true);
     resetScopedMachineTransportCacheForTests();
     home = await boundary.addHome('https://restart.example.test', 'account-a');
     boundary.setHttpResponder(async input => {
@@ -106,10 +117,130 @@ describe('session runner restart op', () => {
             { sessionId: 's1', machineId: 'm1', serverId: home.id },
             { surface: 'ui', authority: 'present_user', serverId: home.id, actionCaller: { kind: 'host' } });
         expect(result).toMatchObject({ ok: true, result: { ok: true, status: 'restarted', sessionId: 's1' } });
+        expect(Modal.confirm).not.toHaveBeenCalled();
         expect(decodedRequests).toContainEqual({ method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, payload: {
             sessionId: 's1', mode: 'if_stale', reason: 'ui_stale_runner_banner', expectedRunnerPid: 123,
             expectedProcessCommandHash: 'hash-old', expectedRunnerEntrypointIdentity: 'runner-runtime-old',
         } });
+    });
+
+    function installActivity(foreground = false) {
+        storage.setState({ sessions: { s1: createSessionFixture({ id: 's1',
+            active: true, activeAt: Date.now(), presence: 'online',
+            latestTurnStatus: foreground ? 'in_progress' : null,
+            runtimeActivityState: 'active', runtimeActivityActiveCount: 2,
+            runtimeActivityObservedAt: Date.now(), runtimeActivityRevision: 1,
+        }) } });
+    }
+
+    const confirmedMethod = RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND;
+    it.each([false, true])('confirms underlying provider activity even with foreground work (%s)', async foreground => {
+        installActivity(foreground);
+        await restartCases[0][1]();
+        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String),
+            expect.objectContaining({ destructive: true }));
+        expect(decodedRequests.map(request => request.method)).toEqual([confirmedMethod]);
+    });
+
+    it('cancels without a restart RPC', async () => {
+        installActivity();
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        await expect(restartCases[0][1]()).resolves.toBeNull();
+        expect(decodedRequests).toEqual([]);
+    });
+
+    it('honors the caller lifetime after the dialog resolves', async () => {
+        installActivity();
+        const controller = new AbortController();
+        vi.mocked(Modal.confirm).mockImplementation(async () => { controller.abort(); return true; });
+        await expect(ops.restartSessionRunnerOnCurrentRuntime({ runtimeState, serverId: home.id,
+            signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(decodedRequests).toEqual([]);
+    });
+
+    it.each(['METHOD_NOT_FOUND', 'METHOD_NOT_AVAILABLE'])('falls back to V1 only after consent when %s', async code => {
+        installActivity();
+        response = method => method === confirmedMethod ? { ok: false, errorCode: code }
+            : { ok: true, status: 'restarted', sessionId: 's1' };
+        await expect(restartCases[0][1]()).resolves.toMatchObject({ status: 'restarted' });
+        expect(decodedRequests.map(request => request.method)).toEqual([confirmedMethod, RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);
+        expect(decodedRequests[0]?.payload).toEqual(decodedRequests[1]?.payload);
+    });
+
+    it('does not downgrade an authorization denial', async () => {
+        installActivity();
+        response = method => method === confirmedMethod ? { ok: false, errorCode: 'FORBIDDEN', error: 'Method not found' } : statusResponse(runtimeState);
+        vi.useFakeTimers();
+        const pending = restartCases[0][1]();
+        await vi.waitFor(() => expect(decodedRequests.length).toBeGreaterThan(0));
+        await vi.advanceTimersByTimeAsync(15_000);
+        await expect(pending).resolves.toMatchObject({ ok: false });
+        expect(decodedRequests.filter(request => request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART)).toEqual([]);
+    });
+
+    it.each([true, false])('uses the same confirmation from the UI Action (accepted: %s)', async accepted => {
+        installActivity(true);
+        vi.mocked(Modal.confirm).mockResolvedValue(accepted);
+        response = method => method === confirmedMethod
+            ? { ok: true, status: 'restarted', sessionId: 's1' } : statusResponse(runtimeState);
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+        const result = await createDefaultActionExecutor().execute(ActionIdSchema.parse('session.runtime.refresh'),
+            { sessionId: 's1', machineId: 'm1', serverId: home.id },
+            { surface: 'ui', authority: 'present_user', serverId: home.id, actionCaller: { kind: 'host' } });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject(accepted ? { ok: true, result: { status: 'restarted' } }
+            : { ok: false, errorCode: 'cancelled' });
+        expect(decodedRequests.filter(request => request.method.startsWith('daemon.sessionRunner.restart'))
+            .map(request => request.method)).toEqual(accepted ? [confirmedMethod] : []);
+    });
+
+    it.each(['accept', 'cancel', 'older daemon'] as const)('protects background work for a provider-binding restart (%s)', async outcome => {
+        installActivity(true);
+        vi.mocked(Modal.confirm).mockResolvedValue(outcome !== 'cancel');
+        response = method => method === confirmedMethod && outcome === 'older daemon'
+            ? { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }
+            : { ok: true, status: 'restarted', sessionId: 's1' };
+        const result = await restartCases[1][1]();
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        if (outcome === 'cancel') {
+            expect(result).toBeNull();
+            expect(decodedRequests).toEqual([]);
+            return;
+        }
+        expect(decodedRequests.map(request => request.method)).toEqual(outcome === 'older daemon'
+            ? [confirmedMethod, RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2] : [confirmedMethod]);
+        expect(decodedRequests[0]?.payload).toMatchObject({ v: 2,
+            expectedRunnerProcessIdentity: processIdentity,
+            providerBindingSecurityChangeConfirmationV1: { previousBindingSecurityFingerprint: 'binding-security:v1:a',
+                nextBindingSecurityFingerprint: 'binding-security:v1:b' },
+        });
+        if (outcome === 'older daemon') expect(decodedRequests[1]?.payload).toEqual(decodedRequests[0]?.payload);
+    });
+
+    it('protects retained activity independently of Session presentation availability', async () => {
+        installActivity();
+        const session = storage.getState().sessions.s1!;
+        storage.setState({ sessions: { s1: { ...session, archivedAt: 1, active: false, presence: 1,
+            runtimeActivityObservedAt: 1 } } });
+        await restartCases[0][1]();
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(decodedRequests.map(request => request.method)).toEqual([confirmedMethod]);
+    });
+
+    it.each(restartCases.flatMap(([name, restart, method]) => [
+        { name, restart, method, accept: true }, { name, restart, method, accept: false },
+    ]))('confirms late native activity for $name (accepted: $accept)', async ({ restart, method, accept }) => {
+        vi.mocked(Modal.confirm).mockResolvedValue(accept);
+        response = requestedMethod => requestedMethod === method
+            ? { ok: false, status: 'busy', sessionId: 's1', diagnostics: { busySource: 'native_background_work' } }
+            : { ok: true, status: 'restarted', sessionId: 's1' };
+        const result = await restart();
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(decodedRequests.map(request => request.method)).toEqual(accept ? [method, confirmedMethod] : [method]);
+        if (accept) expect(result).toMatchObject({ status: 'restarted' });
+        else expect(result).toBeNull();
+        if (accept) expect(decodedRequests[1]?.payload).toEqual(decodedRequests[0]?.payload);
     });
 
     it.each(restartCases)('accepts a %s restart acknowledgement after deferred child work', async (_name, restart, method) => {
@@ -219,7 +350,7 @@ describe('session runner restart op', () => {
         await expect(restartCases[1][1]()).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
     });
 
-    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
+    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'restart_admission_unsupported', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
         response = () => ({ ok: false, status, sessionId: 's1' });
         await expect(restartCases[0][1]()).resolves.toMatchObject({ ok: false, status });
         expect(decodedRequests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);

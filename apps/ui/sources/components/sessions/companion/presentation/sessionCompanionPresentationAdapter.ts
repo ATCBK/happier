@@ -55,6 +55,11 @@ export type SessionPresentationPorts = Readonly<{
     canAddCompanionItem: (item: SessionCompanionItemRefV1) => boolean;
     /** Returns to Chat preserving draft, selection, anchor and keyboard focus. */
     returnToChat: () => SessionPresentationMutationOutcome;
+    /**
+     * Runs a readable Board item's one live body in its Chat reply ("Show here"). `unavailable`
+     * while no reply that draws the item is on screen.
+     */
+    showItemInChat: (itemId: string) => SessionPresentationMutationOutcome;
     /** Opens the incumbent full Companion destination; it owns route currentness. */
     openFullSurface: () => SessionPresentationMutationOutcome;
     publishNotice: (notice: PresentationNotice) => void;
@@ -275,6 +280,17 @@ export function applySessionPresentationIntent(
                 t('sessionBoard.companion.notices.returnedToChat'),
                 exactPorts.returnToChat(),
             );
+
+        case 'chat.item.show': {
+            if (exactPorts.board.availability !== 'ready') return UNAVAILABLE;
+            if (!exactPorts.board.canReadItem(intent.widgetId)) return INVALID_TARGET;
+            return fromPresentationOutcome(
+                exactPorts,
+                'chat.item.show',
+                t('sessionBoard.companion.notices.shownInChat'),
+                exactPorts.showItemInChat(intent.widgetId),
+            );
+        }
 
         case 'board.open':
             return fromPresentationOutcome(

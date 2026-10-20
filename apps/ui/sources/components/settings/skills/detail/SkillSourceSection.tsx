@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 
 import { Switch } from '@/components/ui/forms/Switch';
@@ -8,9 +9,12 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Typography } from '@/constants/Typography';
+import { useMachine } from '@/sync/store/hooks';
 import { t } from '@/text';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 
+import { SkillOutsideReferencesItem } from '../outsideReferences';
 import type { SkillChange, SkillChangeResult } from './useSkillDetail';
 
 function formatTime(ms: number): string {
@@ -30,6 +34,7 @@ function formatDay(ms: number): string {
 function sourceRow(
   read: SkillReadResultV1,
   machineName: (machineId: string) => string,
+  homeDir: string | undefined,
   pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>,
 ): Readonly<{
   title: string;
@@ -69,7 +74,7 @@ function sourceRow(
           machine: machineName(provenance.machineId),
         }),
         subtitle: t('capabilities.skillDetail.source.foundOnBody', {
-          path: provenance.path,
+          path: formatPathRelativeToHome(provenance.path, homeDir),
         }),
         icon: 'desktop',
       };
@@ -122,7 +127,26 @@ export function SkillSourceSection(
   const { read } = props;
   const tracked =
     read.provenance.kind === 'registry' || read.provenance.kind === 'link';
-  const source = sourceRow(read, props.machineName, props.pluginSource);
+  const foundOn = read.provenance.kind === 'machine' ? read.provenance.machineId : null;
+  // The folder is shown the way the machine's person writes it (~/...), from that machine's own home.
+  const homeDir = useMachine(foundOn ?? '', foundOn !== null)?.metadata?.homeDir ?? undefined;
+  const source = sourceRow(read, props.machineName, homeDir, props.pluginSource);
+  // Imported bundles are copies of a folder; a skill written here or shipped with Happier has no outside to miss.
+  const importedCopy =
+    read.provenance.kind === 'registry' ||
+    read.provenance.kind === 'link' ||
+    read.provenance.kind === 'upload' ||
+    read.provenance.kind === 'machine';
+  const outsideReferences = React.useMemo(
+    () =>
+      importedCopy
+        ? readSkillOutsideReferencesV1(
+            read.skillMd,
+            read.files.map((file) => file.path),
+          )
+        : [],
+    [importedCopy, read.files, read.skillMd],
+  );
   const [policy, setPolicy] = React.useState(props.updatePolicy);
   React.useEffect(() => setPolicy(props.updatePolicy), [props.updatePolicy]);
   const setUpdatePolicy = React.useCallback(
@@ -138,11 +162,10 @@ export function SkillSourceSection(
   if (!source) return null;
 
   const description =
-    read.provenance.kind === 'plugin'
+    // Built-in and plugin skills say who ships them in the source row, once.
+    read.provenance.kind === 'plugin' || read.provenance.kind === 'first_party'
       ? undefined
-      : read.provenance.kind === 'first_party'
-        ? t('capabilities.skillDetail.source.descriptionFirstParty')
-        : !tracked
+      : !tracked
           ? t('capabilities.skillDetail.source.descriptionOwn')
           : policy === 'pinned'
             ? t('capabilities.skillDetail.source.descriptionPinned')
@@ -186,6 +209,10 @@ export function SkillSourceSection(
         ) : undefined
         }
         showChevron={false}
+      />
+      <SkillOutsideReferencesItem
+        references={outsideReferences}
+        testID={`${props.testID}:outsideReferences`}
       />
       {tracked ? (
         <>

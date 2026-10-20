@@ -11,7 +11,7 @@ import { LocalServiceManagedServiceActionTargetV1Schema, ProjectServiceDeclarati
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { ManagedControllerV1Schema } from '../../machines/managed/managedMachineV1.js';
 import { ManagedResourceV1Schema } from '../../machines/managed/providerFactsV1.js';
-import { ActionApprovalRequestCreatedResultSchema } from '../actionExecutionResult.js';
+import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema } from '../actionExecutionResult.js';
 import { WorkspaceExecutionConfigAddressV1Schema } from '../../workspaces/projectWorkerPreferencesV1.js';
 
 /** Existing operations that may hold their original Project setup invocation. */
@@ -265,6 +265,8 @@ export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.strictObjec
   settledAt: z.optional(ActionOperationTimestampV1Schema),
   progress: z.optional(ActionOperationProgressV1Schema),
   result: z.optional(z.unknown()),
+  /** Current V2 read only: historical host-observed actors, never credential authority. */
+  operationCredentialUses: z.optional(z.array(ActionOperationCredentialUseV1Schema)),
   error: z.optional(ActionOperationFailureV1Schema),
   domainRef: z.optional(ActionOperationDomainRefV1Schema),
   observation: z.optional(ActionOperationObservationV1Schema),
@@ -313,7 +315,8 @@ export type ActionOperationSnapshotV1 = Readonly<z.infer<typeof ActionOperationS
  * current readers use V2 and the store retains the complete owner observation.
  * Remove this projection when that supported predecessor reader is retired. */
 export function projectActionOperationSnapshotForV1Reader(snapshot: ActionOperationSnapshotV1): ActionOperationSnapshotV1 {
-  const { domainRef, setupReview: _review, observation: _observation, error, progress, ...projection } = snapshot;
+  const { domainRef, setupReview: _review, observation: _observation, operationCredentialUses: _credentialUses,
+    error, progress, ...projection } = snapshot;
   const legacyDomainRef = domainRef?.kind === 'forkRequest' || domainRef?.kind === 'spawnAttempt'
     || domainRef?.kind === 'handoff' ? domainRef : undefined;
   const legacyProgress = progress?.kind === 'phase'

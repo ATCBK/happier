@@ -8,6 +8,7 @@ import {
     RuntimeTranscriptRequiredAdmissionError,
 } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { projectPluginFailureText } from '@/plugins/runtime/lifecycle/utils';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 
 export const NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE =
     'native_agent_privileged_effect_authority_unavailable';
@@ -182,7 +183,9 @@ export function sanitizeNativeAgentSessionBoundaryError(
         return error;
     }
     if (pluginError) {
-        const sanitized = new PluginError({
+        const sanitized = error instanceof SessionStartupInputRefusalError
+            ? new SessionStartupInputRefusalError({ code: code ?? pluginError.code, message })
+            : new PluginError({
             code: code ?? pluginError.code,
             message,
             retryable: pluginError.retryable,

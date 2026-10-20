@@ -8,7 +8,7 @@ import { isStreamingIncompleteLinkHref } from './streaming/streamingMarkdownRepa
 import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
 import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
-import { MarkdownFindDecorationContext } from './rendering/MarkdownFindDecorationContext';
+import { MarkdownFindDecorationContext, MarkdownSourceMarkKindContext } from './rendering/MarkdownFindDecorationContext';
 
 export type MarkdownSpansViewProps = {
     spans: MarkdownSpan[];
@@ -26,6 +26,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
     const resolveSpanStyle = props.resolveSpanStyle ?? (() => undefined);
     const inlineTextSelectable = props.inlineTextSelectable ?? true;
     const findDecoration = React.useContext(MarkdownFindDecorationContext);
+    const markKind = React.useContext(MarkdownSourceMarkKindContext);
     let offset = 0;
 
     return (
@@ -33,7 +34,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
             {props.spans.map((span, index) => {
                 const ranges = findDecoration?.get(span) ?? sliceFindRanges(props.findRanges, offset, span.text.length);
                 offset += span.text.length;
-                const text = ranges?.length ? <FindHighlightedText text={span.text} ranges={ranges} selectable={inlineTextSelectable} /> : span.text;
+                const text = ranges?.length ? <FindHighlightedText text={span.text} ranges={ranges} selectable={inlineTextSelectable} kind={markKind} /> : span.text;
                 if (span.url) {
                     const linkStyle = [props.linkStyle, span.styles.map(resolveSpanStyle)];
                     // Special blocks render from the same repaired source as prose, so a link

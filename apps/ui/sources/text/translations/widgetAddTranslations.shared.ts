@@ -22,7 +22,8 @@ export type WidgetAddTranslation = Readonly<{
     panes: string;
     panesHint: string;
     builtIn: string;
-    prompts: Readonly<{ project: string; projects: string; session: string; workspace: string; machine: string }>;
+    sessionDetails: string;
+    prompts: Readonly<{ project: string; projects: string; session: string; workspace: string; checkout: string; machine: string }>;
     inputLabels: Readonly<Record<'session' | 'metric' | 'breakdown' | 'groupBy' | 'apiEquivalent' | 'agent' | 'model' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine', string>>;
     nativeDescriptions: Readonly<{
         session_summary: string;
@@ -71,6 +72,7 @@ export type WidgetAddTranslation = Readonly<{
     noChoices: string;
     optionsLoading: string;
     optionsFailed: string;
+    widgetLoadFailed: string;
     invalidValue: string;
     invalidReason: string;
     inputsInvalid: string;
@@ -127,7 +129,7 @@ export type WidgetAddTranslation = Readonly<{
     areaWriteFailed: string;
     areaApprovalPending: string;
     /** Why an Add or save was refused, and the next step. */
-    refusals: Readonly<Record<'areaUnavailable' | 'inputsInvalid' | 'typeUnavailable' | 'sizeUnsupported' | 'editDenied' | 'writeUnconfirmed', string>>;
+    refusals: Readonly<Record<'areaUnavailable' | 'inputsInvalid' | 'typeUnavailable' | 'sizeUnsupported' | 'editDenied' | 'writeUnconfirmed' | 'inputsAccessDenied' | 'inputsChoiceGone' | 'inputsChoicesUnavailable', string>>;
     valueNotFound: (params: Readonly<{ value: string }>) => string;
     chooseAnother: (params: Readonly<{ field: string }>) => string;
     chooseField: (params: Readonly<{ field: string }>) => string;
@@ -164,7 +166,8 @@ export const widgetAddTranslationsEnglish = { en: {
         panes: 'Panes',
         panesHint: 'added as a link that opens in Details',
         builtIn: 'Built in',
-        prompts: { project: 'Which project?', projects: 'Which projects?', session: 'Which session?', workspace: 'Which workspace?', machine: 'Which machine?' },
+        sessionDetails: 'Session details',
+        prompts: { project: 'Which project?', projects: 'Which projects?', session: 'Which session?', workspace: 'Which workspace?', checkout: 'Which checkout?', machine: 'Which machine?' },
         inputLabels: { session: 'Session', metric: 'Metric', breakdown: 'Breakdown', groupBy: 'Group by', apiEquivalent: 'API equivalent', agent: 'Agent', model: 'Model', project: 'Project', workspace: 'Workspace', backendMode: 'Backend mode', source: 'Source', machine: 'Machine' },
         nativeDescriptions: {
             session_summary: 'Activity and next steps for the session you choose.',
@@ -211,6 +214,7 @@ export const widgetAddTranslationsEnglish = { en: {
         noChoices: 'Nothing to choose here yet',
         optionsLoading: 'Loading choices…',
         optionsFailed: 'Couldn’t load the choices',
+        widgetLoadFailed: 'Couldn’t load this widget',
         invalidValue: 'not found',
         inputsInvalid: 'Review this widget’s inputs',
         inputsUnavailable: 'A selected input is unavailable',
@@ -272,6 +276,9 @@ export const widgetAddTranslationsEnglish = { en: {
             sizeUnsupported: 'That size isn’t available for this widget. Pick another size.',
             editDenied: 'You can’t change widgets here.',
             writeUnconfirmed: 'Your Home didn’t confirm it. Check the area, then try again.',
+            inputsAccessDenied: 'That session isn’t readable by you, so the widget can’t show it.',
+            inputsChoiceGone: 'That choice isn’t available anymore. Choose another.',
+            inputsChoicesUnavailable: 'Couldn’t load the choices for this widget. Try again in a moment.',
         },
         valueNotFound: ({ value }) => `${value} can’t be found`,
         chooseAnother: ({ field }) => `Choose another ${inSentence(field)}`,

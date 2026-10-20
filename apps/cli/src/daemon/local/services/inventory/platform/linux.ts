@@ -9,6 +9,10 @@ type ProcNetInput = Readonly<{
 }>;
 
 export type LinuxProcfsBoundary = Readonly<{
+    /** Listener summaries do not consume process provenance or ownership. */
+    includeProcessFacts?: boolean;
+    /** Count-only consumers need ownership only to exclude these internal listeners. */
+    listenerOwnerPids?: readonly number[];
     procRoot?: string;
     readFile(path: string, encoding: 'utf8'): Promise<string | Buffer>;
     readdir(path: string): Promise<readonly string[]>;
@@ -26,9 +30,12 @@ export type LinuxProcfsBoundary = Readonly<{
 export type LinuxLocalServiceScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
+    readProcessFacts?: () => Promise<ReadonlyMap<number, LocalServiceProcessFact>>;
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
     /** Actual unreadable FD owners while kernel listening inodes remain unattributed. */
     socketOwnerReadFailures: readonly number[];
+    /** A detailed reader must repeat attribution without the summary's PID restriction. */
+    listenerOwnersRestricted?: true;
 }>;
 
 const PROC_FD_SCAN_CHUNK = 32;
@@ -242,13 +249,13 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
         const [tcp4, tcp6, procEntries] = await Promise.all([
             boundary.readFile(joinProcPath(procRoot, 'net', 'tcp'), 'utf8').catch(() => ''),
             boundary.readFile(joinProcPath(procRoot, 'net', 'tcp6'), 'utf8').catch(() => ''),
-            boundary.readdir(procRoot),
+            boundary.listenerOwnerPids === undefined ? boundary.readdir(procRoot) : [],
         ]);
         const rows = [
             ...parseProcNetTcpRows(String(tcp4), 'ipv4'),
             ...parseProcNetTcpRows(String(tcp6), 'ipv6'),
         ];
-        const pids = procEntries
+        const pids = boundary.listenerOwnerPids ?? procEntries
             .map(parseNumericPid)
             .filter((pid): pid is number => pid !== null);
         const owners = await resolveListeningSocketOwners({
@@ -272,7 +279,7 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
         const listenerPids = [...new Set([...listeners
             .map((listener) => listener.pid)
             .filter((pid): pid is number => typeof pid === 'number'), ...owners.unreadablePids])];
-        const processes = listenerPids.length > 0
+        const readProcessFacts = async (): Promise<ReadonlyMap<number, LocalServiceProcessFact>> => listenerPids.length > 0
             ? await projectLocalServiceProcessFacts({
                 seedPids: listenerPids,
                 onReadFailure: () => {
@@ -285,7 +292,10 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
             })
             : new Map<number, LocalServiceProcessFact>();
 
-        return { listeners, processes, diagnostics, socketOwnerReadFailures: owners.unreadablePids };
+        return { listeners, processes: boundary.includeProcessFacts === false ? new Map<number, LocalServiceProcessFact>() : await readProcessFacts(),
+            ...(boundary.includeProcessFacts === false ? { readProcessFacts } : {}),
+            diagnostics, socketOwnerReadFailures: owners.unreadablePids,
+            ...(boundary.listenerOwnerPids === undefined ? {} : { listenerOwnersRestricted: true as const }) };
     } catch (error) {
         return {
             listeners: [],

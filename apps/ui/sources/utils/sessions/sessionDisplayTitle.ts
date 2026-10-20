@@ -8,6 +8,8 @@ import { getSessionName, resolveLockedSessionTitle } from './sessionUtils';
  * owner's, locked titles included. One derivation, so a workspace tab and a drag preview
  * cannot name the same session differently.
  */
+export function sessionDisplayTitle(source: SessionDisplayNameSource): string;
+export function sessionDisplayTitle(source: SessionDisplayNameSource | null): string | null;
 export function sessionDisplayTitle(source: SessionDisplayNameSource | null): string | null {
     if (!source) return null;
     const title = getSessionName(source, source.serverId);

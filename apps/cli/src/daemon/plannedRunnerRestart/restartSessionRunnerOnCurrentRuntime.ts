@@ -7,7 +7,7 @@ import type {
 import type { SessionRunnerEntrypointIdentity } from '../sessionRunnerRuntime/types';
 import type { SessionRunnerAgentRuntimeCurrentness } from '../sessionRunnerRuntime/resolveAgentRuntimeCurrentness';
 import { resolveSessionRunnerRuntimeState, resolveTrackedSessionRunnerActivity, type SessionRunnerActivityRefusal } from '../sessionRunnerRuntime/resolveRuntimeState';
-import { resolveSessionRunnerEntrypointIdentityFromProcessCommand } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
+import { readTrackedSessionRunnerProcessCommand, resolveSessionRunnerEntrypointIdentityFromProcessCommand } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import {
   resolveSessionRunnerRestartEligibility,
   shouldRefreshSessionRunnerResumeIdentity,
@@ -75,6 +75,9 @@ type RestartSessionRunnerOnCurrentRuntimeInput = Readonly<{
   resolveActivityDisabledReason?: ResolveActivityDisabledReason;
   resolveAgentRuntimeCurrentness?: ResolveAgentRuntimeCurrentness;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
+  readNativeRuntimeActivity?: (sessionId: string) => Promise<'active' | 'settled' | 'unknown'>;
+  /** Set only by the explicit confirmed-background restart operation. */
+  allowNativeBackgroundInterruption?: true;
 }>;
 
 export type RestartSessionRunnerCompletion =
@@ -95,7 +98,7 @@ export function captureRunnerRestartIdentityWitness(
 ): RunnerRestartIdentityWitness {
   const runnerIdentity =
     resolveSessionRunnerEntrypointIdentityFromProcessCommand(
-      tracked.processCommand,
+      readTrackedSessionRunnerProcessCommand(tracked),
     );
   return Object.freeze({
     pid: tracked.pid,
@@ -125,7 +128,7 @@ function isActivePid(value: unknown): value is number {
 }
 
 export function summarizeSessionRunnerEndpoint(tracked: TrackedSession): RestartSessionRunnerEndpointSummary {
-  const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand);
+  const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(readTrackedSessionRunnerProcessCommand(tracked));
   return {
     pid: tracked.pid,
     cliVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
@@ -158,6 +161,7 @@ function mapRestartNotSignaledReasonToDisabledReason(
     || reason === 'shutting_down'
     || reason === 'runner_identity_changed'
     || reason === 'activity_observation_unavailable'
+    || reason === 'remainder_capture_unavailable'
   ) {
     return null;
   }
@@ -182,6 +186,7 @@ function validateRestartContext(input: Readonly<{
     if (eligibility.disabledReason === 'not_active') return skipped('runner_not_active', sessionId, eligibility.disabledReason);
     if (eligibility.disabledReason === 'missing_spawn_options') return skipped('missing_spawn_options', sessionId, eligibility.disabledReason);
     if (eligibility.disabledReason === 'missing_resume_identity') return skipped('missing_resume_snapshot', sessionId, eligibility.disabledReason);
+    if (eligibility.disabledReason === 'restart_admission_unsupported') return skipped('restart_admission_unsupported', sessionId, eligibility.disabledReason);
     return skipped('ineligible', sessionId, eligibility.disabledReason);
   }
 
@@ -217,7 +222,7 @@ function validateRestartContext(input: Readonly<{
 
   const expectedEntrypoint = normalizeString(input.request.expectedRunnerEntrypointIdentity);
   if (expectedEntrypoint) {
-    const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand);
+    const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(readTrackedSessionRunnerProcessCommand(tracked));
     if (runnerIdentity.status !== 'known' || runnerIdentity.comparableId !== expectedEntrypoint) {
       return skipped('runner_identity_changed', sessionId);
     }
@@ -326,9 +331,10 @@ function resolveVersionGate(input: Readonly<{
     };
   }
   if (state.versionState === 'unknown') {
-    const reasonCode = state.plannedRestart.disabledReason === 'current_entrypoint_unknown'
+    const reasonCode = state.daemon.currentEntrypointSource === 'unknown'
       ? 'current_entrypoint_unknown'
-      : 'runner_entrypoint_unknown';
+      : state.runner.entrypointSource === 'unknown'
+        ? 'runner_entrypoint_unknown' : 'runner_generation_unattested';
     return skipped('version_unknown', input.request.sessionId, reasonCode);
   }
   return null;
@@ -415,9 +421,23 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
     return providerRecoverySpawnOptions;
   }
 
+  const resolveNativeActivityGate = async (): Promise<PlannedRunnerRestartSignalGateResult> => {
+    if (input.allowNativeBackgroundInterruption === true || !input.readNativeRuntimeActivity) return true;
+    try {
+      const state = await input.readNativeRuntimeActivity(sessionId);
+      return state === 'active' ? 'turn_in_progress' : true;
+    } catch { return 'activity_observation_unavailable'; }
+  };
   const activityRefusal = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
   if (activityRefusal) {
     return busy(sessionId, activityRefusal);
+  }
+
+  const nativeActivityGate = await resolveNativeActivityGate();
+  if (nativeActivityGate !== true) {
+    return nativeActivityGate === 'turn_in_progress'
+      ? busy(sessionId, { reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } })
+      : { ok: false, status: 'partial_failure', sessionId, diagnostics: { activityObservation: 'unavailable' } };
   }
 
   if ('dryRun' in input.request && input.request.dryRun === true) {
@@ -485,7 +505,13 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
       if (signalVersionGateResult) {
         return agentRuntimeRestartUnavailableReason ?? false;
       }
-      return resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason)?.reasonCode ?? true;
+      const foreground = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
+      if (foreground) return foreground.reasonCode;
+      const nativeGate = await resolveNativeActivityGate();
+      if (nativeGate === 'turn_in_progress') {
+        signalVersionGateResult = busy(sessionId, { reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } });
+      }
+      return nativeGate;
     }
     : undefined;
   const restart = await input.requestRestart({
@@ -515,9 +541,16 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
   });
   if (!restart.signaled) {
     if (signalVersionGateResult) return signalVersionGateResult;
+    if (restart.notSignaledReason === 'restart_admission_unsupported') {
+      return skipped('restart_admission_unsupported', sessionId, 'restart_admission_unsupported');
+    }
     if (restart.notSignaledReason === 'activity_observation_unavailable') {
       return { ok: false, status: 'partial_failure', sessionId,
         diagnostics: { activityObservation: 'unavailable' } };
+    }
+    if (restart.notSignaledReason === 'remainder_capture_unavailable') {
+      return { ok: false, status: 'partial_failure', sessionId,
+        diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } };
     }
     if (
       restart.notSignaledReason === 'unsafe_process'
@@ -631,6 +664,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
   ) => Promise<SessionRunnerAgentRuntimeCurrentness>;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
   shouldContinue?: () => boolean;
+  readNativeRuntimeActivity?: RestartSessionRunnerOnCurrentRuntimeInput['readNativeRuntimeActivity'];
 }>): Promise<RestartAllSessionRunnersResult> {
   const results: RestartSessionRunnerResult[] = [];
   const restartTargets = input.trackedSessions.map((tracked) => ({
@@ -666,6 +700,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
         }
         : {}),
       requestRestart: input.requestRestart,
+      readNativeRuntimeActivity: input.readNativeRuntimeActivity,
       ...(input.resolveAgentRuntimeCurrentness
         ? {
           resolveAgentRuntimeCurrentness:

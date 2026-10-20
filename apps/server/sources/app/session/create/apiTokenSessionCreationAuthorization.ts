@@ -90,7 +90,7 @@ export async function readSessionCreationApiTokenIdInTx(
     authorization: SessionCreationExecutionAuthorization | undefined,
 ): Promise<string | null> {
     if (authorization === undefined) return null;
-    await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "content");
     const binding = 'modelBirth' in authorization ? authorization.binding : authorization;
     const principal = await verifyCurrentExternalActionPrincipalInTx(tx, binding);
     if (binding.accountId !== accountId || !principal || ('modelBirth' in authorization

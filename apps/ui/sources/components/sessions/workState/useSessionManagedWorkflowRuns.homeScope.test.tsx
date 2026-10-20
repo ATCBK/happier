@@ -12,7 +12,7 @@ import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
+import { workflowRunRowFromSummary, workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -22,7 +22,7 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { getActiveServerSnapshot, setActiveServer } = await import('@/sync/domains/server/serverRuntime');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
+const { useSessionManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
 const { useSessionWorkSourcesOwner } = await import('../work/sessionWorkSources');
 const { useSessionAgentActivity } = await import('@/hooks/session/useSessionAgentActivity');
 
@@ -32,7 +32,7 @@ const run = createWorkflowRunSummaryFixture({
     origin: { kind: 'direct', originSessionId: 'session-1' },
 });
 const route = '/v3/automations/runs/workflow-storage';
-let listResponse: unknown;
+let listResponse: Record<string, unknown>;
 let homeA: string;
 let homeB: string;
 let previous = getStorage().getState();
@@ -92,6 +92,36 @@ afterEach(async () => {
 });
 
 describe('Session-managed Workflow exact Home reads through the real Account owner', () => {
+    it('reads Discussion membership from its captured Home while another Home has the same Run id', async () => {
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const { useContextManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
+        const addressedRun = { ...run, state: 'running' as const, origin: { kind: 'direct' as const } };
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({
+            definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                document: { text: 'Wait', references: [], attachments: [] } }] }),
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+            context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+                executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct', discussion: { discussion: { serverId: homeB, discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 } },
+                authorization: { principal: { kind: 'host' } } },
+        });
+        if (!materialized.ok) throw new Error('discussion_fixture_materialization_failed');
+        const accepted = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+        home.answer(homeB, route, { body: { ...listResponse, runs: [addressedRun],
+            acceptedEnvelopesByRunId: { [run.id]: accepted } } });
+        getStorage().getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...run, state: 'failed' })], { serverId: homeA, accountId });
+        const requestedHomes = [homeB];
+        const hook = await renderHook(() => {
+            const bindings = useServerCredentialAccountScopeBindings(requestedHomes);
+            return useContextManagedWorkflowRuns({ resource: { kind: 'discussion', id: 'discussion-1' }, serverId: homeB,
+                accountLifetime: bindings.get(homeB) ?? undefined });
+        });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().runs.map(value => [value.id, value.state])).toEqual([[run.id, 'running']]);
+        expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(run.id, { serverId: homeA, accountId })]?.summary?.state).toBe('failed');
+        expect(home.requestsFor(route).every(request => request.serverId === homeB)).toBe(true);
+    });
     it('retains Work membership and attention after an offline consumer remount, then replaces them on recovery', async () => {
         const useWork = () => useSessionWorkSourcesOwner({
             sessionId: 'session-1', serverId: homeA, ownerMetadata: null,

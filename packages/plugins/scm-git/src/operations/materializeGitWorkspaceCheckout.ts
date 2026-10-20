@@ -504,13 +504,13 @@ async function inspectGitWorktreeBranchRegistration(input: Readonly<{
     });
     if (!listed.success) return { existingPath: null, missingAtTarget: false };
 
-    const matched = parseGitWorktreeListPorcelain({
+    const registered = parseGitWorktreeListPorcelain({
         worktreesOutput: listed.stdout,
         currentWorktreePath: input.repoRoot,
         mainWorktreePath: input.repoRoot,
-    }).find((worktree) => worktree.branch === input.branchName)?.path ?? null;
-    if (!matched) return { existingPath: null, missingAtTarget: false };
-    if (await pathExists(matched)) return { existingPath: matched, missingAtTarget: false };
+    });
+    const branchPath = registered.find((worktree) => worktree.branch === input.branchName)?.path ?? null;
+    if (branchPath && await pathExists(branchPath)) return { existingPath: branchPath, missingAtTarget: false };
 
     const canonicalizeMissingTarget = async (path: string): Promise<string> => {
         try {
@@ -523,10 +523,16 @@ async function inspectGitWorktreeBranchRegistration(input: Readonly<{
             }
         }
     };
-    return {
-        existingPath: null,
-        missingAtTarget: await canonicalizeMissingTarget(matched) === await canonicalizeMissingTarget(input.targetPath),
-    };
+    // Git refuses to add into a path it still lists as a deleted worktree, whichever branch
+    // that earlier worktree carried, and `--force` is the documented override.
+    const canonicalTarget = await canonicalizeMissingTarget(input.targetPath);
+    for (const worktree of registered) {
+        if (await pathExists(worktree.path)) continue;
+        if (await canonicalizeMissingTarget(worktree.path) === canonicalTarget) {
+            return { existingPath: null, missingAtTarget: true };
+        }
+    }
+    return { existingPath: null, missingAtTarget: false };
 }
 
 export async function materializeGitWorkspaceCheckoutAtPath(input: Readonly<{
@@ -557,14 +563,12 @@ export async function materializeGitWorkspaceCheckoutAtPath(input: Readonly<{
         };
     }
 
-    const branchRegistration = input.branchMode === 'existing'
-        ? await inspectGitWorktreeBranchRegistration({
-            repoRoot: input.repoRoot,
-            targetPath: input.targetPath,
-            branchName,
-        })
-        : null;
-    if (branchRegistration?.existingPath) {
+    const branchRegistration = await inspectGitWorktreeBranchRegistration({
+        repoRoot: input.repoRoot,
+        targetPath: input.targetPath,
+        branchName,
+    });
+    if (input.branchMode === 'existing' && branchRegistration.existingPath) {
             input.assertFilesystemPathAuthorized?.(branchRegistration.existingPath);
             return {
                 targetPath: branchRegistration.existingPath,
@@ -597,7 +601,7 @@ export async function materializeGitWorkspaceCheckoutAtPath(input: Readonly<{
         branchName,
         baseRef: normalizedBaseRef,
         branchMode: input.branchMode,
-        force: branchRegistration?.missingAtTarget === true,
+        force: branchRegistration.missingAtTarget,
     });
 
     return {

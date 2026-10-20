@@ -16,6 +16,10 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
+
 describe('Sync workspace readiness', () => {
     beforeEach(() => vi.resetModules());
     it('recovers an offscreen Session draft without materializing the owning Session', async () => {

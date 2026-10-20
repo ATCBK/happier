@@ -78,12 +78,16 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
         await db.sessionMessage.create({ data: { sessionId: destination.id, seq: 1, localId: localInputId,
             messageRole: 'user', acceptedTurnId: 'accepted-destination-turn',
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Continue with the worker result' } } } } });
-        const requests = routes.map(row => SessionFollowAcknowledgeRequestV1Schema.parse({ v: 1,
+        const requests = routes.map(row => {
+            const request = SessionFollowAcknowledgeRequestV1Schema.parse({ v: 1,
             destinationSessionId: destination.id, sourceSessionId: source.id,
             expectedPublisherGeneration: observation.publisherGeneration, relation: row.relation,
             ...(row.relation === 'manager' ? { attachedAt: row.attachedAt } : {}), policy: row.policy,
             expected: row.delivered, observed: row.observed, consumed: row.observed,
-            acceptance: { kind: 'admitted_input', localInputId, userMessageSeq: 1 } }));
+            acceptance: { kind: 'admitted_input', localInputId, userMessageSeq: 1 } });
+            if (!('consumed' in request)) throw new Error('Expected source frontier ACK');
+            return request;
+        });
         const acknowledge = async (request: typeof requests[number]) => {
             let response: unknown;
             await getSocketHandler(socket, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1)(request,
@@ -126,7 +130,16 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
         for (const edge of edges) expect(edge).toMatchObject({ deliveredTranscriptSeq: 2, deliveredReadyEventSeq: 0,
             deliveredAgentStateVersion: 2, deliveredTurnId: 'session-turn:failed-source', deliveredTurnStatus: 'failed' });
         // A duplicate retains the typed CAS refusal; it cannot throw or regress progress.
-        expect(await acknowledge(requests[0]!)).toEqual({ ok: false, v: 1, error: 'stale_expected_frontier' });
+        const semanticWarning = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        try {
+            expect(await acknowledge(requests[0]!)).toEqual({ ok: false, v: 1, error: 'stale_expected_frontier' });
+            expect(semanticWarning.mock.calls).toContainEqual([
+                expect.objectContaining({ operation: 'session_follow_acknowledge', phase: 'frontier',
+                    destinationSessionId: destination.id, sourceSessionId: source.id,
+                    causes: [{ name: 'SessionFollowAcknowledgeRefusal', code: 'stale_expected_frontier' }] }),
+                'Session Follow acknowledgment failed',
+            ]);
+        } finally { semanticWarning.mockRestore(); }
         // A superseded socket cannot borrow the successor's current generation,
         // even with a valid accepted input and an otherwise-current route tuple.
         const successorSocket = {};

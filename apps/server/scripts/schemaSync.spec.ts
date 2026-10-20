@@ -24,6 +24,7 @@ describe("schemaSync", () => {
         for (const field of ['followPolicy', 'notifyOnce']) {
             expect(follow).toMatch(new RegExp(`^\\s*${field}\\s+String\\?\\s+@db\\.LongText`, 'mu'));
         }
+        expect(follow).toMatch(/^\s*sourceKey\s+String\?\s+@db\.VarChar\(202\)/mu);
     });
     it("preserves exact retained KV identities within MySQL's full compound index capacity", () => {
         const postgres = readFileSync(join(serverRoot, "prisma/schema.prisma"), "utf8");
@@ -153,6 +154,50 @@ describe("schemaSync", () => {
         expect(mysql).not.toMatch(/SET NEW\.`sourceSessionId` = NULLIF/gu);
         expect(mysql).toMatch(/SessionFollowEdge_frontier_nonnegative_check/u);
         expect(mysql).toMatch(/SessionFollowEdge_deliveredTurn_pair_check/u);
+    });
+
+    it("keeps the public share exactly-one-subject invariant provider-complete", () => {
+        for (const providerDir of ["prisma", "prisma/sqlite"]) {
+            const migration = readFileSync(join(
+                serverRoot,
+                providerDir,
+                "migrations/20261002200000_stored_content_public_shares/migration.sql",
+            ), "utf8");
+            expect(migration).toMatch(/PublicSessionShare_subject_check/u);
+        }
+
+        const mysql = readFileSync(join(
+            serverRoot,
+            "prisma/mysql/migrations/20261002200000_stored_content_public_shares/migration.sql",
+        ), "utf8");
+        // sessionId and artifactId both participate in cascading foreign keys,
+        // so MySQL rejects the CHECK (error 3823); triggers carry the invariant.
+        expect(mysql).not.toMatch(/PublicSessionShare_subject_check/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `PublicSessionShare_subject_insert`/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `PublicSessionShare_subject_update`/u);
+        expect(mysql.match(/SIGNAL SQLSTATE '45000'/gu)).toHaveLength(2);
+    });
+
+    it("keeps the managed Machine preset exactly-one-owner invariant provider-complete", () => {
+        for (const providerDir of ["prisma", "prisma/sqlite"]) {
+            const migration = readFileSync(join(
+                serverRoot,
+                providerDir,
+                "migrations/20261008143000_add_managed_machine_authority/migration.sql",
+            ), "utf8");
+            expect(migration).toMatch(/ManagedMachinePreset_owner_check/u);
+        }
+
+        const mysql = readFileSync(join(
+            serverRoot,
+            "prisma/mysql/migrations/20261008143000_add_managed_machine_authority/migration.sql",
+        ), "utf8");
+        // custodianAccountId and teamId both participate in cascading foreign
+        // keys, so MySQL rejects the CHECK (error 3823); triggers carry it.
+        expect(mysql).not.toMatch(/ManagedMachinePreset_owner_check/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `ManagedMachinePreset_owner_insert`/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `ManagedMachinePreset_owner_update`/u);
+        expect(mysql).toMatch(/DATETIME\(3\) NOT NULL DEFAULT CURRENT_TIMESTAMP\(3\)/u);
     });
 
     it("keeps the Automation catalog identity within MySQL's exact key boundary", () => {

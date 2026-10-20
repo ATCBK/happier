@@ -162,5 +162,5 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
             icon: pinned ? 'push-pin-slash' : 'push-pin', title: pinned ? t('session.transcriptNavigation.unpinMessageA11y') : t('session.transcriptNavigation.pinMessageA11y'),
             onPress: () => { if (pinAvailability.status === 'available') input.onToggleMessagePin?.(buildSessionMessagePinAtPressTime(pinAvailability.pinTarget)); } },
     ];
-    return { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability };
+    return { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability, committedMessage };
 }

@@ -81,6 +81,8 @@ export type SessionSummaryActivityFacts = Readonly<{
 
 export type SessionSummaryInput = Readonly<{
     awareness: SessionAwarenessProjectionV1;
+    /** Authorized process fact from the shared Session status metadata reader. */
+    lifecycleState?: string;
     /** From the existing Agent catalog presentation; never inferred from metadata here. */
     agentLabel: string | null;
     /** The presentation Agent id, for its mark on the status line. */
@@ -249,7 +251,9 @@ export function projectSessionSummaryCard(input: SessionSummaryInput): SessionSu
         title: input.awareness.title ?? null,
         agentLabel: input.agentLabel,
         agentId: input.agentId ?? null,
-        status: presentSessionAwarenessV1(input.awareness),
+        status: presentSessionAwarenessV1(input.awareness, {
+            lifecycleState: input.lifecycleState, disconnectedTextMode: 'offline',
+        }),
         stale: input.awareness.freshness !== 'live',
         availability: input.awareness.availability,
         encryption: input.awareness.encryption,

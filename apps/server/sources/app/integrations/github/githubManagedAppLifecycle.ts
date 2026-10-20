@@ -10,6 +10,7 @@ import {
 import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 import {
     createIdentityProviderInstanceInTx,
+    acquireIdentityProviderMutationAdmissionInTx,
 } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "@/app/teams/identity/teamIdentityAdministrationAuthority";
@@ -17,7 +18,7 @@ import type { TeamIdentityErrorCodeV1 } from "@happier-dev/protocol/teams";
 import { resolveManagedIdentityNetworkPolicyInTx } from "@/app/auth/providers/managed/managedIdentityNetworkPolicy";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import type { TeamDirectorySourceState } from "@/storage/enums.generated";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 import {
@@ -50,6 +51,8 @@ import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdminist
 import {
     publishGitHubAppRegistrationTeamsChangedInTx,
     publishTeamChangedInTx,
+    readGitHubAppRegistrationTeamsChangeAudienceInTx,
+    readGitHubAppRegistrationTeamIdsInTx,
 } from "@/app/teams/teamChanges";
 
 const GitHubAppRegistrationStateSchema = z.enum([
@@ -165,6 +168,39 @@ async function publishGitHubAppOwnerChangedInTx(
 
 function rowHasOwner(row: Pick<GitHubAppRegistrationRow, "ownerTeamId">, owner: ProviderCatalogContext): boolean {
     return row.ownerTeamId === ownerTeamId(owner);
+}
+
+async function acquireGitHubAppMutationAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{
+        actorAccountId: string;
+        owner: ProviderCatalogContext;
+        registrationId?: string;
+        installationId?: string;
+    }>,
+): Promise<() => Promise<void>> {
+    const registrationId = input.registrationId ?? (input.installationId
+        ? (await tx.gitHubAppInstallation.findUnique({ where: { id: input.installationId }, select: { registrationId: true } }))?.registrationId
+        : undefined);
+    const readAudience = () => registrationId
+        ? readGitHubAppRegistrationTeamsChangeAudienceInTx(tx, { registrationId }) : Promise.resolve([]);
+    const audience = await readAudience();
+    const readTeamIds = () => registrationId
+        ? readGitHubAppRegistrationTeamIdsInTx(tx, registrationId) : Promise.resolve([]);
+    const teamIds = await readTeamIds();
+    const recheckProvider = await acquireIdentityProviderMutationAdmissionInTx(tx, {
+        owner: input.owner, additionalAccountIds: [input.actorAccountId, ...audience],
+        additionalTeamIds: teamIds,
+    });
+    const captured = new Set(audience);
+    const recheck = async () => {
+        await recheckProvider();
+        if ((await readAudience()).some(accountId => !captured.has(accountId))) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    };
+    await recheck();
+    return recheck;
 }
 
 async function ensureManagedGitHubIdentityProviderCandidateInTx(
@@ -363,6 +399,7 @@ export async function createGitHubAppRegistration(params: GitHubAppManagementAut
     }
     const githubHost = normalizeGitHubHost(params.input.githubHost);
     return await inTx(async (tx) => {
+        const recheckAdmission = await acquireGitHubAppMutationAdmissionInTx(tx, params);
         const authority = await authorizeGitHubAppManagementInTx(tx, params);
         if (authority.status !== "authorized") {
             return { status: authority.status };
@@ -388,6 +425,7 @@ export async function createGitHubAppRegistration(params: GitHubAppManagementAut
             },
             select: registrationSelect,
         });
+        await recheckAdmission();
         await publishGitHubAppOwnerChangedInTx(tx, params.owner, row.id, {
             actorAccountId: params.actorAccountId,
             detail: { action: "github_app.create", summary: { name: gitHubAppAuditName(row) } },
@@ -509,6 +547,7 @@ export async function updateGitHubAppRegistration(params: GitHubAppManagementAut
     }>;
 }>): Promise<UpdateHomeGitHubAppRegistrationResult> {
     return await inTx(async (tx) => {
+        const recheckAdmission = await acquireGitHubAppMutationAdmissionInTx(tx, params);
         const authority = await authorizeGitHubAppManagementInTx(tx, params);
         if (authority.status !== "authorized") {
             return { status: authority.status };
@@ -563,6 +602,7 @@ export async function updateGitHubAppRegistration(params: GitHubAppManagementAut
         });
         const latestSecrets = updated.count === 0 ? decryptRegistrationSecrets(latest) : nextSecrets;
         if (updated.count === 1) {
+            await recheckAdmission();
             await publishGitHubAppOwnerChangedInTx(tx, params.owner, params.registrationId, {
                 actorAccountId: params.actorAccountId,
                 detail: {
@@ -1049,6 +1089,7 @@ async function verifyGitHubAppInstallationWithAdministrator(params: GitHubAppMan
     if (!administrator.ok) return { status: administrator.code };
 
     return await inTx(async (tx): Promise<VerifyHomeGitHubAppInstallationResult> => {
+        const recheckAdmission = await acquireGitHubAppMutationAdmissionInTx(tx, params);
         const authority = await authorizeGitHubAppManagementInTx(tx, params);
         if (authority.status !== "authorized") {
             return { status: authority.status };
@@ -1128,6 +1169,7 @@ async function verifyGitHubAppInstallationWithAdministrator(params: GitHubAppMan
                 },
                 select: installationSelect,
             });
+        await recheckAdmission();
         await ensureManagedGitHubIdentityProviderCandidateInTx(tx, {
             actorAccountId: params.actorAccountId,
             owner: params.owner,
@@ -1213,6 +1255,7 @@ export async function removeGitHubAppInstallation(params: GitHubAppManagementAut
     expectedRevision: number;
 }>): Promise<RemoveHomeGitHubAppInstallationResult> {
     return await inTx(async (tx) => {
+        const recheckAdmission = await acquireGitHubAppMutationAdmissionInTx(tx, params);
         const authority = await authorizeGitHubAppManagementInTx(tx, params);
         if (authority.status !== "authorized") {
             return { status: authority.status };
@@ -1241,6 +1284,7 @@ export async function removeGitHubAppInstallation(params: GitHubAppManagementAut
             where: { id: params.installationId, revision: params.expectedRevision },
         });
         if (removed.count === 1) {
+            await recheckAdmission();
             await publishGitHubAppOwnerChangedInTx(tx, params.owner, installation.registrationId, {
                 actorAccountId: params.actorAccountId,
                 detail: {

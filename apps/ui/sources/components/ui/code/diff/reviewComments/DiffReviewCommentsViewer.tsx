@@ -13,7 +13,7 @@ import { useInlineDiffVirtualizationThresholds } from '@/components/ui/code/diff
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import type { DiffViewerBaseProps } from '../diffViewerTypes';
 
 const DISABLED_INTRA_LINE_WORD_DIFF = {

@@ -31,7 +31,7 @@ export type SkillsUpdatesTranslation = Readonly<{
     upToDate: string;
     noSources: string;
     updatedTitle: string;
-    upToDateChecked: (params: Readonly<{ time: string }>) => string;
+    checkedAt: (params: Readonly<{ time: string }>) => string;
     checkFailed: string;
     diffFailed: string;
     applyFailed: string;
@@ -40,6 +40,7 @@ export type SkillsUpdatesTranslation = Readonly<{
   }>;
   choose: Readonly<{
     purpose: (params: Readonly<{ total: number; off: number }>) => string;
+    purposeIdle: string;
     migratedTitle: (params: Count) => string;
     migratedBody: (params: Readonly<{ names: string }>) => string;
     listTitle: string;
@@ -96,7 +97,7 @@ const en: SkillsUpdatesTranslation = {
     upToDate: 'Everything is up to date',
     noSources: 'None of your skills come from a source that updates. Skills you add from GitHub or a registry show their newer versions here.',
     updatedTitle: 'Updated',
-    upToDateChecked: ({ time }) => `Everything is up to date · checked ${time}`,
+    checkedAt: ({ time }) => `Checked ${time}`,
     checkFailed: 'Couldn’t check for updates.',
     diffFailed: 'Couldn’t load the changes.',
     applyFailed: 'Couldn’t update it.',
@@ -106,6 +107,7 @@ const en: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `You have ${total} skills in your library. ${off} stay off until you choose, so your sessions don’t change yet.`,
+    purposeIdle: 'Decide which of your skills your agents get.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'is' : 'are'} already on, where you used ${count === 1 ? 'it' : 'them'}`,
     migratedBody: ({ names }) =>
@@ -165,7 +167,7 @@ const de: SkillsUpdatesTranslation = {
     upToDate: 'Alles ist aktuell',
     noSources: 'Keiner deiner Skills stammt aus einer Quelle mit Updates. Skills, die du von GitHub oder aus einer Registry hinzufügst, zeigen ihre neueren Versionen hier.',
     updatedTitle: 'Aktualisiert',
-    upToDateChecked: ({ time }) => `Alles ist aktuell · geprüft ${time}`,
+    checkedAt: ({ time }) => `Geprüft ${time}`,
     checkFailed: 'Updates konnten nicht geprüft werden.',
     diffFailed: 'Die Änderungen konnten nicht geladen werden.',
     applyFailed: 'Konnte nicht aktualisiert werden.',
@@ -175,6 +177,7 @@ const de: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Deine Bibliothek hat ${total} Skills. ${off} bleiben aus, bis du wählst, deine Sitzungen ändern sich also noch nicht.`,
+    purposeIdle: 'Entscheide, welche deiner Skills deine Agents bekommen.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'ist' : 'sind'} schon dort an, wo du sie genutzt hast`,
     migratedBody: ({ names }) =>
@@ -236,7 +239,7 @@ const fr: SkillsUpdatesTranslation = {
     upToDate: 'Tout est à jour',
     noSources: 'Aucun de vos skills ne vient d’une source qui se met à jour. Les skills ajoutés depuis GitHub ou un registre montrent ici leurs nouvelles versions.',
     updatedTitle: 'Mis à jour',
-    upToDateChecked: ({ time }) => `Tout est à jour · vérifié à ${time}`,
+    checkedAt: ({ time }) => `Vérifié à ${time}`,
     checkFailed: 'Impossible de vérifier les mises à jour.',
     diffFailed: 'Impossible de charger les changements.',
     applyFailed: 'Impossible de mettre à jour.',
@@ -246,6 +249,7 @@ const fr: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Votre bibliothèque compte ${total} skills. ${off} restent désactivés jusqu’à votre choix : vos sessions ne changent pas encore.`,
+    purposeIdle: 'Choisissez quels skills vos agents reçoivent.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'est déjà activé' : 'sont déjà activés'}, là où vous ${count === 1 ? 'l’avez utilisé' : 'les avez utilisés'}`,
     migratedBody: ({ names }) =>
@@ -306,7 +310,7 @@ const es: SkillsUpdatesTranslation = {
     upToDate: 'Todo está al día',
     noSources: 'Ninguna de tus skills viene de una fuente que se actualice. Las skills que añadas desde GitHub o un registro muestran aquí sus versiones nuevas.',
     updatedTitle: 'Actualizadas',
-    upToDateChecked: ({ time }) => `Todo está al día · comprobado ${time}`,
+    checkedAt: ({ time }) => `Comprobado ${time}`,
     checkFailed: 'No se pudieron comprobar las actualizaciones.',
     diffFailed: 'No se pudieron cargar los cambios.',
     applyFailed: 'No se pudo actualizar.',
@@ -316,6 +320,7 @@ const es: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Tienes ${total} habilidades en tu biblioteca. ${off} siguen desactivadas hasta que elijas, así que tus sesiones aún no cambian.`,
+    purposeIdle: 'Decide qué habilidades reciben tus agentes.',
     migratedTitle: ({ count }) =>
       `${count} ya ${count === 1 ? 'está activada' : 'están activadas'} donde las usabas`,
     migratedBody: ({ names }) =>
@@ -376,7 +381,7 @@ const ca: SkillsUpdatesTranslation = {
     upToDate: 'Tot està al dia',
     noSources: 'Cap de les teves skills ve d’una font que s’actualitzi. Les skills que afegeixis des de GitHub o un registre mostren aquí les versions noves.',
     updatedTitle: 'Actualitzades',
-    upToDateChecked: ({ time }) => `Tot està al dia · comprovat ${time}`,
+    checkedAt: ({ time }) => `Comprovat ${time}`,
     checkFailed: 'No s’han pogut comprovar les actualitzacions.',
     diffFailed: 'No s’han pogut carregar els canvis.',
     applyFailed: 'No s’ha pogut actualitzar.',
@@ -386,6 +391,7 @@ const ca: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Tens ${total} habilitats a la biblioteca. ${off} continuen desactivades fins que triïs, així que les sessions encara no canvien.`,
+    purposeIdle: 'Decideix quines habilitats reben els teus agents.',
     migratedTitle: ({ count }) =>
       `${count} ja ${count === 1 ? 'està activada' : 'estan activades'} on les feies servir`,
     migratedBody: ({ names }) =>
@@ -446,7 +452,7 @@ const it: SkillsUpdatesTranslation = {
     upToDate: 'È tutto aggiornato',
     noSources: 'Nessuna delle tue skill viene da una fonte che si aggiorna. Le skill aggiunte da GitHub o da un registro mostrano qui le versioni più recenti.',
     updatedTitle: 'Aggiornate',
-    upToDateChecked: ({ time }) => `È tutto aggiornato · controllato ${time}`,
+    checkedAt: ({ time }) => `Controllato ${time}`,
     checkFailed: 'Impossibile controllare gli aggiornamenti.',
     diffFailed: 'Impossibile caricare le modifiche.',
     applyFailed: 'Impossibile aggiornare.',
@@ -456,6 +462,7 @@ const it: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Hai ${total} skill nella libreria. ${off} restano disattivate finché non scegli, quindi le tue sessioni non cambiano ancora.`,
+    purposeIdle: 'Scegli quali skill ricevono i tuoi agenti.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'è già attiva' : 'sono già attive'} dove le usavi`,
     migratedBody: ({ names }) =>
@@ -516,7 +523,7 @@ const pt: SkillsUpdatesTranslation = {
     upToDate: 'Tudo está atualizado',
     noSources: 'Nenhuma das suas skills vem de uma fonte que se atualiza. Skills adicionadas do GitHub ou de um registro mostram aqui as versões novas.',
     updatedTitle: 'Atualizadas',
-    upToDateChecked: ({ time }) => `Tudo está atualizado · verificado ${time}`,
+    checkedAt: ({ time }) => `Verificado ${time}`,
     checkFailed: 'Não foi possível verificar atualizações.',
     diffFailed: 'Não foi possível carregar as alterações.',
     applyFailed: 'Não foi possível atualizar.',
@@ -526,6 +533,7 @@ const pt: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Você tem ${total} habilidades na biblioteca. ${off} ficam desativadas até você escolher, então suas sessões ainda não mudam.`,
+    purposeIdle: 'Escolha quais habilidades seus agentes recebem.',
     migratedTitle: ({ count }) =>
       `${count} já ${count === 1 ? 'está ativada' : 'estão ativadas'} onde você as usava`,
     migratedBody: ({ names }) =>
@@ -584,8 +592,8 @@ const pl: SkillsUpdatesTranslation = {
     upToDate: 'Wszystko jest aktualne',
     noSources: 'Żadna z Twoich umiejętności nie pochodzi ze źródła z aktualizacjami. Umiejętności dodane z GitHuba lub rejestru pokażą tu nowsze wersje.',
     updatedTitle: 'Zaktualizowane',
-    upToDateChecked: ({ time }) =>
-      `Wszystko jest aktualne · sprawdzono ${time}`,
+    checkedAt: ({ time }) =>
+      `Sprawdzono ${time}`,
     checkFailed: 'Nie udało się sprawdzić aktualizacji.',
     diffFailed: 'Nie udało się wczytać zmian.',
     applyFailed: 'Nie udało się zaktualizować.',
@@ -595,6 +603,7 @@ const pl: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Masz w bibliotece ${total} umiejętności. ${off} pozostaje wyłączonych, dopóki nie wybierzesz, więc Twoje sesje jeszcze się nie zmieniają.`,
+    purposeIdle: 'Wybierz, które umiejętności dostają Twoi agenci.',
     migratedTitle: ({ count }) =>
       `Już włączone tam, gdzie ich używałeś: ${count}`,
     migratedBody: ({ names }) =>
@@ -652,7 +661,7 @@ const ru: SkillsUpdatesTranslation = {
     upToDate: 'Всё актуально',
     noSources: 'Ни один ваш навык не пришёл из источника с обновлениями. Навыки из GitHub или реестра показывают здесь новые версии.',
     updatedTitle: 'Обновлены',
-    upToDateChecked: ({ time }) => `Всё актуально · проверено ${time}`,
+    checkedAt: ({ time }) => `Проверено ${time}`,
     checkFailed: 'Не удалось проверить обновления.',
     diffFailed: 'Не удалось загрузить изменения.',
     applyFailed: 'Не удалось обновить.',
@@ -662,6 +671,7 @@ const ru: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `В вашей библиотеке ${total} навыков. ${off} остаются выключенными, пока вы не выберете, поэтому ваши сессии пока не меняются.`,
+    purposeIdle: 'Выберите, какие скиллы получают ваши агенты.',
     migratedTitle: ({ count }) =>
       `Уже включены там, где вы их использовали: ${count}`,
     migratedBody: ({ names }) =>
@@ -719,7 +729,7 @@ const ja: SkillsUpdatesTranslation = {
     upToDate: 'すべて最新です',
     noSources: '更新元のあるスキルはありません。GitHub やレジストリから追加したスキルは、新しいバージョンがここに表示されます。',
     updatedTitle: '更新済み',
-    upToDateChecked: ({ time }) => `すべて最新です · ${time} に確認`,
+    checkedAt: ({ time }) => `${time} に確認`,
     checkFailed: 'アップデートを確認できませんでした。',
     diffFailed: '変更を読み込めませんでした。',
     applyFailed: '更新できませんでした。',
@@ -729,6 +739,7 @@ const ja: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `ライブラリには ${total} 個のスキルがあります。選ぶまで ${off} 個はオフのままなので、セッションはまだ変わりません。`,
+    purposeIdle: 'エージェントに渡すスキルを選びます。',
     migratedTitle: ({ count }) => `${count} 個は使っていた場所ですでにオンです`,
     migratedBody: ({ names }) =>
       `${names} はアカウントまたはプロジェクトのコンテキストから来たため、使っていた場所でオンのままです。`,
@@ -783,7 +794,7 @@ const zhHans: SkillsUpdatesTranslation = {
     upToDate: '一切都是最新的',
     noSources: '你的技能都不来自会更新的来源。从 GitHub 或注册表添加的技能会在这里显示新版本。',
     updatedTitle: '已更新',
-    upToDateChecked: ({ time }) => `一切都是最新的 · ${time} 检查`,
+    checkedAt: ({ time }) => `${time} 检查`,
     checkFailed: '无法检查更新。',
     diffFailed: '无法加载改动。',
     applyFailed: '无法更新。',
@@ -793,6 +804,7 @@ const zhHans: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `你的库中有 ${total} 个技能。在你选择之前，${off} 个保持关闭，所以你的会话暂时不会改变。`,
+    purposeIdle: '选择你的代理能获得哪些技能。',
     migratedTitle: ({ count }) => `${count} 个已在你用过的地方开启`,
     migratedBody: ({ names }) =>
       `${names} 来自你的账户或项目上下文，所以在你用过的地方保持开启。`,
@@ -847,7 +859,7 @@ const zhHant: SkillsUpdatesTranslation = {
     upToDate: '一切都是最新的',
     noSources: '你的技能都不來自會更新的來源。從 GitHub 或登錄檔新增的技能會在這裡顯示新版本。',
     updatedTitle: '已更新',
-    upToDateChecked: ({ time }) => `一切都是最新的 · ${time} 檢查`,
+    checkedAt: ({ time }) => `${time} 檢查`,
     checkFailed: '無法檢查更新。',
     diffFailed: '無法載入改動。',
     applyFailed: '無法更新。',
@@ -857,6 +869,7 @@ const zhHant: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `你的庫中有 ${total} 個技能。在你選擇之前，${off} 個保持關閉，所以你的工作階段暫時不會改變。`,
+    purposeIdle: '選擇你的代理能獲得哪些技能。',
     migratedTitle: ({ count }) => `${count} 個已在你用過的地方開啟`,
     migratedBody: ({ names }) =>
       `${names} 來自你的帳戶或專案上下文，所以在你用過的地方保持開啟。`,

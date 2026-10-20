@@ -73,6 +73,12 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ? { kind: 'accepted-input-start', target }
                 : machine.retention.kind !== 'until-delete' ? { kind: 'retention' } : null;
             if (!purpose) continue;
+            // Unused retention needs the enrolled guest's positive activity
+            // evidence. Native allocation alone is still creation, not idle.
+            // A reviewed deadline or an already-submitted effect retains its
+            // own lifecycle, including reconciliation before enrollment.
+            if (purpose.kind === 'retention' && machine.retention.kind === 'unused'
+                && !machine.enrolledMachineId && !machine.submittedNativeEffect) continue;
             current.add(machine.id);
             // Intent revisions created by this same driver do not cancel its
             // native completion. A replaced native resource or enrollment does
@@ -83,6 +89,14 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ...(purpose.kind === 'accepted-input-start' ? { origin: purpose.target.origin } : {}) };
             const prior = active.get(machine.id);
             if (prior && isDeepStrictEqual(prior.signature, signature) && !prior.cancel.signal.aborted) continue;
+            // Pending may remain authorized until its Agent actually claims it.
+            // Running compute already satisfies its wake; keep any incumbent
+            // native reconciliation above, but do not create another Start/Ask.
+            if (purpose.kind === 'accepted-input-start' && !machine.submittedNativeEffect
+                && machine.observation?.availability === 'present' && machine.observation.power === 'running') {
+                if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
+                continue;
+            }
             // Native Stop satisfies a Stop policy until compute runs again.
             // Keep an already-running driver's settlement above; a pending native
             // effect still needs its incumbent reconciliation, and an accepted

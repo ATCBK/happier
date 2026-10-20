@@ -13,6 +13,17 @@ import {
 } from './discussionComposerDocument';
 
 describe('discussion composer document', () => {
+    it('keeps an unstarted model slot inert through draft edits and refuses to serialize it as a Session', () => {
+        const raw = [{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }];
+        const spans = parseDiscussionMentionSpans(raw, '@Model');
+        expect(spans).toEqual(raw);
+        const mentions = discussionComposerMentionsFromSpans('@Model', spans);
+        expect(mentions[0]).not.toMatchObject({ kind: 'happier.session' });
+        expect(discussionMentionSpansFromComposerMentions(mentions)).toEqual(raw);
+        expect(reconcileDiscussionMentionSpans({ previousText: '@Model', nextText: 'Ask @Model', mentions: spans }))
+            .toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(() => buildDiscussionContent('@Model', spans)).toThrow();
+    });
     it('submits Account and Session mentions through the canonical participant content arm without mixing person attention', () => {
         const mentions = [
             { start: 0, end: 5, accountId: 'same-id' },

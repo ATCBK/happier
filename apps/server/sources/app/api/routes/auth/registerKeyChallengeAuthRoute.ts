@@ -414,7 +414,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
             // passed, so the stamp records what was actually verified.
             const token = purpose.tokenKind === "account"
                 ? await inTx(async (tx) => {
-                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, expectedAccount.id);
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, expectedAccount.id, "content");
                     const passwordIdentity = verifiedNativePasswordEvidence !== null
                         ? await tx.accountIdentity.findUnique({
                             where: { accountId_provider: { accountId: expectedAccount.id, provider: "email" } },

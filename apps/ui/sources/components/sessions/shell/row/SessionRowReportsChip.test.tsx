@@ -64,6 +64,17 @@ describe('SessionRowReportsChip', () => {
     expect(settled.findByTestId('session-row-reports-chip:bot')).not.toBeNull();
   });
 
+  it('counts only the sub-sessions that are not archived, and says nothing when every report is archived', async () => {
+    const counted = await renderScreen(
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 3, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+    );
+    expect(counted.findByTestId('session-row-reports-chip:bot')?.props.accessibilityLabel).toContain('2');
+    const archivedOnly = await renderScreen(
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 1, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+    );
+    expect(archivedOnly.findByTestId('session-row-reports-chip:bot')).toBeNull();
+  });
+
   it('writes the explicit opposite of the current fold for its own list node', async () => {
     const onSetCollapsed = vi.fn();
     const screen = await renderScreen(

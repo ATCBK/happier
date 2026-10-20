@@ -1,14 +1,27 @@
-import { probeAgentModelsBestEffort } from '@/capabilities/probes/agentModelsProbe';
+import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { invokeCliPreflightMethod, type CliProbeDependencies } from '@/capabilities/probes/agentPreflight';
 import { withAgentPreflightCatalog } from '@/capabilities/probes/withAgentPreflightCatalog';
 import { resolveExecutionRunRuntimeBackendId } from './backendTargets';
 import type { ExecutionRunManagerStartParams } from './executionRunTypes';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { CreateAgentInvocationServices } from '@/plugins/runtime/invocation/services/types';
+import { readExecutionRunErrorCode } from './errors';
 
 type ModelAdmissionParams = Pick<ExecutionRunManagerStartParams,
   'backendTarget' | 'modelId' | 'modelSelection' | 'teamCredentialModel' | 'cwd'
-  | 'accountSettings' | 'promptCredentials' | 'runtimeDescriptorV1' | 'readNativeOfferedModel'>;
+  | 'accountSettings' | 'promptCredentials' | 'runtimeDescriptorV1' | 'readNativeOfferedModel'
+  | 'connectedServices' | 'secretReferenceOverlay'>;
+
+function modelCatalogUnavailable(modelId: string, reason: string, causeCode?: string): Error {
+  const code = 'model_catalog_unavailable';
+  return Object.assign(new Error('The selected model catalog could not be read.'), {
+    code,
+    rpcErrorCode: code,
+    details: { modelId, reason, ...(causeCode ? { causeCode } : {}) },
+  });
+}
 
 /** One probe owner serves both daemon-retained and ordinary native admission. */
 export async function readNativeExecutionRunOfferedModel(params: Parameters<NonNullable<ExecutionRunManagerStartParams['readNativeOfferedModel']>>[0]
@@ -17,18 +30,43 @@ export async function readNativeExecutionRunOfferedModel(params: Parameters<NonN
     runtimeCacheKey?: string;
     registrySnapshot?: ResolvedContributionRegistry;
     signal?: AbortSignal;
+    createAgentInvocationServices?: CreateAgentInvocationServices;
+    isCurrent?: () => boolean;
+    preflightDependencies?: Pick<CliProbeDependencies, 'createApiClient' | 'activatePurposeBindings' | 'connectedAccountsOwner'>;
   }>) {
   // The same executable occurrence may probe for more than one Session Account.
   const runtimeCacheKey = params.promptCredentials
     ? JSON.stringify([params.runtimeCacheKey ?? null, resolveAccountSettingsScopeKey(params.promptCredentials)])
     : params.runtimeCacheKey;
-  const catalog = await probeAgentModelsBestEffort({
-    agentId: resolveExecutionRunRuntimeBackendId(params.backendTarget),
-    catalogEntry: params.catalogEntry, runtimeCacheKey, registrySnapshot: params.registrySnapshot,
-    backendTarget: params.backendTarget, cwd: params.cwd, accountSettings: params.accountSettings,
-    credentials: params.promptCredentials, runtimeDescriptorV1: params.runtimeDescriptorV1, signal: params.signal,
-  });
-  return catalog.source === 'unavailable' ? undefined : catalog.availableModels.find(model => model.id === params.modelId);
+  const agentId = resolveExecutionRunRuntimeBackendId(params.backendTarget);
+  const response = await invokeCliPreflightMethod(agentId, 'probeModels', {
+    backendTarget: params.backendTarget, cwd: params.cwd, runtimeDescriptorV1: params.runtimeDescriptorV1,
+    connectedServices: params.connectedServices,
+    secretReferenceOverlay: params.secretReferenceOverlay,
+  }, {
+    ...params.preflightDependencies,
+    createApiClient: params.preflightDependencies?.createApiClient
+      ?? (async credentials => (await import('@/api/api')).ApiClient.create(credentials)),
+    accountContext: { credentials: params.promptCredentials ?? null, accountSettings: params.accountSettings ?? null },
+    agentCatalogEntry: params.catalogEntry, agentRuntimeCacheKey: runtimeCacheKey,
+    agentRegistrySnapshot: params.registrySnapshot,
+    createAgentInvocationServices: params.createAgentInvocationServices,
+    isAgentRegistryCurrent: params.isCurrent,
+  }, { signal: params.signal });
+  if (!response.ok) throw modelCatalogUnavailable(params.modelId, 'preflight_failed', response.error.code);
+  const catalog = AgentModelsProbeObservationSchema.safeParse(response.result);
+  if (!catalog.success || catalog.data.agentId !== agentId) {
+    throw modelCatalogUnavailable(params.modelId, 'invalid_catalog');
+  }
+  if (catalog.data.source === 'unavailable') throw modelCatalogUnavailable(params.modelId, 'catalog_unavailable');
+  const model = catalog.data.availableModels.find(model => model.id === params.modelId);
+  // Keep usable last-good capability evidence, as the picker does. A failed
+  // refresh without that evidence cannot establish that a model is unsupported.
+  if (catalog.data.refreshError && (!model || !model.capabilities?.structuredOutput
+    || model.capabilities.structuredOutput === 'unknown')) {
+    throw modelCatalogUnavailable(params.modelId, 'catalog_refresh_failed');
+  }
+  return model;
 }
 
 /** Admission consumes the same actual offered-model truth published by the probe. */
@@ -39,6 +77,8 @@ export async function readExecutionRunOfferedModel(params: ModelAdmissionParams)
   if (!params.teamCredentialModel && !params.modelSelection?.providerConnectionId) {
     try {
       const request = { backendTarget: params.backendTarget, modelId, cwd: params.cwd ?? process.cwd(),
+        ...(params.connectedServices !== undefined ? { connectedServices: params.connectedServices } : {}),
+        ...(params.secretReferenceOverlay ? { secretReferenceOverlay: params.secretReferenceOverlay } : {}),
         ...(params.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.runtimeDescriptorV1 } : {}) };
       if (params.readNativeOfferedModel) {
         const model = await params.readNativeOfferedModel(request);
@@ -48,9 +88,9 @@ export async function readExecutionRunOfferedModel(params: ModelAdmissionParams)
       return await withAgentPreflightCatalog({ agentId }, context => readNativeExecutionRunOfferedModel({
         ...params, ...request, ...context,
       }));
-    } catch {
-      // An unavailable catalog is not evidence of structured publication support.
-      return undefined;
+    } catch (error) {
+      if (readExecutionRunErrorCode(error) || (error instanceof Error && error.name === 'AbortError')) throw error;
+      throw modelCatalogUnavailable(modelId, 'catalog_read_failed');
     }
   }
   return undefined;

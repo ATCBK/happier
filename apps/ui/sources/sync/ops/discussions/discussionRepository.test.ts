@@ -14,6 +14,9 @@ import { DiscussionOpenedMessageV1Schema, DiscussionListResultV1Schema, Discussi
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createDiscussionActionAdapter, type DiscussionClientOutcome } from '@/sync/api/discussions/discussionActions';
 import { Encryption } from '@/sync/encryption/encryption';
+import { createResourceDataKey } from '@/sync/encryption/resourceDataKey';
+import { resourceStoredContentContext } from '@/sync/encryption/resourceStoredContent';
+import { sealSessionStoredContent } from '@happier-dev/sync-client';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { DiscussionCreateRequestV1Schema, type DiscussionCreateRequestV1, type DiscussionCreateResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionCreateResultV1Schema } from '@happier-dev/protocol/discussions/actions';
@@ -21,7 +24,7 @@ import { DiscussionAccessGrantsListResponseV1Schema, DiscussionAccessGrantMutati
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 
-import { createDiscussionRepository, type DiscussionRepositoryClient } from './discussionRepository';
+import { createDiscussionRepository, selectDiscussionListSearch, type DiscussionRepositoryClient } from './discussionRepository';
 import { publishMountedDiscussionChanges } from '@/sync/domains/discussions/discussionChangeWatch';
 import {
     clearDiscussionRepositoryRegistryForTests,
@@ -155,9 +158,186 @@ function storedMessage(discussionId: string, seq: number) {
     return { ...row, content: { t: 'plain' as const, v: content } };
 }
 
+function storedProposalMessage(discussionId: string, seq: number) {
+    return { ...storedMessage(discussionId, seq), content: { t: 'plain' as const, v: { kind: 'doc_edit_proposal' as const, proposal: {
+        target: { ref: { kind: 'doc' as const, serverId: scope.serverId, artifactId: 'doc-a' }, revision: { headerVersion: 1, bodyVersion: 1 },
+            range: { start: 0, end: 6 }, quote: 'Before' }, baseRevision: { headerVersion: 1, bodyVersion: 1 },
+        before: 'Before', after: 'After', reason: 'Review' } } } };
+}
+
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe('Discussion repository', () => {
+    function docRootHistory(rootKind: 'comment' | 'closed') {
+        const root = storedProposalMessage('discussion-a', 1);
+        const rootMessage = rootKind === 'closed' ? { ...root, docEditProposalDispositionV1: {
+            state: 'declined', decidedBy: { accountId: scope.accountId, atMs: 10 } } }
+            : { ...storedMessage('discussion-a', 1), content: { t: 'plain' as const, v: {
+                kind: 'doc_passage_comment' as const, passage: root.content.v.proposal.target,
+                content: { v: 1, parts: [{ t: 'text', text: 'A passage comment' }] } } } };
+        // The real C3 query omits independently withheld Doc rows and fills the
+        // page with readable history; sequence contiguity is not a paging fact.
+        const rows = Array.from({ length: 100 }, (_, index) => index === 0 ? rootMessage : storedMessage('discussion-a', index + 1))
+            .filter(row => row.seq !== 90);
+        const requests: URL[] = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            const row = { ...storedSummary('discussion-a'), messageSeq: 100, latestMessage: {
+                ...storedSummary('discussion-a').latestMessage, id: 'message-100', seq: 100 } };
+            if (url.pathname === '/v1/discussions') return response({ discussions: [{ ...row, anchor: { kind: 'doc', doc: {
+                ref: root.content.v.proposal.target.ref, revision: root.content.v.proposal.target.revision } }, firstMessage: rootMessage }], nextCursor: null });
+            if (!url.pathname.endsWith('/messages')) return response({ discussion: row });
+            requests.push(url);
+            const after = url.searchParams.get('afterSeq');
+            const before = url.searchParams.get('beforeSeq');
+            const messages = after !== null ? rows.filter(message => message.seq > Number(after)).slice(0, 20)
+                : rows.filter(message => before === null || message.seq < Number(before)).slice(-20);
+            return response({ messages, hasMoreOlder: (messages[0]?.seq ?? 1) > 1, messageSeq: 100 });
+        }) });
+        return { repository, requests, rows };
+    }
+
+    it.each(['comment', 'closed'] as const)('pages missing history and focuses an older message after a scoped %s root joins a loaded tail', async rootKind => {
+        const { repository, requests, rows } = docRootHistory(rootKind);
+        await repository.refreshDiscussion('discussion-a');
+        const tail = repository.getSnapshot().threads['discussion-a']!.messages;
+        expect(tail[0]?.seq).toBe(80);
+        expect(tail).toHaveLength(20);
+        await repository.readList({ state: 'active', anchorDocArtifactId: 'doc-a' });
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([1, ...tail.map(row => row.seq)]);
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.at(-1)).toBe(tail.at(-1));
+        const focused = await repository.openMessage(message(25).messageRef);
+        expect(focused?.seq).toBe(25);
+        for (let page = 0; page < 5 && repository.getSnapshot().threads['discussion-a']!.hasMoreOlder; page += 1) {
+            await repository.loadOlderMessages('discussion-a');
+        }
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual(rows.map(row => row.seq));
+        expect(repository.getSnapshot().threads['discussion-a']!.hasMoreOlder).toBe(false);
+        expect(requests.filter(url => url.searchParams.has('beforeSeq')).map(url => Number(url.searchParams.get('beforeSeq')))).toEqual([80, 60, 40, 20]);
+    });
+
+    it('keeps a cold immutable Doc root tail-lazy while retaining access to its missing older history', async () => {
+        const { repository, requests } = docRootHistory('comment');
+        await repository.readList({ state: 'active', anchorDocArtifactId: 'doc-a' });
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([
+            1, ...Array.from({ length: 21 }, (_, index) => index + 80).filter(seq => seq !== 90),
+        ]);
+        expect(repository.getSnapshot().threads['discussion-a']!.hasMoreOlder).toBe(true);
+        expect(requests.map(url => url.search)).toEqual(['']);
+        await repository.loadOlderMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.some(row => row.seq === 60)).toBe(true);
+    });
+
+    it('refreshes accepted and declined proposals on older retained pages from the existing Discussion change', async () => {
+        const proposal = storedProposalMessage('discussion-a', 3).content.v;
+        let decided = false;
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            const stored = storedSummary('discussion-a');
+            const row = { ...stored, messageSeq: 8, latestMessage: { ...stored.latestMessage, id: 'message-8', seq: 8 } };
+            if (url.pathname === '/v1/discussions') return response({ discussions: url.searchParams.get('state') === 'archived' ? [] : [row], nextCursor: null });
+            if (!url.pathname.endsWith('/messages')) return response({ discussion: row });
+            const rows = Array.from({ length: 8 }, (_, index) => {
+                const seq = index + 1;
+                return seq === 3 || seq === 6 ? { ...storedProposalMessage('discussion-a', seq),
+                    docEditProposalDispositionV1: !decided ? { state: 'open' } : seq === 3
+                        ? { state: 'accepted', acceptedRevision: { headerVersion: 1, bodyVersion: 2 }, decidedBy: { accountId: scope.accountId, atMs: 10 } }
+                        : { state: 'declined', decidedBy: { accountId: scope.accountId, atMs: 10 } } } : storedMessage('discussion-a', seq);
+            });
+            const after = url.searchParams.get('afterSeq');
+            const before = url.searchParams.get('beforeSeq');
+            const messages = after !== null ? rows.filter(row => row.seq > Number(after)).slice(0, 2)
+                : rows.filter(row => before === null || row.seq < Number(before)).slice(-2);
+            return response({ messages, hasMoreOlder: (messages[0]?.seq ?? 1) > 1, messageSeq: 8 });
+        }) });
+        await repository.refreshDiscussion('discussion-a');
+        await repository.loadOlderMessages('discussion-a');
+        await repository.loadOlderMessages('discussion-a');
+        const previous = repository.getSnapshot().threads['discussion-a']!;
+        expect(previous.messages.map(row => row.seq)).toEqual([3, 4, 5, 6, 7, 8]);
+        expect(previous.hasMoreOlder).toBe(true);
+        const unchanged = previous.messages.find(row => row.seq === 4);
+        const unmount = repository.mount();
+        try {
+            decided = true;
+            publishMountedDiscussionChanges({ ...scope, changes: [{ cursor: 1, kind: 'discussion', entityId: 'discussion-a', changedAt: 10 }] });
+            await vi.waitFor(() => expect(repository.getSnapshot().threads['discussion-a']?.messages.filter(row => row.docEditProposalDispositionV1)
+                .map(row => row.docEditProposalDispositionV1?.state)).toEqual(['accepted', 'declined']));
+            const current = repository.getSnapshot().threads['discussion-a']!;
+            expect(current.messages.map(row => row.seq)).toEqual([3, 4, 5, 6, 7, 8]);
+            expect(current.hasMoreOlder).toBe(true);
+            expect(current.messages.find(row => row.seq === 4)).toBe(unchanged);
+            expect(current.messages.filter(row => row.docEditProposalDispositionV1).map(row => row.content)).toEqual([proposal, proposal]);
+        } finally { unmount(); }
+    });
+
+    it('does not reopen a settled proposal when an older HTTP read finishes after its decision read', async () => {
+        let decided = false;
+        let pauseRead = false;
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            if (!path.includes('/messages')) return response({ discussion: storedSummary('discussion-a') });
+            const disposition = decided ? { state: 'declined', decidedBy: { accountId: scope.accountId, atMs: 10 } } : { state: 'open' };
+            const messages = [{ ...storedProposalMessage('discussion-a', 1), docEditProposalDispositionV1: disposition }];
+            if (pauseRead) { pauseRead = false; entered.resolve(); await release.promise; }
+            return response({ messages, hasMoreOlder: false, messageSeq: 1 });
+        }) });
+        await repository.refreshDiscussion('discussion-a');
+        pauseRead = true;
+        const stale = repository.refreshMessages('discussion-a');
+        await entered.promise;
+        decided = true;
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']?.messages[0]?.docEditProposalDispositionV1?.state).toBe('declined');
+        release.resolve();
+        await stale;
+        expect(repository.getSnapshot().threads['discussion-a']?.messages[0]?.docEditProposalDispositionV1?.state).toBe('declined');
+    });
+
+    it('does not restore an unreadable settled root from a delayed open scoped list and recovers through a current authorized read', async () => {
+        let settled = false;
+        let readable = true;
+        let pauseList = false;
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const root = () => ({ ...storedProposalMessage('discussion-a', 1),
+            ...(readable ? {} : { content: { t: 'encrypted' as const, c: 'unreadable-with-current-resource-key' } }),
+            docEditProposalDispositionV1: settled
+                ? { state: 'declined', decidedBy: { accountId: scope.accountId, atMs: 10 } } : { state: 'open' } });
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.pathname === '/v1/discussions') {
+                const row = { ...storedSummary('discussion-a'), anchor: { kind: 'doc', doc: {
+                    ref: { kind: 'doc', serverId: scope.serverId, artifactId: 'doc-a' }, revision: { headerVersion: 1, bodyVersion: 1 } } }, firstMessage: root() };
+                if (pauseList) { pauseList = false; entered.resolve(); await release.promise; }
+                return response({ discussions: [row], nextCursor: null });
+            }
+            if (url.pathname.endsWith('/messages')) return response({ messages: [root()], hasMoreOlder: false, messageSeq: 1 });
+            return response({ discussion: storedSummary('discussion-a') });
+        }) });
+        const input = { state: 'active' as const, anchorDocArtifactId: 'doc-a' };
+        expect((await repository.readList(input)).kind).toBe('succeeded');
+        pauseList = true;
+        const oldList = repository.readList(input);
+        await entered.promise;
+        settled = true;
+        readable = false;
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']?.summary?.firstMessage).toMatchObject({
+            content: null, docEditProposalDispositionV1: { state: 'declined' } });
+        expect(JSON.stringify(repository.getSnapshot())).not.toContain('Before');
+        release.resolve();
+        await oldList;
+        expect(JSON.stringify(repository.getSnapshot())).not.toContain('Before');
+        readable = true;
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']?.summary?.firstMessage).toMatchObject({
+            content: { kind: 'doc_edit_proposal' }, docEditProposalDispositionV1: { state: 'declined' } });
+    });
+
     it('keeps detail backfills separate from list query completion and recovers full membership', async () => {
         let refuseList = false;
         let archived = false;
@@ -553,9 +733,9 @@ describe('Discussion repository', () => {
         }) });
         await repository.refreshList('active');
         await repository.refreshList('active', undefined, 'anchor-a');
-        expect(repository.getSnapshot()).toMatchObject({ anchors: { 'anchor-a': { lists: { active: {
+        expect(repository.getListSnapshot('anchor-a')).toMatchObject({ lists: { active: {
             items: [expect.objectContaining({ id: 'matching' })], nextCursor: 'anchor-page-2', status: 'ready',
-        } } } } });
+        } } });
         await repository.loadMoreAnchoredList('anchor-a', 'active');
         await repository.refreshAnchoredList('anchor-a', 'archived');
         expect(repository.getListSnapshot('anchor-a').lists.active.items.map(row => row.id)).toEqual(['matching', 'matching-page-2']);
@@ -747,6 +927,125 @@ describe('Discussion repository', () => {
         });
     });
 
+    it.each(['active', 'archived'] as const)('completes the selected %s corpus for client search through existing HTTP keyset pages', async state => {
+        const requests: URL[] = [];
+        const row = (id: string) => ({ ...storedSummary(id), archivedAt: state === 'archived' ? 20 : null });
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            requests.push(url);
+            if (url.searchParams.get('state') !== state) return response({ discussions: [], nextCursor: null });
+            const cursor = url.searchParams.get('cursor');
+            return response(cursor === 'page-3'
+                ? { discussions: [row('last-page-match')], nextCursor: null }
+                : cursor === 'page-2'
+                    ? { discussions: [row('middle')], nextCursor: 'page-3' }
+                    : { discussions: [row('first')], nextCursor: 'page-2' });
+        }) });
+        await repository.refreshList(state, undefined, undefined, { complete: true });
+        expect(repository.getSnapshot().lists[state].items.map(row => row.id)).toEqual(['first', 'middle', 'last-page-match']);
+        expect(repository.getSnapshot().lists[state]).toMatchObject({ status: 'ready', nextCursor: null, incomplete: false });
+        expect(requests.filter(url => url.searchParams.get('state') === state).map(url => url.searchParams.get('cursor')))
+            .toEqual([null, 'page-2', 'page-3']);
+        expect(requests.every(url => [...url.searchParams.keys()].every(key => ['state', 'cursor', 'limit'].includes(key)))).toBe(true);
+    });
+
+    it('keeps received search pages visible with the real next frontier when a later page fails', async () => {
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.searchParams.get('state') === 'archived') return response({ discussions: [], nextCursor: null });
+            return url.searchParams.has('cursor') ? response({ error: 'temporary_failure' }, 503)
+                : response({ discussions: [storedSummary('known-match')], nextCursor: 'unread-page' });
+        }) });
+        await repository.refreshList('active', undefined, undefined, { complete: true });
+        expect(repository.getSnapshot().lists.active).toMatchObject({
+            items: [{ id: 'known-match' }], status: 'error', nextCursor: 'unread-page',
+        });
+        expect(selectDiscussionListSearch(repository.getSnapshot().lists.active, 'known-match', new Map())).toMatchObject({
+            items: [{ id: 'known-match' }], status: 'error', nextCursor: 'unread-page', incomplete: true,
+        });
+    });
+
+    it('keeps a normal joined page read when its search caller cancels and resumes the same frontier', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const requests: string[] = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.searchParams.get('state') === 'archived') return response({ discussions: [], nextCursor: null });
+            requests.push(url.searchParams.get('cursor') ?? 'first');
+            if (!url.searchParams.has('cursor')) { entered.resolve(); await release.promise; }
+            return response({ discussions: [storedSummary(url.searchParams.has('cursor') ? 'last' : 'first')],
+                nextCursor: url.searchParams.has('cursor') ? null : 'later-page' });
+        }) });
+        const search = new AbortController();
+        const completing = repository.loadCompleteList('active', search.signal);
+        await entered.promise;
+        const visibleRead = repository.refreshList('active');
+        search.abort();
+        release.resolve();
+        await Promise.all([completing, visibleRead]);
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', items: [{ id: 'first' }], nextCursor: 'later-page' });
+        expect(requests).toEqual(['first']);
+        await repository.loadCompleteList('active');
+        expect(repository.getSnapshot().lists.active.items.map(row => row.id)).toEqual(['first', 'last']);
+        expect(requests).toEqual(['first', 'later-page']);
+        const snapshot = repository.getSnapshot();
+        await repository.loadCompleteList('active');
+        expect(repository.getSnapshot()).toBe(snapshot);
+    });
+
+    it('searches a later-page title opened by the actual resource cipher, never ciphertext or message bodies', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(37));
+        const key = await createResourceDataKey({ mode: 'e2ee', encryptDataEncryptionKey: value => encryption.encryptEncryptionKey(value) });
+        if (!key || key.mode !== 'e2ee') throw new Error('Expected resource key fixture');
+        const title = await sealSessionStoredContent(resourceStoredContentContext(key), { v: 1, title: 'Private payroll review' });
+        const body = await sealSessionStoredContent(resourceStoredContentContext(key), { v: 1, parts: [{ t: 'text', text: 'body-only-needle' }] });
+        if (title.status !== 'ready' || title.content.t !== 'encrypted' || body.status !== 'ready') throw new Error('Expected sealed resource fixture');
+        const opened = { ...storedSummary('opened-title'), encryptionMode: 'e2ee', dataEncryptionKey: key.dataEncryptionKey,
+            titleContent: title.content, latestMessage: { ...storedSummary('opened-title').latestMessage, content: body.content } };
+        const locked = { ...opened, id: 'locked-title', keyReadiness: false };
+        const requests: Array<{ url: URL; init: RequestInit | undefined }> = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async (path, init) => {
+            const url = new URL(path, 'https://home.invalid');
+            requests.push({ url, init });
+            return response({ discussions: url.searchParams.get('state') === 'archived' ? []
+                : url.searchParams.has('cursor') ? [opened] : [locked],
+                nextCursor: url.searchParams.get('state') === 'archived' || url.searchParams.has('cursor') ? null : 'encrypted-page-2' });
+        }, { encryption, accountMode: 'e2ee' }) });
+        await repository.loadCompleteList('active');
+        const list = repository.getSnapshot().lists.active;
+        expect(list.items.map(row => row.title)).toEqual([null, 'Private payroll review']);
+        const selected = selectDiscussionListSearch(list, 'PAYROLL', new Map());
+        expect(selected.items.map(row => row.id)).toEqual(['opened-title']);
+        expect(selected).toMatchObject({ status: 'locked', nextCursor: null, incomplete: true });
+        expect(selectDiscussionListSearch(list, title.content.c, new Map()).items).toEqual([]);
+        expect(selectDiscussionListSearch(list, 'body-only-needle', new Map()).items).toEqual([]);
+        expect(requests.every(({ url, init }) => init?.method === 'GET' && init.body === undefined
+            && [...url.searchParams.keys()].every(name => ['state', 'cursor', 'limit'].includes(name)))).toBe(true);
+    });
+
+    it('does not publish a later search page or continue traversal after Home retirement', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const cursors: Array<string | null> = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            const cursor = url.searchParams.get('cursor');
+            cursors.push(cursor);
+            if (cursor) { entered.resolve(); await release.promise; }
+            return response({ discussions: [storedSummary(cursor ? 'retired-private' : 'first')], nextCursor: cursor ? 'must-not-read' : 'later-page' });
+        }) });
+        const completing = repository.loadCompleteList('active');
+        await entered.promise;
+        repository.clear();
+        const retired = repository.getSnapshot();
+        release.resolve();
+        await completing;
+        expect(repository.getSnapshot()).toBe(retired);
+        expect(repository.getSnapshot().lists.active.items).toEqual([]);
+        expect(cursors).toEqual([null, 'later-page']);
+    });
+
     it('keeps active and archived keyset pages separate and merges repeated rows stably', async () => {
         const first = summary('discussion-a', null, 3);
         const second = summary('discussion-b', null, 2);
@@ -823,7 +1122,9 @@ describe('Discussion repository', () => {
 
         const retried = await repository.retry('create-local-a');
         expect(retried.kind).toBe('succeeded');
-        expect(create.mock.calls[0]?.[0]).toEqual(create.mock.calls[1]?.[0]);
+        const submitted = create.mock.calls.map(([{ onResolvedParticipants: _observe, ...intent }]) => intent);
+        expect(submitted).toHaveLength(2);
+        expect(submitted[0]).toEqual(submitted[1]);
         expect(repository.getSnapshot().lists.active.items[0]?.id).toBe('discussion-created');
     });
 
@@ -1242,7 +1543,7 @@ describe('Discussion repository', () => {
         const lockedRow = { ...message(1), content: null };
         const readOpened = { current: false };
         const read = vi.fn<DiscussionRepositoryClient['read']>(async (_discussionId, input) => (
-            input?.afterSeq === undefined
+            input?.afterSeq === undefined || input.afterSeq === 0
                 ? { kind: 'succeeded' as const, value: { ...readResult(readOpened.current ? [message(1)] : [lockedRow], false, 1), incomplete: !readOpened.current } }
                 : { kind: 'succeeded' as const, value: readResult([], false, 1) }
         ));

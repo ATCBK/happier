@@ -8,7 +8,9 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { t, type TranslationKeyNoParams } from '@/text';
-import { useLocalSettingMutable, useSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { normalizeComposerBannerCollapseRecord } from '@/components/sessions/composerBanners/composerBannerCollapse';
 import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/session/control/submitMode';
 import type { NewSessionPresentationModeV1 } from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
@@ -49,8 +51,9 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
     const [pendingQueueDrainMode, setPendingQueueDrainMode] = useSettingMutable('sessionPendingQueueDrainMode');
     const [pendingQueueDeliveryTiming, setPendingQueueDeliveryTiming] = useSettingMutable('sessionPendingQueueDeliveryTiming');
     const [sessionInactiveResumePolicy, setSessionInactiveResumePolicy] = useSettingMutable('sessionInactiveResumePolicy');
-    const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
-    const [agentInputEnterToSendNative, setAgentInputEnterToSendNative] = useSettingMutable('agentInputEnterToSendNative');
+    const agentInputEnterToSend = useSetting('agentInputEnterToSend');
+    const agentInputEnterToSendNative = useSetting('agentInputEnterToSendNative');
+    const { setSetting } = useSettingActionFeedback();
     const [agentInputHistoryScope, setAgentInputHistoryScope] = useSettingMutable('agentInputHistoryScope');
     const [agentInputActionBarLayout, setAgentInputActionBarLayout] = useSettingMutable('agentInputActionBarLayout');
     const [agentInputChipDensity, setAgentInputChipDensity] = useSettingMutable('agentInputChipDensity');
@@ -59,10 +62,12 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
     const [composerSurfaceStyle, setComposerSurfaceStyle] = useSettingMutable('composerSurfaceStyle');
     const [composerPromptLibraryButtonEnabled, setComposerPromptLibraryButtonEnabled] = useSettingMutable('composerPromptLibraryButtonEnabled');
     const [rememberBannerVisibility, setRememberBannerVisibility] = useSettingMutable('sessionComposerRememberBannerVisibility');
-    const [collapsedBannerKinds, setCollapsedBannerKinds] = useLocalSettingMutable('sessionComposerCollapsedBannerKinds');
+    const collapsedBannerKinds = useLocalSetting('sessionComposerCollapsedBannerKinds');
     const hiddenBannerCount = Object.keys(normalizeComposerBannerCollapseRecord(collapsedBannerKinds)).length;
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
-    const setEnterToSendEnabled = Platform.OS === 'web' ? setAgentInputEnterToSend : setAgentInputEnterToSendNative;
+    const setEnterToSendEnabled = React.useCallback((value: boolean) => {
+        void setSetting(SESSION_COMPOSER_SETTINGS.settings.enterToSend, value);
+    }, [setSetting]);
     const enterToSendSubtitle = enterToSendEnabled
         ? Platform.OS === 'web'
             ? t('settingsFeatures.enterToSendEnabled')
@@ -364,7 +369,7 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
                         title={t('settingsSession.banners.resetHiddenTitle')}
                         subtitle={t('settingsSession.banners.resetHiddenSubtitle')}
                         detail={String(hiddenBannerCount)}
-                        onPress={() => setCollapsedBannerKinds({})}
+                        onPress={() => getStorage().getState().applyLocalSettings({ sessionComposerCollapsedBannerKinds: {} }, { source: 'ui' })}
                         showChevron={false}
                     />
                 ) : null}

@@ -178,7 +178,8 @@ export function SessionViewerControllerProvider(
         current.left === inset.left &&
         current.right === inset.right &&
         current.centred.left === inset.centred.left &&
-        current.centred.right === inset.centred.right
+        current.centred.right === inset.centred.right &&
+        current.centred.bottom === inset.centred.bottom
           ? current
           : inset,
       );

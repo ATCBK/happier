@@ -204,7 +204,8 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
     /**
      * One line of row subtitle, never a body excerpt. Body, description,
      * comment, activity, diff, and complete label/reviewer content belongs to
-     * the live detail materialization and never rides a scan or get result.
+     * the live detail materialization and never rides this snapshot. Exact get
+     * may separately supply complete taskFields for an explicit edit.
      */
     summary: TriageTextV1ProtocolSchema.optional(),
     /** Readable owning scope; presentation only, never parsed back into identity. */

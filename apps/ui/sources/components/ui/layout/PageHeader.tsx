@@ -52,6 +52,8 @@ export type PageHeaderProps = Readonly<{
     titleAccessory?: React.ReactNode;
     /** One sentence saying what the page is for (a node only when the sentence itself animates). */
     description?: React.ReactNode;
+    /** A description set by data (a skill's own frontmatter) of any length stops at this many lines; static copy omits it. */
+    descriptionLines?: number;
     /** Identity details under the description (an identifier to copy, a version and machine). */
     details?: React.ReactNode;
     /** Defaults to identity; column places the summary below title and actions at full content width. */
@@ -188,6 +190,15 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
             : {}),
     })), [props.meta, theme.colors.text.secondary]);
 
+    const { descriptionLines } = props;
+    const renderText = React.useMemo<HappierPageHeaderTextRender>(
+        () => descriptionLines === undefined
+            ? renderPageHeaderText
+            : (input) => input.role === 'pageDescription'
+                ? <Text numberOfLines={descriptionLines} style={stylesheet.description}>{input.text}</Text>
+                : renderPageHeaderText(input),
+        [descriptionLines],
+    );
     const titleNode = props.titleEditor
         ? <InlineTextField editor={props.titleEditor} style={stylesheet.titleInput} />
         : props.title;
@@ -218,7 +229,7 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
             status={props.status}
             renderBack={renderBack}
             columnMaxWidthPx={props.columnWidth === 'pane' ? undefined : maxWidth}
-            renderText={renderPageHeaderText}
+            renderText={renderText}
             testID={props.testID}
         />
         </>

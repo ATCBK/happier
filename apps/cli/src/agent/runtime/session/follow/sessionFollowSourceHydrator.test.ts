@@ -1,6 +1,7 @@
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { SessionFollowUpdateEnvelopeV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowUpdateEnvelopeV1';
 import type { SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
@@ -15,13 +16,14 @@ import {
 } from './sessionFollowSourceHydrator';
 
 const observation = { policy: { preset: 'everything' as const },
+  relation: 'follower' as const,
   sourceSessionId: 'source',
   destinationSessionId: 'destination',
   delivered: { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null },
   observed: { transcriptSeq: 3, readyEventSeq: 0, agentStateVersion: 0, turn: null },
 };
 
-const awareness = {
+const awareness: SessionAwarenessProjectionV1 = {
   v: 1,
   sessionId: 'source',
   lifecycle: 'ready' as const,
@@ -124,7 +126,7 @@ describe('Session Follow source hydrator', () => {
         hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
     } });
     const result = await hydrate({ observation: { ...observation,
-      policy: { preset: 'custom', events: { update_posted: { delivery: 'quiet', voice: true } } } },
+      policy: { preset: 'custom' as const, events: { update_posted: { delivery: 'quiet' as const, voice: true } } } },
       signal: new AbortController().signal, selectionChannel: 'voice' });
     if (problem === 'sidechain') expect(result?.recentMessages.map(message => message.seq)).toEqual([3]);
     else expect(result).toMatchObject({ reason: 'source_unavailable', recentMessages: [] });
@@ -167,7 +169,7 @@ describe('Session Follow source hydrator', () => {
           hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
       } });
     const result = await hydrate({ signal: new AbortController().signal, selectionChannel: 'voice',
-      observation: { ...observation, policy: { preset: 'custom', events: { update_posted: { delivery: 'quiet', voice: true } } } } });
+      observation: { ...observation, policy: { preset: 'custom' as const, events: { update_posted: { delivery: 'quiet' as const, voice: true } } } } });
     expect(result?.recentMessages.map(message => message.seq)).toEqual([2]);
     expect(result?.observed.transcriptSeq).toBe(2);
     expect(result?.transcriptConsumedThroughByRenderedMessageCount).toEqual([1, 2]);
@@ -180,12 +182,12 @@ describe('Session Follow source hydrator', () => {
     const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
       credentials: { token: 'token', encryption: null }, deps: {
         resolveSourceTransport: (async () => plainSourceTransport({ active: selected !== 'stalled',
-          latestTurnId: observed.turn?.id, latestTurnStatus: selected === 'stalled' ? 'in_progress' : observed.turn?.status })) as never,
+          latestTurnId: observed.turn?.id, latestTurnStatus: selected === 'stalled' ? 'in_progress' : selected === 'finished' ? 'completed' : undefined })) as never,
         fetchTranscriptPage: (async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
       } });
     const result = await hydrate({ signal: new AbortController().signal, selectionChannel: 'voice',
-      observation: { ...observation, observed, policy: { preset: 'custom', events: {
-        finished: { delivery: 'quiet', voice: true }, stalled: { delivery: 'quiet', voice: true },
+      observation: { ...observation, observed, policy: { preset: 'custom' as const, events: {
+        finished: { delivery: 'quiet' as const, voice: true }, stalled: { delivery: 'quiet' as const, voice: true },
       } } } });
     if (selected === 'off') expect(result).toBeNull();
     else expect(result).toMatchObject({ observed, recentMessages: [] });

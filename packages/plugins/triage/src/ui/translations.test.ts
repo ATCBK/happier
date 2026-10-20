@@ -6,22 +6,34 @@ import { describe, expect, it } from 'vitest';
 
 import { TRANSLATED_TRIAGE_EMPTY_KINDS_V1, readTriageListEmptyStateKeys } from './shell/emptyState.js';
 import { TRIAGE_UI_TRANSLATIONS } from './translations.js';
+import { PLUGIN_MANIFEST as LINEAR_MANIFEST } from '../../../linear/src/manifest.js';
+import { PLUGIN_MANIFEST as JIRA_MANIFEST } from '../../../jira/src/manifest.js';
 
 
 const LOCALES = Object.keys(TRIAGE_UI_TRANSLATIONS) as readonly (keyof typeof TRIAGE_UI_TRANSLATIONS)[];
+const CATALOGS = [
+    { id: 'triage', root: new URL('..', import.meta.url), messages: TRIAGE_UI_TRANSLATIONS },
+    ...[
+        { id: 'linear', root: new URL('../../../linear/src/', import.meta.url), manifest: LINEAR_MANIFEST },
+        { id: 'jira', root: new URL('../../../jira/src/', import.meta.url), manifest: JIRA_MANIFEST },
+    ].map(({ id, root, manifest }) => ({
+        id, root, messages: Object.fromEntries(manifest.contributes.ui.translations.map((row) => [row.locale, row.messages])),
+    })),
+];
 
 describe('the Triage UI catalog', () => {
-    it('carries the same keys in every locale it ships', () => {
+    it.each(CATALOGS)('$id carries the same keys in every first-party locale', ({ messages }) => {
         // A key present only in `en` renders English on every other device and
         // nothing fails, so the drift has to be asserted rather than noticed.
-        const english = Object.keys(TRIAGE_UI_TRANSLATIONS.en).sort();
+        const english = Object.keys(messages.en!).sort();
         expect(LOCALES.length).toBeGreaterThan(1);
+        expect(Object.keys(messages).sort()).toEqual([...LOCALES].sort());
         for (const locale of LOCALES) {
-            expect(Object.keys(TRIAGE_UI_TRANSLATIONS[locale]).sort(), locale).toEqual(english);
+            expect(Object.keys(messages[locale]!).sort(), locale).toEqual(english);
         }
     });
 
-    it('defines every catalog key the surfaces actually ask for', () => {
+    it.each(CATALOGS)('$id defines every catalog key the surfaces actually ask for', ({ id, root: sourceRoot, messages }) => {
         // The parity test above compares locales against `en`, so a key missing
         // from `en` ENTIRELY is invisible to it: absent everywhere reads as
         // agreement. That is not hypothetical — five `surface.session.*` keys
@@ -30,7 +42,7 @@ describe('the Triage UI catalog', () => {
         //
         // So the keys are read from the source that asks for them, not from a
         // hand-kept list that drifts the same way the catalog did.
-        const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+        const root = fileURLToPath(sourceRoot);
         const referenced = new Set<string>();
         const walk = (dir: string): void => {
             for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -43,8 +55,8 @@ describe('the Triage UI catalog', () => {
                 // `text('plugins.triage...', 'fallback')` calls. Matching any
                 // catalog-key literal covers both and anything added later,
                 // rather than enumerating call shapes that keep growing.
-                for (const match of source.matchAll(/['"](plugins\.triage\.[A-Za-z0-9._]+)['"]/gu)) {
-                    if (match[1] !== undefined) referenced.add(match[1]);
+                for (const match of source.matchAll(/['"](plugins\.[A-Za-z0-9._-]+)['"]/gu)) {
+                    if (match[1]?.startsWith(`plugins.${id}.`)) referenced.add(match[1]);
                 }
             }
         };
@@ -52,9 +64,9 @@ describe('the Triage UI catalog', () => {
 
         // A scan that finds nothing would pass this test without asserting
         // anything, so the scan itself is asserted first.
-        expect(referenced.size).toBeGreaterThan(20);
+        expect(referenced.size).toBeGreaterThan(id === 'triage' ? 20 : 0);
 
-        const english: Readonly<Record<string, string>> = TRIAGE_UI_TRANSLATIONS.en;
+        const english = messages.en!;
         const missing = [...referenced].filter((key) => english[key] === undefined).sort();
         expect(missing).toEqual([]);
     });

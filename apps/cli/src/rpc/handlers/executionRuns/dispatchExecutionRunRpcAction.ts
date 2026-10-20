@@ -398,14 +398,6 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
         });
       }
     }
-    if (!params.context.budgetRegistry) {
-      if (
-        typeof params.policy.maxConcurrentRuns === 'number'
-        && params.manager.getRunningCount() >= params.policy.maxConcurrentRuns
-      ) {
-        return beforeStart({ ok: false, error: 'Execution run budget exceeded', errorCode: 'execution_run_budget_exceeded' });
-      }
-    }
     const policyValidation = validateExecutionRunStartIntentPolicy({
       intent: parsed.data.intent,
       permissionMode: parsed.data.permissionMode,
@@ -496,6 +488,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
         teamCredentialSessionBindingConsent: _teamCredentialSessionBindingConsent,
         // Nonsecret custody facts are still host-only. A passthrough public
         // request must not acquire identity merely by naming the internal field.
+        actionRequestId: _callerActionRequestId,
         requesterWorkAttributionV1: _callerAttribution,
         projectLaunchContext: _callerProjectLaunchContext,
         projectSetupOperation: _callerProjectSetupOperation,

@@ -21,6 +21,7 @@ import {
 import { resolveCliEntrypoint } from './runtime/launch/resolveCliEntrypoint.mjs';
 import { ensureStackDaemonPreflight, requiresStackDaemonPreflight } from './stack/stack_happier_daemon_preflight.mjs';
 import { readActiveStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { projectBorrowedExpoWebappEnv } from './runtime/shared/borrowed_expo.mjs';
 import {
   assertStackServerProfileReconciled,
   buildStackServerProfileSetArgs,
@@ -322,6 +323,17 @@ async function main() {
     env.HAPPIER_HOME_DIR = env.HAPPIER_HOME_DIR || cliHomeDir;
   }
 
+  // Bootstrap reloads the stack's authored env and scrubs inherited defaults.
+  // Restore the runtime's selected UI through the same projection as startup.
+  if (isStackScopedInvocation && !prefixServerSelection.hasExplicitSelection && activeRuntimeState?.sourceUi === 'borrowed') {
+    env = await projectBorrowedExpoWebappEnv({
+      rootDir,
+      consumerStackName: stackName,
+      producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+      env,
+    });
+  }
+
   const settingsDefaults =
     !isStackScopedInvocation && !prefixServerSelection.hasExplicitSelection
       ? readActiveServerUrlsFromCliSettings(env.HAPPIER_HOME_DIR)
@@ -348,7 +360,7 @@ async function main() {
       env.HAPPIER_PUBLIC_SERVER_URL = publicServerUrl;
       env.HAPPIER_LOCAL_SERVER_URL = internalServerUrl;
       env.HAPPIER_SERVER_URL = internalServerUrl;
-      env.HAPPIER_WEBAPP_URL = publicServerUrl;
+      env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
     } else {
       env.HAPPIER_SERVER_URL = env.HAPPIER_SERVER_URL || internalServerUrl;
       env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
@@ -405,7 +417,7 @@ async function main() {
     await ensureStackDaemonPreflight({
       rootDir,
       stackName,
-      env: process.env,
+      env,
       argv: wrapperArgv,
       cliIdentity,
       activeRuntimeState,

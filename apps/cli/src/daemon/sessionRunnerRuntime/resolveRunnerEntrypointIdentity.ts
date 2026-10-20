@@ -1,6 +1,7 @@
 import type { HappyCliSubprocessLaunchSpec } from '../../utils/spawnHappyCLI';
 import { buildHappyCliSubprocessLaunchSpec } from '../../utils/spawnHappyCLI';
 import { normalizeProcessCommandPathValue } from '../../subprocess/processCommandPathMatch';
+import type { TrackedSession } from '../types';
 
 import type {
   SessionRunnerEntrypointIdentity,
@@ -10,6 +11,17 @@ import type {
 
 function unknownIdentity(reason: UnknownSessionRunnerEntrypointIdentity['reason']): SessionRunnerEntrypointIdentity {
   return { status: 'unknown', source: 'unknown', reason };
+}
+
+/** Runtime facts belong to the reported runner; physical signal custody can remain on its launcher. */
+export function readTrackedSessionRunnerProcessCommand(
+  tracked: Pick<TrackedSession, 'pid' | 'sessionRunnerPid' | 'processCommand' | 'runnerProcessIdentity'>,
+): string | undefined {
+  const runnerPid = tracked.sessionRunnerPid ?? tracked.pid;
+  if (tracked.runnerProcessIdentity?.pid === runnerPid && tracked.runnerProcessIdentity.processCommand) {
+    return tracked.runnerProcessIdentity.processCommand;
+  }
+  return runnerPid === tracked.pid ? tracked.processCommand : undefined;
 }
 
 function normalizePathLike(value: string): string {

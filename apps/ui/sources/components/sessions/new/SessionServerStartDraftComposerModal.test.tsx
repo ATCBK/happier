@@ -7,13 +7,26 @@ import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contribut
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { SessionServerStartSpawnDraftV1Schema, type SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import type { CustomModalChromeConfig } from '@/modal';
-import { PluginUiJsonObjectV1Schema, type PluginUiSurfaceContextV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiExecuteActionRequestV1Schema, PluginUiJsonObjectV1Schema, type PluginUiJsonValueV1, type PluginUiSurfaceContextV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
+import { PluginHostApiProvider } from '@happier-dev/plugin-ui/advanced';
+import {
+    useTriageEntrySessionStart,
+    type TriageEntrySessionStartPhaseV1,
+    type TriageEntrySessionStartRequestV1,
+} from '../../../../../../packages/plugins/triage/src/ui/header/useEntrySessionStart';
+import { buildTriageEntryAttachmentPresentation } from '../../../../../../packages/plugins/triage/src/composer/mutationPlan';
+import {
+    TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
+    TriageStartEntrySessionInputV1Schema,
+    type TriageStartEntrySessionInputV1,
+    type TriageStartEntrySessionResultV1,
+} from '../../../../../../packages/plugins/triage/src/actions/entrySessionProtocol';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -59,6 +72,15 @@ const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/compo
 
 function RecipeRequestingPlugin({ api, request }: Readonly<{ api: PluginUiHostApi; request(): void }>) {
     return <RoundButton title="Choose recipe" onPress={request} disabled={!api.version().methods.includes('selectActionInput')} />;
+}
+
+function TriageRecipeRequestingPlugin(props: Readonly<{
+    request: TriageEntrySessionStartRequestV1;
+    observe(phase: TriageEntrySessionStartPhaseV1): void;
+}>) {
+    const controller = useTriageEntrySessionStart();
+    React.useLayoutEffect(() => { props.observe(controller.phase); }, [controller.phase, props.observe]);
+    return <RoundButton title="Walk through" onPress={() => controller.start(props.request)} />;
 }
 
 afterAll(async () => {
@@ -176,10 +198,11 @@ describe('mounted Session server-start recipe composer', () => {
     }
 
     it.each([
-        { name: 'canonical Home', aliasHost: false, aliasRecipe: false },
-        { name: 'saved recipe Home alias', aliasHost: false, aliasRecipe: true },
-        { name: 'mounted and saved Home aliases', aliasHost: true, aliasRecipe: true },
-    ])('composes a mounted external plugin recipe with $name and all authoring controls', async ({ aliasHost, aliasRecipe }) => {
+        { name: 'canonical Home', aliasHost: false, aliasRecipe: false, fresh: false },
+        { name: 'saved recipe Home alias', aliasHost: false, aliasRecipe: true, fresh: false },
+        { name: 'mounted and saved Home aliases', aliasHost: true, aliasRecipe: true, fresh: false },
+        { name: 'fresh connected Codex recipe without a launch profile', aliasHost: false, aliasRecipe: false, fresh: true },
+    ])('composes a mounted external plugin recipe with $name and all authoring controls', async ({ aliasHost, aliasRecipe, fresh }) => {
         const draft = recipe();
         const requestedDraft = aliasRecipe
             ? { ...draft, executionTarget: { ...draft.executionTarget, serverId: serverAlias } }
@@ -200,7 +223,9 @@ describe('mounted Session server-start recipe composer', () => {
             accountEncryptionMode: 'plain', targetedContributions: undefined, mount: { kind: 'destination',
                 destination: { pluginId: requestSurface.pluginId, localId: 'settings' }, container: 'appPage' } });
         const request = { hostAction: { action: 'session.spawn_new', projection: 'serverStartDraft' },
-            draft: PluginUiJsonObjectV1Schema.parse({ existingDraft: requestedDraft,
+            draft: PluginUiJsonObjectV1Schema.parse({ ...(fresh
+                ? { directory: '/tmp', agentId: 'codex', permissionMode: 'default' }
+                : { existingDraft: requestedDraft }),
                 candidates: [{ projectKey: { id: 'project-intake' }, serverId: aliasRecipe ? serverAlias : serverId,
                     machineId: 'machine-1', rootPath: '/repo', reachable: true, worktrees: [] }] }) } as const;
         // Removing the real host registration must refuse before any dialog opens.
@@ -248,9 +273,25 @@ describe('mounted Session server-start recipe composer', () => {
                 for (const field of ['agentTarget', 'allowedTools', 'unlistedTools']) {
                     expect(dialog.findHostByTestId(`server-start-draft-control-${field}-row`)).not.toBeNull();
                 }
-                expect(dialog.findByTestId('server-start-draft-folder')).not.toBeNull();
+                if (!fresh) expect(dialog.findByTestId('server-start-draft-folder')).not.toBeNull();
                 expect(dialog.findByType(PathSelectionList).props).toMatchObject({ serverId, machineId: 'machine-1' });
-                expect(dialog.findAllByType(Item).some(node => node.props.selected === true && typeof node.props.onPress === 'function')).toBe(true);
+                expect(dialog.findAllByType(Item).some(node => node.props.selected === true && typeof node.props.onPress === 'function')).toBe(!fresh);
+                if (fresh) {
+                    await act(async () => {
+                        dialog.findAllByType(SessionAuthoringControls)[0]!.props.onChangeFields({
+                            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                            modelSelection: { v: 1, updatedAt: 12, ref: {
+                                agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6.1-sol',
+                            } },
+                            sessionConfigOptionOverrides: { v: 1, updatedAt: 12, overrides: {
+                                reasoning_effort: { value: 'low', updatedAt: 12 },
+                            } },
+                            connectedServices: { v: 2, bindingsByServiceId: {
+                                'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: '97bd5614-8970-4068-87f2-1447de69d604' },
+                            } },
+                        });
+                    });
+                }
                 if (chrome.current?.kind !== 'card') throw new Error('Missing composer card');
                 const footer = await renderScreen(<>{chrome.current.footer}</>);
                 try {
@@ -258,7 +299,130 @@ describe('mounted Session server-start recipe composer', () => {
                     expect(submit.props.disabled).toBe(false);
                     await act(async () => { submit.props.onPress(); });
                 } finally { await footer.unmount(); }
-                await expect(selection).resolves.toEqual({ kind: 'serverStartDraft', draft });
+                if (fresh) {
+                    const settled = await selection;
+                    expect(settled).toMatchObject({ kind: 'serverStartDraft', draft: {
+                        executionTarget: { serverId, machineId: 'machine-1' },
+                        directory: { kind: 'path', path: '/tmp' },
+                        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                        modelSelection: { ref: { modelId: 'gpt-6.1-sol' } },
+                        configuration: { options: { reasoning_effort: { value: 'low' } } },
+                        connectedServices: { bindingsByServiceId: {
+                            'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: '97bd5614-8970-4068-87f2-1447de69d604' },
+                        } },
+                    } });
+                    if (!settled || settled.kind !== 'serverStartDraft') throw new Error('Missing recipe settlement');
+                    expect(settled.draft).not.toHaveProperty('profileId');
+                    expect(PluginUiJsonObjectV1Schema.safeParse(settled.draft).success).toBe(true);
+                    expect(SessionServerStartSpawnDraftV1Schema.safeParse(settled.draft).success).toBe(true);
+                } else {
+                    await expect(selection).resolves.toEqual({ kind: 'serverStartDraft', draft });
+                }
+            } finally { await dialog.unmount(); }
+        } finally { adapter.dispose(); await plugin.unmount(); }
+    });
+
+    it.each([false, true])('settles the real chooser through its mounted Triage owner (owner retired=%s)', async (retireOwner) => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Missing Home lifetime');
+        const requestSurface: PluginUiSurfaceContextV1 = {
+            pluginId: 'happier.triage', contributionId: 'list', surfaceId: 'triage-list',
+            placement: 'appSurface', platform: 'ios', channel: 'internal', resourceScope: [], diagnostics: [],
+        };
+        const comparison = { kind: 'pullRequest', locator: { providerId: 'forge', repository: 'example/repository',
+            number: 17, baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40) } } as const;
+        const entryRef = { source: { pluginId: 'example.forge', localId: 'pull-requests' },
+            kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' };
+        const request = {
+            action: { actionId: 'walk-comparison', label: 'Walk through', enabled: true, appliesTo: ['pullRequest'],
+                profileId: null, workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: null, delivery: 'compose' } },
+            entryRef, sourceInstance: { source: entryRef.source, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+            display: { locator: { v: 1, webUrl: 'https://example.test/pull/17' }, scopeLabel: 'example/repository' },
+            presentation: buildTriageEntryAttachmentPresentation({ title: 'Repair the parser', scopeLabel: 'example/repository' }),
+            comparisonDestination: { kind: 'scmReview', comparison, view: 'walkthrough' },
+        } satisfies TriageEntrySessionStartRequestV1;
+        const starts: TriageStartEntrySessionInputV1[] = [];
+        const opens: unknown[] = [];
+        const selections: PluginUiJsonValueV1[] = [];
+        const selector = createPluginActionInputSelectionHostApiHandler({
+            host: { machineId: 'machine-1', serverId, targetPluginId: requestSurface.pluginId, accountLifetime: lifetime },
+            isCurrent: lifetime.isCurrent,
+        });
+        const host = createPluginSurfaceHostApi({ surfaceContext: requestSurface, handlers: {
+            selectActionInput: async (envelope, options) => {
+                const outcome = await selector(envelope, options);
+                if (outcome !== undefined) selections.push(outcome);
+                return outcome;
+            },
+            executeAction: async (envelope): Promise<PluginUiJsonValueV1> => {
+                const action = PluginUiExecuteActionRequestV1Schema.parse(envelope.payload);
+                if (action.action === 'projects.list') return { items: [], truncated: false };
+                if (action.action === TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1) {
+                    starts.push(TriageStartEntrySessionInputV1Schema.parse(action.input));
+                    return { v: 1, type: 'linked', sessionId: 'recipe-session', disposition: 'created',
+                        delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1;
+                }
+                if (action.action === 'session.open') { opens.push(action.input); return null; }
+                throw new Error(`Unexpected Action: ${String(action.action)}`);
+            },
+        } });
+        const surface = createPluginSurfaceContextFixture({ platform: 'ios', target: { kind: 'app' },
+            accountEncryptionMode: 'plain', targetedContributions: undefined, mount: { kind: 'destination',
+                destination: { pluginId: requestSurface.pluginId, localId: 'list' }, container: 'appPage' } });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface, requestSurface,
+            requestIdPrefix: 'triage-recipe', handleRequest: host.handleRequest, installedMethods: host.installedMethods });
+        let phase: TriageEntrySessionStartPhaseV1 = { kind: 'idle' };
+        const observe = (next: TriageEntrySessionStartPhaseV1) => { phase = next; };
+        const plugin = await renderScreen(<PluginHostApiProvider hostApi={adapter.api}>
+            <TriageRecipeRequestingPlugin request={request} observe={observe} />
+        </PluginHostApiProvider>);
+        try {
+            vi.mocked(Modal.show).mockClear();
+            vi.mocked(Modal.hide).mockClear();
+            await act(async () => { plugin.findByType(RoundButton).props.onPress(); });
+            await waitForHomeGovernance(() => expect(Modal.show).toHaveBeenCalledTimes(1));
+            expect(phase).toEqual({ kind: 'choosing' });
+            const config = vi.mocked(Modal.show).mock.calls[0]![0];
+            const chrome: { current: CustomModalChromeConfig | null } = { current: null };
+            const chooser = (key: string) => React.createElement(config.component, { ...config.props, key,
+                onClose: () => config.onRequestClose?.(), setChrome: (value: CustomModalChromeConfig) => { chrome.current = value; } });
+            const dialog = await renderScreen(chooser('before-remount'));
+            try {
+                await dialog.update(chooser('after-remount'));
+                expect(phase).toEqual({ kind: 'choosing' });
+                await act(async () => { dialog.findByType(PathSelectionList).props.onChangeDraftPath('/repo'); });
+                await waitForHomeGovernance(() => {
+                    expect(dialog.findAllByType(SessionAuthoringControls)).toHaveLength(2);
+                    if (chrome.current?.kind !== 'card') throw new Error('Missing recipe footer');
+                });
+                const footer = await renderScreen(<>{chrome.current?.footer}</>);
+                try {
+                    const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!;
+                    expect(submit.props.disabled).toBe(false);
+                    if (retireOwner) {
+                        await plugin.unmount();
+                        await flushHookEffects();
+                        // The host presentation must withdraw before any old submit callback can run.
+                        expect(Modal.hide).toHaveBeenCalledTimes(1);
+                        expect(selections).toEqual([{ code: 'unavailable', diagnostics: ['aborted'] }]);
+                        await act(async () => { submit.props.onPress(); });
+                        await flushHookEffects();
+                        expect(starts).toEqual([]);
+                        expect(opens).toEqual([]);
+                        return;
+                    }
+                    await act(async () => { submit.props.onPress(); });
+                } finally { await footer.unmount(); }
+                await flushHookEffects();
+                expect(starts, JSON.stringify(phase)).toHaveLength(1);
+                expect(opens, JSON.stringify(phase)).toHaveLength(1);
+                expect(starts[0]?.destination).toMatchObject({ kind: 'new', spawn: {
+                    executionTarget: { serverId, machineId: 'machine-1' },
+                }, materialization: { kind: 'referenceOnly', directory: '/repo' } });
+                expect(opens).toEqual([{ sessionId: 'recipe-session', serverId,
+                    destination: { kind: 'scmReview', comparison, view: 'walkthrough' } }]);
+                expect(phase).toMatchObject({ kind: 'settled', result: { type: 'opened', sessionId: 'recipe-session' } });
             } finally { await dialog.unmount(); }
         } finally { adapter.dispose(); await plugin.unmount(); }
     });

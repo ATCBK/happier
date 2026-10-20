@@ -34,7 +34,7 @@ import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/sema
 import type { HappierTypeRole, HappierUiTheme, HappierUiTypography } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierCollectionDetailWidthContext, HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
-import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
+import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionRestingRowsContext, HappierCollectionTableRowContext, type HappierCollectionRestingRows, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
 import {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   HAPPIER_INSTANT_DISCLOSURE_MOTION,
@@ -81,7 +81,7 @@ import { ListCollectionControlContext, type ListCollectionControl } from './list
 import { CollectionKeyCap, ListCollectionHeader, useListCollectionSearch, useListSelectionModeControl, type ListCollectionSearchToken } from './listCollectionHeader.js';
 import { ListMultiSelectionProvider, useListMultiSelectionStoreSnapshot } from './ListMultiSelection.js';
 import { renderCollectionItemDestination } from './collectionItemDestination.js';
-import { DetailsPane, DetailsPaneBody, PushedDetailHeader, useDetailsPaneAvailable, useDetailsPaneHostInstalled } from './DetailsPane.js';
+import { DetailsPane, DetailsPaneBody, PushedDetailHeader, useDetailsPanePlacement, useDetailsPaneHostInstalled } from './DetailsPane.js';
 import { usePluginTranslation } from './PluginUiProvider.js';
 import type { NavigationListDestination } from './NavigationList.js';
 import { CollectionDetailHeadingFocusContext, useCollectionDetailHeadingFocusInternal } from './Focus.js';
@@ -532,6 +532,8 @@ type CollectionStage<Item> = Readonly<{
    * take two lines and rows size to them. Beside a detail rows keep the exact height the travel plans with.
    */
   wrapTitles: boolean;
+  /** The resting list is ruled (`restingRows` `ruled`/`ruled-page`): the row inset at both ends, else null. */
+  ruledInsetPx: number | null;
   pageSections: boolean;
   useRowActions: ((item: Item) => CollectionRowActions) | undefined;
   expandable: boolean;
@@ -555,7 +557,16 @@ const LIST_LINE_GAP = 4;
 /** A list row's title keeps this share of the table's title minimum before its title meta moves beneath it. */
 const LIST_TITLE_MIN_SHARE = 0.5;
 /** The list row's action stands at the row's end inset, mirroring where its text starts. */
-const listActionStyle: HappierPortableStyle = { marginRight: TABLE.insetStart - TABLE.insetEnd };
+const LIST_ACTION_INSET = TABLE.insetStart - TABLE.insetEnd;
+/**
+ * A ruled resting list's row inset, at both ends: where a row action ends (its own margin and the accessory cell's
+ * inset), so text, status, action and loading rows share one edge pair, the dialog's tools band above them. `ruled`:
+ * the card's 24; `ruled-page`: the page gutter (the action's margin shrinks to keep the action on it).
+ */
+function ruledRowInset(theme: HappierUiTheme, restingRows: HappierCollectionRestingRows): number {
+  return restingRows === 'ruled-page' ? theme.spacing.large : LIST_ACTION_INSET + theme.spacing.medium;
+}
+const listActionStyle: HappierPortableStyle = { marginRight: LIST_ACTION_INSET };
 /** The title meta: end-aligned, whole (it never shrinks; the title gives way). */
 const metaCellStyle: HappierPortableStyle = { flexShrink: 0, alignItems: 'flex-end', marginLeft: HAPPIER_ROW_TITLE_META_GAP_PX };
 const NO_ROW_ACTIONS: CollectionRowActions = Object.freeze({});
@@ -682,6 +693,8 @@ function CollectionSkeletonRows(props: Readonly<{
   rowHeight: number;
   twoLines: boolean;
   viewportHeight: number | null;
+  /** The row insets the placeholders stand at; the table's own unless a ruled resting list sets its inset. */
+  ruledInsetPx?: number;
   testID?: string;
   accessibilityLabel?: string;
   reducedMotion?: boolean;
@@ -696,7 +709,9 @@ function CollectionSkeletonRows(props: Readonly<{
       rowHeight={props.rowHeight}
       lines={props.twoLines ? 2 : 1}
       dividerColor={palette.rowDivider}
-      geometry={COLLECTION_SKELETON_GEOMETRY}
+      geometry={props.ruledInsetPx === undefined
+        ? COLLECTION_SKELETON_GEOMETRY
+        : { ...COLLECTION_SKELETON_GEOMETRY, insetStart: props.ruledInsetPx, insetEnd: props.ruledInsetPx }}
       {...(props.accessibilityLabel === undefined ? {} : { accessibilityLabel: props.accessibilityLabel })}
       {...(props.reducedMotion === undefined ? {} : { reducedMotion: props.reducedMotion })}
       {...(props.testID === undefined ? {} : { rowTestID: `${props.testID}:skeleton-row` })}
@@ -1017,12 +1032,21 @@ function ListCells<Item>(props: Readonly<{
   AnimatedView: ReturnType<typeof useMotionDriver>['AnimatedView'];
   /** The resting phone list: a title may take a second line and the row grows to it (no travel to plan). */
   wrapTitle: boolean;
+  /** The resting list is ruled: the row inset at both ends (the table's insets instead of the page's edges), else null. */
+  ruledInsetPx: number | null;
   pageSection: boolean;
   /** No accessory cell follows the row's content, so the content runs to the row's trailing edge. */
   ownsTrailingInset: boolean;
 }>): ReactElement {
   const { item, anatomy, AnimatedView } = props;
   const typography = useOptionalHappierUiTypography();
+  const uiTheme = useHappierUiTheme();
+  // The row's 1 pt press edge is part of its inset. A ruled row with no trailing control ends where its action
+  // would, so a status at the title's end and an Add button share one end edge.
+  const ruledPaddingPx = (props.ruledInsetPx ?? 0) - 1;
+  const ruledStyle: HappierPortableStyle = props.ownsTrailingInset
+    ? { paddingLeft: ruledPaddingPx, paddingRight: ruledPaddingPx }
+    : { paddingLeft: ruledPaddingPx };
   const age = anatomy.age?.(item) ?? null;
   const where = anatomy.byline === undefined ? anatomy.where?.(item) : anatomy.byline(item);
   const reason = anatomy.reason?.(item);
@@ -1072,7 +1096,9 @@ function ListCells<Item>(props: Readonly<{
   return (
     <View pointerEvents={layer?.content} style={[listRowContentStyle,
       page ? pageRowContentStyle : props.wrapTitle ? { minHeight: props.height } : { height: props.height },
-      props.wrapTitle && !page ? (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle) : null]}>
+      props.wrapTitle && !page ? (props.ruledInsetPx !== null
+        ? ruledStyle
+        : (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle)) : null]}>
       {glyph === null && badge === null ? null : (
         <View pointerEvents={layer?.leaf} style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
           {badge === null ? glyph : (
@@ -1196,7 +1222,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   const accessory = (rowAccessory === undefined && anatomy.peek === undefined && anatomy.action === undefined)
     || (stage.wrapTitles && rowAccessory === undefined && chevron === null && listAction === null) ? null : (
     <View style={lineStyle}>
-      {anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : <View style={listActionStyle}>{listAction}</View>}
+      {anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : <View style={stage.ruledInsetPx === null ? listActionStyle : { marginRight: stage.ruledInsetPx - theme.spacing.medium }}>{listAction}</View>}
       {rowAccessory}{chevron}
     </View>
   );
@@ -1246,6 +1272,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
         secondLine={{ value: progress, tracks: travel === null ? NO_TRACKS : HAPPIER_COLLECTION_TRANSITION_TRACKS.secondLine }}
         AnimatedView={AnimatedView}
         wrapTitle={stage.wrapTitles}
+        ruledInsetPx={stage.ruledInsetPx}
         pageSection={stage.pageSections}
         ownsTrailingInset={stage.wrapTitles && !stage.pageSections && accessory === null}
       />
@@ -1260,7 +1287,8 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   const peekActionId = 'collection.peek';
   const secondaryActions = [
     ...(actions.onSecondaryAction === undefined ? [] : actions.secondaryActions ?? []),
-    ...(peekable ? [{ id: peekActionId, label: translate('happier.plugin-ui.collection.peek', 'Peek {title}').replace('{title}', title) }] : []),
+    // The menu is already named for its row ("More actions for …"), so its item is the verb alone.
+    ...(peekable ? [{ id: peekActionId, label: translate('happier.plugin-ui.collection.peekAction', 'Peek') }] : []),
   ];
   const onSecondaryAction = (id: string) => {
     if (id === peekActionId) toggle(itemKey);
@@ -1301,7 +1329,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
     </List.Item>
   );
   const destinationRow = (
-    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles ? RESTING_LIST_ROW : RULED_ROW}>
+    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles && stage.ruledInsetPx === null ? RESTING_LIST_ROW : RULED_ROW}>
       <HappierCollectionTreeRowContext.Provider value={treeFacts}>
         {renderCollectionItemDestination(host, anatomy, item, rowItem)}
       </HappierCollectionTreeRowContext.Provider>
@@ -1480,10 +1508,11 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     gap: 0,
   }), [props.minDetailWidth, props.minListWidth, props.preferredListRatio, size]);
   const openKey = model.openKey;
-  // The page's app details pane, when the host placed this page in a pane host and it sits beside the page now.
-  // In a pane host whose pane is not beside the page (a phone, side panes off) the detail pushes: never a split.
+  // Choose the container on open and retain it across resizing. A fresh phone open pushes in-page;
+  // an already-open app pane fills the viewport without reparenting the detail's local owners.
   const paneHost = useDetailsPaneHostInstalled() && detail === 'auto' && props.renderDetail !== undefined;
-  const pane = useDetailsPaneAvailable() && paneHost;
+  const panePlacement = useDetailsPanePlacement(paneHost && openKey !== null);
+  const pane = panePlacement.inPane && paneHost;
   // The table fits where it clears the list minimum AND can still show a column beside the title: a table that
   // is a title column alone is the list with less in it, so there the rows recompose (COLLECTION.md "Phones").
   const rowAccessoryWidth = (anatomy.peek === undefined ? 0 : TABLE.chevronWidth) + (props.useRowActions !== undefined ? 36 : 0);
@@ -1612,6 +1641,8 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const layoutState = useMemo(() => ({ mode: layoutMode, composition: publishedComposition }), [layoutMode, publishedComposition]);
 
   const wrapTitles = composition === 'list' && transition === null && !besideDetail;
+  const restingRows = useContext(HappierCollectionRestingRowsContext);
+  const ruledInsetPx = wrapTitles && restingRows !== 'air' ? ruledRowInset(theme, restingRows) : null;
   // Peeks exist in the resting table; while the table fades out (reduced motion) they stay and fade with it.
   const expandable = rowGeometry === 'table'
     && (transition === null || transition.kind === 'fade')
@@ -1636,27 +1667,41 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
 
   // ---- the List's cells: rows, and each open peek right below its row (table only) ----
   const expanded = model.expanded;
-  const sections = useMemo(() => drawnSections.map((section, index): ListSectionData<CollectionCell<Item>> => {
-    const data: CollectionCell<Item>[] = [];
-    for (const item of section.items) {
-      const key = model.keyOf(item);
-      data.push({ kind: 'item', key, item });
-      if ((expandable || ghostPeeks) && (expanded.has(key) || closingPeeks.has(key))) {
-        data.push({ kind: 'peek', key: peekCellKey(key), itemKey: key, item });
-      }
-    }
-    const group = section.group;
-    return {
-      key: group?.key ?? `collection-${index}`,
-      title: group?.title ?? '',
-      // A page section names its rows; a dense list's caption band counts them (a nested group every item
-      // it holds, open or not, but not the owners shown only to place a match).
-      ...(pageSections ? {} : { count: tree === null ? section.items.length
-        : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
-      ...(group?.description === undefined ? {} : { description: group.description }),
-      data,
+  const previousCells = useRef<ReadonlyMap<string, CollectionCell<Item>>>(new Map());
+  const sections = useMemo(() => {
+    const nextCells = new Map<string, CollectionCell<Item>>();
+    const retainCell = (cell: CollectionCell<Item>): CollectionCell<Item> => {
+      const previous = previousCells.current.get(cell.key);
+      // The caller owns item identity. Preserve it through this wrapper so the
+      // List's existing PureComponent row sees only its own data changes.
+      const retained = previous?.kind === cell.kind && previous.item === cell.item ? previous : cell;
+      nextCells.set(cell.key, retained);
+      return retained;
     };
-  }), [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
+    const nextSections = drawnSections.map((section, index): ListSectionData<CollectionCell<Item>> => {
+      const data: CollectionCell<Item>[] = [];
+      for (const item of section.items) {
+        const key = model.keyOf(item);
+        data.push(retainCell({ kind: 'item', key, item }));
+        if ((expandable || ghostPeeks) && (expanded.has(key) || closingPeeks.has(key))) {
+          data.push(retainCell({ kind: 'peek', key: peekCellKey(key), itemKey: key, item }));
+        }
+      }
+      const group = section.group;
+      return {
+        key: group?.key ?? `collection-${index}`,
+        title: group?.title ?? '',
+        // A page section names its rows; a dense list's caption band counts them (a nested group every item
+        // it holds, open or not, but not the owners shown only to place a match).
+        ...(pageSections ? {} : { count: tree === null ? section.items.length
+          : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
+        ...(group?.description === undefined ? {} : { description: group.description }),
+        data,
+      };
+    });
+    previousCells.current = nextCells;
+    return nextSections;
+  }, [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
   const dividedKeys = useMemo(() => (pageSections
     ? new Set(drawnSections.flatMap((section) => section.items.slice(0, -1).map(model.keyOf)))
     : null), [drawnSections, model.keyOf, pageSections]);
@@ -1741,13 +1786,14 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     toggleExpanded: model.actions.toggleExpanded,
     tree: treeStage,
     wrapTitles,
+    ruledInsetPx,
     pageSections,
     useRowActions: props.useRowActions,
     expandable,
     dividedKeys,
     onPeekHeight,
     onPeekSettled,
-  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
+  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, ruledInsetPx, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
 
   // ---- the List engine's Collection facts ----
   const authorMultiple: NonNullable<CollectionProps<Item>['selection']>['multiple'] = props.selection?.multiple
@@ -1840,8 +1886,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         height: metrics.groupHeader,
         justifyContent: 'flex-end' as const,
         paddingBottom: LIST_LINE_GAP,
-        // On the page's edges, with its rows' marks and trailing facts (`restingListContentStyle`).
-        paddingHorizontal: 0,
+        // On the page's edges, with its rows' marks and trailing facts (`restingListContentStyle`); a ruled list
+        // keeps its rows' own inset.
+        paddingHorizontal: ruledInsetPx ?? 0,
       },
     } : {
       sectionHeaderTitleRole: 'micro' as const,
@@ -1878,7 +1925,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         {header}
       </driver.AnimatedView>
     ),
-  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
+  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, ruledInsetPx, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
 
   // ---- Escape returns to the table from anywhere inside the Collection (web keyboard) ----
   const rootRef = useRef<View | null>(null);
@@ -2128,7 +2175,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const headerHosted = (pane || pushedPage) && props.detailHeader !== undefined;
   const detailNode = openKey !== null && props.renderDetail !== undefined && detail !== 'none'
     ? <CollectionDetailHeadingFocusContext.Provider value={headerHosted ? null : headingFocus}>
-        {props.renderDetail(openKey, { headerHosted, pushed: composition === 'detail' })}
+        {props.renderDetail(openKey, { headerHosted, pushed: composition === 'detail' || (pane && !panePlacement.beside) })}
       </CollectionDetailHeadingFocusContext.Provider>
     : transition !== null ? lastDetailRef.current : null;
   lastDetailRef.current = openKey !== null ? detailNode : transition !== null ? lastDetailRef.current : null;
@@ -2273,6 +2320,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                         rowHeight={rowGeometry === 'table' ? metrics.tableRow : metrics.listRow}
                         twoLines={rowGeometry === 'list'}
                         viewportHeight={viewportHeight}
+                        {...(ruledInsetPx === null ? {} : { ruledInsetPx })}
                         {...(props.testID === undefined ? {} : { testID: props.testID })}
                       />
                     ) : props.empty}

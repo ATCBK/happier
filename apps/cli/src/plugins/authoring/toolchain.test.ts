@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPluginManifestV2Fixture } from '../testkit/manifestV2Fixture';
 import { ensureManagedJavaScriptRuntimeCommand } from '@/packagedRuntime/js/managedJavaScriptRuntime';
 import { PluginAuthorBundlerUnavailableError } from './bundleDaemonRuntime';
+import { collectBundledPrepublicationAuthorPackageNames } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { assertPluginAuthorPrepublicationRuntimeDeclarations } from './hostSdkResolution';
 import { classifyPluginAuthorDaemonBuild, cleanupPluginAuthorGeneratedArtifacts, normalizePluginSdkRegistryOrigin, resolvePluginAuthorToolchainSpawnInvocation, resolveNativeTypeScriptBin, resolvePluginUiBuildBin, runPluginAuthorToolchain, type PluginAuthorToolchainDeps } from './toolchain';
 import { cleanupPluginDaemonOutputManifest, PLUGIN_DAEMON_OUTPUT_MANIFEST_RELATIVE_PATH, writePluginDaemonOutputManifest } from './daemonOutputManifest';
@@ -92,6 +93,36 @@ describe('assertPluginAuthorPrepublicationRuntimeDeclarations', () => {
 });
 
 describe('runPluginAuthorToolchain', () => {
+  it.each(['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const)(
+    'resolves only satisfying Happier prepublication specifiers in %s',
+    (section) => {
+      expect(collectBundledPrepublicationAuthorPackageNames({
+        name: 'external-happier-plugin', version: '1.0.0',
+        [section]: {
+          '@happier-dev/plugin-sdk': '0.0.0',
+          '@happier-dev/triage-protocol': ' >=0.0.0 <1.0.0 ',
+          '@happier-dev/triage-sources': '>=1.0.0 <2.0.0',
+          'third-party-protocol': '0.0.0',
+          '@happier-dev/plugin-ui': 'file:../plugin-ui',
+          '@happier-dev/channels-protocol': 'latest',
+          '@happier-dev/email-transports-protocol': 'not a range',
+        },
+      })).toEqual([
+        '@happier-dev/plugin-sdk', '@happier-dev/triage-protocol',
+      ]);
+    },
+  );
+
+  it('resolves the real out-of-tree Triage fixture package through bundled author packages', async () => {
+    const packageJson: unknown = JSON.parse(await readFile(new URL(
+      '../../../../../packages/tests/fixtures/plugin-platform/out-of-tree-triage-source/package.json',
+      import.meta.url,
+    ), 'utf8'));
+    expect(collectBundledPrepublicationAuthorPackageNames(packageJson)).toEqual([
+      '@happier-dev/plugin-sdk', '@happier-dev/triage-protocol', '@happier-dev/triage-sources',
+    ]);
+  });
+
   it.each([
     { name: 'author-owned', contents: 'packages:\n  - plugins/*\n', replaceable: false },
     { name: 'author-owned with a quoted marker', contents: 'packages:\n  - plugins/*\n# Happier transient public author workspace\n', replaceable: false },
@@ -696,9 +727,7 @@ describe('runPluginAuthorToolchain', () => {
       }), 'utf8');
       const packageRootsByName = new Map([
         ['@happier-dev/plugin-sdk', join(materializedRoot, 'plugin-sdk')],
-        ['@happier-dev/plugin-ui', join(materializedRoot, 'plugin-ui')],
         ['@happier-dev/channels-protocol', join(materializedRoot, 'channels-protocol')],
-        ['@happier-dev/triage-protocol', join(materializedRoot, 'triage-protocol')],
       ]);
       const spawn = vi.fn(async () => {
         const workspaceConfig = await readFile(join(projectRoot, 'pnpm-workspace.yaml'), 'utf8');

@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { LEGACY_PROMPT_STACKS_ROUTE, PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextNavigation';
 import { MACHINE_RETENTION_CATEGORIES_V1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 
 type Translate = (key: TranslationKeyNoParams) => string;
@@ -146,7 +147,7 @@ function isMountedSettingsRoute(segments: readonly string[]): boolean {
  */
 export function resolveSettingsRouteParentPathname(
     pathname: string | null | undefined,
-    params?: Readonly<{ category?: string | string[] }>,
+    params?: Readonly<{ category?: string | string[]; source?: string | string[] }>,
 ): string | null {
     if (typeof pathname !== 'string') return null;
     const normalizedPathname = pathname.trim().replace(/\/+$/, '') || '/';
@@ -161,6 +162,9 @@ export function resolveSettingsRouteParentPathname(
         return normalizedPathname;
     }
 
+    // A phone pushes an open plugin source as the Sources page's query state: Back closes it to the list first.
+    if (normalizedPathname === '/settings/plugins/sources' && params?.source !== undefined) return normalizedPathname;
+
     // Custom ACP agents live in the Agents collection; `custom` alone is the new-agent draft, not
     // the parent of a saved agent, although it is a mounted route.
     if (/^\/settings\/agents\/custom(?:\/[^/]+)?$/.test(normalizedPathname)) return '/settings/agents';
@@ -168,7 +172,14 @@ export function resolveSettingsRouteParentPathname(
     const segments = normalizedPathname.slice('/settings/'.length).split('/');
     for (let length = segments.length - 1; length > 0; length -= 1) {
         const ancestor = segments.slice(0, length);
-        if (isMountedSettingsRoute(ancestor)) return `/settings/${ancestor.join('/')}`;
+        const parentPathname = `/settings/${ancestor.join('/')}`;
+        // Stacks is a redirect to Context, not a parent page. Context itself returns to
+        // Prompts & Skills; its Voice/Profile children return to the retained Context page.
+        if (parentPathname === LEGACY_PROMPT_STACKS_ROUTE) {
+            if (normalizedPathname === PROMPTS_CONTEXT_ROUTE) continue;
+            return PROMPTS_CONTEXT_ROUTE;
+        }
+        if (isMountedSettingsRoute(ancestor)) return parentPathname;
     }
     return '/settings';
 }
@@ -201,7 +212,7 @@ export function shouldShowSettingsParentBackButton(params: Readonly<{
 export function useSettingsParentBack(tag: string): Readonly<{ parentPathname: string | null; goToParent: () => void }> {
     const pathname = usePathname();
     const router = useRouter();
-    const params = useLocalSearchParams<{ settingsSearch?: string | string[]; category?: string | string[] }>();
+    const params = useLocalSearchParams<{ settingsSearch?: string | string[]; category?: string | string[]; source?: string | string[] }>();
     const searchOrigin = params[SETTINGS_SEARCH_RETURN_QUERY_PARAM];
     const parentPathname = searchOrigin === '1' ? '/settings' : resolveSettingsRouteParentPathname(pathname, params);
     const goToParent = React.useCallback(() => {

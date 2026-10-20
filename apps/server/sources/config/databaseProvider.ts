@@ -1,6 +1,12 @@
 import type { ServerFlavor } from './backends';
 
 export type DbProvider = 'postgres' | 'pglite' | 'sqlite' | 'mysql';
+export type DbSqlDialect = Exclude<DbProvider, 'pglite'>;
+
+/** SQL compatibility is distinct from the backend's connection and shutdown lifecycle. */
+export function resolveDbSqlDialect(provider: DbProvider): DbSqlDialect {
+    return provider === 'pglite' ? 'postgres' : provider;
+}
 
 export function resolveDefaultDbProvider(flavor: ServerFlavor): DbProvider {
     return flavor === 'light' ? 'sqlite' : 'postgres';

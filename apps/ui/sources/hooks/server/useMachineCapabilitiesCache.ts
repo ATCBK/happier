@@ -24,6 +24,8 @@ type CacheEntry = {
     state: MachineCapabilitiesCacheState;
     updatedAt: number;
     inFlightToken?: number;
+    /** Successful requests can omit optional facts; mounting again is not an invalidation. */
+    settledRequestKeys?: ReadonlySet<string>;
 };
 
 const cache = new Map<string, CacheEntry>();
@@ -350,7 +352,7 @@ function detectRequestKey(request: CapabilitiesDetectRequest): string {
     });
 }
 
-function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest): boolean {
+function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest, settledRequest = false): boolean {
     const snapshot =
         state.status === 'loaded'
             ? state.snapshot
@@ -366,6 +368,28 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
     const overrideEntries = isPlainObject(request.overrides)
         ? Object.entries(request.overrides as Record<string, { params?: Record<string, unknown> }>)
         : [];
+    const capabilityIdsNeedingLoginStatus = new Set<string>();
+    for (const entry of requests) {
+        if (entry.id.startsWith('cli.') && isPlainObject(entry.params) && entry.params.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(entry.id);
+        }
+    }
+    for (const [capabilityId, override] of overrideEntries) {
+        if (capabilityId.startsWith('cli.') && override?.params?.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(capabilityId);
+        }
+    }
+    if (settledRequest) {
+        // A failed readiness probe supplied no installation/login facts. A new
+        // demand must ask again; cache publication itself never starts a read.
+        // Successful answers may omit optional facts, while update-only failures
+        // retain the existing latest-version retry cadence.
+        return [...capabilityIdsNeedingLoginStatus].some(id => results[id as CapabilityId]?.ok !== true)
+            || requests.some(entry => entry.id.startsWith('cli.')
+                && Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
+                && results[entry.id]?.ok === false
+                && isAgentLatestVersionMissing(results, entry.id));
+    }
 
     for (const entry of requests) {
         const capabilityId = typeof entry?.id === 'string' ? entry.id : '';
@@ -387,22 +411,6 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
         if (Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
             && isAgentLatestVersionMissing(results, entry.id)) {
             return true;
-        }
-    }
-
-    const capabilityIdsNeedingLoginStatus = new Set<string>();
-
-    for (const entry of requests) {
-        if (!entry?.id?.startsWith('cli.')) continue;
-        if (Boolean((entry.params as any)?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(entry.id);
-        }
-    }
-
-    for (const [capabilityId, override] of overrideEntries) {
-        if (!capabilityId.startsWith('cli.')) continue;
-        if (Boolean(override?.params?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(capabilityId);
         }
     }
 
@@ -536,6 +544,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             state: { status: 'loading', ...(prevSnapshot ? { snapshot: prevSnapshot } : {}) },
             updatedAt: Date.now(),
             inFlightToken: token,
+            settledRequestKeys: existing?.settledRequestKeys,
         });
 
         let result: MachineCapabilitiesDetectResult;
@@ -557,6 +566,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             setEntry(cacheKey, {
                 state: prevSnapshot ? ({ status: 'error', snapshot: prevSnapshot } as const) : ({ status: 'error' } as const),
                 updatedAt: failedAt,
+                settledRequestKeys: existing?.settledRequestKeys,
             });
             scheduleObservedErrorRetry(cacheKey, currentReaders(), failedAt);
             return;
@@ -593,6 +603,9 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
         setEntry(cacheKey, {
             state: nextState,
             updatedAt,
+            settledRequestKeys: result.supported
+                ? new Set([...(existing?.settledRequestKeys ?? []), requestKey])
+                : existing?.settledRequestKeys,
         });
         if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, currentReaders(), updatedAt);
     });
@@ -656,7 +669,9 @@ export function prefetchMachineCapabilitiesIfStale(params: {
             signal: params.signal,
         });
     }
-    if (requestNeedsRefetchFromState(existing.state, params.request)) {
+    if (existing.state.status !== 'error'
+        && requestNeedsRefetchFromState(existing.state, params.request,
+            existing.settledRequestKeys?.has(detectRequestKey(params.request)))) {
         return fetchAndMerge({
             machineId: params.machineId,
             serverId: params.serverId,

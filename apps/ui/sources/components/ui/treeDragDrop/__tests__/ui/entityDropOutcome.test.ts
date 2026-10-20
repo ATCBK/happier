@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityDropAdmissionV1, EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 
+import { t } from '@/text';
+import { admitWidgetEntityMovement } from '@/sync/ops/actions/widgetEntityMovement';
 import { describeEntityDropOutcome, describeEntityDropSettled } from '../../ui/entityDropOutcome';
 
 const allowed = (actionId: string, glyph?: EntityDropPreviewV1['glyph'], verb = 'Verb'): EntityDropAdmissionV1 => ({
@@ -18,7 +20,7 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
     });
 
     it('treats every "nothing would change" code as a quiet Already here, never a refusal', () => {
-        for (const code of ['no-change', 'same-position', 'board-no-change', 'workspace_tab_already_here']) {
+        for (const code of ['no-change', 'same-position', 'board-no-change', 'workspace_tab_already_here', 'already-kept', 'already-placed', 'board-already-here', 'unchanged', 'already_under']) {
             expect(describeEntityDropOutcome({ phase: 'carrying', admission: { status: 'refused', reason: { code, message: 'It’s already here' } } }))
                 .toMatchObject({ tone: 'quiet', glyph: 'here', title: 'Already here', detail: 'Release to leave it where it is' });
         }
@@ -64,6 +66,23 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
         const unchanged: EntityDropAdmissionV1 = { status: 'refused', reason: { code: 'same-position', message: 'Already here' },
             preview: { glyph: 'move', verb: 'Move to Project', target: 'Project' } };
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: unchanged })).toMatchObject({ tone: 'quiet', title: 'Move to Project' });
+    });
+
+    it('presents a widget place whose admission is still being read as neither admitted nor silently refused', () => {
+        // The real movement owner's verdict before its read answers: refused, yet carrying the place's own "Move below X" verb.
+        const effect = { actionId: 'widgets.item.move', input: {}, preview: { glyph: 'below' as const, verb: 'Move below Checkouts', target: 'Checkouts' } };
+        const admission = admitWidgetEntityMovement(effect, null);
+        expect(admission).toMatchObject({ status: 'refused', reason: { code: 'widget_admission_pending' } });
+        if (admission.status !== 'refused') throw new Error('Expected the pending verdict to be a refusal');
+        const checking = admission.reason.message;
+        // While carried: a neutral card that says it is checking; the place's verb is never offered.
+        const carrying = describeEntityDropOutcome({ phase: 'carrying', admission });
+        expect(carrying).toMatchObject({ tone: 'quiet', title: checking });
+        expect(carrying?.title).not.toContain('Move below');
+        // Released before the answer: it springs back with the reason, and the source row keeps the same line.
+        const verdict = { phase: 'settled' as const, admission, outcome: { status: 'refused' as const, reason: admission.reason } };
+        expect(describeEntityDropOutcome(verdict)).toEqual({ tone: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
+        expect(describeEntityDropSettled(verdict)).toMatchObject({ kind: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
     });
 
     it('names a late relation refusal by item and lead, and any other one by its verb', () => {

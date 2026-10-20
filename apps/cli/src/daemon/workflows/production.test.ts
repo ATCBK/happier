@@ -2,7 +2,11 @@ import { createTestWorkflowCoordinator as createWorkflowCoordinator } from './wo
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import type { SessionInputWorkflowV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { createSocketTransportAdapter, socketRpcCodec } from '@happier-dev/sync-client';
 import { createApiSessionSocketStub, createAvailableSessionSpawnMachineSnapshot } from '@/testkit/backends/apiSessionSocketHarness';
@@ -47,6 +51,7 @@ import {
   createWorkflowActionExecutor,
   StrictJsonValueSchema,
   getActionSpec,
+  FeaturesResponseSchema,
   zodSchemaToJsonSchemaObject,
 } from '@happier-dev/protocol';
 import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
@@ -140,7 +145,7 @@ beforeEach(() => {
     return { status: 'success', sessionId: readySessionId };
   });
 });
-afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+afterEach(() => { resetActiveAccountSettingsSnapshotForTests(); vi.unstubAllGlobals(); });
 const availability = { pause: true, resumeBoundary: false,
     restoreWorkspace: false, cancel: true, inspectExecution: true, disabledReasons: [] };
 /** The canonical definition requires at least one block, so fixtures cannot use an empty program. */
@@ -225,6 +230,174 @@ async function commandOutputAdmissionFixture(mode: 'plain' | 'e2ee', fault?: 're
 }
 
 describe('production workflow coordinator', () => {
+  it.each(['none', 'lost_ack', 'denied'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
+    const publication = scenario !== 'none';
+    const discussion = { serverId: 'server-1', discussionId: 'discussion-1' };
+    const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null } as const;
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
+      conversation: { kind: 'existing_session', sessionId: 'session-1', machineId },
+    }, blocks: [{ ...onlyStep, input: [{ kind: 'discussion_context', scope: 'addressing_message' },
+      { kind: 'discussion_context', scope: 'so_far' }] }] };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct', discussion: { discussion, messageId: 'question', throughSeq: 2 } },
+        ...(publication ? { resultDelivery: { kind: 'originating_discussion' as const, discussion, messageId: 'question', throughSeq: 2 } } : {}),
+        authorization: { principal: { kind: 'host' } } }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot,
+    }));
+    const boundary = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    const reads: { throughSeq?: number; beforeSeq?: number }[] = [];
+    const transportRequests: string[] = [];
+    const features = FeaturesResponseSchema.parse({ features: { sessions: { enabled: true,
+      conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {} });
+    vi.stubGlobal('fetch', async () => Response.json(features));
+    const settings = accountSettingsParse({});
+    setActiveAccountSettingsSnapshot({ settings, source: 'network', rawSettings: {}, settingsVersion: 1,
+      loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+    const wireMessage = (seq: number) => ({ id: seq === 2 ? 'question' : `message-${seq}`,
+      discussionId: discussion.discussionId, localId: `local-${seq}`, seq, authorAccountId: accountId,
+      accountActor: { v: 1, accountId, profile: null }, producerV1: null, createdAt: seq,
+      content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: seq === 3 ? 'peer sentinel' : `message ${seq}` }] } },
+      mentionedAccountIds: [] });
+    vi.spyOn(axios, 'request').mockImplementation(async request => {
+      const url = new URL(String(request.url));
+      transportRequests.push(`request ${url.pathname}`);
+      if (url.pathname === '/v1/features') return { status: 200, data: features };
+      if (url.pathname === '/v1/discussions/discussion-1/participants') return { status: 200, data: {
+        discussionId: discussion.discussionId, ownerAccountId: accountId, access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'session', sessionId: 'session-1' }, answerPolicy: 'when_addressed', createdAt: 1 }],
+      } };
+      if (url.pathname === '/v1/discussions/discussion-1') return { status: 200, data: { discussion: {
+        id: discussion.discussionId, ownerAccountId: accountId, encryptionMode: 'plain', anchor: null,
+        access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId: 'creation',
+        titleContent: { t: 'plain', v: { v: 1, title: 'Discussion' } }, messageSeq: 3,
+        lastReadSeq: 0, unreadCount: 3, unreadMentionCount: 0, recentAuthorAccountIds: [accountId],
+        latestMessage: { id: 'message-3', localId: 'local-3', seq: 3, authorAccountId: accountId,
+          accountActor: { v: 1, accountId, profile: null }, producerV1: null, createdAt: 3 },
+        archivedAt: null, capabilities: { postMessages: true, rename: true,
+          archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+      } } };
+      if (url.pathname.endsWith('/messages')) {
+        const throughSeq = Number(url.searchParams.get('throughSeq') ?? 3);
+        const beforeSeq = url.searchParams.has('beforeSeq') ? Number(url.searchParams.get('beforeSeq')) : undefined;
+        reads.push({ throughSeq, ...(beforeSeq === undefined ? {} : { beforeSeq }) });
+        const seq = Math.min(throughSeq, (beforeSeq ?? throughSeq + 1) - 1);
+        return { status: 200, data: { messages: [wireMessage(seq)], messageSeq: throughSeq, hasMoreOlder: seq > 1 } };
+      }
+      throw new Error(`Unexpected Discussion request: ${url.pathname}`);
+    });
+    const inputs: string[] = [];
+    let workflow: SessionInputWorkflowV2 | undefined;
+    let inputLocalId = '';
+    const committedPosts = new Map<string, string>();
+    const publicationDiagnostics: unknown[] = [];
+    vi.spyOn(logger, 'warnLocalFile').mockImplementation((...args) => { publicationDiagnostics.push(args); });
+    let published = false;
+    let denied = false;
+    const previousGet = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url, config) => {
+      transportRequests.push(`get ${url}`);
+      if (url.includes('/by-local-id/') && url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
+        v: 1, mode: 'wait', workflow, acceptedTurnId: 'accepted-turn', disposition: published ? 'returned' : 'observing',
+        discussion: { discussionId: discussion.discussionId, messageId: 'question', throughSeq: 2, participantSessionId: 'session-1' },
+        outcome: published ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion, messageId: 'published-answer' } }
+          : { kind: 'answer', result: { sessionId: 'session-1', messageId: 'exact-result' } },
+      } } };
+      return previousGet(url, config);
+    });
+    const previousRpc = readinessMachineRpc.callMachineRpc.getMockImplementation()!;
+    readinessMachineRpc.callMachineRpc.mockImplementation(async args => {
+      if (args.method !== SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1) return previousRpc(args);
+      const request = args.request.request;
+      const expectedLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'session-1', localId: inputLocalId,
+        acceptedTurnId: 'accepted-turn' });
+      expect(request).toMatchObject({ sessionId: 'session-1', discussionId: discussion.discussionId,
+        replyReturn: { requestLocalId: inputLocalId, acceptedTurnId: 'accepted-turn', workflow: {
+          runId, invocationRecordId: workflow!.invocationRecordId, invocationAttempt: '0',
+        } }, request: { localId: expectedLocalId, replyTarget: { kind: 'message', messageId: 'question' },
+          content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'answer' }] } } } });
+      if (scenario === 'denied' && !denied) {
+        denied = true;
+        return { v: 1, ok: false, error: 'discussion_post_denied' };
+      }
+      // This is the native RPC network boundary: the real append owner commits
+      // one reply and C2 publicationRef, then its acknowledgement is lost.
+      committedPosts.set(expectedLocalId, 'published-answer');
+      published = true;
+      if (scenario === 'denied') return { v: 1, ok: true, value: {
+        message: { ...wireMessage(4), id: 'published-answer', localId: expectedLocalId, content: request.request.content }, messageSeq: 4,
+      } };
+      throw new Error('committed_reply_ack_lost');
+    });
+    const coordinate = createProductionWorkflowRunCoordinator({ token: credentials.token, accountId, machineId, storage: boundary,
+      execution: { ...productionExecution({ enqueue: async request => {
+        inputs.push(request.text);
+        workflow = request.workflow;
+        inputLocalId = deriveWorkflowSessionInputLocalIdV2(request.workflow);
+        return { status: 'accepted', localId: inputLocalId };
+      }, observe: async ({ sessionId, localId }) => ({ ok: true, sessionId, localId,
+        result: { kind: 'final_text', text: 'answer' }, replyOutcome: { kind: 'answer',
+          result: { sessionId, messageId: 'exact-result' } } }) }), credentials },
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation' }),
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      isAcceptedAuthorizationCurrent: async () => true,
+      workspaceScm: { realizeWorktree: async () => { throw new Error('unexpected worktree'); },
+        inspectLocation: async () => null, verifyRecordedWorkspace: async () => 'available' },
+      onCommittedTransition: async () => {},
+    });
+    const claim = { runId, attempt: 0, expectedRevision: 0,
+      accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null }, acceptedEnvelope };
+    if (scenario === 'denied') {
+      expect(await coordinate(claim)).toMatchObject({ state: 'interrupted', reason: 'workflow_discussion_publication_unavailable' });
+      expect(boundary.run().state).toBe('interrupted');
+      expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
+      expect(boundary.rows().find(row => row.index.parentRecordId === null)?.index.lifecycle).toBe('needs_attention');
+      expect(committedPosts.size).toBe(0);
+    } else if (publication) {
+      await expect(coordinate(claim)).rejects.toThrow('committed_reply_ack_lost');
+      expect(boundary.run().state).toBe('running');
+      expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
+      expect(committedPosts.size, JSON.stringify({ publicationDiagnostics, transportRequests })).toBe(1);
+    } else expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
+    expect(inputs).toHaveLength(1);
+    const values = JSON.parse(inputs[0]!.split('**Workflow inputs**\n\n')[1]!);
+    expect(values[0].value).toMatchObject({ throughSeq: 2, messages: [
+      { id: 'message-1' }, { id: 'question' },
+    ] });
+    expect(JSON.stringify(values[0].value)).not.toContain('peer sentinel');
+    expect(values[1].value).toMatchObject({ throughSeq: 3, messages: [
+      { id: 'message-1' }, { id: 'question' }, { id: 'message-3' },
+    ] });
+    const previousReads = reads.length;
+    if (scenario === 'denied') {
+      const root = boundary.rows().find(row => row.index.parentRecordId === null)!;
+      const owner = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => accountId,
+        storage: boundary, definitions: { get: async () => { throw new Error('No mutable definition read'); } },
+        resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+        normalizeAbsolutePath: path => path, randomBytes: () => { throw new Error('Plain keys are absent'); },
+        isAcceptedAuthorizationCurrent: async () => true,
+      });
+      const retried = WorkflowActionOutputSchemasV1['workflow.run.invocations.retry'].parse(await owner.execute({
+        actionId: 'workflow.run.invocations.retry', context: { surface: 'cli', authority: 'present_user',
+          callerPermissionMode: 'yolo', actionCaller: { kind: 'host' }, actionRequestId: 'retry-publication' },
+        input: { runId, expectedRevision: boundary.run().revision, invocation: { recordId: root.index.id },
+          causalInvocationIds: [root.index.id], conversation: 'fresh_agent',
+          input: { kind: 'original' } },
+      }));
+      expect(retried.invocation.attempt).toBe('1');
+      expect(boundary.rows().find(row => row.index.id === workflow!.invocationRecordId)?.index).toMatchObject({
+        attempt: '0', lifecycle: 'completed',
+      });
+    }
+    expect(await coordinate({ ...claim, expectedRevision: boundary.run().revision })).toMatchObject({ state: 'succeeded' });
+    expect(inputs).toHaveLength(1);
+    expect(reads).toHaveLength(previousReads);
+  });
   it.each([
     { status: 500, committed: false, recordingAvailable: true, settlement: false },
     { status: 500, committed: true, recordingAvailable: true, settlement: false },
@@ -1846,7 +2019,8 @@ describe('production workflow coordinator', () => {
           attempt: index.attempt, logicalInvocationRecordId: blockId === 'parallel-1' ? oldParentId : index.id,
           ...(previousAttemptRecordId ? { previousAttemptRecordId } : {}),
           ...(blockKind === 'parallel' ? { container: { kind: 'parallel' as const, nextBranchOrdinal: '0' } } : {}),
-          ...(blockKind === 'step' ? { result: 'kept' } : {}),
+          ...(blockKind === 'step' ? { result: 'kept', replyOutcome: { kind: 'answer' as const,
+            result: { sessionId: 'reviewer-session', messageId: 'committed-answer' } } } : {}),
         },
       }));
     const details = new Map([
@@ -1875,7 +2049,8 @@ describe('production workflow coordinator', () => {
       runId, blockId: 'successful-step', scope: [],
       parentKey: workflowInvocationKey({ runId, blockId: 'parallel-1', scope: [], attempt: 2 }),
       memberOrdinal: '0',
-    })).resolves.toMatchObject({ recordId: childId, lifecycle: 'completed', result: 'kept' });
+    })).resolves.toMatchObject({ recordId: childId, lifecycle: 'completed', result: 'kept',
+      replyOutcome: { kind: 'answer', result: { sessionId: 'reviewer-session', messageId: 'committed-answer' } } });
     expect(execute.mock.calls.filter(([operation]) => operation.operation === 'invocations.current')
       .map(([operation]) => operation.parentRecordId)).toEqual([newParentId, middleParentId, oldParentId]);
   });
@@ -2850,6 +3025,46 @@ describe('production workflow coordinator', () => {
       await expect(coordinate(claim)).resolves.toEqual({ state: 'failed', reason: 'work_depth_exceeded', admission: 'refused', blockId: 'work' });
       expect(execute).not.toHaveBeenCalled();
     }
+  });
+
+  it('names an inline trigger Run after its Automation and keeps a saved Workflow\'s own name', async () => {
+    const captured = new Error('accepted_snapshot_captured');
+    const accepted: unknown[] = [];
+    const coordinate = createProductionWorkflowRunCoordinator({
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
+      token: 'token', accountId, machineId,
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      isAcceptedAuthorizationCurrent: async () => true,
+      execution: productionExecution(), onCommittedTransition: vi.fn(),
+      resolveMaterializationHost: productionMaterializationHost,
+      prepareAcceptedWorkspaceTarget: async () => ({ ok: true,
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+      }),
+      storage: { observeChanges: quietStorageChanges, execute: async (operation) => {
+        if (operation.operation !== 'accepted-snapshot.resolve') throw new Error('unexpected_storage_effect');
+        const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({
+          mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId },
+          envelope: parseWorkflowStoredContentEnvelopeV1(operation.acceptedEnvelope),
+        });
+        if (opened.kind !== 'available') throw new Error('snapshot_unavailable');
+        accepted.push(opened.content);
+        throw captured;
+      } },
+    });
+    const claim = { runId, attempt: 0, expectedRevision: 0, automationId: 'automation-1',
+      accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null },
+      automationCause: { kind: 'manual' as const, invokedAt: 1 }, causeWorkDepth: 0,
+      definitionEnvelope: JSON.stringify({ t: 'plain', v: {
+        inlineDefinition: { version: 1, inputs: [], defaults: {
+          agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
+        }, blocks: [onlyStep] },
+        workspace: { directory: '/repo' }, executionTarget: { kind: 'session' },
+      } }),
+    };
+    await expect(coordinate({ ...claim, automationName: 'Library memory upkeep' })).rejects.toBe(captured);
+    expect(accepted[0]).toMatchObject({ source: { kind: 'automation' }, metadata: { title: 'Library memory upkeep' } });
+    await expect(coordinate(claim)).rejects.toBe(captured);
+    expect((accepted[1] as { metadata?: unknown }).metadata ?? null).toBeNull();
   });
 
   it('freezes an Automation definition and evidence before durable row admission, Session execution, and parent settlement', async () => {

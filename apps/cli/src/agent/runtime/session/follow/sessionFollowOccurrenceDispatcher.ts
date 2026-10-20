@@ -1,12 +1,17 @@
 import axios from 'axios';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { evaluateSessionFollowRuleOccurrenceV1, type SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
-import { resolveFollowDeliveryV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import { SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema, type SessionFollowSessionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
-import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
-import { deriveSessionFollowInputLocalIdV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { resolveFollowDeliveryV1, isFollowPolicyEqualV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema, SessionFollowRunOccurrenceRoutesResponseV1Schema, type SessionFollowSessionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowSourceOccurrenceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
+import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1, ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowInputLocalIdV1, RunFollowOccurrenceV1Schema, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import type { SessionFollowSourceOccurrenceWitnessV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { SessionFollowRelationWitnessesV1Schema, type SessionFollowRelationWitnessV1, type SessionFollowSourceOccurrenceWitnessV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
@@ -33,15 +38,18 @@ import { decryptSessionPayload, encryptSessionPayload } from '@/session/transpor
 import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEvent } from '@/agent/permissions/activeForegroundRequests';
 import { captureSemanticSessionFollowRuleSourceEvidence } from './sessionFollowRuleSourceEvidence';
 import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
 export type { SessionFollowAccountOccurrence } from './sessionFollowRuleSourceEvidence';
 export type SessionFollowReceiverRangeResult = Readonly<{ coveredEvents: readonly Readonly<{
   sourceSessionId: string; kind: FollowEventV1['kind'];
 }>[]; receiverSessionIds?: readonly string[] }>;
+export type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
 export type SessionFollowOccurrenceDispatch = Readonly<
-  { occurrence: SessionFollowRuleSourceOccurrenceV1; destinationSessionId?: never }
+  { occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowRunOccurrence; destinationSessionId?: never; contextSessionId?: string }
   | { occurrence: SessionFollowAccountOccurrence; destinationSessionId: string }
   | { observations: readonly SessionFollowSessionPendingObservationV1[]; destinationSessionId: string; sourceSessionId?: string; occurrence?: never }
   | { sourceSessionIdChanged: string; occurrence?: never; destinationSessionId?: never }
+  | { accountFollowSourcesChanged: Readonly<{ sourceSessionId?: string; workflowRunIds?: readonly string[]; discussionIds?: readonly string[] }>; occurrence?: never; destinationSessionId?: never }
 >;
 
 /** One captured Account daemon: original read, current predicate, route union, existing Pending admission. */
@@ -65,6 +73,117 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   const current = async () => !input.signal.aborted && await input.isCurrent();
   const prepareSourceKey = createSessionFollowSourceKeyPreparationAfterSet({ credentials: input.credentials,
     serverHttpBaseUrl: input.serverHttpBaseUrl, resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot });
+  const dispatchRun = async (request: SessionFollowRunOccurrence | Readonly<{ source: RunFollowOriginalV1['source'] }>, receiverSessionId?: string, personalOnly = false): Promise<void> => {
+    if (!await current()) return;
+    const response = await axios.post(`${input.serverHttpBaseUrl}${SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes}`,
+      { v: 1, ...('original' in request ? { original: request.original } : { source: request.source }) }, { headers: { Authorization: `Bearer ${input.credentials.token}` },
+        signal: input.signal, validateStatus: () => true });
+    const parsed = response.status === 200 ? SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse(response.data) : null;
+    if (!parsed?.success || !parsed.data.ok || 'original' in request && !sameStrictJsonValue(parsed.data.original, request.original)
+      || !await current()) return;
+    const occurrence = RunFollowOccurrenceV1Schema.parse({ original: parsed.data.original, event: parsed.data.event });
+    if (!receiverSessionId && parsed.data.personal && !parsed.data.personal.alreadyRepresented && await input.isPersonalCurrent() && await current()) {
+      const policies = [parsed.data.personal.policy];
+      await input.dispatchPersonal({ occurrence, policies, signal: input.signal, acceptDelivery: async () => {
+        if (!await current() || !await input.isPersonalCurrent()) return false;
+        const accepted = await submitAccountFollowPersonalProgress({ token: input.credentials.token,
+          serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, occurrence: { original: occurrence.original } });
+        return accepted?.accepted === true && !accepted.alreadyRepresented;
+      } }, async () => {
+        if (!await current() || !await input.isPersonalCurrent()) return false;
+        const response = await axios.post(`${input.serverHttpBaseUrl}${SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes}`,
+          { v: 1, original: occurrence.original }, { headers: { Authorization: `Bearer ${input.credentials.token}` },
+            signal: input.signal, validateStatus: () => true });
+        const latest = response.status === 200 ? SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse(response.data) : null;
+        return Boolean(latest?.success && latest.data.ok && latest.data.personal
+          && isFollowPolicyEqualV1(latest.data.personal.policy, policies[0]!)
+          && sameStrictJsonValue(latest.data.original, occurrence.original));
+      });
+    }
+    if (personalOnly) return;
+    for (const route of parsed.data.routes) {
+      if (receiverSessionId !== undefined && route.destinationSessionId !== receiverSessionId) continue;
+      const selected = resolveFollowDeliveryV1({ policies: [route.policy], event: occurrence.event });
+      if (!selected.selected || !await current()) continue;
+      const source = occurrence.original.source;
+      const muted = await readSessionDeliveryMutedScopes({ token: input.credentials.token,
+        receiver: { kind: 'session', sessionId: route.destinationSessionId }, serverHttpBaseUrl: input.serverHttpBaseUrl,
+        signal: input.signal });
+      if (!muted || isFollowDeliveryMutedV1(muted, { source,
+        ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) })) continue;
+      const delivery = { v: 1 as const, original: occurrence.original, event: occurrence.event,
+        delivery: selected.session.wake ? 'wake' as const : 'next_turn' as const };
+      const relation = { relation: route.relation, attachedAt: route.attachedAt, source,
+        ...('expectedRevision' in route ? { expectedRevision: route.expectedRevision }
+          : { expectedTerminalEventId: route.expectedTerminalEventId }) };
+      const admission = buildTrustedHostSessionInputAdmissionV1('agent');
+      const features = await input.resolveServerFeaturesSnapshot?.();
+      await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => sendSessionMessage({ credentials: input.credentials,
+        idOrPrefix: route.destinationSessionId, wait: false,
+        localId: deriveSessionFollowInputLocalIdV1({ destinationSessionId: route.destinationSessionId, original: delivery.original }),
+        timeoutMs: resolveSessionMessageAdmissionTimeoutMs(), message: `Followed Run ${occurrence.event.kind}: ${JSON.stringify(source)}. Read this Run's current source.`,
+        inputAdmission: { provenance: admission.provenance,
+          request: SessionInputRequestV1Schema.parse({ ...admission.request, followDeliveryV1: delivery }) },
+        followRelations: SessionFollowRelationWitnessesV1Schema.parse([relation]), informationDelivery: 'session_follow', executionAuthority: 'account_automation',
+        resumeInactiveSession: selected.session.wake, ...(input.spawnSession ? { spawnSession: input.spawnSession } : {}),
+        ...(features ? { serverFeaturesSnapshot: features } : {}), signal: input.signal }));
+    }
+  };
+  const dispatchDiscussion = async (source: Readonly<{ kind: 'discussion'; discussionId: string }>) => {
+    const read = async (messageId?: string) => {
+      if (!await current() || !await input.isPersonalCurrent()) return null;
+      const response = await axios.post(`${input.serverHttpBaseUrl}${SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes}`,
+        { v: 1, source, ...(messageId ? { messageId } : {}) }, { headers: { Authorization: `Bearer ${input.credentials.token}` },
+          signal: input.signal, validateStatus: () => true });
+      const parsed = response.status === 200 ? SessionFollowSourceOccurrenceRoutesResponseV1Schema.safeParse(response.data) : null;
+      return parsed?.success && parsed.data.ok && 'discussion' in parsed.data && await current() ? parsed.data.discussion : null;
+    };
+    for (;;) {
+      const occurrence = await read();
+      if (!occurrence || occurrence.personal.alreadyRepresented) return;
+      const original = DiscussionMessageRefV1Schema.parse({ kind: 'discussion',
+        discussion: { serverId: input.serverId, discussionId: source.discussionId }, messageId: occurrence.messageId });
+      let settled = false;
+      await input.dispatchPersonal({ occurrence: { discussion: { original, seq: occurrence.seq, event: occurrence.event } },
+        policies: [occurrence.personal.policy], signal: input.signal, acceptDelivery: async () => {
+          if (!await current() || !await input.isPersonalCurrent()) return false;
+          const acceptance = await submitAccountFollowPersonalProgress({ token: input.credentials.token,
+            serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, occurrence: { discussion: { original, seq: occurrence.seq } } });
+          settled = acceptance?.accepted === true;
+          return settled && acceptance?.alreadyRepresented === false;
+        } }, async () => {
+          const latest = await read(occurrence.messageId);
+          return Boolean(latest && latest.seq === occurrence.seq && sameStrictJsonValue(latest.source, source)
+            && isFollowPolicyEqualV1(latest.personal.policy, occurrence.personal.policy));
+        });
+      // Unavailable progress custody holds this exact original. A read
+      // never consumes it or spins while the same effect remains unrepresented.
+      if (!settled) return;
+    }
+  };
+  const dispatchAccountSourceRange = async (filter: Readonly<{ sourceSessionId?: string; workflowRunIds?: readonly string[]; discussionIds?: readonly string[] }> = {}) => {
+    let cursor: string | undefined;
+    do {
+      if (!await current() || !await input.isPersonalCurrent()) return;
+      const response = await axios.get(`${input.serverHttpBaseUrl}/v2/account/session-follows`, {
+        headers: { Authorization: `Bearer ${input.credentials.token}` }, ...(cursor ? { params: { cursor } } : {}),
+        signal: input.signal, validateStatus: () => true,
+      });
+      const page = response.status === 200 ? ListAccountSessionFollowsResponseV1Schema.safeParse(response.data) : null;
+      if (!page?.success || !await current()) return;
+      for (const relation of page.data.follows) {
+        if (!('source' in relation)) continue;
+        const source = relation.source;
+        if (source.kind !== 'execution_run' && source.kind !== 'workflow_run' && source.kind !== 'discussion') continue;
+        if (filter.sourceSessionId && (source.kind !== 'execution_run' || source.sessionId !== filter.sourceSessionId)) continue;
+        if ((filter.workflowRunIds || filter.discussionIds) && !(source.kind === 'workflow_run' && filter.workflowRunIds?.includes(source.runId)
+          || source.kind === 'discussion' && filter.discussionIds?.includes(source.discussionId))) continue;
+        if (source.kind === 'discussion') await dispatchDiscussion(source);
+        else await dispatchRun({ source }, undefined, true);
+      }
+      cursor = page.data.continuation;
+    } while (cursor && await current());
+  };
   const readRoutes = async (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence, destinationSessionId?: string) => {
     const request = SessionFollowObserveSourceRoutesRequestV1Schema.parse({ v: 1,
       ...(destinationSessionId ? { destinationSessionId } : 'sourcePublisher' in occurrence ? { sourcePublisher: occurrence.sourcePublisher } : {}),
@@ -109,7 +228,11 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           continue;
         }
         const ordinary = await readRoutes(original, receiverSessionId);
-        if (ordinary === null) { personalRequestPassComplete = false; continue; } // Unsupported/denied is pending, not an empty route set.
+        if (ordinary === null) {
+          if (receiverSessionId) return;
+          personalRequestPassComplete = false;
+          continue;
+        } // Unsupported/denied is pending, not an empty route set.
         const evaluated = evaluateSessionFollowRuleOccurrenceV1({ accountId: input.accountId, evaluator: receiverSessionId ? 'receiver' : 'source',
           production: receiverSessionId ? 'recovery' : 'source', sourceSessionId: original.sourceSessionId, evidence, currentFacts: facts,
           rules: opened.rules.filter(rule => !rule.inception || ordinary.originalCreatedAt !== undefined
@@ -119,14 +242,21 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             hasPersistentFollow: ordinary.currentAccountFacts.hasPersistentFollow } } : {}),
           ...(ordinary.currentAccountFacts ? { personalFollowSuppressed: ordinary.currentAccountFacts.personalFollowSuppressed } : {}),
         });
-        if (evaluated.status !== 'evaluated') { personalRequestPassComplete = false; continue; }
+        if (evaluated.status !== 'evaluated') {
+          if (receiverSessionId) return;
+          personalRequestPassComplete = false;
+          continue;
+        }
         const candidates = new Map<string, { policies: FollowPolicyV1[]; witnesses: SessionFollowSourceOccurrenceWitnessV1[];
-          relations: { relation: 'follower' | 'manager'; attachedAt?: number }[] }>();
+          relations: SessionFollowRelationWitnessV1[] }>();
         for (const route of ordinary.routes) {
           if (!resolveFollowDeliveryV1({ policies: [route.policy], event: evidence.event }).selected) continue;
           const candidate = candidates.get(route.destinationSessionId) ?? { policies: [], witnesses: [], relations: [] };
           candidate.policies.push(route.policy);
-          candidate.relations.push({ relation: route.relation, ...(route.attachedAt === undefined ? {} : { attachedAt: route.attachedAt }) });
+          candidate.relations.push(route.relation === 'manager'
+            // The route response schema requires this attachment for managers.
+            ? { relation: route.relation, attachedAt: route.attachedAt! }
+            : { relation: route.relation, ...(route.attachedAt === undefined ? {} : { attachedAt: route.attachedAt }) });
           candidates.set(route.destinationSessionId, candidate);
         }
         for (const route of evaluated.routes) {
@@ -137,6 +267,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             : await readSessionDeliveryMutedScopes({ token: input.credentials.token, receiver: route.receiver,
               serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal });
           if (!muted) {
+            if (receiverSessionId) return;
             if (route.receiver.kind === 'account') personalRequestPassComplete = false;
             continue;
           }
@@ -231,7 +362,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             ...(input.spawnSession ? { spawnSession: input.spawnSession } : {}),
             ...(features ? { serverFeaturesSnapshot: features } : {}), signal: input.signal,
           }));
-          if (!result.ok) logger.debug('[Session Follow] Original admission held', { code: result.code });
+          if (!result.ok) {
+            logger.debug('[Session Follow] Original admission held', { code: result.code });
+            if (receiverSessionId) return;
+          }
           else if (!result.suppressed && await current()) {
             const context = await input.resolveSourceKeyContext();
             if (context && await current()) await prepareSourceKey({ sourceSessionId: original.sourceSessionId,
@@ -260,6 +394,20 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     observations: readonly SessionFollowSessionPendingObservationV1[]; sourceSessionId?: string }>): Promise<SessionFollowReceiverRangeResult> => {
     const coveredEvents: { sourceSessionId: string; kind: FollowEventV1['kind'] }[] = [];
     if (!await current()) return { coveredEvents };
+    // Reconnect and source invalidation re-read the real configured Run
+    // sources. Their retained original is never inferred from a parent turn.
+    let cursor: string | undefined;
+    do {
+      const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));
+      const response = await axios.get(`${input.serverHttpBaseUrl}${path}`, { headers: { Authorization: `Bearer ${input.credentials.token}` },
+        ...(cursor ? { params: { cursor } } : {}), signal: input.signal, validateStatus: () => true });
+      const page = response.status === 200 ? ListSessionFollowSourcesResponseSchema.safeParse(response.data) : null;
+      if (!page?.success || !await current()) break;
+      for (const relation of page.data.sources) if ('source' in relation
+        && (relation.source.kind === 'execution_run' || relation.source.kind === 'workflow_run')
+        && relation.deliveryState === 'eligible') await dispatchRun({ source: relation.source }, request.destinationSessionId);
+      cursor = page.data.continuation;
+    } while (cursor && await current());
     // Progress changes independently of rule configuration. Refresh once at
     // this existing catch-up boundary, never for each original in the range.
     const opened = await rules.read({ refresh: true });
@@ -312,7 +460,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       if (typeof ownerAccountId !== 'string') continue;
       const source = transport.rawSession;
       const throughSeq = range.throughSeq ?? source.seq;
-      if (source.agentStateVersion > range.afterStateVersion && source.agentStateVersion > 0 && typeof source.agentState === 'string') {
+      if (typeof source.agentStateVersion === 'number' && source.agentStateVersion > range.afterStateVersion && source.agentStateVersion > 0 && typeof source.agentState === 'string') {
         const ctx = transport.ctx;
         const openedState = await openSessionStateValue(transport.mode === 'plain' ? { mode: 'plain' } : {
           mode: 'e2ee', encryption: ctx ? {
@@ -348,8 +496,12 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             row, mode: transport.mode, ctx: transport.ctx });
           if (read.status === 'unavailable') { unavailable = true; break; }
           if (read.status === 'occurrence' && 'sourceMessage' in read.occurrence) {
-            await dispatch(read.occurrence, request.destinationSessionId);
+            const dispatched = await dispatch(read.occurrence, request.destinationSessionId);
             coveredEvents.push({ sourceSessionId, kind: read.occurrence.evidence.event.kind });
+            // A later original's accepted ACK advances this same source cursor.
+            // Leave the suffix for the next existing catch-up boundary when
+            // this original's admission is unavailable or unconfirmed.
+            if (!dispatched) { unavailable = true; break; }
           }
           if (typeof row.seq === 'number') afterSeq = row.seq;
         }
@@ -361,10 +513,12 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   };
   return {
     dispose: () => { if (!input.rulesCache) rules.dispose(); },
-    dispatch: (occurrence: SessionFollowRuleSourceOccurrenceV1) => dispatch(occurrence),
+    dispatch: (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowRunOccurrence) =>
+      'original' in occurrence ? dispatchRun(occurrence) : dispatch(occurrence),
     dispatchReceiver: (request: Readonly<{ occurrence: SessionFollowAccountOccurrence; destinationSessionId: string }>) =>
       dispatch(request.occurrence, request.destinationSessionId),
     dispatchReceiverRange,
+    dispatchAccountSourceRange,
     async readReceiverSessionIds(): Promise<readonly string[]> {
       if (!await current()) return [];
       const opened = await rules.read();

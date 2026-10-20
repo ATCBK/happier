@@ -19,6 +19,7 @@ import {
   ExternalActionResponseEnvelopeV1Schema,
 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
@@ -69,7 +70,7 @@ afterEach(async () => {
  * A plugin-declared Skill reaches the page the way it does in the app: the committed plugin projection names it,
  * and the supplying Machine answers the Account Action transport (the genuine HTTP boundary).
  */
-async function pluginSkillHome(origin: string) {
+async function pluginSkillHome(origin: string, skill: Partial<SkillListItemV1> = {}) {
   const [
     { normalizePluginUiProjection },
     { unionPluginUiProjections },
@@ -117,6 +118,7 @@ async function pluginSkillHome(origin: string) {
       pluginId: PLUGIN_ID,
       occurrenceId: 'acme-runtime',
     },
+    ...skill,
   });
   const read = SkillReadResultV1Schema.parse({
     skillId: PLUGIN_SKILL_ID,
@@ -269,5 +271,22 @@ describe('SkillDetailScreen for a Skill a plugin declares', () => {
     expect(screen.findByTestId('skill.detail.files:add')).toBeNull();
     expect(screen.findByTestId('skill.detail.remove')).toBeNull();
     expect(screen.findByTestId('skill.detail.header.menu')).toBeTruthy();
+  });
+  it('reads a folded multi-line description as one sentence and says Off once, in Where it is on, not beside the title', async () => {
+    await pluginSkillHome('https://skill-detail-plugin-off.test', {
+      description: 'Check things\n  for Acme,\nevery morning.',
+      rules: [],
+    });
+    const screen = await renderScreen(<SkillDetailScreen skillId={PLUGIN_SKILL_ID} />);
+    await vi.waitFor(
+      async () => {
+        await flushHookEffects();
+        expect(screen.findByTestId('skill.detail.instructions'), screen.getTextContent()).toBeTruthy();
+      },
+      { timeout: 20_000 },
+    );
+
+    expect(screen.getTextContent()).toContain('Check things for Acme, every morning.');
+    expect(screen.findByTestId('skill.detail.header.status')).toBeNull();
   });
 });

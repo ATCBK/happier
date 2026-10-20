@@ -1,18 +1,15 @@
 import fastify from 'fastify';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { expect, it, vi } from 'vitest';
-import { z } from 'zod/mini';
-import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1, ARTIFACT_PLAIN_DATA_KEY_MARKER,
-    encodePlainArtifactStoredContent, decodePlainArtifactStoredContent, FeaturesResponseSchema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1, buildHomeHubArtifactIdV1, encodePlainArtifactStoredContent, decodePlainArtifactStoredContent, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
 import * as daemonControl from '@/daemon/controlClient';
+import { createCounterWidgetFixture, registerAccountHomeHttp, registerPlainArtifactRoutes } from './widgetApproval.testkit';
 
 it('replays approved installed Board inputs on the hosting Session without an ambient CLI Session', async () => {
     const app = fastify();
@@ -23,43 +20,15 @@ it('replays approved installed Board inputs on the hosting Session without an am
     const sessionId = 'c000000000000000000000066';
     const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
     const credentials = { token, encryption: null };
-    const pluginId = 'example.widgets';
-    const inputType = { pluginId, localId: 'count-kind' };
-    const occurrenceId = `${pluginId}:66`;
-    const type = { id: inputType.localId, title: 'Count', semantic: 'count-kind',
-        valueSchema: { type: 'string' as const, enum: ['files', 'folders'] }, options: { resource: 'count-kinds' } };
-    const binding = normalizePluginUiInlineSurfaceBindingV1({ pluginId, surfaceId: 'counter', rendererId: 'counter', role: 'widget', target: { kind: 'app' } });
-    if (!binding) throw new Error('Expected widget binding');
-    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
-        pluginUi: { family: 'pluginUi', entriesById: { counter: { id: 'counter', pluginId, contributionKind: 'surfacePlacement',
-            descriptorId: 'counter', occurrenceId, binding, target: binding.target, display: { title: 'Directory count' },
-            sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
-            inputs: { fields: [{ path: 'filter', title: 'Count', widget: 'select', required: true, inputType }] },
-            inputSchema: { type: 'object', properties: { filter: type.valueSchema }, required: ['filter'], additionalProperties: false },
-        } } }, inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/count-kind`]: {
-            id: `${pluginId}/count-kind`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: type,
-        } } },
-    } });
-    const registry = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
-        inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId, identity: inputType,
-            manifestPath: '/plugins/widgets/plugin.json', definition: type }],
-        resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
-            definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
-    });
+    const { pluginId, projection, registry, readUiResource } = createCounterWidgetFixture();
     // Only Home HTTP, Machine RPC and the plugin Resource transport are replaced.
     // The CLI composition, approval claim/replay, catalog and input owners stay real.
     vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async request => {
         expect(request.machineId).toBe(machineId);
         return { protocolVersion: 1, projection };
     });
-    const features = FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, board: { enabled: true } } },
-        capabilities: { serverIdentity: { serverIdentityId: serverId } } });
+    const features = registerAccountHomeHttp(app, { accountId, serverId });
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(features));
-    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
-    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
-        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
-    app.get('/v1/account/profile', async () => ({ id: accountId }));
-    app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
     app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { id: sessionId, seq: 1, createdAt: 1, updatedAt: 1,
         active: false, activeAt: 1, encryptionMode: 'plain', metadata: JSON.stringify({ machineId }), metadataVersion: 1,
         dataEncryptionKey: null, agentState: null, agentStateVersion: 0, responsibleAccountId: null, responsibleAccount: null,
@@ -77,23 +46,9 @@ it('replays approved installed Board inputs on the hosting Session without an am
             serverId, serverIdentityId: serverId, accountId, sessionId, machineId, target: { kind: 'machine', machineId },
             actionId: 'widgets.item.add', requestId: 'approved-counter' },
     });
-    let row = { id: 'counter-approval', ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
-        header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request)),
-        body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-    app.get('/v1/artifacts', async () => [row]);
-    app.get('/v1/artifacts/counter-approval', async () => row);
-    app.get('/v1/artifacts/counter-approval/access/recipients', async () => ({ artifactId: row.id, ownerAccountId: accountId,
-        access: 'owner', encryptionMode: 'plain', dataEncryptionKey: row.dataEncryptionKey, callerDataEncryptionKey: row.dataEncryptionKey,
-        provenanceDataEncryptionKey: null, callerProvenanceDataEncryptionKey: null, recipients: [] }));
-    app.get('/v1/artifacts/counter-approval/access/grants', async () => ({ artifactId: row.id, ownerAccountId: accountId, access: 'owner', grants: [] }));
-    app.post('/v1/artifacts/counter-approval', async http => {
-        const update = z.object({ header: z.string(), body: z.string(), expectedHeaderVersion: z.number(), expectedBodyVersion: z.number() }).parse(http.body);
-        expect(update.expectedHeaderVersion).toBe(row.headerVersion);
-        expect(update.expectedBodyVersion).toBe(row.bodyVersion);
-        row = { ...row, ...update, headerVersion: row.headerVersion + 1, bodyVersion: row.bodyVersion + 1 };
-        return { success: true, headerVersion: row.headerVersion, bodyVersion: row.bodyVersion };
-    });
+    const artifacts = registerPlainArtifactRoutes(app, accountId);
+    artifacts.seed('counter-approval', encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request)),
+        encodePlainArtifactStoredContent({ body: JSON.stringify(request) }));
     let writes = 0;
     // The outer writer is deliberately refused at HTTP after admission, making
     // this test independent of Board layout semantics covered by its own suite.
@@ -109,9 +64,7 @@ it('replays approved installed Board inputs on the hosting Session without an am
         vi.spyOn(daemonControl, 'requestDaemonPluginActionExecution').mockResolvedValue({ matched: false });
         const daemon = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
             serverId, serverIdentityId: serverId, serverHttpBaseUrl: 'http://widget-approval.test' }, {
-            ...createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({ resource: { pluginId, localId: 'count-kinds' },
-                kind: 'config', contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`,
-                bytes: new TextEncoder().encode(JSON.stringify([{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' }])) }) }),
+            ...createRegistryInputTypeDeps({ contributes: registry, readUiResource }),
         });
         const { executor } = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
             serverId, serverIdentityId: serverId, serverHttpBaseUrl: 'http://widget-approval.test',
@@ -125,11 +78,99 @@ it('replays approved installed Board inputs on the hosting Session without an am
             isApprovalExecutionOriginCurrent: currentness,
         });
         const result = await runWithServerHttpBaseUrl('http://widget-approval.test', () => executor.execute('approval.request.decide',
-            { artifactId: row.id, decision: 'approve' }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+            { artifactId: 'counter-approval', decision: 'approve' }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
                 serverId, serverIdentityId: serverId, runtimeAccountId: accountId, actionRequestId: 'decide-counter' }));
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'session_board_forbidden' } } });
         expect(writes).toBe(1);
-        const stored = decodePlainArtifactStoredContent(row.body);
+        const stored = decodePlainArtifactStoredContent(artifacts.read('counter-approval')!.body);
         expect(stored).toHaveProperty('body');
     } finally { restore(); vi.restoreAllMocks(); await app.close(); }
+});
+
+/** One approved Home add replayed by a standalone CLI that knows the Account's Machine inventory and nothing else. */
+async function replayApprovedHomeCounter(input: Readonly<{
+    machines: readonly Readonly<{ id: string; connected: boolean }>[];
+    explicitMachineId?: string;
+}>) {
+    const app = fastify();
+    const restore = installAxiosFastifyAdapter({ app, origin: 'http://widget-approval.test' });
+    const accountId = 'widget-owner';
+    const serverId = 'srv_widget_approval';
+    const machineId = 'counter-machine';
+    const reached: string[] = [];
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null };
+    const { definition, projection, registry, readUiResource } = createCounterWidgetFixture();
+    // Only Home HTTP, Machine RPC and the plugin Resource transport are replaced.
+    vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async request => {
+        reached.push(request.machineId);
+        // The server answers `target_unavailable` for a Machine row whose daemon is connected to another server.
+        if (!input.machines.find(machine => machine.id === request.machineId)?.connected) {
+            throw new RpcError('RPC target unavailable', 'target_unavailable');
+        }
+        return { protocolVersion: 1, projection };
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(registerAccountHomeHttp(app, { accountId, serverId })));
+    const artifacts = registerPlainArtifactRoutes(app, accountId);
+    // Every Machine looks present in the shared Account inventory; only some daemons are connected to this server.
+    app.get('/v1/machines', async () => input.machines.map(machine => ({ id: machine.id, kind: 'persistent', active: true,
+        activeAt: Date.now(), revokedAt: null, replacedByMachineId: null })));
+    const surface = { serverId, accountId, owner: { kind: 'home' as const } };
+    const instance = { v: 1, id: 'home-counter', definition, bindings: { filter: { kind: 'value', value: 'files' } } };
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, requestedSurface: 'cli', approval: { flow: 'deferred', result: 'required' },
+        actionId: 'widgets.item.add', actionArgs: { surface, instance }, summary: 'Add count',
+        executionOriginV1: { v: 1, authority: 'present_user', surface: 'cli', caller: { kind: 'host' },
+            serverId, serverIdentityId: serverId, accountId, machineId, target: { kind: 'machine', machineId },
+            actionId: 'widgets.item.add', requestId: 'approved-home-counter' },
+    });
+    artifacts.seed('home-approval', encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request)),
+        encodePlainArtifactStoredContent({ body: JSON.stringify(request) }));
+    try {
+        const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials, machineId, serverId,
+            serverApiUrl: 'http://widget-approval.test', resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: serverId, machineId }) });
+        vi.spyOn(daemonControl, 'requestDaemonPluginActionExecution').mockResolvedValue({ matched: false });
+        const daemon = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+            serverId, serverIdentityId: serverId, serverHttpBaseUrl: 'http://widget-approval.test',
+            ...(input.explicitMachineId ? { explicitMachineId: input.explicitMachineId } : {}) }, {
+            ...createRegistryInputTypeDeps({ contributes: registry, readUiResource }),
+        });
+        const { executor } = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+            serverId, serverIdentityId: serverId, serverHttpBaseUrl: 'http://widget-approval.test',
+            ...(input.explicitMachineId ? { explicitMachineId: input.explicitMachineId } : {}),
+            readAdmittedInputTypeOptions: async ({ input, context }) => {
+                const result = await daemon.executor.execute('action.options.resolve', input, context);
+                return result.ok ? result.result : result;
+            },
+        }, { isApprovalExecutionOriginCurrent: currentness });
+        const result = await runWithServerHttpBaseUrl('http://widget-approval.test', () => executor.execute('approval.request.decide',
+            { artifactId: 'home-approval', decision: 'approve' }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverId, serverIdentityId: serverId, runtimeAccountId: accountId, actionRequestId: 'decide-home-counter' }));
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        const home = artifacts.read(buildHomeHubArtifactIdV1(accountId));
+        expect(decodePlainArtifactStoredContent(home!.body)).toMatchObject({ body: expect.stringContaining('home-counter') });
+        // Removal reads the same Account projection; an unreachable first Machine must not surface as a layout read failure.
+        const removal = await runWithServerHttpBaseUrl('http://widget-approval.test', () => executor.execute('home.hub.layout.update',
+            { intent: { kind: 'widget_remove', instanceId: 'home-counter' } }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverId, serverIdentityId: serverId, runtimeAccountId: accountId, actionRequestId: 'remove-home-counter', bypassApprovals: true }));
+        expect(removal, JSON.stringify(removal)).toMatchObject({ ok: true });
+        expect(decodePlainArtifactStoredContent(artifacts.read(buildHomeHubArtifactIdV1(accountId))!.body)).not.toMatchObject({ body: expect.stringContaining('home-counter') });
+        return reached;
+    } finally { restore(); vi.restoreAllMocks(); await app.close(); }
+}
+
+it('replays an approved installed widget add on Home, an Account surface with no hosting Session or ambient CLI Machine', async () => {
+    await replayApprovedHomeCounter({ machines: [{ id: 'counter-machine', connected: true }] });
+});
+
+it('reads the Account widget projection from a Machine this server reaches, not the first Account Machine present', async () => {
+    const reached = await replayApprovedHomeCounter({ machines: [
+        { id: 'other-server-daemon', connected: false }, { id: 'counter-machine', connected: true }] });
+    expect(reached).toContain('counter-machine');
+});
+
+it('reads the Account widget projection from the Machine the CLI names with its explicit selector', async () => {
+    const reached = await replayApprovedHomeCounter({ explicitMachineId: 'counter-machine', machines: [
+        { id: 'other-server-daemon', connected: true }, { id: 'counter-machine', connected: true }] });
+    expect(new Set(reached)).toEqual(new Set(['counter-machine']));
 });

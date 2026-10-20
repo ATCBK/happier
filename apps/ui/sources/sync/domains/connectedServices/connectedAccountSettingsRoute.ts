@@ -3,6 +3,7 @@ import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKe
 import { ConnectedServiceAuthGroupIdSchema, ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { QualifiedConnectedAccountIdSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { PluginUiOpenConnectedAccountsRequestV1 } from '@happier-dev/protocol/plugins/ui';
+import { buildConnectedAccountPurposeSetupRoute, type ConnectedAccountPurposeSetupRequest } from './connectedAccountPurposeSetup';
 
 import {
     getGeneratedLegacyConnectedServiceRegistryFallback,
@@ -182,7 +183,12 @@ export function buildConnectedAccountSettingsRoute(
  */
 export function buildConnectedAccountsSettingsRoute(
     request: PluginUiOpenConnectedAccountsRequestV1,
+    context?: Omit<ConnectedAccountPurposeSetupRequest, 'purpose'>,
 ) {
+    if ('purpose' in request && request.purpose) {
+        if (!context) throw new Error('connected_account_purpose_unavailable');
+        return buildConnectedAccountPurposeSetupRoute({ ...context, purpose: request.purpose });
+    }
     return request.service === undefined
         ? CONNECTED_ACCOUNTS_SETTINGS_ROUTE
         : buildConnectedAccountSettingsRoute(

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
-import type { SessionOrganizationMoveInput } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
+import { SessionOrganizationMoveInputSchema, type SessionOrganizationMoveInput } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
 
 import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId';
 import { describeSessionListDropPreview, describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
@@ -13,7 +13,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
-import type { AppRailBotEntry } from './appRailModel';
+import { resolveAppRailBotDropDestinationKey, type AppRailBotEntry } from './appRailModel';
 
 type MountedActionExecute = ReturnType<typeof useMountedActionExecution>['execute'];
 
@@ -68,6 +68,11 @@ export function useAppRailBotReorder(bot: AppRailBotEntry) {
     });
     const retireTarget = runtime.registerTarget({ id: targetId, scope, acceptedKinds: ['session'], isCurrent,
       getBounds: () => readWindowBounds(host.current),
+      getDestinationKey: (_context, admission) => {
+        const input = SessionOrganizationMoveInputSchema.parse(admission.effect.input);
+        const pins = readSessionOrganizationProjectionCached(getStorage().getState(), bot.serverId).orderedPinSessionIds;
+        return resolveAppRailBotDropDestinationKey(input, pins);
+      },
       resolve: ({ item, pointer }) => {
         if (item.kind !== 'session' || item.address.serverId !== bot.serverId || item.scope.accountId !== scope.accountId)
           return { status: 'refused', reason: describeSessionListDropReason('scope-mismatch') };

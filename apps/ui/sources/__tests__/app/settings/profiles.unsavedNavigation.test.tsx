@@ -95,10 +95,14 @@ installProfilesCommonModuleMocks({
     // The modal host is the presentation boundary: the test reads what the page asked it to show.
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: {
-            show: (config) => { shareState.shown.push(config as never); return 'modal-id'; },
-            alert: answerModalAlert,
-        } }).module;
+        const mock = createModalModuleMock({ confirmResult: true, spies: { alert: answerModalAlert } });
+        const present = mock.spies.show.getMockImplementation();
+        if (!present) throw new Error('Expected the canonical modal presentation boundary');
+        mock.spies.show.mockImplementation(config => {
+            if (config.chrome?.testID === 'document-share-modal') shareState.shown.push(config as never);
+            return present(config);
+        });
+        return mock.module;
     },
 
 });
@@ -185,12 +189,10 @@ const savedV2Profile = { ...createEmptyCustomProfile(), id: 'profile-v2', name: 
 const profileFixture = { profiles: [] as Array<AiLaunchProfile | ReturnType<typeof LaunchProfileArtifactReferenceV1Schema.parse>> };
 const profileRows = new Map<string, Readonly<{ record: ProfileRecordV1; revision: number }>>();
 let profileRevision = 1;
-let denyArtifactCreation = false;
 let publishedArtifactId: string | null = null;
 const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/')) {
-        if (denyArtifactCreation && path === '/v1/artifacts' && init?.method === 'POST') return Response.json({ error: 'forbidden' }, { status: 403 });
         const response = await artifactStore.handle(path, init ?? {});
         if (response?.ok && path === '/v1/artifacts' && init?.method === 'POST') publishedArtifactId = artifactStore.list().at(-1)?.id ?? null;
         if (response) return response;
@@ -258,7 +260,7 @@ type DetailTarget =
 async function renderDetail(target: DetailTarget) {
     await seedFocusedAccount();
     const { ProfileDetailScreen } = await import('@/components/settings/profiles/ProfileDetailScreen');
-    return renderScreen(React.createElement(ProfileDetailScreen, { target }));
+    return renderScreen(React.createElement(ProfileDetailScreen, { target }), { wrapper: runtime.Wrapper });
 }
 
 async function renderDirtyEditor(target: DetailTarget = { kind: 'profile', profileId: savedV2Profile.id }) {
@@ -314,17 +316,22 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
 });
 
     it('uses the exact Administration target for V2 profile reads instead of an active or first machine', async () => {
-        await renderDirtyEditor();
+        const screen = await renderDirtyEditor();
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const { MachineAdministrationTargetSelector } = await import('@/components/settings/machines/MachineAdministrationTargetSelector');
+        const selectedHome = getServerProfileById(runtime.serverId);
+        if (!selectedHome) throw new Error('Expected the Administration target Home');
 
         expect(capturedEditFormProps).toMatchObject({
             machineId: 'machine-b',
-            serverId: 'server-profile-b',
+            serverId: selectedHome.id,
         });
-        const header = capturedEditFormProps?.header;
-        expect(React.isValidElement(header)).toBe(true);
-        if (!React.isValidElement(header)) throw new Error('Expected the profile header');
         // The machine chip rides on the header of a machine-scoped (V2) profile.
-        expect(header.props).toMatchObject({ showMachineChip: true });
+        const chips = screen.findAllByType(MachineAdministrationTargetSelector);
+        expect(chips).toHaveLength(1);
+        expect(chips[0]?.props).toMatchObject({ presentation: 'chip', selection: { selectedTarget: {
+            machineId: 'machine-b', serverIdentityId: runtime.serverIdentityId,
+        } } });
     });
 
     it('does not substitute another machine when the selected Administration target is no longer executable', async () => {
@@ -530,13 +537,13 @@ async function seedFocusedAccount(artifacts: Record<string, DecryptedArtifact> =
     const scope = storage.getState().settingsScope;
     if (!scope) throw new Error('Expected the real fixture Home Account scope');
     storage.setState({ settings: settingsParse({ ...storage.getState().settings, ...settingsState.values }), artifacts });
-    const previewTarget = { serverIdentityId: runtime.serverIdentityId ?? runtime.serverId, machineId: 'machine-preview' };
+    const previewTarget = { serverIdentityId: runtime.serverIdentityId, machineId: 'machine-b' };
     storage.setState(state => ({ settings: { ...state.settings, machineAdministrationTargetsLocalV1: {
         ...state.settings.machineAdministrationTargetsLocalV1, [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents]: previewTarget,
     } } }));
-    storage.getState().applyMachines(machineFixtureState.available
-        ? [createMachineFixture({ id: previewTarget.machineId, active: true, activeAt: Date.now() })] : [],
-        false, { sourceServerId: runtime.serverId, sourceAccountId: scope.accountId });
+    const machines = [createMachineFixture({ id: 'machine-first', active: true, activeAt: Date.now() })];
+    if (machineFixtureState.available) machines.push(createMachineFixture({ id: previewTarget.machineId, active: true, activeAt: Date.now() }));
+    storage.getState().applyMachines(machines, true, { sourceServerId: runtime.serverId, sourceAccountId: scope.accountId });
     artifactStore.clear();
     for (const artifact of Object.values(artifacts)) {
         if (!artifact.isDecrypted || !artifact.header) throw new Error('Expected readable plain fixture Artifact');
@@ -582,7 +589,6 @@ describe('Settings › Profiles detail: Share…', () => {
     beforeEach(async () => {
     modalDecisions.length = 0;
     defaultModalDecision = 'keepEditing';
-    denyArtifactCreation = false;
     publishedArtifactId = null;
     artifactStore.clear();
     storage.setState({ artifacts: {} });
@@ -638,7 +644,7 @@ describe('Settings › Profiles detail: Share…', () => {
             expect(shareState.calls).toEqual([{
             actionId: 'launch_profiles.publish',
             input: { profileId: savedV2Profile.id },
-            context: expect.objectContaining({ surface: 'ui', authority: 'present_user', serverId: 'server-1' }),
+            context: expect.objectContaining({ surface: 'ui', authority: 'present_user', serverId: runtime.serverId }),
         }]);
         expect(shareState.shown[0]).toMatchObject({
             chrome: { testID: 'document-share-modal' },
@@ -648,7 +654,8 @@ describe('Settings › Profiles detail: Share…', () => {
     });
 
     it('explains a secret-value refusal and opens no sheet', async () => {
-        denyArtifactCreation = true;
+        profileFixture.profiles = [{ ...savedV2Profile,
+            extraEnvironmentVariables: [{ name: 'PROJECT_REGION', value: 'example-region' }] }];
         const screen = await renderDetail({ kind: 'profile', profileId: savedV2Profile.id });
         await act(async () => { await headerMenuActions(screen).find((action) => action.id === 'share')!.onSelect(); });
 

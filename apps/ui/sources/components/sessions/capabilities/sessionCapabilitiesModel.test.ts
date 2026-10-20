@@ -79,6 +79,11 @@ describe('the session capability sheet data owner', () => {
         expect(unknown.costKnown).toBe(false);
         expect(unknown.costLine).not.toContain('0');
     });
+    it('keeps the cost line silent until the first preview answers, never claiming "unknown" while it loads', () => {
+        const input = fixture();
+        expect(buildSessionCapabilitiesModel({ ...input, view: null, selection: undefined, state: 'resolving' }).costLine).toBe('');
+        expect(buildSessionCapabilitiesModel({ ...input, cost: () => null }).costLine).not.toBe('');
+    });
     it('keeps dimmed removals and respects read-only/native masking and no-resume timing', () => {
         const input = fixture();
         const removed = buildSessionCapabilitiesModel({ ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'off') });

@@ -63,11 +63,12 @@ describe("createServerRpcForwarder", () => {
         });
 
         expect(inMock).toHaveBeenCalledWith("rpc:user-1:agent.run");
-        expect(target.timeout).toHaveBeenCalledWith(30000);
+        expect(target.timeout).toHaveBeenCalledWith(30000, { rejectOnDisconnect: true });
         expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REQUEST, {
             method: "agent.run",
             params: { value: 1 },
             timeoutMs: 30000,
+            callerAuthority: "account_automation",
         });
         expect(response).toEqual({
             ok: true,

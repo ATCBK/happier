@@ -190,7 +190,8 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
             ...(producer?.progress.review === undefined ? {} : { finalProducerReview: producer.progress.review }) });
           if (!update) continue;
           const delivery = resolveWorkerUpdateFollowDeliveryV1({ update,
-            ...(accepted.resultDelivery?.reportPolicy ? { policies: [accepted.resultDelivery.reportPolicy] } : {}),
+            ...(accepted.resultDelivery?.kind === 'originating_session' && accepted.resultDelivery.reportPolicy
+              ? { policies: [accepted.resultDelivery.reportPolicy] } : {}),
           });
           if (!delivery?.selected) continue;
           const worker = { localId: `workflow-run:${run.id}:${run.revision}`, update,

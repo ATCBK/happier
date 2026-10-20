@@ -33,20 +33,29 @@ afterEach(async () => {
 });
 
 describe('Work admitted Profile context', () => {
-    it('retains the Session Plan annotation in its existing Context row read model', async () => {
+    it('keeps an own disabled Plan re-enableable while inherited source-disabled context stays locked', async () => {
         fixture = await createPlainArtifactHomeFixture('https://work-context-plan.example');
         const scope = { serverId: fixture.home.id, accountId: 'artifact-account' };
         storage.getState().applySettingsForScope(scope, settingsDefaults, 1);
+        applyProfileCatalogSnapshot(scope, { ...ready, records: [{ revision: 1, record: {
+            v: 1, id: 'azure-openai', definition: { kind: 'legacy', profile: AIBackendProfileSchema.parse(getBuiltInBackendProfile('azure-openai')) },
+            enabled: true, promptStack: [{ id: 'profile-plan', ref: { kind: 'doc', artifactId: 'plan-doc' },
+                enabled: false, placement: 'system_append' }], skillSeeds: [], secretBindings: {},
+        } }] }, true);
         storage.getState().applyArtifacts([{ id: 'plan-doc', title: 'Plan',
             header: { v: 1, kind: 'prompt_doc.v2', title: 'Plan' },
             ownerAccountId: scope.accountId, access: 'owner', isDecrypted: true, body: null,
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
-        const hook = await renderHook(() => useSessionContextLayers({ serverId: scope.serverId,
-            sessionId: 'work', ownerMetadata: { work: { promptStack: [{ id: 'plan', plan: true,
-                ref: { kind: 'doc', artifactId: 'plan-doc' }, enabled: false, placement: 'system_append' }] } }, metadataVersion: 1 }));
+        const hook = await renderHook((enabled: boolean) => useSessionContextLayers({ serverId: scope.serverId,
+            sessionId: 'work', ownerMetadata: { profileId: 'azure-openai', work: { promptStack: [{ id: 'plan', plan: true,
+                ref: { kind: 'doc', artifactId: 'plan-doc' }, enabled, placement: 'system_append' }] } }, metadataVersion: 1 }), { initialProps: false });
         expect(hook.getCurrent().sessionStackValid).toBe(true);
         expect(hook.getCurrent().session[0]?.entry.plan).toBe(true);
-        expect(hook.getCurrent().session[0]).toMatchObject({ off: 'source', on: false });
+        expect(hook.getCurrent().session[0]).toMatchObject({ off: 'session', on: false });
+        expect(hook.getCurrent().profile.rows[0]).toMatchObject({ off: 'source', on: false });
+        await hook.rerender(true);
+        expect(hook.getCurrent().session[0]).toMatchObject({ off: null, on: true });
+        expect(hook.getCurrent().profile.rows[0]).toMatchObject({ off: 'source', on: false });
     });
     it('projects only prompt-preparation placements while preserving a historical generic bundle', async () => {
         fixture = await createPlainArtifactHomeFixture('https://work-context-placements.example');

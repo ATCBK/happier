@@ -550,6 +550,7 @@ export function createVoiceToolHandlers(
           .filter((entry) => entry.question.length > 0 && entry.values.length > 0)
       : [];
     const decision = typeof data.decision === 'string' ? data.decision : null;
+    const disposition = data.disposition === 'pass_up' ? data.disposition : undefined;
     const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
     const hasUpdatedPermissions = Object.prototype.hasOwnProperty.call(data, 'updatedPermissions');
     const requestId = selected.requestId;
@@ -567,7 +568,7 @@ export function createVoiceToolHandlers(
         : null;
     const answersPayload = answers.length > 0 ? answers : derivedAnswers;
     const decisionPayload = decision;
-    if (answers.length === 0 && !decision && (!derivedAnswers || derivedAnswers.length === 0)) {
+    if (!disposition && answers.length === 0 && !decision && (!derivedAnswers || derivedAnswers.length === 0)) {
       return jsonError('invalid_parameters', 'invalid_parameters', { sessionId });
     }
 
@@ -577,6 +578,7 @@ export function createVoiceToolHandlers(
       {
         sessionId,
         requestId,
+        ...(disposition ? { disposition } : {}),
         ...(answersPayload ? { answers: answersPayload } : {}),
         ...(decisionPayload ? { decision: decisionPayload } : {}),
         ...(reason ? { reason } : {}),

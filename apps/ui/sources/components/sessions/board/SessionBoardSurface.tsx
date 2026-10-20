@@ -32,7 +32,7 @@ import { measureWindowBounds, readWindowBounds, useTreeDropAutoscroll, useEntity
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { sessionSurfaceMeasurable, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh, SessionSurfaceEntityFeedback, type SessionSurfaceEntityBinding } from './SessionSurfaceEntityDrag';
-import { resolveSessionBoardEntityDrop, sessionSurfaceDropRefused } from './sessionSurfaceEntityDrop';
+import { resolveSessionBoardEntityDrop, sessionSurfaceDropRefused, sessionSurfaceEntityDropDestinationKey } from './sessionSurfaceEntityDrop';
 import { executeSessionBoardEntityDrop, SessionBoardDestinationSchema, SessionBoardViewDestinationSchema } from './sessionBoardEntityBinding';
 import { resolveSessionSurfaceKeyboardDestination } from './sessionSurfaceKeyboardDestination';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
@@ -725,7 +725,8 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             }
             return null;
         },
-        target: { acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance'],
+        target: { getDestinationKey: (_context, admission) => sessionSurfaceEntityDropDestinationKey(admission),
+            acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance'],
             listDestinations: () => (controller.snapshot?.views ?? []).filter(view => !view.synthetic).map(view => ({ destination: { viewId: view.id }, label: resolveSessionBoardViewTitle(view), group: t('sessionBoard.views.label') })),
             resolve: ({ item, destination }) => {
                 const parsed = SessionBoardViewDestinationSchema.safeParse(destination);
@@ -1052,7 +1053,8 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                         translationY: pointer.y - viewport.y - gridContentY.current + scrollOffsetY.current - sourceRect.y - sourceRect.height / 2 });
                     return anchor ? { ...anchor, viewId: activeView.id } : null;
                 },
-                target: { acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance'] as const,
+                target: { getDestinationKey: (_context, admission) => sessionSurfaceEntityDropDestinationKey(admission),
+                    acceptedKinds: ['session-board-item', 'companion-item', 'home-section', 'work-board-widget', 'widget-area-instance'] as const,
                     containsPointer: pointer => {
                         const viewport = readWindowBounds(sessionSurfaceMeasurable(scrollRef.current)) ?? scrollWindow.current;
                         return !!viewport && pointer.y >= viewport.y && pointer.y <= viewport.y + viewport.height && pointer.x >= viewport.x && pointer.x <= viewport.x + viewport.width;

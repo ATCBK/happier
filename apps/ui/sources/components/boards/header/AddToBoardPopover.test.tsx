@@ -11,6 +11,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ARTIFACT_LIST_PATH, RUN_STORAGE_PATH, boardDefinitionArtifact, boardRunStoragePage, installBoardLibraryTestHarness } from '../boardLibraryTestHarness';
 
@@ -55,7 +56,7 @@ function picker(open = true) {
 
 function options(screen: Awaited<ReturnType<typeof renderScreen>>): readonly SelectionListOption[] {
     return screen.findByType(SelectionList).props.rootStep.sections.flatMap(
-        (section: Readonly<{ options: readonly SelectionListOption[] }>) => section.options,
+        (section: Readonly<{ options?: readonly SelectionListOption[] }>) => section.options ?? [],
     );
 }
 
@@ -121,6 +122,43 @@ describe('AddToBoardPopover library recovery', () => {
             expect(options(screen).find(option => option.id === id)?.subtitle)
                 .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label);
         } finally { clearMachineRequestReachabilityForTest(); }
+    });
+    it('leads with a short Widgets group and reaches the built-in families through Gallery and search (lab dashboards L1)', async () => {
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
+        const projection = widgetProjectionOf([{ pluginId: 'acme.widgets', localId: 'counter', target: 'app', title: 'Counter' }],
+            { 'acme.widgets': widgetInstalledPackage('acme.widgets', 'Widgets') });
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current',
+                interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
+                accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
+                {picker()}
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+        await flushHookEffects({ cycles: 4 });
+        const sections = screen.findByType(SelectionList).props.rootStep.sections as readonly Readonly<{
+            id: string; kind: string; options?: readonly SelectionListOption[];
+            visibleWhen?: (input: string) => boolean;
+            resolve?: (seed: string, signal: AbortSignal) => Promise<Readonly<{ options: readonly SelectionListOption[] }>>;
+        }>[];
+        // Widgets lead, then the work the empty board promises.
+        expect(sections.map(section => section.id).slice(0, 3)).toEqual(['widgets', 'widgets-more', 'sessions']);
+        const lead = sections[0]!.options!.map(option => option.id);
+        expect(lead).toContain('widget:plugin-acme.widgets/counter');
+        expect(lead.at(-1)).toBe('widgets:gallery');
+        // Machines, Usage, Project and Session-companion widgets are families: one row away through Gallery, never the lead.
+        const families = [...MACHINE_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
+            ...SESSION_COMPANION_BUILTIN_ITEM_IDS];
+        expect(lead.filter(id => families.some(family => id.endsWith(family)))).toEqual([]);
+        // Typing still finds every widget in this one search.
+        const more = sections[1]!;
+        expect(more.visibleWhen?.('')).toBe(false);
+        expect(more.visibleWhen?.('vit')).toBe(true);
+        const found = (await more.resolve!('vit', new AbortController().signal)).options.map(option => option.id);
+        expect(found.some(id => id.endsWith('machine_vitals'))).toBe(true);
+        const companion = (await more.resolve!('session summary', new AbortController().signal)).options.map(option => option.id);
+        expect(companion.some(id => id.endsWith('session_summary'))).toBe(true);
+        expect(found).not.toContain('widget:plugin-acme.widgets/counter');
     });
     it.each(['refused', 'pending'] as const)('opens a picked widget in the shared Add surface and shows a %s Add there without adding twice', async kind => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });

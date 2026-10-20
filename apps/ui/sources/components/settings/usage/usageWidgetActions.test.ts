@@ -20,8 +20,6 @@ let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
 
 it('edits only displayed widget metric inputs through real Actions and Artifact CAS, retaining independent scopes', async () => {
-    const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>;
-    const presets = createUsageWidgetPresets(names);
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
     home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-actions.test', accountId: 'account-a',
         settings: { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
@@ -34,13 +32,15 @@ it('edits only displayed widget metric inputs through real Actions and Artifact 
     publishAppliedActiveServerSnapshot({ serverId: focused.id, serverUrl: focused.serverUrl, generation: 0 });
     const surface: WidgetSurfaceRefV1 = { serverId: focused.id, accountId: 'account-a', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
     // Inject the real executor: no Metro call-time require bridge or substituted Action logic.
-    const execute = createFrontDoorActionExecute(createDefaultActionExecutor({ resolveWidgetAreaPresets: () => presets }));
+    const execute = createFrontDoorActionExecute(createDefaultActionExecutor());
     const values = readUsageWidgetPageContext(readUsageWidgetPageScope(normalizeUsageQuery({ period: { startMs: 1000 } })));
     const context = { surface: 'ui' as const, actionCaller: { kind: 'host' as const }, serverId: focused.id,
         expectedAccountId: 'account-a', widgetAreaContext: { surface, values },
         actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
             'widgets.area.layout.create': ['ui'], 'widgets.item.inputs.set': ['ui'],
         } }) };
+    expect(await execute('widgets.area.layout.list', { surface }, context)).toMatchObject({ ok: true, result: { layouts:
+        USAGE_WIDGET_PRESET_IDS.map(layoutId => ({ surface: { owner: { layoutId } }, isPreset: true })) } });
     const before = await execute('widgets.item.list', { surface }, context);
     expect(before.ok).toBe(true);
     if (!before.ok) throw new Error(before.errorCode);

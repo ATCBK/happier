@@ -981,8 +981,14 @@ export async function waitForExecutionRun(
             return waited.data;
         }
         const normalized = normalizeExecutionRunRpcPayload(waitedPayload);
-        if (!('machineId' in observedParams) && !params.condition && !params.onSnapshot && !normalized.ok && isFallbackSafeExecutionRunServiceError(normalized)) {
-            return await readExecutionRunWaitCompatibilitySnapshot(observedParams) ?? normalized;
+        if (!normalized.ok) {
+            // RPC admission/Action failures are transport envelopes, not wait
+            // observations. Preserve their canonical service error just as the
+            // other execution-run reads do; only successes use the strict wait schema.
+            if (!('machineId' in observedParams) && !params.condition && !params.onSnapshot && isFallbackSafeExecutionRunServiceError(normalized)) {
+                return await readExecutionRunWaitCompatibilitySnapshot(observedParams) ?? normalized;
+            }
+            return normalized;
         }
         return {
             ok: false,

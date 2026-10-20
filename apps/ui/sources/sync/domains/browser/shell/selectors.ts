@@ -1,3 +1,4 @@
+import { resolveBrowserNavigationVerbAvailability } from '../adapters/capabilities';
 import type { BrowserControlState, BrowserControlViewState } from '../control';
 
 export type BrowserToolbarModel = Readonly<{
@@ -21,6 +22,12 @@ export type BrowserToolbarModel = Readonly<{
     showBackForward: boolean;
     /** Whether reload/stop exist at all on this engine (they share one toggling control). */
     showReloadStop: boolean;
+    /**
+     * AMD-8: set when the page itself keeps its history and loading from Happier (a third-party
+     * page in the web iframe engine). Back, Forward and Stop then render unavailable with this
+     * reason instead of hiding, so the person learns why and finds the browser-tab escape.
+     */
+    historyUnavailableReason: 'page_history_uncontrollable' | null;
 }>;
 
 /**
@@ -67,17 +74,26 @@ export function selectBrowserToolbarModel(view: BrowserControlViewState | null):
             isLoading: false,
             showBackForward: false,
             showReloadStop: false,
+            historyUnavailableReason: null,
         };
     }
     const navigation = view.adapterCapabilities.navigation;
+    // An ended relay preview has no page left to act on: its history and address belonged to it.
+    // Reload stays, since it asks the proxy again.
+    const ended = view.loadingState === 'failed' && view.lastError === 'preview_ended';
+    const back = resolveBrowserNavigationVerbAvailability(view.adapterCapabilities, 'goBack');
+    const historyUnavailableReason = !back.available && back.reasonCode === 'page_history_uncontrollable'
+        ? back.reasonCode
+        : null;
     return {
-        canNavigate: navigation.canNavigate,
-        canGoBack: navigation.canGoBack && view.canGoBack,
-        canGoForward: navigation.canGoForward && view.canGoForward,
+        canNavigate: navigation.canNavigate && !ended,
+        canGoBack: navigation.canGoBack && view.canGoBack && !ended,
+        canGoForward: navigation.canGoForward && view.canGoForward && !ended,
         canReload: navigation.canReload,
         canStop: navigation.canStop && view.loadingState === 'loading',
         isLoading: view.loadingState === 'loading',
-        showBackForward: navigation.canGoBack || navigation.canGoForward,
+        showBackForward: navigation.canGoBack || navigation.canGoForward || historyUnavailableReason !== null,
         showReloadStop: navigation.canReload || navigation.canStop,
+        historyUnavailableReason,
     };
 }

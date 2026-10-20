@@ -1,3 +1,4 @@
+export type { GitFileLineage } from './comparisonOutput.js';
 export type { PluginScmRegistrationApi } from './projections.js';
 export type { ProtocolScmHostingProviderKind } from './projections.js';
 export { SCM_COMMIT_MESSAGE_MAX_LENGTH } from './projections.js';
@@ -189,6 +190,7 @@ export { normalizeScmRemoteName } from './projections.js';
 export { normalizeScmRemoteRequest } from './projections.js';
 export { normalizeScmRemoteUrl } from './projections.js';
 export { normalizeWorktreeDisplayName } from './projections.js';
+export { parseGitComparisonOutput } from './comparisonOutput.js';
 export { parseScmRemoteUrl } from './projections.js';
 export { resolveScmScopedChangedPaths } from './projections.js';
 export { sameScmHostingRepositoryIdentity } from './projections.js';

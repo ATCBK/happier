@@ -210,26 +210,19 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     });
   });
 
-  it('expires stale action evidence against the explicit nowMs', () => {
-    const fresh = projectSessionAwarenessV1(input({
-      pending: {
-        hasPendingUserActionRequests: true,
-        pendingRequestObservedAtMs: NOW - 1_000,
-      },
-    }));
-    expect(fresh.operational.primary).toBe('action_required');
-
-    const stale = projectSessionAwarenessV1(input({
+  it('keeps action evidence while the runtime is live, however long the request has waited', () => {
+    // The observation instant is the request's creation time and is never refreshed while it
+    // waits; the request ends through its durable settlement, not through elapsed time.
+    const longWaiting = projectSessionAwarenessV1(input({
       pending: {
         hasPendingUserActionRequests: true,
         pendingRequestObservedAtMs: NOW - SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS - 1,
       },
     }));
-    expect(stale.operational.primary).not.toBe('action_required');
-    expect(stale.operational.reasons).not.toContain('action_required');
+    expect(longWaiting.operational.primary).toBe('action_required');
   });
 
-  it('projects permission-required only from a currently observed pending request', () => {
+  it('projects permission-required while a pending request is reported and the runtime is live', () => {
     const current = projectSessionAwarenessV1(input({
       pending: {
         hasPendingPermissionRequests: true,
@@ -238,14 +231,13 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     }));
     expect(current.operational.primary).toBe('permission_required');
 
-    const expired = projectSessionAwarenessV1(input({
+    const longWaiting = projectSessionAwarenessV1(input({
       pending: {
         hasPendingPermissionRequests: true,
         pendingRequestObservedAtMs: NOW - SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS - 1,
       },
     }));
-    expect(expired.operational.primary).toBe('none');
-    expect(expired.operational.reasons).not.toContain('permission_required');
+    expect(longWaiting.operational.primary).toBe('permission_required');
 
     const resolved = projectSessionAwarenessV1(input({
       pending: {

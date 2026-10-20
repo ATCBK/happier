@@ -1,21 +1,18 @@
 import {
     readLocalNotificationPreference,
-    resolveLocalNotificationPreferenceDelta,
     type LocalNotificationPreferenceId,
 } from '@/components/settings/notifications/localNotificationPreferences';
 import {
     resolveThinkingDisplayChoice,
-    resolveThinkingDisplayChoiceDelta,
     type ThinkingDisplayChoice,
 } from '@/components/settings/session/thinkingDisplayChoice';
-import { readGlassPreset, readGlassTintIntensity, resolveGlassPresetSettingsDelta, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
+import { readGlassPreset, readGlassTintIntensity, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
 import {
     resolveSessionListLayoutChoice,
-    resolveSessionListLayoutSettingsDelta,
     type SessionListLayoutChoice,
 } from '@/sync/domains/session/listing/sessionListLayout';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
-import type { Settings, SettingsWriteDelta } from '@/sync/domains/settings/settings';
+import type { Settings } from '@/sync/domains/settings/settings';
 
 /**
  * Personalize Happier: six choices, each saved on Next through the setting's own writer. This module
@@ -61,8 +58,6 @@ export type PersonalizeChoices = Readonly<{
     notifyPreview: boolean;
 }>;
 
-type NotificationSettings = Pick<LocalSettings, 'attentionDeviceOverridesV1'>;
-
 export function readPersonalizeChoices(account: Settings, local: Pick<LocalSettings, 'themePreference' | 'attentionDeviceOverridesV1'>): PersonalizeChoices {
     const notificationsOn = readLocalNotificationPreference(local, 'enabled');
     const read = (id: LocalNotificationPreferenceId) => readLocalNotificationPreference(local, id);
@@ -89,20 +84,29 @@ export function readPersonalizeChoices(account: Settings, local: Pick<LocalSetti
     };
 }
 
+/** Existing declared choices; their owners resolve compound storage mutations at commit time. */
+export type PersonalizeSettingWrite = Readonly<
+    | { anchor: 'appearance.glassPreset'; value: Exclude<GlassMaterialChoice, 'custom'> }
+    | { anchor: 'transcript.layoutPicker'; value: PersonalizeChoices['transcriptLayout'] }
+    | { anchor: 'transcript.displayMode'; value: ThinkingDisplayChoice }
+    | { anchor: 'transcript.timelineChrome'; value: ToolChromeChoice }
+    | { anchor: 'transcript.defaultToolDetailLevel'; value: ToolDetailChoice }
+    | { anchor: 'transcript.cardTapAction'; value: PersonalizeChoices['toolTap'] }
+    | { anchor: 'session.layout'; value: SessionListLayoutChoice }
+    | { anchor: 'session.listDensity'; value: ListDensityChoice }
+    | { anchor: 'session.attentionPromotion'; value: AttentionPlacementChoice }
+    | { anchor: 'notifications.localPermissionRequests' | 'notifications.localUserActions'
+        | 'notifications.ready' | 'notifications.readyPreview' | 'notifications.requestPreview'
+        | 'notifications.localEnabled'; value: boolean }
+>;
+
 export type PersonalizeStepWrite = Readonly<{
-    /** Account preferences, one write through the Account settings writer. */
-    account: SettingsWriteDelta | null;
-    /** This device's preferences. */
-    local: Partial<LocalSettings> | null;
+    settings: readonly PersonalizeSettingWrite[];
     /** The theme mode goes through the theme owner, which also applies it. */
     theme: ThemeModeChoice | null;
 }>;
 
-const NO_WRITE: PersonalizeStepWrite = { account: null, local: null, theme: null };
-
-function accountWrite(delta: Record<string, unknown>): PersonalizeStepWrite {
-    return Object.keys(delta).length === 0 ? NO_WRITE : { ...NO_WRITE, account: delta as SettingsWriteDelta };
-}
+const NO_WRITE: PersonalizeStepWrite = { settings: [], theme: null };
 
 /** What Next writes for one step: only the choices that differ from the current settings. */
 export function resolvePersonalizeStepWrite(
@@ -114,30 +118,29 @@ export function resolvePersonalizeStepWrite(
     const current = readPersonalizeChoices(account, local);
     switch (step) {
         case 'look': {
-            const glass = draft.glass !== 'custom' && draft.glass !== current.glass
-                ? resolveGlassPresetSettingsDelta(account, draft.glass)
-                : null;
             const theme = draft.theme !== current.theme ? draft.theme : null;
-            return { account: glass, local: null, theme };
+            return { settings: draft.glass !== 'custom' && draft.glass !== current.glass
+                ? [{ anchor: 'appearance.glassPreset', value: draft.glass }] : [], theme };
         }
         case 'conversation':
-            return accountWrite({
-                ...(draft.transcriptLayout !== current.transcriptLayout ? { transcriptGroupingMode: draft.transcriptLayout } : {}),
-                ...(draft.thinking !== current.thinking ? resolveThinkingDisplayChoiceDelta(draft.thinking) : {}),
-            });
+            return { ...NO_WRITE, settings: [
+                ...(draft.transcriptLayout !== current.transcriptLayout ? [{ anchor: 'transcript.layoutPicker' as const, value: draft.transcriptLayout }] : []),
+                ...(draft.thinking !== current.thinking ? [{ anchor: 'transcript.displayMode' as const, value: draft.thinking }] : []),
+            ] };
         case 'tools':
-            return accountWrite({
-                ...(draft.toolChrome !== current.toolChrome ? { toolViewTimelineChromeMode: draft.toolChrome } : {}),
-                ...(draft.toolDetail !== current.toolDetail ? { toolViewDetailLevelDefault: draft.toolDetail } : {}),
-                ...(draft.toolTap !== current.toolTap ? { toolViewTapAction: draft.toolTap } : {}),
-            });
+            return { ...NO_WRITE, settings: [
+                ...(draft.toolChrome !== current.toolChrome ? [{ anchor: 'transcript.timelineChrome' as const, value: draft.toolChrome }] : []),
+                ...(draft.toolDetail !== current.toolDetail ? [{ anchor: 'transcript.defaultToolDetailLevel' as const, value: draft.toolDetail }] : []),
+                ...(draft.toolTap !== current.toolTap ? [{ anchor: 'transcript.cardTapAction' as const, value: draft.toolTap }] : []),
+            ] };
         case 'work':
-            return accountWrite({
-                ...(draft.listLayout !== current.listLayout ? resolveSessionListLayoutSettingsDelta(draft.listLayout, account) : {}),
-                ...(draft.listDensity !== current.listDensity ? { sessionListDensity: draft.listDensity } : {}),
-            });
+            return { ...NO_WRITE, settings: [
+                ...(draft.listLayout !== current.listLayout ? [{ anchor: 'session.layout' as const, value: draft.listLayout }] : []),
+                ...(draft.listDensity !== current.listDensity ? [{ anchor: 'session.listDensity' as const, value: draft.listDensity }] : []),
+            ] };
         case 'attention':
-            return accountWrite(draft.attention !== current.attention ? { sessionListAttentionPromotionModeV1: draft.attention } : {});
+            return { ...NO_WRITE, settings: draft.attention !== current.attention
+                ? [{ anchor: 'session.attentionPromotion', value: draft.attention }] : [] };
         case 'notifications':
             return resolveNotificationsWrite(draft, current, local);
     }
@@ -146,25 +149,25 @@ export function resolvePersonalizeStepWrite(
 function resolveNotificationsWrite(
     draft: PersonalizeChoices,
     current: PersonalizeChoices,
-    local: NotificationSettings,
+    local: Pick<LocalSettings, 'attentionDeviceOverridesV1'>,
 ): PersonalizeStepWrite {
     if (draft.notifyNeedsYou === current.notifyNeedsYou
         && draft.notifyFinished === current.notifyFinished
         && draft.notifyPreview === current.notifyPreview) return NO_WRITE;
     // Once the step changed, every stored field matches what the step shows, so turning this device's
     // notifications on cannot revive an event the person left off.
-    let next: NotificationSettings = local;
-    const set = (id: LocalNotificationPreferenceId, value: boolean) => {
-        if (readLocalNotificationPreference(next, id) !== value) next = resolveLocalNotificationPreferenceDelta(next, id, value);
+    const settings: PersonalizeSettingWrite[] = [];
+    const set = (id: LocalNotificationPreferenceId, anchor: Extract<PersonalizeSettingWrite, { value: boolean }>['anchor'], value: boolean) => {
+        if (readLocalNotificationPreference(local, id) !== value) settings.push({ anchor, value });
     };
-    set('permissionRequests', draft.notifyNeedsYou);
-    set('userActions', draft.notifyNeedsYou);
-    set('ready', draft.notifyFinished);
-    set('readyPreview', draft.notifyPreview);
-    set('requestPreview', draft.notifyPreview);
+    set('permissionRequests', 'notifications.localPermissionRequests', draft.notifyNeedsYou);
+    set('userActions', 'notifications.localUserActions', draft.notifyNeedsYou);
+    set('ready', 'notifications.ready', draft.notifyFinished);
+    set('readyPreview', 'notifications.readyPreview', draft.notifyPreview);
+    set('requestPreview', 'notifications.requestPreview', draft.notifyPreview);
     // Choosing to be told about something turns this device's notifications on; choosing nothing leaves the switch alone.
-    if (draft.notifyNeedsYou || draft.notifyFinished) set('enabled', true);
-    return next === local ? NO_WRITE : { ...NO_WRITE, local: { attentionDeviceOverridesV1: next.attentionDeviceOverridesV1 } };
+    if (draft.notifyNeedsYou || draft.notifyFinished) set('enabled', 'notifications.localEnabled', true);
+    return { ...NO_WRITE, settings };
 }
 
 // --- Starting styles ------------------------------------------------------------------------------

@@ -38,18 +38,20 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
   return async ({ observation, signal }: Readonly<{ observation: SessionFollowDiscussionPendingObservationV1; signal: AbortSignal }>): Promise<boolean> => {
     if (signal.aborted || observation.destinationSessionId !== input.session.sessionId) return false;
     return input.session.runSessionFollowSourceRequest({ credentials: input.credentials, request: async () => {
-      // C1 supplies the persisted relation policy and committed original's
-      // classification. Intake must not replace either with a local preset.
-      const delivery = resolveFollowDeliveryV1({ policies: [observation.policy], event: observation.event });
-      if (!delivery.selected) return false;
       const { addressing } = observation;
       const opened = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
         input: { discussionId: addressing.discussionId, afterSeq: addressing.throughSeq - 1, throughSeq: addressing.throughSeq },
-        context: { surface: 'background', authority: 'account_automation', serverId: binding.serverId }, signal }));
+        context: { surface: 'cli', authority: 'account_automation', serverId: binding.serverId }, signal }));
       if (!opened.success || opened.data.incomplete || opened.data.serverId !== binding.serverId
         || opened.data.discussionId !== addressing.discussionId) return false;
       const question = opened.data.messages.find(message => message.id === addressing.messageId && message.seq === addressing.throughSeq);
       if (!question?.content || !question.addressingV1?.participantSessionIds.includes(input.session.sessionId)) return false;
+      const reply = { mode: 'return' as const, discussion: addressing };
+      // One C1 resolver distinguishes an actual addressed C2 ask from level-
+      // controlled watch/information using the opened committed original.
+      const delivery = resolveFollowDeliveryV1({ policies: [observation.policy], event: observation.event,
+        discussionInput: { addressing, original: question, reply } });
+      if (!delivery.selected) return false;
       let root = question;
       const ancestors = new Set([question.id]);
       while (root.replyTarget?.kind === 'message') {
@@ -58,7 +60,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         ancestors.add(parentId);
         const result = await readCommittedDiscussionMessage({ kind: 'discussion', discussion: {
           serverId: binding.serverId, discussionId: addressing.discussionId }, messageId: parentId },
-        { surface: 'background', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction,
+        { surface: 'cli', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction,
         { throughSeq: addressing.throughSeq });
         if (!result.ok) return false;
         root = result.message;
@@ -92,7 +94,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         }
         if (!header || header.header.title !== undefined && typeof header.header.title !== 'string') return false;
         const openCommentCount = await countDocPassageThreadsV1(source.ref,
-          { surface: 'background', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction);
+          { surface: 'cli', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction);
         doc = { docRef: source.ref, title: typeof header.header.title === 'string' ? header.header.title : null, revision: source.revision,
           openCommentCount, threadRef: root.messageRef };
       }
@@ -125,7 +127,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
               accountEncryptionMode: target.accountEncryptionCurrentness.mode }) });
           if (!targetMachineId) return false;
           const result = await transport({ v: 1, sessionId: input.session.sessionId, targetMachineId, localId,
-            requestedAction: { v: 1, kind: 'enqueue' }, reply: { mode: 'return', discussion: addressing, sourceSession },
+            requestedAction: { v: 1, kind: 'enqueue' }, reply: { ...reply, sourceSession },
             content: sealSessionStoredContent({ ...target, payload: { role: 'user', content: { type: 'text', text: questionText } },
               idempotencyKey: `session-input:v1:${input.session.sessionId}:${localId}` }),
           }, { timeoutMs: resolveSessionMessageAdmissionTimeoutMs(), signal });
@@ -161,7 +163,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         localId, wait: false, timeoutMs: resolveSessionMessageAdmissionTimeoutMs(),
         message: questionText,
         inputAdmission: { provenance: admission.provenance, request: SessionInputRequestV1Schema.parse({ ...admission.request,
-          discussionAddressing: addressing, actionRequestAttributionV1, replyIntent: { mode: 'return' } }) },
+          discussionAddressing: addressing, actionRequestAttributionV1, replyIntent: { mode: reply.mode } }) },
         executionAuthority: 'account_automation', resumeInactiveSession: delivery.session.wake,
         ...(input.spawnSession ? { spawnSession: input.spawnSession } : {}),
         ...(machineAdmissionTransport ? { machineAdmissionTransport } : {}), signal });

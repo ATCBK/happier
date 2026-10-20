@@ -283,7 +283,7 @@ describe("native password public-owner provider contract", () => {
             ))),
         };
         const consume = () => inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
             return consumePasswordMutationKeyChallengeInTx(tx, { mutation, proof, env: process.env });
         });
 

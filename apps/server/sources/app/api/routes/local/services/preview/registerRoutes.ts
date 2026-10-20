@@ -12,6 +12,7 @@ import { LocalServicePreviewAccessRequestV1Schema, LocalServicePreviewServerAcce
 import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import type { Fastify } from "@/app/api/types";
+import { claimHttpUpgrade } from "@/app/api/utils/httpUpgradeOwnership";
 import {
     proxyLocalServicePreviewHttpRequest,
     type LocalServicePreviewHttpRequest,
@@ -33,7 +34,8 @@ import { sendLocalServicePreviewHttpResponse, type LocalServicePreviewHttpReply 
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS, registerLocalServiceHostRoutes } from '../hostRoutes';
-import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
+import { readLocalServiceRequestHostname, resolveLocalServiceExternalProtocol } from '@/app/local/services/preview/origin';
+import { cooperativeProbeRefusalHeaders } from '@/app/local/services/preview/collectorBootstrap';
 import type {
     LocalServicePreviewRuntimeRegistrationInput,
     LocalServicePreviewRuntimeRegistrationResult,
@@ -250,7 +252,7 @@ function redirectPreviewTokenExchange(reply: RouteReply, target: PreviewHttpRout
         .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
             name: 'happier_preview_token',
             path: target.exchangeCookiePath,
-            rawToken,
+            value: rawToken,
         }))
         .header?.("Location", target.exchangeRedirectLocation)
         .send?.();
@@ -352,6 +354,7 @@ function createDownstreamAbortSignal(reply: RouteReply): AbortSignal | undefined
 function createPreviewHttpRequest(
     request: RouteRequest,
     target: PreviewHttpRouteTarget,
+    configuredExternalProtocol: "http" | "https" | undefined,
     signal?: AbortSignal,
 ): LocalServicePreviewHttpRequest {
     return {
@@ -369,7 +372,10 @@ function createPreviewHttpRequest(
         ),
         body: request.body === undefined ? undefined : bodyChunks(request.body),
         signal,
-        externalProtocol: request.protocol === "https" ? "https" : "http",
+        externalProtocol: resolveLocalServiceExternalProtocol({
+            requestIsSecure: request.protocol === "https",
+            configured: configuredExternalProtocol,
+        }),
     };
 }
 
@@ -396,6 +402,15 @@ function upgradeUrl(request: UpgradeRequest): URL | null {
 
 function sendError(reply: RouteReply, statusCode: number, error: string, reasonCode: string): void {
     reply.code?.(statusCode).send?.({ error, reasonCode });
+}
+
+/** A data-plane refusal, readable by the pane's own state probe (see `cooperativeProbeRefusalHeaders`). */
+function sendPreviewRefusal(request: RouteRequest, reply: RouteReply, statusCode: number, error: string, reasonCode: string): void {
+    let response = reply.code?.(statusCode);
+    for (const [name, value] of Object.entries(cooperativeProbeRefusalHeaders(serializeQuery(request.query), request.headers ?? {}) ?? {})) {
+        response = response?.header?.(name, value);
+    }
+    response?.send?.({ error, reasonCode });
 }
 
 async function isSessionAuthorized(
@@ -450,7 +465,7 @@ export async function handleLocalServicePreviewHttpRequest(
     }
     const target = resolvePreviewHttpRouteTarget(request, options);
     if (isPreviewHttpRouteError(target)) {
-        sendError(reply, target.errorStatusCode, target.error, target.reasonCode);
+        sendPreviewRefusal(request, reply, target.errorStatusCode, target.error, target.reasonCode);
         return undefined;
     }
 
@@ -472,7 +487,7 @@ export async function handleLocalServicePreviewHttpRequest(
                 reply.code?.(303).header?.('Location', target.exchangeRedirectLocation).send?.();
                 return undefined;
             }
-            sendError(reply, 401, "preview_access_denied", exchanged.reasonCode);
+            sendPreviewRefusal(request, reply, 401, "preview_access_denied", exchanged.reasonCode);
             return undefined;
         }
         redirectPreviewTokenExchange(reply, target, exchanged.rawToken);
@@ -486,7 +501,7 @@ export async function handleLocalServicePreviewHttpRequest(
         machineId: target.preview.machineId,
     });
     if (!access.ok) {
-        sendError(reply, 401, "preview_access_denied", access.reasonCode);
+        sendPreviewRefusal(request, reply, 401, "preview_access_denied", access.reasonCode);
         return undefined;
     }
 
@@ -504,7 +519,7 @@ export async function handleLocalServicePreviewHttpRequest(
         try {
             return await proxyHttp({
                 preview: target.preview,
-                request: createPreviewHttpRequest(request, target, signal),
+                request: createPreviewHttpRequest(request, target, options.externalProtocol, signal),
                 response,
                 openTunnel: options.openTunnel,
                 observability: options.observability,
@@ -526,9 +541,13 @@ async function handlePreviewWebSocketUpgrade(
     if (!url) return;
     const hostRouteCandidate = parseHostPreviewUpgradeRoute(request, options);
     if (!hostRouteCandidate) {
-        if (url.pathname.startsWith(PREVIEW_UPGRADE_ROUTE_PREFIX)) await sendUpgradeError(socket, 404, 'Not Found');
+        if (url.pathname.startsWith(PREVIEW_UPGRADE_ROUTE_PREFIX)) {
+            claimHttpUpgrade(request);
+            await sendUpgradeError(socket, 404, 'Not Found');
+        }
         return;
     }
+    claimHttpUpgrade(request);
 
     if (options.featureEnabled && !await options.featureEnabled(request)) {
         await sendUpgradeError(socket, 404, "Not Found");
@@ -586,7 +605,10 @@ async function handlePreviewWebSocketUpgrade(
                     )),
                 ),
                 rawHeaders: request.rawHeaders ?? [],
-                externalProtocol: request.socket?.encrypted ? "https" : options.externalProtocol ?? "http",
+                externalProtocol: resolveLocalServiceExternalProtocol({
+                    requestIsSecure: request.socket?.encrypted === true,
+                    configured: options.externalProtocol,
+                }),
                 head,
                 signal: registration.signal,
                 client: createLocalServicePreviewUpgradeClient(socket),

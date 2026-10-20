@@ -1,4 +1,5 @@
 import type { ApiProxyTrust } from '@/app/api/utils/apiRateLimitPolicy';
+import { claimHttpUpgrade } from '@/app/api/utils/httpUpgradeOwnership';
 import { readOptionalPublicAuthDisposition } from "@/app/api/utils/optionalPublicAuth";
 import proxyAddr from '@fastify/proxy-addr';
 import type { IncomingMessage } from 'node:http';
@@ -28,7 +29,7 @@ import {
 } from "@/app/local/services/public/accessAuthorization";
 import type { LocalServicePublicExposureV1 } from '@happier-dev/protocol/local/services/public/v1';
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
-import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
+import { readLocalServiceRequestHostname, resolveLocalServiceExternalProtocol } from '@/app/local/services/preview/origin';
 
 type UpgradeRequest = Readonly<{
     url?: string;
@@ -184,6 +185,7 @@ export async function handleLocalServicePublicWebSocketUpgrade(
 ): Promise<void> {
     const route = parsePublicUpgradeRoute(request, options);
     if (!route && !upgradeUrl(request)?.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) return;
+    claimHttpUpgrade(request);
 
     if (options.featureEnabled && !await options.featureEnabled(request)) {
         await sendUpgradeError(socket, 404, "Not Found");
@@ -280,7 +282,10 @@ export async function handleLocalServicePublicWebSocketUpgrade(
                     )),
                 ),
                 rawHeaders: request.rawHeaders ?? [],
-                externalProtocol: request.socket?.encrypted ? "https" : options.externalProtocol ?? "http",
+                externalProtocol: resolveLocalServiceExternalProtocol({
+                    requestIsSecure: request.socket?.encrypted === true,
+                    configured: options.externalProtocol,
+                }),
                 head,
                 signal: registration.signal,
                 client: createLocalServicePreviewUpgradeClient(socket),

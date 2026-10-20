@@ -6,6 +6,7 @@ import {
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import type { Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
@@ -34,7 +35,7 @@ export const providerConnectionsRowDomain: ReservedAccountScopedKvRowDomain<Stor
   assertEnvelopeForMode: assertProviderConnectionsContentForModeV1,
 };
 
-export function markProviderConnectionsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markProviderConnectionsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
   return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
     hint: { providerConnections: true, revision: input.revision } });
 }
@@ -49,7 +50,7 @@ export async function readProviderConnectionsRowInTx(tx: Tx, input: Readonly<{ a
 export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderConnectionsRowMutationV1 & Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
 }>, options?: Readonly<{ ownSecretReferencesOnly?: boolean }>) {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   if (input.content !== null) {
@@ -60,6 +61,7 @@ export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderCo
     if (input.sourceSettingsVersion === undefined || input.content === null) throw new Error('Provider catalog initialization requires captured source currentness');
     const source = await tx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { settingsVersion: true } });
     if (source.settingsVersion !== input.sourceSettingsVersion) return { status: 'settings-conflict' as const, revision: source.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: input.sourceSettingsVersion });
   } else if (input.sourceSettingsVersion !== undefined) throw new Error('Only catalog initialization admits a source Settings version');
 
   const current = await readProviderConnectionsRowInTx(tx, { accountId: input.accountId });

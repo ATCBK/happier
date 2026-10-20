@@ -106,6 +106,7 @@ export async function createV2SessionAttentionPage(params: Readonly<{
                     accessMode: "effective_access_v1",
                     allowProjectionFallback: false,
                     qualifiedTeamIds: access.qualifiedTeamIds,
+                    collectiveAccessSnapshot: access.collectiveAccessSnapshot,
                     discussionReader: tx,
                 },
                 attentionWhere: params.attentionWhere ?? attention.candidateWhere,

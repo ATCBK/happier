@@ -227,7 +227,7 @@ export type PluginSurfaceClientActionBinding = Readonly<{
     sessionId?: string;
     openSurface?: PluginSurfaceOpenHandler;
     currentUiContext?: () => CurrentUiContextSnapshotV1 | null | undefined;
-    /** The incumbent Message carrier, consumed only with host-presented Message intent. */
+    /** Opaque committed identity; resolved after the client's Action admission. */
     messageActionReference?: MessageActionReferenceV1;
 }>;
 
@@ -474,6 +474,22 @@ type ClientContributedActionSelection = Readonly<{
     isCurrent: () => boolean;
 }>;
 
+function clientActionInvocation(selection: ClientContributedActionSelection): Extract<
+    DaemonPluginStructuredMessageActionInvocationV1, { kind: 'clientPluginAction' }
+> {
+    return {
+        kind: 'clientPluginAction',
+        clientActionBinding: {
+            pluginId: selection.action.pluginId,
+            contributionLocalId: selection.action.id,
+            occurrenceId: selection.registration.occurrenceId,
+            // Source-backed development occurrences have no materialization.
+            ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
+                ? { materializationRef: selection.registration.executionOrigin.materializationRef } : {}),
+        },
+    };
+}
+
 /**
  * Reads one Action from the producer-owned generic executable index. The raw
  * descriptor, exact target/origin and registration generation must all remain
@@ -602,19 +618,7 @@ function clientActionExecuteAction(
                     ? {}
                     : { resolveContributedAction: input.resolveContributedAction }),
                 invocationSurface: input.invocationSurface ?? 'ui',
-                invocation: {
-                    kind: 'clientPluginAction',
-                    clientActionBinding: {
-                        pluginId: selection.action.pluginId,
-                        contributionLocalId: selection.action.id,
-                        occurrenceId: selection.registration.occurrenceId,
-                        // An originless (bundled/development) plugin has no
-                        // materialization; the daemon admits that exact case.
-                        ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
-                            ? { materializationRef: selection.registration.executionOrigin.materializationRef }
-                            : {}),
-                    },
-                },
+                invocation: clientActionInvocation(selection),
                 signal: cancellation.signal,
                 isCurrent: selection.isCurrent,
             });
@@ -1151,7 +1155,11 @@ async function executeClientContributedAction(
                 }
             };
             const reference = current.binding.messageActionReference;
-            if (!reference || input.invocation?.kind !== 'hostPresentedMessage') return invokeHandler();
+            if (!reference) return invokeHandler();
+            const messageInvocation = input.invocation?.kind === 'hostPresentedMessage' ? input.invocation
+                : invocationSurface === 'cli' || invocationSurface === 'agent' || invocationSurface === 'mcp'
+                    ? clientActionInvocation(current) : null;
+            if (!messageInvocation) throw new PluginError({ code: 'plugin_message_action_unavailable' });
             // Reuse daemon Actions' exact current-row resolver after client
             // policy/confirmation, through the same strict Action RPC carrier.
             const execute = current.binding.execute ?? machinePluginStructuredMessageActionExecute;
@@ -1159,8 +1167,8 @@ async function executeClientContributedAction(
                 serverId: authority.serverId,
                 expectedContributorOccurrenceId: current.action.occurrenceId,
                 qualifiedActionId: buildQualifiedPluginContributionKey(identity),
-                executionSurface: 'ui',
-                invocation: input.invocation,
+                executionSurface: invocationSurface,
+                invocation: messageInvocation,
                 ...(current.binding.sessionId ? { sessionId: current.binding.sessionId } : {}),
                 messageActionReference: reference,
                 resolveClientMessageContext: true,
@@ -1764,7 +1772,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     /** Live controller capability for daemon-owned host methods. */
     isMethodAvailable?: (method: PluginUiHostMethodV1) => boolean;
     /** Context stays with the bound controller; error provenance stays with the facade. */
-    resolveUnavailableMessage?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => string | undefined;
+    resolveUnavailableError?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => PluginUiHostApiErrorPayloadV1 | undefined;
     isConnectionPending?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => boolean;
     /** Live controller capability for the daemon branch of `executeAction`. */
     isContributedActionAvailable?: () => boolean;
@@ -1787,7 +1795,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             surfaceContext: input.surfaceContext,
             ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
             ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
-            ...(input.resolveUnavailableMessage ? { resolveUnavailableMessage: input.resolveUnavailableMessage } : {}),
+            ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
             ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
             handlers: {
@@ -1880,7 +1888,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         surfaceContext: input.surfaceContext,
         ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
         ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
-        ...(input.resolveUnavailableMessage ? { resolveUnavailableMessage: input.resolveUnavailableMessage } : {}),
+        ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
         ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         handlers: {

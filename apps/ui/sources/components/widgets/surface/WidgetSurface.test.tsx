@@ -638,6 +638,31 @@ it('keeps an input-options read pending, then preserves the canonical terminal r
     } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
 });
 
+it('settles as unavailable, never loading, when its plugin runtime is offline and the saved input needs a choices read', async () => {
+    const disposeActionLoader = await installRealActionExecutorModuleLoader();
+    const http = createHomeHubArtifactHttpBoundary('actor');
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://offline-widget-options.test', accountId: 'actor', request: http.request });
+    const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'home' } };
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'offline-options', name: 'Offline options',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        inputs: { fields: [{ path: 'home', title: 'Home', widget: 'select', optionsSourceId: 'sessions.spawn.servers.available' }] },
+        inputSchema: { type: 'object', properties: { home: { type: 'string' } }, additionalProperties: false },
+        provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'A declared options reader' } } } });
+    const reference = { kind: 'inline' as const, definition };
+    const instance: WidgetInstanceV1 = { v: 1, id: 'options', definition: reference, bindings: { home: { kind: 'value', value: connection.home.id } } };
+    const descriptor = describeAuthoredWidgetDefinitionV1(definition, reference, null);
+    // The daemon is unreachable and only the retained snapshot remains: no choices read is demanded, so none will ever answer.
+    const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'retainedOffline' as const,
+        unavailableReasonCode: 'plugin_machine_unreachable', interactionEnabled: false, machineId: null, serverId: null, platform: 'web' as const,
+        accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const hook = await renderHook(() => useConfiguredWidgetTarget({ scope, instance, descriptor, providedContext: {}, appRuntime: runtime }));
+    try {
+        await flushHookEffects({ cycles: 3 });
+        expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_machine_unreachable' });
+    } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
+});
+
 it('renders an HTML copy through the shared sandbox with its copied policy and retires on lost viewer admission', async () => {
     const http = createHomeHubArtifactHttpBoundary('viewer');
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://html-widget-copy.test', serverIdentityId: 'srv_html-widget-home', accountId: 'viewer', request: http.request });

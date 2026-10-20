@@ -34,6 +34,7 @@ import { UsageNightShiftWidget } from './UsageNightShiftWidget';
 import { UsageRecapWidget } from './UsageRecapWidget';
 import { UsageFootprintWidget } from './UsageFootprintWidget';
 import { UsageSourcesWidget } from './UsageSourcesWidget';
+import { UsageSourceCoverageWidget, UsageUnpricedWidget } from './UsageSourcePanels';
 
 /** The one body per builtin Usage definition; all share the descriptor owner's ids. */
 const USAGE_QUERY_BODIES: Readonly<
@@ -62,6 +63,8 @@ const USAGE_QUERY_BODIES: Readonly<
   usage_night_shift: UsageNightShiftWidget,
   usage_recap: UsageRecapWidget,
   usage_footprint: UsageFootprintWidget,
+  usage_source_coverage: UsageSourceCoverageWidget,
+  usage_unpriced: UsageUnpricedWidget,
 };
 
 export function isUsageBuiltinWidgetId(
@@ -104,7 +107,7 @@ function UsageQueryWidgetBody(
   const replacing = slice !== null && model.updatingPreviousPeriod;
   useWidgetFrameResourceActivity(replacing || model.refreshing);
   // Ask and Copy act on the query the body is showing (the held one while a new period arrives).
-  const pricesAction = useUsageModelPricesAction(props.id === 'usage_cost_facts' ? slice : null, props.serverId, props.testID);
+  const pricesAction = useUsageModelPricesAction(props.id === 'usage_cost_facts' || props.id === 'usage_unpriced' ? slice : null, props.serverId, props.testID);
   useUsageQueryActions(props.id, slice?.shownQuery ?? query, pricesAction);
   const Body = USAGE_QUERY_BODIES[props.id];
   // A first read holds the room of the shape that lands (Period summary's figures, the Coach's strip), so the

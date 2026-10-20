@@ -164,6 +164,7 @@ export type DiscoveryActionInputById = {
         sessionId?: string | undefined;
         limit?: number | undefined;
         query?: string | undefined;
+        values?: unknown[] | undefined;
         draftInput?: Record<string, unknown> | undefined;
     };
     readonly "action.invoke": Omit<{
@@ -172,6 +173,12 @@ export type DiscoveryActionInputById = {
             localId: string;
         };
         input?: JsonValue;
+        messageActionReference?: {
+            v: 1;
+            sessionId: string;
+            messageId: string;
+            observedRevision: string;
+        };
     }, 'input'> & {
         input?: unknown;
     };
@@ -729,6 +736,26 @@ export type DiscoveryActionResultById = {
                             };
                         } | undefined;
                     }[];
+                    connectedAccountTarget?: {
+                        kind: 'account';
+                        account: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        kind: 'group';
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        } | {
+                            pluginId: 'happier';
+                            localId: 'mcp-sign-in';
+                        };
+                        groupId: string;
+                    } | undefined;
                     sourceAuthority?: {
                         provider: {
                             identity: {

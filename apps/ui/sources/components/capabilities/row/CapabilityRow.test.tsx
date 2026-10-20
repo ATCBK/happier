@@ -41,6 +41,15 @@ describe('CapabilityRow', () => {
         expect(texts(ready)).toContain('anthropics/skills');
     });
 
+    it('counts one tool in the singular and several in the plural', async () => {
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const one = await renderScreen(<CapabilityRow title="fetch" facts={{ presentation: 'row', cost: { toolCount: 1 } }} testID="row" />);
+        expect(texts(one)).toContain('1 tool');
+        expect(texts(one)).not.toContain('1 tools');
+        const many = await renderScreen(<CapabilityRow title="fetch" facts={{ presentation: 'row', cost: { toolCount: 2 } }} testID="row" />);
+        expect(texts(many)).toContain('2 tools');
+    });
+
     it('draws the scope as its own column before the action in menu density, not on the title line', async () => {
         const { CapabilityRow } = await import('./CapabilityRow');
         const { Text } = await import('@/components/ui/text/Text');
@@ -85,5 +94,33 @@ describe('CapabilityRow', () => {
             .map((child) => child.props.testID as string);
         expect(order.indexOf('row:status')).toBeLessThan(order.indexOf('row:scope'));
         expect(screen.findAll((node) => node.props?.testID === 'action').length).toBeGreaterThan(0);
+    });
+    it('joins the scope to the facts on one narrow line, scope first ("Everywhere · 1.2k tokens")', async () => {
+        const { act } = await import('react');
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const screen = await renderScreen(
+            <CapabilityRow title="pdf" whereSummary="Everywhere" facts={{ presentation: 'row', cost: { tokensWhenUsed: 1200 } }} density="menu" testID="row" />,
+        );
+        const outer = screen.findAll((node) => typeof node.type === 'string' && typeof node.props?.onLayout === 'function')[0]!;
+        await act(async () => {
+            outer.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 64 } } });
+        });
+        const words = texts(screen);
+        expect(words).toContain('Everywhere');
+        expect(words).toMatch(/tokens/);
+        expect(words.indexOf('Everywhere')).toBeLessThan(words.search(/tokens/));
+    });
+    it('says a stopped server short in its pill and its reason whole on the next line', async () => {
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const reason = "its sign-in couldn't be passed to this session";
+        const screen = await renderScreen(
+            <CapabilityRow title="linear" density="menu" status={{ kind: 'error', machineName: 'nl2', detail: reason }} testID="row" />,
+        );
+        const words = texts(screen);
+        expect(words).toContain(reason);
+        // The pill carries the short state only; the reason is not inside a one-line, truncating text.
+        const truncating = screen.findAll((node) => node.props?.numberOfLines === 1 && JSON.stringify(node.props.children ?? '').includes(reason));
+        expect(truncating).toHaveLength(0);
+        expect(screen.findAll((node) => node.props?.children === reason && node.props.numberOfLines === undefined).length).toBeGreaterThan(0);
     });
 });

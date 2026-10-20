@@ -7,12 +7,12 @@ import { qualifyPluginContributionReferenceV1 } from "@happier-dev/protocol/plug
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { isMachineProvisionerCredentialPurposeRequiredV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { db, isPrismaUniqueConstraintError, getActivePrismaRuntime } from "@/storage/db";
 import { AccountStatus, TeamMembershipStatus } from "@/storage/enums.generated";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     resolveTeamActorContextInTx, qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextsInTx, qualifyTeamOperationAuthenticationsInTx,
@@ -71,10 +71,31 @@ async function requireHomeInTx(tx: Tx, homeId: string): Promise<void> {
 }
 
 export async function invalidatePresetInTx(tx: Tx, row: StoredPreset): Promise<void> {
-    const accountIds = row.teamId
-        ? (await tx.teamMembership.findMany({ where: { teamId: row.teamId, status: TeamMembershipStatus.active, account: { status: AccountStatus.active } }, select: { accountId: true } })).map(member => member.accountId)
-        : row.custodianAccountId ? [row.custodianAccountId] : [];
+    const accountIds = await readMachinePresetPublicationAudienceInTx(tx, ownerOf(row));
     await markAccountsChanged(tx, { accountIds, entityId: row.id });
+}
+
+export async function readMachinePresetPublicationAudienceInTx(tx: Tx, owner: ManagedMachinePresetV1['owner']): Promise<string[]> {
+    return owner.kind === 'team'
+        ? (await tx.teamMembership.findMany({ where: { teamId: owner.teamId, status: TeamMembershipStatus.active,
+            account: { status: AccountStatus.active } }, select: { accountId: true } })).map(member => member.accountId)
+        : [owner.accountId];
+}
+
+/** Recipe authority and every actual preset recipient enter in one sorted Account batch. */
+async function acquirePresetMutationAccountsInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; owner: ManagedMachinePresetV1['owner']; controllerMachineIds: readonly string[];
+}>): Promise<void> {
+    const read = async () => [input.actorAccountId, ...await readMachinePresetPublicationAudienceInTx(tx, input.owner),
+        ...(await tx.machine.findMany({ where: { id: { in: [...input.controllerMachineIds] } }, select: { accountId: true } }))
+            .map(machine => machine.accountId)];
+    const accountIds = await read();
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
+    const admitted = new Set(accountIds);
+    if ((await read()).some(accountId => !admitted.has(accountId))) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
+    beforeAccountChangePublication(tx, accountIds, async () => assertAccountChangePublicationAudienceInTx(tx, await read()));
 }
 
 /** Save and acquire consume the same current declaration and credential-source readers. No material is read. */
@@ -122,6 +143,8 @@ function definition(preset: ManagedMachinePresetV1): ManagedMachinePresetCreateI
 export async function createMachinePreset(params: PresetContext & Readonly<{ input: ManagedMachinePresetCreateInputV1 }>): Promise<PresetMutationResultV1> {
     const input = ManagedMachinePresetCreateInputV1Schema.parse(params.input);
     const execute = () => inTx(async tx => {
+        await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: input.owner,
+            controllerMachineIds: [input.controller.machineId] });
         await requireHomeInTx(tx, input.homeId);
         if (!await mayAccessInTx(tx, params, input.owner, true)) return { kind: "refused", code: "permission_denied" } as const;
         const existing = await tx.managedMachinePreset.findUnique({ where: { id: input.id } });
@@ -192,8 +215,10 @@ export async function listMachinePresets(params: PresetContext & Readonly<{ inpu
 export async function updateMachinePreset(params: PresetContext & Readonly<{ input: ManagedMachinePresetUpdateInputV1 }>): Promise<PresetMutationResultV1> {
     const input = ManagedMachinePresetUpdateInputV1Schema.parse(params.input);
     try { return await inTx(async tx => {
-        await requireHomeInTx(tx, input.homeId);
         const row = await tx.managedMachinePreset.findFirst({ where: { id: input.id, homeId: input.homeId } });
+        if (row) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(row),
+            controllerMachineIds: [row.controllerMachineId, ...(input.patch.controller ? [input.patch.controller.machineId] : [])] });
+        await requireHomeInTx(tx, input.homeId);
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;
         const current = await projectPresetInTx(tx, row);
         if (row.revision !== input.expectedRevision) return { kind: "conflict", currentRevision: row.revision } as const;
@@ -230,8 +255,10 @@ export async function updateMachinePreset(params: PresetContext & Readonly<{ inp
 /** Archive changes recipe offers only; acquired rows and capacity are untouched. */
 async function setArchived(params: PresetContext & Readonly<{ input: ManagedMachinePresetRevisionInputV1 }>, archived: boolean): Promise<PresetMutationResultV1> {
     try { return await inTx(async tx => {
-        await requireHomeInTx(tx, params.input.homeId);
         const row = await tx.managedMachinePreset.findFirst({ where: { id: params.input.id, homeId: params.input.homeId } });
+        if (row) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(row),
+            controllerMachineIds: [row.controllerMachineId] });
+        await requireHomeInTx(tx, params.input.homeId);
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;
         if (row.revision !== params.input.expectedRevision) return { kind: "conflict", currentRevision: row.revision } as const;
         if ((row.archivedAt !== null) === archived) return { kind: "saved", preset: await projectPresetInTx(tx, row) } as const;

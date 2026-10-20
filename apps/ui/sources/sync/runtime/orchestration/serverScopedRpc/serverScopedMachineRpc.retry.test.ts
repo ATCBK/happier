@@ -14,6 +14,7 @@ const { serverScopedRpcSocketPool } = await import('./serverScopedRpcSocketPool'
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const { resetRunnerCreatorMachineContentKeyTrustProjectionForTests } = await import('@/sync/domains/ephemeralRunner/runnerCreatorMachineContentKeyTrust');
 const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
+const { machineStopSession } = await import('@/sync/ops/machines');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { fetchMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/readMachineDoctorSnapshot');
 const {
@@ -171,6 +172,29 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         expect(await client.listTargets()).toEqual({ ok: false, code: errorCode });
         expect(ActionExecuteFailureSchema.parse(failure)).toMatchObject({ errorCode });
         expect(boundary.requests.length).toBeGreaterThan(0);
+    });
+
+    it('keeps the released daemon Stop acknowledgement pending through the legacy Machine facade', async () => {
+        boundary.setRpcAckResponder(async request => {
+            const decoded = await decodeRequest(request);
+            expect(request).toMatchObject({ serverUrl: 'https://server-a.example.test',
+                targetId: 'machine-1', method: RPC_METHODS.STOP_SESSION });
+            expect(decoded.params).toEqual({ sessionId: 'session-1' });
+            return { ok: true, result: await socketRpcCodec.encodeResponse(content, { message: 'Session stopped' }, decoded.callId) };
+        });
+        expect(await machineStopSession('machine-1', 'session-1', { serverId: home.id }))
+            .toEqual({ ok: true, status: 'requested' });
+        expect(boundary.requests).toHaveLength(1);
+    });
+
+    it('withdraws a pre-aborted canonical Stop before transport issuance', async () => {
+        const { stopSessionViaDaemonMachineRpc } = await import('@/sync/ops/sessionStopStrategy');
+        const controller = new AbortController();
+        controller.abort();
+        expect(await stopSessionViaDaemonMachineRpc({ serverId: home.id, accountId: 'account-a',
+            machineId: 'machine-1', sessionId: 'session-1', signal: controller.signal }))
+            .toMatchObject({ type: 'failed', errorCode: 'MACHINE_RPC_ABORTED' });
+        expect(boundary.requests).toEqual([]);
     });
 
     it.each(['reply', 'cancel'] as const)('keeps canonical Stop under the admitted operation lifetime: %s', async outcome => {

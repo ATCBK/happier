@@ -281,12 +281,19 @@ async function stopSessionViaMarkersBestEffort(params: Readonly<{
       timeoutMs: resolveSessionControlStopTimeoutMs(),
       pollIntervalMs: resolveSessionControlStopPollIntervalMs(),
     }),
-    retireExactTerminalControlServiceability: async ({ attachmentInfo, terminalMode }) => {
+    retireAbsentTerminalControlServiceability: async ({ trackedSession, stoppedAt }) =>
+      await retireExactTerminalControlServiceability({
+        credentials: params.credentials, sessionId, terminalMode: 'plain', stoppedAt,
+        expectedRunner: { pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
+          startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs },
+      }),
+    retireExactTerminalControlServiceability: async ({ attachmentInfo, terminalMode, stoppedAt }) => {
       return await retireExactTerminalControlServiceability({
         credentials: params.credentials,
         sessionId,
         attachmentId: attachmentInfo.attachmentId,
         terminalMode,
+        stoppedAt,
       });
     },
   })(sessionId);
@@ -322,7 +329,7 @@ export async function requestSessionStop(params: Readonly<{
   idOrPrefix: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof recordSessionExplicitStopIntent>[0]['resolveAuthorizationHeaders'];
 }>): Promise<
   | (Readonly<{ ok: true }> & SessionStopCommandResult)
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] }>

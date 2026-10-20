@@ -23,6 +23,8 @@ import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '
 import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 /** The one typed answer for a query arm an admitted one-Session corpus cannot serve. */
 function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
@@ -53,7 +55,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
     }
     if (
       input.context.serverId !== undefined
-      && input.context.serverId !== params.serverId
+      && !await isServerProfileHomeIdentity(params.serverId, input.context.serverId)
     ) {
       return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
     }
@@ -176,6 +178,7 @@ export function createSessionListActionDeps(params: Readonly<{
   const read = async ({
     project,
     context,
+    serverId: requestedServerId,
     query,
     view,
     limit,
@@ -188,13 +191,15 @@ export function createSessionListActionDeps(params: Readonly<{
     includeLastMessagePreview,
     signal,
   }: Parameters<ActionExecutorDeps['sessionList']>[0], filterCandidates?: Parameters<typeof listSessions>[0]['filterCandidates'],
-  workspaceRefs?: readonly WorkspaceRefV1[]): Promise<Awaited<ReturnType<ActionExecutorDeps['sessionList']>>> => {
+  workspaceRefs?: readonly WorkspaceRefV1[]) => {
     const normalizedActiveOnly = activeOnly === true;
     const normalizedArchivedOnly = archivedOnly === true;
-    if (context?.serverId && context.serverId !== serverId) {
+    if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
+      || (context?.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) {
       return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
     }
-    if (project && project.serverId !== serverId) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+    if (project && !await isServerProfileHomeIdentity(serverId, project.serverId)) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+    const qualifiedProject = project ? { ...project, serverId: await resolveServerProfileHomeIdentityId(serverId) ?? serverId } : undefined;
     if (normalizedActiveOnly && normalizedArchivedOnly) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
@@ -242,7 +247,7 @@ export function createSessionListActionDeps(params: Readonly<{
       return { ok: false as const, errorCode: 'follow_rule_account_scope_unavailable', error: 'follow_rule_account_scope_unavailable' };
     }
     const run = async () => await listSessions({
-      ...(project ? { project, workspaceRefs: await params.readWorkspaceRefs?.({ context, project, signal }) } : {}),
+      ...(qualifiedProject ? { project: qualifiedProject, workspaceRefs: await params.readWorkspaceRefs?.({ context, project: qualifiedProject, signal }) } : {}),
       ...(filterCandidates ? { filterCandidates, workspaceRefs, accountSettings: params.resolveAccountSettings?.() ?? null } : {}),
       credentials: requester?.credentials ?? params.credentials,
       resolveAuthorizationHeaders,
@@ -267,9 +272,12 @@ export function createSessionListActionDeps(params: Readonly<{
       ...(allowedSessionIds ? { allowedSessionIds } : {}),
     });
     try {
-      return params.serverHttpBaseUrl
-        ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
-        : await run();
+      // Scope observation is a preparation read, not the Action effect. Retain
+      // its admitted lifetime through transient Home failures before the scope
+      // guard classifies an unavailable observation as an unsupported corpus.
+      return await readRequesterHomeWithinActionLifetime(() => params.serverHttpBaseUrl
+        ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
+        : run(), signal);
     } catch (error) {
       // The admitted one-Session corpus cannot answer every query arm; that is a
       // typed contract answer, not a transport failure.
@@ -282,34 +290,53 @@ export function createSessionListActionDeps(params: Readonly<{
   return {
     sessionList: read,
     sessionFollowPreview: async ({ context, input, serverId: requestedServerId, signal }) => {
-      if (requestedServerId && requestedServerId !== serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
+        || (context.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      const homeServerId = await resolveServerProfileHomeIdentityId(serverId) ?? serverId;
+      // Qualifiers are portable identities; local profile ids select credentials.
+      // Resolve every supplied qualifier at the existing exact Home owner before
+      // structural queries or the shared Project predicate compare identities.
+      const identifiers = new Set([...input.filter.homeServerIds, ...input.filter.audiences.map(row => row.serverId),
+        ...input.filter.tagIds.map(row => row.serverId),
+        ...(input.filter.projects ? [...input.filter.projects.include, ...input.filter.projects.exclude].map(row => row.serverId) : [])]);
+      const homes = new Map(await Promise.all([...identifiers].map(async identifier =>
+        [identifier, await resolveServerProfileHomeIdentityId(identifier) ?? identifier] as const)));
+      const filter = { ...input.filter,
+        homeServerIds: input.filter.homeServerIds.map(id => homes.get(id)!),
+        audiences: input.filter.audiences.map(row => ({ ...row, serverId: homes.get(row.serverId)! })),
+        tagIds: input.filter.tagIds.map(row => ({ ...row, serverId: homes.get(row.serverId)! })),
+        ...(input.filter.projects ? { projects: {
+          include: input.filter.projects.include.map(row => ({ ...row, serverId: homes.get(row.serverId)! })),
+          exclude: input.filter.projects.exclude.map(row => ({ ...row, serverId: homes.get(row.serverId)! })),
+        } } : {}),
+      };
       const candidates: FollowRulePreviewCandidateV1[] = [];
       const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
       const isAccountCurrent = () => requester ? requester.isCurrent() : params.isCredentialCurrent?.() ?? true;
       if (!await isAccountCurrent()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
       const credentials = requester?.credentials ?? params.credentials;
       const viewerAccountId = readAccountIdFromToken(credentials.token) ?? undefined;
-      const queries = projectSessionListFilterHomeQueriesV1(input.filter, { storage: 'active', includeInactive: true,
-        mountedHomeServerIds: [serverId] });
-      const unservedHome = input.filter.homeServerIds.some(home => home !== serverId);
-      let coverage: 'complete' | 'partial' | 'unavailable' = unservedHome || input.filter.show !== 'sessions'
+      const queries = projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
+        mountedHomeServerIds: [homeServerId] });
+      const unservedHome = filter.homeServerIds.some(home => home !== homeServerId);
+      let coverage: 'complete' | 'partial' | 'unavailable' = unservedHome || filter.show !== 'sessions'
         || context.sessionListAccess === 'current_session' ? 'partial' : 'complete';
-      if (input.filter.show === 'runs') return evaluateFollowRulePreviewV1({ filter: input.filter, candidates, coverage: 'unavailable' });
+      if (filter.show === 'runs') return evaluateFollowRulePreviewV1({ filter, candidates, coverage: 'unavailable' });
       let workspaceRefs: readonly WorkspaceRefV1[] | undefined;
-      if (input.filter.projects && params.readWorkspaceRefs) {
+      if (filter.projects && params.readWorkspaceRefs) {
         try { workspaceRefs = await params.readWorkspaceRefs({ context, signal }); }
         catch (error) { signal?.throwIfAborted(); coverage = 'partial'; }
       }
       for (const home of queries) {
         const page = await read({ context, query: home.query, includeSystem: false, signal },
-          { serverId: home.serverId, viewerAccountId, filters: [input.filter], collect: candidate => candidates.push(candidate) }, workspaceRefs);
+          { serverId: home.serverId, viewerAccountId, filters: [filter], collect: candidate => candidates.push(candidate) }, workspaceRefs);
         if ('ok' in page && page.ok === false) return page;
         if ('hasNext' in page && (page.hasNext || 'attentionHasNext' in page && page.attentionHasNext)
           || 'metadataUpgradeRequiredCount' in page && Number(page.metadataUpgradeRequiredCount) > 0) coverage = 'partial';
       }
       if (!await isAccountCurrent()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
       signal?.throwIfAborted();
-      return evaluateFollowRulePreviewV1({ filter: projectSessionListFilterAfterHomeQueryV1(input.filter, serverId), candidates,
+      return evaluateFollowRulePreviewV1({ filter: projectSessionListFilterAfterHomeQueryV1(filter, homeServerId), candidates,
         coverage: queries.length === 0 && unservedHome ? 'unavailable' : coverage });
     },
   };

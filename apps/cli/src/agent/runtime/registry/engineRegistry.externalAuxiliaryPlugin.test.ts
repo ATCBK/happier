@@ -237,7 +237,7 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
                             value: {
                                 candidates: [],
                                 nextCursor: 'c'.repeat(
-                                    ${EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits}
+                                    2_000
                                     + (request.searchTerm === 'transcript-cursor-limit-plus-one' ? 1 : 0),
                                 ),
                             },

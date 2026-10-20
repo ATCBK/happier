@@ -15,6 +15,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 import { resolveExternalActionServerRequestHeaders, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import type { ManagedProviderOperationAuthority } from '@/daemon/connectedServices/purposeBindings/managedProviderOperationAuthority';
 import type { StoredCredentials } from '@/persistence';
+import { retryHomeOperation, isRetryableHomeOperationError, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
@@ -58,6 +59,7 @@ export type ManagedMachineExecutionOptions = Readonly<{
 /** The controller transport consumes the server's row/currentness authority. */
 export function createManagedMachineControllerClient(input: ManagedMachineAcquisitionDriverInput, options: ManagedMachineExecutionOptions, action: ManagedMachineActionIdV1) {
     let policyMachine = options.policyMachine;
+    let homeRetry: HomeOperationRetry | undefined;
     type CapturedIdentity = Readonly<{ kind: 'acquire' | 'rebuild' | 'pending-acquire'; machine: ManagedMachineV1;
         validateResource: ReturnType<typeof compilePluginJsonSchema>; validateNativeOperation?: ReturnType<typeof compilePluginJsonSchema> }>;
     let submittedIdentity: CapturedIdentity | undefined;
@@ -108,6 +110,13 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
         catch { throw requestFailure(path, 'schema', response.status); }
     }
     async function post<T>(path: string, body: unknown, schema: { parse(data: unknown): T }, signal: AbortSignal | null | undefined = options.signal): Promise<T> {
+        const run = () => postOnce(path, body, schema, signal);
+        // Only the repeatable authority observation is replayed. Every retry
+        // obtains fresh request authorization; submit/report/native effects do not replay.
+        return path === '/v1/machines/managed/controller/current' && homeRetry
+            ? await retryHomeOperation({ ...homeRetry, signal: signal ?? homeRetry.signal }, run) : await run();
+    }
+    async function postOnce<T>(path: string, body: unknown, schema: { parse(data: unknown): T }, signal: AbortSignal | null | undefined): Promise<T> {
         try {
             const projection = originProjection();
             if (projection && !(options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin
@@ -187,7 +196,12 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
         // Passive lifetime queries fail closed. Effect admission uses the strict
         // read so an unreadable source retains its typed refusal.
         try { return await readCurrent(machine, nativeRole) !== null; }
-        catch { return false; }
+        catch (error) {
+            // During an admitted enrollment, unavailable authority must reach
+            // its effect owner, rather than becoming a definite intent change.
+            if (homeRetry && isRetryableHomeOperationError(error)) throw error;
+            return false;
+        }
     }
     async function submitIdentity(machine: ManagedMachineV1, kind: 'acquire' | 'rebuild') {
         const provider = input.runtimeRegistry.contributes.machineProvisioners?.find(candidate =>
@@ -250,6 +264,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
     }
     return {
         post, row, correlation, readCurrent, isCurrent, assertConnection,
+        setHomeOperationRetry(lifetime?: HomeOperationRetry) { homeRetry = lifetime; },
         async submit(machine: ManagedMachineV1) { return await submitIdentity(machine, 'acquire'); },
         async submitIntent(machine: ManagedMachineV1) { return await submitIdentity(machine, 'rebuild'); },
         /** Capture the admitted paid handle immediately before its safe native reconciliation. */
@@ -422,13 +437,15 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                     admission = await client.post('/v1/machines/managed/controller/admit-control', request, ManagedAdmissionOutputV1Schema);
                 } catch (error) {
                     // Lost transport/schema acknowledgement cannot establish that
-                    // this write rolled back. Home's named acquisition/rollback
-                    // refusals and pre-request currentness failures remain definite.
+                    // this write rolled back. database_connection_unavailable also
+                    // covers raw pool errors without pre-commit evidence. Only the
+                    // transaction owner's confirmed rollback refusal is definite;
+                    // pre-request currentness failures retain their own boundary.
                     if (!executesIntent || !operationId || !(error instanceof ManagedMachineControllerError)) throw error;
                     const details = error.details;
                     const unknown = details && (details.category === 'transport' || details.category === 'schema'
                         || details.category === 'status' && (details.status ?? 0) >= 500
-                            && error.code !== 'database_connection_unavailable' && error.code !== 'database_transaction_conflict_exhausted');
+                            && error.code !== 'database_transaction_conflict_exhausted');
                     if (!unknown) throw error;
                     const managedId = 'managedMachineId' in request.input ? request.input.managedMachineId : request.input.managedId;
                     options.context?.operationOwnerUpdate?.update({ domainRef: { kind: 'managedMachine', id: managedId } });
@@ -449,9 +466,11 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 } catch (error) {
                     // The successful admission response proves desired intent committed.
                     // A later unreadable Home cannot prove that intent was withdrawn
-                    // or that native submission did not commit. Keep the same operation
-                    // unconfirmed; definite native refusals keep their own settlement.
-                    if (!(error instanceof ManagedMachineControllerError) || !error.details) throw error;
+                    // or that native submission did not commit. Native reconciliation
+                    // also explicitly retains unknown delivery. Keep both unconfirmed;
+                    // definite native refusals keep their own settlement.
+                    if (!(error instanceof ManagedMachineControllerError) || error instanceof ManagedMachineNativeRefusal
+                        || (!error.details && error.code !== 'native_intent_unconfirmed')) throw error;
                     return unconfirmed(error, true);
                 }
                 return accepted;
@@ -533,6 +552,8 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         expectedContributorOccurrenceId: occurrenceId,
                         admittedConnectedAccountPurposeBinding: { exactPurposeBindingSubjectId: activation.exactPurposeBindingSubjectId, isCurrent: () => isCurrent() && activation.isCurrent() },
                         input: role === 'check' ? {} : 'selectors' in probe ? probe.selectors ?? {} : {},
+                        ...(options.context?.recordOperationCredentialUse
+                            ? { approvalContext: { recordOperationCredentialUse: options.context.recordOperationCredentialUse } } : {}),
                         context: { surface: 'plugin', invocationSurface: 'plugin', originSurface: 'cli', signal: options.signal, initiatingActionCaller: options.context?.actionCaller },
                     });
                     if (!attempt.matched) throw new ManagedMachineControllerError('provider_unavailable');

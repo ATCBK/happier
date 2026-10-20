@@ -254,6 +254,21 @@ describe('current Widget field options admission', () => {
         expect(await resolver.resolve({ ...request, admission: 'configuration' }))
             .toMatchObject({ status: 'unavailable', fields: [{ path: 'connection', reasonCode: 'widget_viewer_purpose_authority_unavailable' }] });
     });
+    it('asks the options owner about the picked value so a source need not list its whole inventory', async () => {
+        const asked: (readonly JsonValue[])[] = [];
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => ({ ...viewerDescriptor, inputs: { fields: [viewerDescriptor.inputs!.fields[1]!] },
+                inputSchema: { type: 'object', properties: { choice: { type: 'string', minLength: 2 } }, required: ['choice'], additionalProperties: false } }),
+            readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+            validateValue: async () => ({ status: 'valid' }),
+            resolveOptions: async (_field, _input, _request, values) => { asked.push(values); return [{ value: 'current' }]; },
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'owner', owner: { kind: 'home' as const } }, instanceId: 'copy' },
+            instance: { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: { pluginId: consumer.pluginId, localId: 'widget' } },
+                bindings: { choice: { kind: 'value' as const, value: 'current' } } }, context: {} };
+        expect(await resolver.resolve(request)).toEqual({ status: 'ready', input: { choice: 'current' } });
+        expect(asked).toEqual([['current']]);
+    });
     it('admits declared viewer intent without a connection only for configuration, preserving execution and other value admission', async () => {
         const { resolver, removeResource, setDescriptor } = createUnconnectedViewerWidgetResolver();
         const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'sessionBoard' as const, sessionId: 'shared' } }, instanceId: 'copy' },

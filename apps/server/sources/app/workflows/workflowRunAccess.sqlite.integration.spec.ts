@@ -17,6 +17,10 @@ import { resolveWorkflowRunAdmissionVisibilityInTx } from "./workflowRunAccess";
 import { readTeamSummaryForActorInTx } from "@/app/teams/lifecycle";
 import { hashPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
+import { createDiscussion } from '@/app/discussions/mutations';
+import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { inviteDiscussionParticipant } from '@/app/discussions/accessService';
 
 describe("Workflow Run live Team access (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -53,6 +57,60 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             assignments: { create: { machineId: machine.id, priority: 0 } } } });
         return { owner, viewer, team, membership, artifact, runId, machine, acceptedEnvelope };
     }
+
+    it('admits a Workflow Discussion destination only at its committed frontier with current grants, keys and Session disclosure', async () => {
+        const f = await fixture();
+        await db.automationRun.delete({ where: { id: f.runId } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Compare these answers' }] };
+        const created = await createDiscussion({ actorAccountId: f.owner.id, authentication,
+            request: buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: crypto.randomUUID(),
+                titleContent: { t: 'plain', v: { v: 1, title: 'Pattern origin' } },
+                firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: content }, authoredContent: content,
+                    mentionedAccountIds: [] } }) });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        const target = await db.session.create({ data: { accountId: f.owner.id, tag: crypto.randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ actorAccountId: f.owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: target.id } } })).toMatchObject({ ok: true });
+        const origin = { kind: 'direct' as const, discussion: { discussion: { serverId: 'home', discussionId },
+            messageId: created.value.firstMessage.id, throughSeq: created.value.firstMessage.seq } };
+        const input = { accountId: f.owner.id, runId: f.runId, origin, machineId: f.machine.id,
+            acceptedEnvelope: f.acceptedEnvelope, discussionTargetSessionIds: [target.id],
+            resultDelivery: { kind: 'originating_discussion' as const },
+            accountCurrentness: { mode: 'plain' as const, version: f.owner.seq, contentKeyFingerprint: null },
+            discussionAuthentication: authentication,
+            authentication: { authenticationAuthority: 'present_user' as const } };
+        await expect(admitWorkflowRun({ ...input, origin: { ...origin,
+            discussion: { ...origin.discussion, throughSeq: origin.discussion.throughSeq + 1 } } }))
+            .rejects.toMatchObject({ code: 'invalid_input' });
+        const share = await db.sessionShare.create({ data: { sessionId: target.id, sharedByUserId: f.owner.id,
+            sharedWithUserId: f.viewer.id, accessLevel: 'view' } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+        await db.sessionShare.delete({ where: { id: share.id } });
+        await db.discussionParticipant.update({ where: { discussionId_sessionId: { discussionId, sessionId: target.id } },
+            data: { answerPolicy: 'reads_only' } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+        await db.discussionParticipant.update({ where: { discussionId_sessionId: { discussionId, sessionId: target.id } },
+            data: { answerPolicy: 'when_addressed' } });
+        const foreign = await db.session.create({ data: { accountId: f.viewer.id, tag: crypto.randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        await db.discussionAccountGrant.create({ data: { discussionId, accountId: f.viewer.id, accessLevel: 'view',
+            createdByAccountId: f.owner.id } });
+        await db.sessionShare.create({ data: { sessionId: foreign.id, sharedByUserId: f.viewer.id,
+            sharedWithUserId: f.owner.id, accessLevel: 'edit' } });
+        expect(await inviteDiscussionParticipant({ actorAccountId: f.owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: foreign.id } } })).toMatchObject({ ok: true });
+        // The current protected Workflow input contract has no cross-Account
+        // custody. Read grants cannot manufacture that execution authority.
+        await expect(admitWorkflowRun({ ...input, discussionTargetSessionIds: [foreign.id] }))
+            .rejects.toMatchObject({ code: 'run_access_denied' });
+        await expect(admitWorkflowRun(input)).resolves.toMatchObject({ kind: 'created', run: { origin: { kind: 'direct' } } });
+        expect((await db.automationRun.findUniqueOrThrow({ where: { id: f.runId } })).originDeliveryAckRevision).toBeNull();
+        await db.discussion.update({ where: { id: discussionId }, data: { archivedAt: new Date() } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+    });
 
     it("a Team viewer reads owner-bound content, cannot control it, and immediately loses visibility when membership is removed", async () => {
         const f = await fixture();

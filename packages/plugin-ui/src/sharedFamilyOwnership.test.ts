@@ -101,7 +101,13 @@ const APPROVED_CATALOG_VOCABULARY = [
   // C3 DISC-13: the existing Discussion frame shared with external author threads.
   'ThreadMessage',
   'ReplyQuote',
+  // C2 U4: the answer another session returned to an Ask, shared by core and external authors.
+  'ReturnedAnswerQuote',
   'FollowPolicyEditor',
+  // C3/C4 R7: one host-mediated, controlled participant choice/search presentation.
+  'ExecutableParticipantPicker',
+  // C6/C5 (N3 FR1-10): the controlled Memory duplicate choice and the Doc suggested-edit card.
+  'MemoryDuplicateChoice', 'DocEditProposal',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -2061,6 +2067,97 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no reply-quote node; source admission is caller-owned.' },
   },
+  {
+    publicName: 'ReturnedAnswerQuote',
+    propTypeName: 'ReturnedAnswerQuoteProps',
+    family: 'Returned answer quote',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/ReturnedAnswerQuote.tsx',
+    sharedSymbol: 'HappierReturnedAnswerQuote',
+    pluginOwner: { module: 'components/ReturnedAnswerQuote.tsx', symbol: 'ReturnedAnswerQuote' },
+    coreConsumers: ['components/sessions/transcript/returnedAnswer/ReturnedAnswerQuote.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/returnedAnswerQuoteSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no returned-answer node; answer admission and the question read are caller-owned.' },
+  },
+  {
+    publicName: 'MemoryDuplicateChoice',
+    propTypeName: 'MemoryDuplicateChoiceProps',
+    family: 'Memory duplicate choice',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/MemoryDuplicateChoice.tsx',
+    sharedSymbol: 'HappierMemoryDuplicateChoice',
+    pluginOwner: { module: 'components/MemoryDuplicateChoice.tsx', symbol: 'MemoryDuplicateChoice' },
+    coreConsumers: ['components/memory/MemoryDocumentBody.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/memoryDuplicateChoiceSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no duplicate-choice node; the review, the write and its effect are caller-owned Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/memory/MemoryDocumentBody.tsx', symbol: 'compareRowChosen' }],
+  },
+  {
+    publicName: 'DocEditProposal',
+    propTypeName: 'DocEditProposalProps',
+    family: 'Doc suggested edit',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/DocEditProposal.tsx',
+    sharedSymbol: 'HappierDocEditProposal',
+    pluginOwner: { module: 'components/DocEditProposal.tsx', symbol: 'DocEditProposal' },
+    coreConsumers: ['components/artifacts/ArtifactEditProposal.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/docEditProposalSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no suggested-edit node; currency reads and the person-only Accept/Decline stay in the Doc Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/artifacts/ArtifactEditProposal.tsx', symbol: 'Settled' }],
+  },
+  {
+    publicName: 'ExecutableParticipantPicker',
+    propTypeName: 'ExecutableParticipantPickerProps',
+    family: 'Host-mediated executable participant picker',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    // Source core/author mounts are proven; public declaration and loaded-platform gates remain separate.
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentationHost/context.ts',
+    sharedSymbol: 'useOptionalPluginUiPresentationHost',
+    pluginOwner: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    coreConsumers: ['components/sessions/authoring/ExecutableParticipantPickerModal.tsx'],
+    coreAdapter: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/executableParticipantPickerSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: {
+      kind: 'not-applicable',
+      reason: 'V2 has no participant-picker node; native and RNW surfaces bind the same host SelectionList presenter, without inventory or setup authority.',
+    },
+    hostComposition: {
+      adapter: { module: 'components/plugins/surfaces/pluginUiPrivatePresentationHost.tsx', symbol: 'createPluginUiPrivatePresentationRenderers' },
+      physicalHost: {
+        module: 'components/sessions/authoring/ExecutableParticipantPickerPresentation.tsx',
+        symbol: 'ExecutableParticipantPickerPresentation',
+        callbackSymbol: 'renderExecutableParticipantPicker',
+      },
+    },
+  },
   // These five public adapters request the existing physical host. They do not duplicate its
   // presentation or lifecycle and are source-present, not loaded-platform graduated.
   ...[
@@ -2834,7 +2931,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'MemoryDuplicateChoice', 'DocEditProposal', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 

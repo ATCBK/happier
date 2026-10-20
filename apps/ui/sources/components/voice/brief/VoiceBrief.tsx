@@ -4,6 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -17,6 +18,8 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import { InboxModelBoundary } from '@/hooks/inbox/useInboxModel';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { t } from '@/text';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { getVoiceSessionPresentedAttemptId } from '@/voice/session/voiceSessionStore';
 import { type VoiceBrief, type VoiceBriefItem } from '@/voice/context/buildVoiceBrief';
 import { useVoiceBriefRequest } from './useVoiceBriefRequest';
 
@@ -26,21 +29,26 @@ import { useVoiceBriefRequest } from './useVoiceBriefRequest';
  */
 export const VoiceBriefButton = React.memo(function VoiceBriefButton(props: Readonly<{
     open: boolean;
-    onOpen: () => void;
     /** Phone (lab B0p): the button spans the page under the greeting instead of sitting beside it. */
     block?: boolean;
 }>): React.ReactElement | null {
     const voiceEnabled = useFeatureEnabled('voice');
+    const { execute, ready } = useMountedActionExecution(getActiveServerAccountScope(), { openOnRequest: true });
+    const request = React.useCallback(() => {
+        const expectedAttemptId = getVoiceSessionPresentedAttemptId();
+        return execute('ui.voice_global.brief.request', expectedAttemptId ? { expectedAttemptId } : {});
+    }, [execute]);
     if (voiceEnabled !== true || props.open) return null;
-    return <VoiceBriefButtonView onOpen={props.onOpen} block={props.block} />;
+    return <VoiceBriefButtonView onOpen={request} block={props.block} disabled={!ready} />;
 });
 
 /** The button as drawn (the dev Home fixture draws it without the server's feature decision). */
-export const VoiceBriefButtonView = React.memo(function VoiceBriefButtonView(props: Readonly<{ onOpen: () => void; block?: boolean }>) {
+export const VoiceBriefButtonView = React.memo(function VoiceBriefButtonView(props: Readonly<{ onOpen: () => void; block?: boolean; disabled?: boolean }>) {
     return (
         <RoundButton
             style={props.block ? stylesheet.block : undefined}
             testID="home-brief-me"
+            disabled={props.disabled}
             size="small"
             display="secondary"
             title={t('voiceMoments.briefMe')}
@@ -71,7 +79,7 @@ export const VoiceBriefBlock = React.memo(function VoiceBriefBlock(props: Readon
 function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
     const styles = stylesheet;
     const router = useRouter();
-    const { brief, voice, delivery, waitingUnavailable, retry, canStopReply, stopReply, closeBrief } = useVoiceBriefRequest(props.onClose);
+    const { brief, voice, delivery, waitingUnavailable, actionReady, retry, canStopReply, stopReply, closeBrief } = useVoiceBriefRequest(props.onClose);
 
     const open = React.useCallback((item: VoiceBriefItem) => {
         if (typeof item.route === 'string') {
@@ -101,7 +109,7 @@ function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
                         {voice.live ? <VoiceStatusLine voice={voice} size="island" /> : <View style={styles.grow} />}
                         <View style={styles.grow} />
                         {canStopReply && stopReply ? (
-                            <RoundButton testID="voice-brief.stop" size="small" display="secondary" title={t('voiceMoments.briefStop')} onPress={stopReply} />
+                            <RoundButton testID="voice-brief.stop" size="small" display="secondary" title={t('voiceMoments.briefStop')} onPress={stopReply} disabled={!actionReady} />
                         ) : null}
                         <IconButton
                             testID="voice-brief.close"
@@ -112,6 +120,7 @@ function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
                             accessibilityLabel={t('common.close')}
                             tooltip={t('common.close')}
                             onPress={closeBrief}
+                            disabled={!actionReady}
                         />
                     </View>
                     {delivery === 'refused' && !waitingUnavailable ? <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text> : null}
@@ -127,9 +136,10 @@ function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
                                     // The hint is for assistive technology: what the button opens, not body copy.
                                     accessibilityHint={voice.primaryActionHint ?? undefined}
                                     onPress={retry}
+                                    disabled={!actionReady}
                                 />
                             ) : voice.primaryAction === 'start' ? (
-                                <RoundButton testID="voice-brief.retry" size="small" display="secondary" title={t('common.retry')} onPress={retry} />
+                                <RoundButton testID="voice-brief.retry" size="small" display="secondary" title={t('common.retry')} onPress={retry} disabled={!actionReady} />
                             ) : null}
                         </View>
                     ) : null}

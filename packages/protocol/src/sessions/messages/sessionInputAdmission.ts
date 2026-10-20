@@ -5,7 +5,7 @@ import { z } from 'zod/mini';
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { ActionRequestAttributionV1Schema } from '../../actions/actionRequestAttributionV1.js';
-import { SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
+import { isRunFollowOriginalV1, SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
 import { DiscussionAddressingV1Schema } from '../../discussions/references.js';
 import { SessionFollowSourceOccurrenceWitnessesV1Schema, SessionFollowRelationWitnessesV1Schema } from '../follow/sessionFollowSourceOccurrenceV1.js';
 
@@ -484,7 +484,9 @@ export type SessionInputReturnedAnswerV1 = z.infer<typeof SessionInputReturnedAn
 /** Protected origin only: display attribution must never select receiver policy. */
 export function readSessionInputSenderSessionIdV1(request: SessionInputRequest | SessionInputAuthority): string | undefined {
   return request.sourceSession?.sourceSessionId
-    ?? (request.v === 1 ? request.returnedAnswer?.senderSessionId ?? request.followDeliveryV1?.original.sourceSessionId : undefined);
+    ?? (request.v === 1 ? request.returnedAnswer?.senderSessionId ?? (request.followDeliveryV1
+      && !isRunFollowOriginalV1(request.followDeliveryV1.original)
+        ? request.followDeliveryV1.original.sourceSessionId : undefined) : undefined);
 }
 
 const SessionInputProtectedCommonV1Schema = lazyZodSchema(() => z.strictObject({
@@ -509,7 +511,8 @@ function refineProtectedInputCommon(
   if (value.followDeliveryV1) {
     if (value.returnedAnswer || value.replyIntent && !value.discussionAddressing || value.sourceAuthority || value.automation
       || value.producer !== 'sessionAction'
-      || value.sourceSession && value.sourceSession.sourceSessionId !== value.followDeliveryV1.original.sourceSessionId) {
+      || value.sourceSession && (isRunFollowOriginalV1(value.followDeliveryV1.original)
+        || value.sourceSession.sourceSessionId !== value.followDeliveryV1.original.sourceSessionId)) {
       context.addIssue({ code: 'custom', path: ['followDeliveryV1'], message: 'Follow input requires its exact original source and cannot request another effect' });
     }
   }
@@ -639,6 +642,8 @@ const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.strictObject({
   caller: z.optional(SessionInputCallerV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
+  replyIntent: z.optional(SessionInputReplyIntentV1Schema),
+  discussionAddressing: z.optional(DiscussionAddressingV1Schema),
   workflow: SessionInputWorkflowV2Schema,
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }));
@@ -649,6 +654,12 @@ function refineProtectedWorkflowInputCommon(
 ): void {
   if (value.caller?.kind === 'plugin') {
     context.addIssue({ code: 'custom', path: ['caller'], message: 'Workflow input is emitted only by the trusted host' });
+  }
+  if (value.replyIntent?.humanOrigin || value.replyIntent?.mode === 'return' && !value.sourceSession) {
+    context.addIssue({ code: 'custom', path: ['replyIntent'], message: 'Workflow returns require an admitted causal Session' });
+  }
+  if (value.discussionAddressing && value.replyIntent?.mode !== 'wait') {
+    context.addIssue({ code: 'custom', path: ['discussionAddressing'], message: 'Workflow Discussion publication observes the original invocation result' });
   }
 }
 
@@ -777,7 +788,7 @@ export function assertSessionInputAdmissionReceiptForRequest(params: Readonly<{
     throw new TypeError('Account admission receipts cannot attest protected Workflow input');
   }
   if (request.v === 1) assertFollowInputReceipt(request, receipt);
-  if (request.v === 1) assertDiscussionInputReceipt(request, receipt);
+  assertDiscussionInputReceipt(request, receipt);
   return receipt;
 }
 
@@ -797,7 +808,7 @@ function assertFollowInputReceipt(request: SessionInputRequestV1, receipt: Sessi
   }
 }
 
-function assertDiscussionInputReceipt(request: SessionInputRequestV1, receipt: SessionInputAdmissionReceiptV1): void {
+function assertDiscussionInputReceipt(request: SessionInputRequest, receipt: SessionInputAdmissionReceiptV1): void {
   const admitted = receipt.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;
   if (!request.discussionAddressing && !admitted) return;
   if (!request.discussionAddressing || !admitted || receipt.issuer !== 'authenticatedMachine'
@@ -813,10 +824,10 @@ export function assertSessionInputAdmissionReceiptForAuthorityV1(params: Readonl
   authority: unknown;
   inputAdmissionReceipt: unknown;
 }>): SessionInputAdmissionReceiptV1 {
-  const authority = SessionInputAuthorityV1Schema.parse(params.authority);
+  const authority = SessionInputAuthoritySchema.parse(params.authority);
   const { admittedPermissionCeiling: _admittedPermissionCeiling, ...requestPermission } = authority.permission;
-  return assertSessionInputAdmissionReceiptForRequestV1({
-    request: SessionInputRequestV1Schema.parse({
+  return assertSessionInputAdmissionReceiptForRequest({
+    request: SessionInputRequestSchema.parse({
       ...authority,
       permission: requestPermission,
     }),
@@ -1030,7 +1041,8 @@ export type SessionInputRequestEnvelopeDigestV1 = z.infer<typeof SessionInputReq
 export const SessionInputRequestEqualityEvidenceV1Schema = SessionMutationEqualityEvidenceV1Schema;
 export type SessionInputRequestEqualityEvidenceV1 = z.infer<typeof SessionInputRequestEqualityEvidenceV1Schema>;
 
-export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+/** Initial Pending custody; receiver policy holds belong to later settlement. */
+export const SessionInputEnqueueResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('accepted'),
     localId: PendingLocalIdSchema,
@@ -1044,14 +1056,19 @@ export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discrim
     code: SessionInputAdmissionRejectionCodeV1Schema,
   }),
   z.strictObject({
-    status: z.literal('held'),
-    localId: PendingLocalIdSchema,
-    code: z.enum(['autonomous_check_in', 'session_input_target_unavailable']),
-  }),
-  z.strictObject({
     status: z.literal('outcomeUnknown'),
     localId: PendingLocalIdSchema,
     code: preservedBoundedNfcString(128, 'Admission outcome codes'),
+  }),
+]));
+export type SessionInputEnqueueResultV1 = z.infer<typeof SessionInputEnqueueResultV1Schema>;
+
+export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  SessionInputEnqueueResultV1Schema,
+  z.strictObject({
+    status: z.literal('held'),
+    localId: PendingLocalIdSchema,
+    code: z.enum(['autonomous_check_in', 'session_input_target_unavailable']),
   }),
 ]));
 export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmissionResultV1Schema>;

@@ -1,3 +1,7 @@
+import { resolveAnchoredListMoveV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
+import type { SessionOrganizationMoveInput } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
+import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId';
+
 import {
     isRailControlDestination,
     resolveCurrentAppDestination,
@@ -165,4 +169,14 @@ export function resolveAppShellLocation(
         return { current, railEntryId: owner?.id ?? null, column: builtinAppShellColumn(columnId) };
     }
     return { current, railEntryId: current.id, column: resolveAppRailEntryColumn(current) ?? NO_COLUMN };
+}
+
+/** Rail pins reorder the shared pin order, including pins that only appear in the Sessions list. */
+export function resolveAppRailBotDropDestinationKey(input: SessionOrganizationMoveInput, orderedPinSessionIds: readonly string[]): string | null {
+    if (input.projection !== 'rail' || input.sourceKind !== 'leaf'
+        || (input.instructionKind !== 'reorder-before' && input.instructionKind !== 'reorder-after')) return null;
+    const ids = orderedPinSessionIds.map(id => treeRowId.session(input.scope.serverId, id));
+    const order = resolveAnchoredListMoveV1(ids, input.sourceRowId, { anchorId: input.targetRowId,
+        placement: input.instructionKind === 'reorder-before' ? 'before' : 'after' });
+    return order ? JSON.stringify(['rail-pin-position', input.scope, input.containerId, order.indexOf(input.sourceRowId)]) : null;
 }

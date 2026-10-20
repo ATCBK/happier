@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as ReactNavigationNative from '@react-navigation/native';
-import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationInstanceKey } from '@/components/appShell/workspace/destinationInstanceContext';
 
 /**
  * A route's stack-header actions (`headerLeft`/`headerRight`) while its stack header is not drawn:

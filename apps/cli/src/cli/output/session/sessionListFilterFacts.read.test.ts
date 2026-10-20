@@ -6,6 +6,8 @@ import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture }
 import { getActiveProjectAccountRowsSnapshot, readProjectAccountRows, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { createPlainProjectAccountRefRow } from '@/workspaces/projectAccountRows.testkit';
 import { readCliSessionListFilterFactsV1 } from './sessionListFilterFacts';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 
 const token = (sub: string) => `header.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.signature`;
 const bob = { token: token('bob'), encryption: null };
@@ -21,7 +23,7 @@ const tag = (tagId: string) => normalizeSessionListFilterV1({ homeServerIds: ['h
 const all = normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'] });
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 
-function boundary() {
+function boundary(serverId = ref.serverId) {
   const state = { projectKey: 'bob-project', tagIds: ['bob-tag'], unavailable: false };
   // Only Account HTTP is substituted; row admission, snapshots and matching stay real.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
@@ -37,7 +39,7 @@ function boundary() {
     if (state.unavailable) return { status: 403, data: { error: 'forbidden' } } as never;
     const projectKey = config?.headers?.Authorization === `Bearer ${alice.token}` ? 'alice-project' : state.projectKey;
     return { status: 200, data: { status: 'listed', coverage: 'complete',
-      rows: [createPlainProjectAccountRefRow({ ...ref, projectKey })] } } as never;
+      rows: [createPlainProjectAccountRefRow({ ...ref, serverId, projectKey })] } } as never;
   });
   return { state, get, post };
 }
@@ -48,6 +50,22 @@ function input(filters = [project('bob-project'), tag('bob-tag')]) {
 }
 
 describe('captured Account current filter facts', () => {
+  it('reads portable Project and tag facts from a captured local Home profile', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'follow-facts-portable-home-' }, async () => {
+      const profileId = 'stack_agent-qa-coord-n1__id_default';
+      const homeId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+      await seedTestServerProfile({ id: profileId, homeId, serverUrl: 'https://bob-home.test' });
+      boundary(homeId);
+      const projectFilter = normalizeSessionListFilterV1({ homeServerIds: [homeId],
+        projects: { include: [{ serverId: homeId, projectKey: 'bob-project' }], exclude: [] } });
+      const tagFilter = normalizeSessionListFilterV1({ homeServerIds: [homeId], tagIds: [{ serverId: homeId, tagId: 'bob-tag' }] });
+      const facts = await readCliSessionListFilterFactsV1({ ...input([projectFilter, tagFilter]), serverId: profileId });
+      expect(facts?.serverId).toBe(homeId);
+      expect(matchSessionListFilterV1(projectFilter, facts!)).toBe('match');
+      expect(matchSessionListFilterV1(tagFilter, facts!)).toBe('match');
+      expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+    });
+  });
   it('reads Bob current Project and tags without borrowing or publishing Alice installed rows, then observes moves', async () => {
     const { state } = boundary();
     const installed = await readProjectAccountRows({ credentials: alice, serverId: 'home', publication: 'installed' });

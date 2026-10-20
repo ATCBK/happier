@@ -5615,7 +5615,40 @@
                                   ],
                                   "type": "object"
                                 },
-                                "input": {}
+                                "input": {},
+                                "messageActionReference": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "messageId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "observedRevision": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "v": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "v",
+                                    "sessionId",
+                                    "messageId",
+                                    "observedRevision"
+                                  ],
+                                  "type": "object"
+                                }
                               },
                               "required": [
                                 "action"
@@ -6455,6 +6488,206 @@
                   "maximum": 9007199254740991,
                   "minimum": -9007199254740991,
                   "type": "integer"
+                },
+                "taskFields": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "assigneeIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "blockedBy": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "collisionScope": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 192
+                          },
+                          "entryId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "kindId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "source": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "localId": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                "type": "string"
+                              },
+                              "pluginId": {
+                                "maxLength": 256,
+                                "minLength": 3,
+                                "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "pluginId",
+                              "localId"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "kindId",
+                          "collisionScope",
+                          "entryId"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "dueDate": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "estimate": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "labelIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "parent": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "collisionScope": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 192
+                            },
+                            "entryId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "kindId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "kindId",
+                            "collisionScope",
+                            "entryId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "priority": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "projectId": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "scopeId": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "viewer": {
                   "additionalProperties": false,
@@ -31657,6 +31890,7 @@
                     "spawn": {
                       "additionalProperties": false,
                       "properties": {
+                        "agentModeId": {},
                         "agentTarget": {
                           "additionalProperties": false,
                           "properties": {
@@ -31692,6 +31926,10 @@
                           ],
                           "type": "object"
                         },
+                        "allowedTools": {},
+                        "capabilitySelection": {},
+                        "configuration": {},
+                        "connectedServices": {},
                         "executionTarget": {
                           "additionalProperties": false,
                           "properties": {
@@ -31715,6 +31953,7 @@
                           "type": "object"
                         },
                         "modelSelection": {},
+                        "organizationPlacement": {},
                         "permissionMode": {},
                         "profileId": {
                           "maxLength": 256,
@@ -31722,7 +31961,8 @@
                           "type": "string"
                         },
                         "terminal": {},
-                        "transcriptStorage": {}
+                        "transcriptStorage": {},
+                        "unlistedTools": {}
                       },
                       "required": [
                         "executionTarget",
@@ -34667,7 +34907,40 @@
                               ],
                               "type": "object"
                             },
-                            "input": {}
+                            "input": {},
+                            "messageActionReference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "messageId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "observedRevision": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "sessionId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "v": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "v",
+                                "sessionId",
+                                "messageId",
+                                "observedRevision"
+                              ],
+                              "type": "object"
+                            }
                           },
                           "required": [
                             "action"
@@ -35294,6 +35567,7 @@
               "items": {
                 "additionalProperties": true,
                 "properties": {
+                  "agentModeId": {},
                   "agentTarget": {
                     "additionalProperties": false,
                     "properties": {
@@ -35329,6 +35603,10 @@
                     ],
                     "type": "object"
                   },
+                  "allowedTools": {},
+                  "capabilitySelection": {},
+                  "configuration": {},
+                  "connectedServices": {},
                   "directory": {
                     "additionalProperties": false,
                     "properties": {
@@ -35371,6 +35649,7 @@
                     "type": "object"
                   },
                   "modelSelection": {},
+                  "organizationPlacement": {},
                   "permissionMode": {},
                   "profileId": {
                     "maxLength": 256,
@@ -35378,7 +35657,8 @@
                     "type": "string"
                   },
                   "terminal": {},
-                  "transcriptStorage": {}
+                  "transcriptStorage": {},
+                  "unlistedTools": {}
                 },
                 "required": [
                   "executionTarget",
@@ -38105,6 +38385,7 @@
                                     "spawn": {
                                       "additionalProperties": false,
                                       "properties": {
+                                        "agentModeId": {},
                                         "agentTarget": {
                                           "additionalProperties": false,
                                           "properties": {
@@ -38140,6 +38421,10 @@
                                           ],
                                           "type": "object"
                                         },
+                                        "allowedTools": {},
+                                        "capabilitySelection": {},
+                                        "configuration": {},
+                                        "connectedServices": {},
                                         "executionTarget": {
                                           "additionalProperties": false,
                                           "properties": {
@@ -38163,6 +38448,7 @@
                                           "type": "object"
                                         },
                                         "modelSelection": {},
+                                        "organizationPlacement": {},
                                         "permissionMode": {},
                                         "profileId": {
                                           "maxLength": 256,
@@ -38170,7 +38456,8 @@
                                           "type": "string"
                                         },
                                         "terminal": {},
-                                        "transcriptStorage": {}
+                                        "transcriptStorage": {},
+                                        "unlistedTools": {}
                                       },
                                       "required": [
                                         "executionTarget",
@@ -39986,6 +40273,7 @@
                                           "spawn": {
                                             "additionalProperties": false,
                                             "properties": {
+                                              "agentModeId": {},
                                               "agentTarget": {
                                                 "additionalProperties": false,
                                                 "properties": {
@@ -40021,6 +40309,10 @@
                                                 ],
                                                 "type": "object"
                                               },
+                                              "allowedTools": {},
+                                              "capabilitySelection": {},
+                                              "configuration": {},
+                                              "connectedServices": {},
                                               "executionTarget": {
                                                 "additionalProperties": false,
                                                 "properties": {
@@ -40044,6 +40336,7 @@
                                                 "type": "object"
                                               },
                                               "modelSelection": {},
+                                              "organizationPlacement": {},
                                               "permissionMode": {},
                                               "profileId": {
                                                 "maxLength": 256,
@@ -40051,7 +40344,8 @@
                                                 "type": "string"
                                               },
                                               "terminal": {},
-                                              "transcriptStorage": {}
+                                              "transcriptStorage": {},
+                                              "unlistedTools": {}
                                             },
                                             "required": [
                                               "executionTarget",
@@ -43375,7 +43669,40 @@
                                   ],
                                   "type": "object"
                                 },
-                                "input": {}
+                                "input": {},
+                                "messageActionReference": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "messageId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "observedRevision": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "v": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "v",
+                                    "sessionId",
+                                    "messageId",
+                                    "observedRevision"
+                                  ],
+                                  "type": "object"
+                                }
                               },
                               "required": [
                                 "action"
@@ -44339,6 +44666,7 @@
                                     "spawn": {
                                       "additionalProperties": false,
                                       "properties": {
+                                        "agentModeId": {},
                                         "agentTarget": {
                                           "additionalProperties": false,
                                           "properties": {
@@ -44374,6 +44702,10 @@
                                           ],
                                           "type": "object"
                                         },
+                                        "allowedTools": {},
+                                        "capabilitySelection": {},
+                                        "configuration": {},
+                                        "connectedServices": {},
                                         "executionTarget": {
                                           "additionalProperties": false,
                                           "properties": {
@@ -44397,6 +44729,7 @@
                                           "type": "object"
                                         },
                                         "modelSelection": {},
+                                        "organizationPlacement": {},
                                         "permissionMode": {},
                                         "profileId": {
                                           "maxLength": 256,
@@ -44404,7 +44737,8 @@
                                           "type": "string"
                                         },
                                         "terminal": {},
-                                        "transcriptStorage": {}
+                                        "transcriptStorage": {},
+                                        "unlistedTools": {}
                                       },
                                       "required": [
                                         "executionTarget",
@@ -46220,6 +46554,7 @@
                                           "spawn": {
                                             "additionalProperties": false,
                                             "properties": {
+                                              "agentModeId": {},
                                               "agentTarget": {
                                                 "additionalProperties": false,
                                                 "properties": {
@@ -46255,6 +46590,10 @@
                                                 ],
                                                 "type": "object"
                                               },
+                                              "allowedTools": {},
+                                              "capabilitySelection": {},
+                                              "configuration": {},
+                                              "connectedServices": {},
                                               "executionTarget": {
                                                 "additionalProperties": false,
                                                 "properties": {
@@ -46278,6 +46617,7 @@
                                                 "type": "object"
                                               },
                                               "modelSelection": {},
+                                              "organizationPlacement": {},
                                               "permissionMode": {},
                                               "profileId": {
                                                 "maxLength": 256,
@@ -46285,7 +46625,8 @@
                                                 "type": "string"
                                               },
                                               "terminal": {},
-                                              "transcriptStorage": {}
+                                              "transcriptStorage": {},
+                                              "unlistedTools": {}
                                             },
                                             "required": [
                                               "executionTarget",
@@ -60639,7 +60980,40 @@
                               ],
                               "type": "object"
                             },
-                            "input": {}
+                            "input": {},
+                            "messageActionReference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "messageId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "observedRevision": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "sessionId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "v": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "v",
+                                "sessionId",
+                                "messageId",
+                                "observedRevision"
+                              ],
+                              "type": "object"
+                            }
                           },
                           "required": [
                             "action"
@@ -66553,7 +66927,40 @@
                                           ],
                                           "type": "object"
                                         },
-                                        "input": {}
+                                        "input": {},
+                                        "messageActionReference": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "messageId": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "observedRevision": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "sessionId": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "v": {
+                                              "const": 1
+                                            }
+                                          },
+                                          "required": [
+                                            "v",
+                                            "sessionId",
+                                            "messageId",
+                                            "observedRevision"
+                                          ],
+                                          "type": "object"
+                                        }
                                       },
                                       "required": [
                                         "action"
@@ -67393,6 +67800,206 @@
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer"
+                        },
+                        "taskFields": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assigneeIds": {
+                              "items": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "type": "array"
+                            },
+                            "blockedBy": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "collisionScope": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 192
+                                  },
+                                  "entryId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "kindId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "localId": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                        "type": "string"
+                                      },
+                                      "pluginId": {
+                                        "maxLength": 256,
+                                        "minLength": 3,
+                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "pluginId",
+                                      "localId"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "kindId",
+                                  "collisionScope",
+                                  "entryId"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "dueDate": {
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "estimate": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "labelIds": {
+                              "items": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "type": "array"
+                            },
+                            "parent": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "collisionScope": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 192
+                                    },
+                                    "entryId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "kindId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "localId": {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                          "type": "string"
+                                        },
+                                        "pluginId": {
+                                          "maxLength": 256,
+                                          "minLength": 3,
+                                          "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "pluginId",
+                                        "localId"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "kindId",
+                                    "collisionScope",
+                                    "entryId"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "priority": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "scopeId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string"
+                            },
+                            "title": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         },
                         "viewer": {
                           "additionalProperties": false,
@@ -78504,12 +79111,13 @@
             "plugins.triage.internal.description": "Keep personal work in your Happier Account.",
             "plugins.triage.internal.existing": "Your existing tasks and linked Sessions appear in Tasks.",
             "plugins.triage.internal.loading": "Reading task…",
+            "plugins.triage.internal.on": "On",
             "plugins.triage.internal.personal": "Personal tasks",
-            "plugins.triage.internal.ready": "Ready",
+            "plugins.triage.internal.retry": "Try again",
             "plugins.triage.internal.setupFailed": "Happier tasks could not be enabled",
             "plugins.triage.internal.title": "Happier tasks",
+            "plugins.triage.internal.turnOn": "Turn on",
             "plugins.triage.internal.unavailable": "This task could not be read",
-            "plugins.triage.internal.use": "Use Happier tasks",
             "plugins.triage.picker.attach": "Attach",
             "plugins.triage.picker.attachEntryLabel": "Attach {title}",
             "plugins.triage.picker.attached": "Attached",
@@ -78696,8 +79304,8 @@
             "plugins.triage.surface.column.signal": "Signal",
             "plugins.triage.surface.column.where": "Where",
             "plugins.triage.surface.comparisonUnavailable": "This source cannot open a comparison for this pull request.",
-            "plugins.triage.surface.detail.accountError.description": "Happier could not reach your account, so this entry's details are unavailable right now.",
-            "plugins.triage.surface.detail.accountError.title": "Your account could not be read",
+            "plugins.triage.surface.detail.accountError.description": "This entry's details are unavailable right now. Try again when the connection is available.",
+            "plugins.triage.surface.detail.accountError.title": "These details could not be read",
             "plugins.triage.surface.detail.agent.action": "Needs your attention",
             "plugins.triage.surface.detail.agent.archived": "Archived",
             "plugins.triage.surface.detail.agent.failed": "Failed",
@@ -78916,11 +79524,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "This page could not be updated",
             "plugins.triage.surface.routeWriteFailed.unavailable": "This screen cannot update its shareable location, so the last settled view was restored.",
             "plugins.triage.surface.row.absent": "No longer reported by the source",
-            "plugins.triage.surface.row.deselect": "Deselect {title}",
             "plugins.triage.surface.row.moreActions": "More actions for {title}",
             "plugins.triage.surface.row.notSynchronized": "Not yet synchronized",
             "plugins.triage.surface.row.pin": "Pin {title}",
-            "plugins.triage.surface.row.select": "Select {title}",
+            "plugins.triage.surface.row.pinShort": "Pin",
             "plugins.triage.surface.row.stale": "Stale",
             "plugins.triage.surface.row.staleSince": "Stale, last seen",
             "plugins.triage.surface.row.state.active": "Active",
@@ -78979,6 +79586,7 @@
             "plugins.triage.surface.sources.add": "Add a source",
             "plugins.triage.surface.sources.changedTitle": "Configured sources changed",
             "plugins.triage.surface.sources.conflict": "Your configured sources changed somewhere else, so this source was not removed. Showing the current list; try again.",
+            "plugins.triage.surface.sources.loading": "Reading your sources…",
             "plugins.triage.surface.sources.manage": "Manage sources",
             "plugins.triage.surface.sources.missing": "That configured source no longer exists. Showing the current list.",
             "plugins.triage.surface.sources.none": "No configured sources",
@@ -78991,6 +79599,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Your sources could not be reached",
             "plugins.triage.surface.tryAgain": "Try again",
             "plugins.triage.surface.upToDate": "Up to date",
+            "plugins.triage.surface.updatedAgo": "Updated {age}",
+            "plugins.triage.surface.updatedJustNow": "Updated just now",
             "plugins.triage.surface.view.board": "Board",
             "plugins.triage.surface.view.label": "View",
             "plugins.triage.surface.view.list": "List",
@@ -79034,6 +79644,7 @@
             "plugins.triage.tasks.completed": "Completed",
             "plugins.triage.tasks.create": "Create task",
             "plugins.triage.tasks.description": "Your work, and the agents working with you.",
+            "plugins.triage.tasks.draftUnavailable": "This task draft is no longer available. Open it again from the message or action.",
             "plugins.triage.tasks.edit": "Edit task",
             "plugins.triage.tasks.empty.description": "Try another task lens or create a task.",
             "plugins.triage.tasks.empty.pending": "No tasks read so far are in this lens. More sources may still answer.",
@@ -79041,8 +79652,10 @@
             "plugins.triage.tasks.everyone": "Everyone",
             "plugins.triage.tasks.mine": "Mine",
             "plugins.triage.tasks.myTasks": "My tasks",
+            "plugins.triage.tasks.noCreateSource": "Add a source that supports creating tasks in Sources.",
             "plugins.triage.tasks.save": "Save changes",
             "plugins.triage.tasks.scope": "Repository or project",
+            "plugins.triage.tasks.sourcesUnavailable": "Task sources are unavailable",
             "plugins.triage.tasks.started": "Started",
             "plugins.triage.tasks.taskTitle": "Title",
             "plugins.triage.tasks.title": "Tasks",
@@ -79084,12 +79697,13 @@
             "plugins.triage.internal.description": "Behalte persönliche Aufgaben in deinem Happier-Konto.",
             "plugins.triage.internal.existing": "Deine vorhandenen Aufgaben und verknüpften Sitzungen erscheinen unter Aufgaben.",
             "plugins.triage.internal.loading": "Aufgabe wird gelesen…",
+            "plugins.triage.internal.on": "An",
             "plugins.triage.internal.personal": "Persönliche Aufgaben",
-            "plugins.triage.internal.ready": "Bereit",
+            "plugins.triage.internal.retry": "Erneut versuchen",
             "plugins.triage.internal.setupFailed": "Happier-Aufgaben konnten nicht aktiviert werden",
             "plugins.triage.internal.title": "Happier-Aufgaben",
+            "plugins.triage.internal.turnOn": "Einschalten",
             "plugins.triage.internal.unavailable": "Diese Aufgabe konnte nicht gelesen werden",
-            "plugins.triage.internal.use": "Happier-Aufgaben verwenden",
             "plugins.triage.picker.attach": "Anhängen",
             "plugins.triage.picker.attachEntryLabel": "{title} anhängen",
             "plugins.triage.picker.attached": "Angehängt",
@@ -79276,8 +79890,8 @@
             "plugins.triage.surface.column.signal": "Signal",
             "plugins.triage.surface.column.where": "Wo",
             "plugins.triage.surface.comparisonUnavailable": "Diese Quelle kann keinen Vergleich für diesen Pull Request öffnen.",
-            "plugins.triage.surface.detail.accountError.description": "Happier konnte dein Konto nicht erreichen. Die Details dieses Eintrags sind daher gerade nicht verfügbar.",
-            "plugins.triage.surface.detail.accountError.title": "Dein Konto konnte nicht gelesen werden",
+            "plugins.triage.surface.detail.accountError.description": "Die Details dieses Eintrags sind gerade nicht verfügbar. Versuche es erneut, wenn die Verbindung verfügbar ist.",
+            "plugins.triage.surface.detail.accountError.title": "Diese Details konnten nicht gelesen werden",
             "plugins.triage.surface.detail.agent.action": "Braucht deine Aufmerksamkeit",
             "plugins.triage.surface.detail.agent.archived": "Archiviert",
             "plugins.triage.surface.detail.agent.failed": "Fehlgeschlagen",
@@ -79496,11 +80110,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Diese Seite konnte nicht aktualisiert werden",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Diese Ansicht kann ihren teilbaren Ort nicht aktualisieren. Daher wurde die zuletzt bestätigte Ansicht wiederhergestellt.",
             "plugins.triage.surface.row.absent": "Von der Quelle nicht mehr gemeldet",
-            "plugins.triage.surface.row.deselect": "Auswahl von {title} aufheben",
             "plugins.triage.surface.row.moreActions": "Weitere Aktionen für {title}",
             "plugins.triage.surface.row.notSynchronized": "Noch nicht synchronisiert",
             "plugins.triage.surface.row.pin": "{title} anheften",
-            "plugins.triage.surface.row.select": "{title} auswählen",
+            "plugins.triage.surface.row.pinShort": "Anheften",
             "plugins.triage.surface.row.stale": "Veraltet",
             "plugins.triage.surface.row.staleSince": "Veraltet, zuletzt gesehen",
             "plugins.triage.surface.row.state.active": "Aktiv",
@@ -79559,6 +80172,7 @@
             "plugins.triage.surface.sources.add": "Quelle hinzufügen",
             "plugins.triage.surface.sources.changedTitle": "Konfigurierte Quellen wurden geändert",
             "plugins.triage.surface.sources.conflict": "Deine konfigurierten Quellen wurden an anderer Stelle geändert. Daher wurde diese Quelle nicht entfernt. Die aktuelle Liste wird angezeigt. Versuche es erneut.",
+            "plugins.triage.surface.sources.loading": "Deine Quellen werden gelesen…",
             "plugins.triage.surface.sources.manage": "Quellen verwalten",
             "plugins.triage.surface.sources.missing": "Diese konfigurierte Quelle ist nicht mehr vorhanden. Die aktuelle Liste wird angezeigt.",
             "plugins.triage.surface.sources.none": "Keine konfigurierten Quellen",
@@ -79571,6 +80185,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Deine Quellen waren nicht erreichbar",
             "plugins.triage.surface.tryAgain": "Erneut versuchen",
             "plugins.triage.surface.upToDate": "Aktuell",
+            "plugins.triage.surface.updatedAgo": "Aktualisiert {age}",
+            "plugins.triage.surface.updatedJustNow": "Gerade aktualisiert",
             "plugins.triage.surface.view.board": "Board",
             "plugins.triage.surface.view.label": "Ansicht",
             "plugins.triage.surface.view.list": "Liste",
@@ -79614,6 +80230,7 @@
             "plugins.triage.tasks.completed": "Abgeschlossen",
             "plugins.triage.tasks.create": "Aufgabe erstellen",
             "plugins.triage.tasks.description": "Deine Arbeit und die Agents an deiner Seite.",
+            "plugins.triage.tasks.draftUnavailable": "Dieser Aufgabenentwurf ist nicht mehr verfügbar. Öffne ihn erneut über die Nachricht oder Aktion.",
             "plugins.triage.tasks.edit": "Aufgabe bearbeiten",
             "plugins.triage.tasks.empty.description": "Wähle eine andere Aufgabenansicht oder erstelle eine Aufgabe.",
             "plugins.triage.tasks.empty.pending": "Bisher passt keine gelesene Aufgabe in diese Ansicht. Weitere Quellen können noch antworten.",
@@ -79621,8 +80238,10 @@
             "plugins.triage.tasks.everyone": "Alle",
             "plugins.triage.tasks.mine": "Meine",
             "plugins.triage.tasks.myTasks": "Meine Aufgaben",
+            "plugins.triage.tasks.noCreateSource": "Füge unter Quellen eine Quelle hinzu, die das Erstellen von Aufgaben unterstützt.",
             "plugins.triage.tasks.save": "Änderungen speichern",
             "plugins.triage.tasks.scope": "Repository oder Projekt",
+            "plugins.triage.tasks.sourcesUnavailable": "Aufgabenquellen sind nicht verfügbar",
             "plugins.triage.tasks.started": "Begonnen",
             "plugins.triage.tasks.taskTitle": "Titel",
             "plugins.triage.tasks.title": "Aufgaben",
@@ -79664,12 +80283,13 @@
             "plugins.triage.internal.description": "Храните личные задачи в своём аккаунте Happier.",
             "plugins.triage.internal.existing": "Существующие задачи и связанные сеансы появятся в разделе задач.",
             "plugins.triage.internal.loading": "Чтение задачи…",
+            "plugins.triage.internal.on": "Вкл.",
             "plugins.triage.internal.personal": "Личные задачи",
-            "plugins.triage.internal.ready": "Готово",
+            "plugins.triage.internal.retry": "Повторить",
             "plugins.triage.internal.setupFailed": "Не удалось включить задачи Happier",
             "plugins.triage.internal.title": "Задачи Happier",
+            "plugins.triage.internal.turnOn": "Включить",
             "plugins.triage.internal.unavailable": "Не удалось прочитать задачу",
-            "plugins.triage.internal.use": "Использовать задачи Happier",
             "plugins.triage.picker.attach": "Прикрепить",
             "plugins.triage.picker.attachEntryLabel": "Прикрепить «{title}»",
             "plugins.triage.picker.attached": "Прикреплено",
@@ -79856,8 +80476,8 @@
             "plugins.triage.surface.column.signal": "Сигнал",
             "plugins.triage.surface.column.where": "Где",
             "plugins.triage.surface.comparisonUnavailable": "Этот источник не может открыть сравнение для этого пул-реквеста.",
-            "plugins.triage.surface.detail.accountError.description": "Happier не может достучаться до вашего аккаунта, поэтому детали этой записи недоступны в настоящее время.",
-            "plugins.triage.surface.detail.accountError.title": "Ваш аккаунт не может быть прочитан",
+            "plugins.triage.surface.detail.accountError.description": "Сведения об этой записи сейчас недоступны. Повторите попытку, когда соединение будет доступно.",
+            "plugins.triage.surface.detail.accountError.title": "Не удалось прочитать сведения",
             "plugins.triage.surface.detail.agent.action": "Нужно ваше внимание",
             "plugins.triage.surface.detail.agent.archived": "В архиве",
             "plugins.triage.surface.detail.agent.failed": "Ошибка",
@@ -80076,11 +80696,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Не удалось обновить эту страницу",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Этот экран не может обновить общую ссылку, поэтому восстановлен последний подтверждённый вид.",
             "plugins.triage.surface.row.absent": "Источник больше не сообщает об этом",
-            "plugins.triage.surface.row.deselect": "Снять выбор с {title}",
             "plugins.triage.surface.row.moreActions": "Другие действия для {title}",
             "plugins.triage.surface.row.notSynchronized": "Ещё не синхронизировано",
             "plugins.triage.surface.row.pin": "Закрепить {title}",
-            "plugins.triage.surface.row.select": "Выбрать {title}",
+            "plugins.triage.surface.row.pinShort": "Закрепить",
             "plugins.triage.surface.row.stale": "Устарело",
             "plugins.triage.surface.row.staleSince": "Устарело, последний раз видели",
             "plugins.triage.surface.row.state.active": "Активно",
@@ -80139,6 +80758,7 @@
             "plugins.triage.surface.sources.add": "Добавить источник",
             "plugins.triage.surface.sources.changedTitle": "Настроенные источники изменились",
             "plugins.triage.surface.sources.conflict": "Настроенные источники изменились в другом месте, поэтому этот источник не был удалён. Показан текущий список; попробуйте ещё раз.",
+            "plugins.triage.surface.sources.loading": "Читаем ваши источники…",
             "plugins.triage.surface.sources.manage": "Управление источниками",
             "plugins.triage.surface.sources.missing": "Этот настроенный источник больше не существует. Показан текущий список.",
             "plugins.triage.surface.sources.none": "Нет настроенных источников",
@@ -80151,6 +80771,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Не удалось связаться с вашими источниками",
             "plugins.triage.surface.tryAgain": "Повторить",
             "plugins.triage.surface.upToDate": "Обновлено",
+            "plugins.triage.surface.updatedAgo": "Обновлено {age}",
+            "plugins.triage.surface.updatedJustNow": "Обновлено только что",
             "plugins.triage.surface.view.board": "Доска",
             "plugins.triage.surface.view.label": "Вид",
             "plugins.triage.surface.view.list": "Список",
@@ -80194,6 +80816,7 @@
             "plugins.triage.tasks.completed": "Завершены",
             "plugins.triage.tasks.create": "Создать задачу",
             "plugins.triage.tasks.description": "Ваша работа и помогающие вам агенты.",
+            "plugins.triage.tasks.draftUnavailable": "Этот черновик задачи больше недоступен. Откройте его снова из сообщения или действия.",
             "plugins.triage.tasks.edit": "Изменить задачу",
             "plugins.triage.tasks.empty.description": "Выберите другой вид задач или создайте задачу.",
             "plugins.triage.tasks.empty.pending": "Пока ни одна прочитанная задача не подходит. Другие источники ещё могут ответить.",
@@ -80201,8 +80824,10 @@
             "plugins.triage.tasks.everyone": "Все",
             "plugins.triage.tasks.mine": "Мои",
             "plugins.triage.tasks.myTasks": "Мои задачи",
+            "plugins.triage.tasks.noCreateSource": "Добавьте в разделе «Источники» источник, поддерживающий создание задач.",
             "plugins.triage.tasks.save": "Сохранить изменения",
             "plugins.triage.tasks.scope": "Репозиторий или проект",
+            "plugins.triage.tasks.sourcesUnavailable": "Источники задач недоступны",
             "plugins.triage.tasks.started": "Начаты",
             "plugins.triage.tasks.taskTitle": "Название",
             "plugins.triage.tasks.title": "Задачи",
@@ -80244,12 +80869,13 @@
             "plugins.triage.internal.description": "Przechowuj osobiste zadania na swoim koncie Happier.",
             "plugins.triage.internal.existing": "Istniejące zadania i połączone sesje pojawią się w Zadaniach.",
             "plugins.triage.internal.loading": "Odczytywanie zadania…",
+            "plugins.triage.internal.on": "Wł.",
             "plugins.triage.internal.personal": "Osobiste zadania",
-            "plugins.triage.internal.ready": "Gotowe",
+            "plugins.triage.internal.retry": "Spróbuj ponownie",
             "plugins.triage.internal.setupFailed": "Nie udało się włączyć zadań Happier",
             "plugins.triage.internal.title": "Zadania Happier",
+            "plugins.triage.internal.turnOn": "Włącz",
             "plugins.triage.internal.unavailable": "Nie udało się odczytać zadania",
-            "plugins.triage.internal.use": "Używaj zadań Happier",
             "plugins.triage.picker.attach": "Dołącz",
             "plugins.triage.picker.attachEntryLabel": "Dołącz „{title}”",
             "plugins.triage.picker.attached": "Dołączono",
@@ -80436,8 +81062,8 @@
             "plugins.triage.surface.column.signal": "Sygnał",
             "plugins.triage.surface.column.where": "Gdzie",
             "plugins.triage.surface.comparisonUnavailable": "To źródło nie może otworzyć porównania dla tego pull requestu.",
-            "plugins.triage.surface.detail.accountError.description": "Happier nie mógł dojść do Twojego konta, więc szczegółów tego wpisu nie ma obecnie.",
-            "plugins.triage.surface.detail.accountError.title": "Nie udało się odczytać Twojego konta",
+            "plugins.triage.surface.detail.accountError.description": "Szczegóły tego wpisu są teraz niedostępne. Spróbuj ponownie, gdy połączenie będzie dostępne.",
+            "plugins.triage.surface.detail.accountError.title": "Nie udało się odczytać szczegółów",
             "plugins.triage.surface.detail.agent.action": "Wymaga twojej uwagi",
             "plugins.triage.surface.detail.agent.archived": "Zarchiwizowane",
             "plugins.triage.surface.detail.agent.failed": "Niepowodzenie",
@@ -80656,11 +81282,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Nie udało się zaktualizować tej strony",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Ten ekran nie może zaktualizować udostępnianej lokalizacji, więc przywrócono ostatni zatwierdzony widok.",
             "plugins.triage.surface.row.absent": "Źródło już tego nie zgłasza",
-            "plugins.triage.surface.row.deselect": "Odznacz {title}",
             "plugins.triage.surface.row.moreActions": "Więcej akcji dla {title}",
             "plugins.triage.surface.row.notSynchronized": "Jeszcze nie zsynchronizowano",
             "plugins.triage.surface.row.pin": "Przypnij {title}",
-            "plugins.triage.surface.row.select": "Zaznacz {title}",
+            "plugins.triage.surface.row.pinShort": "Przypnij",
             "plugins.triage.surface.row.stale": "Nieaktualne",
             "plugins.triage.surface.row.staleSince": "Nieaktualne, ostatnio widziane",
             "plugins.triage.surface.row.state.active": "Aktywne",
@@ -80719,6 +81344,7 @@
             "plugins.triage.surface.sources.add": "Dodaj źródło",
             "plugins.triage.surface.sources.changedTitle": "Skonfigurowane źródła uległy zmianie",
             "plugins.triage.surface.sources.conflict": "Skonfigurowane źródła zmieniły się w innym miejscu, dlatego to źródło nie zostało usunięte. Wyświetlamy bieżącą listę; spróbuj ponownie.",
+            "plugins.triage.surface.sources.loading": "Odczytywanie Twoich źródeł…",
             "plugins.triage.surface.sources.manage": "Zarządzaj źródłami",
             "plugins.triage.surface.sources.missing": "To skonfigurowane źródło już nie istnieje. Wyświetlamy bieżącą listę.",
             "plugins.triage.surface.sources.none": "Brak skonfigurowanych źródeł",
@@ -80731,6 +81357,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Nie udało się połączyć z twoimi źródłami",
             "plugins.triage.surface.tryAgain": "Spróbuj ponownie",
             "plugins.triage.surface.upToDate": "Zaktualizowane",
+            "plugins.triage.surface.updatedAgo": "Zaktualizowano {age}",
+            "plugins.triage.surface.updatedJustNow": "Zaktualizowano przed chwilą",
             "plugins.triage.surface.view.board": "Tablica",
             "plugins.triage.surface.view.label": "Widok",
             "plugins.triage.surface.view.list": "Lista",
@@ -80774,6 +81402,7 @@
             "plugins.triage.tasks.completed": "Ukończone",
             "plugins.triage.tasks.create": "Utwórz zadanie",
             "plugins.triage.tasks.description": "Twoja praca i pomagający Ci agenci.",
+            "plugins.triage.tasks.draftUnavailable": "Ten szkic zadania nie jest już dostępny. Otwórz go ponownie z wiadomości lub akcji.",
             "plugins.triage.tasks.edit": "Edytuj zadanie",
             "plugins.triage.tasks.empty.description": "Wybierz inny widok zadań lub utwórz zadanie.",
             "plugins.triage.tasks.empty.pending": "Dotąd żadne odczytane zadanie nie pasuje do tego widoku. Inne źródła mogą jeszcze odpowiedzieć.",
@@ -80781,8 +81410,10 @@
             "plugins.triage.tasks.everyone": "Wszystkie",
             "plugins.triage.tasks.mine": "Moje",
             "plugins.triage.tasks.myTasks": "Moje zadania",
+            "plugins.triage.tasks.noCreateSource": "Dodaj w sekcji Źródła źródło obsługujące tworzenie zadań.",
             "plugins.triage.tasks.save": "Zapisz zmiany",
             "plugins.triage.tasks.scope": "Repozytorium lub projekt",
+            "plugins.triage.tasks.sourcesUnavailable": "Źródła zadań są niedostępne",
             "plugins.triage.tasks.started": "Rozpoczęte",
             "plugins.triage.tasks.taskTitle": "Tytuł",
             "plugins.triage.tasks.title": "Zadania",
@@ -80824,12 +81455,13 @@
             "plugins.triage.internal.description": "Guarda tu trabajo personal en tu cuenta de Happier.",
             "plugins.triage.internal.existing": "Tus tareas existentes y sesiones vinculadas aparecen en Tareas.",
             "plugins.triage.internal.loading": "Leyendo tarea…",
+            "plugins.triage.internal.on": "Activado",
             "plugins.triage.internal.personal": "Tareas personales",
-            "plugins.triage.internal.ready": "Listo",
+            "plugins.triage.internal.retry": "Reintentar",
             "plugins.triage.internal.setupFailed": "No se pudieron activar las tareas de Happier",
             "plugins.triage.internal.title": "Tareas de Happier",
+            "plugins.triage.internal.turnOn": "Activar",
             "plugins.triage.internal.unavailable": "No se pudo leer esta tarea",
-            "plugins.triage.internal.use": "Usar tareas de Happier",
             "plugins.triage.picker.attach": "Adjuntar",
             "plugins.triage.picker.attachEntryLabel": "Adjuntar «{title}»",
             "plugins.triage.picker.attached": "Adjunto",
@@ -81016,8 +81648,8 @@
             "plugins.triage.surface.column.signal": "Señal",
             "plugins.triage.surface.column.where": "Dónde",
             "plugins.triage.surface.comparisonUnavailable": "Esta fuente no puede abrir una comparación de esta solicitud de cambios.",
-            "plugins.triage.surface.detail.accountError.description": "Happier no pudo alcanzar tu cuenta, por lo que los detalles de esta entrada no están disponibles en este momento.",
-            "plugins.triage.surface.detail.accountError.title": "No se pudo leer tu cuenta",
+            "plugins.triage.surface.detail.accountError.description": "Los detalles de esta entrada no están disponibles ahora. Inténtalo de nuevo cuando la conexión esté disponible.",
+            "plugins.triage.surface.detail.accountError.title": "No se pudieron leer estos detalles",
             "plugins.triage.surface.detail.agent.action": "Necesita tu atención",
             "plugins.triage.surface.detail.agent.archived": "Archivada",
             "plugins.triage.surface.detail.agent.failed": "Error",
@@ -81236,11 +81868,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "No se pudo actualizar esta página",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Esta pantalla no puede actualizar su ubicación compartible, así que se restauró la última vista confirmada.",
             "plugins.triage.surface.row.absent": "La fuente ya no lo informa",
-            "plugins.triage.surface.row.deselect": "Anular la selección de {title}",
             "plugins.triage.surface.row.moreActions": "Más acciones para {title}",
             "plugins.triage.surface.row.notSynchronized": "Aún no se ha sincronizado",
             "plugins.triage.surface.row.pin": "Fijar {title}",
-            "plugins.triage.surface.row.select": "Seleccionar {title}",
+            "plugins.triage.surface.row.pinShort": "Fijar",
             "plugins.triage.surface.row.stale": "Desactualizado",
             "plugins.triage.surface.row.staleSince": "Desactualizado, visto por última vez",
             "plugins.triage.surface.row.state.active": "Activo",
@@ -81299,6 +81930,7 @@
             "plugins.triage.surface.sources.add": "Añadir una fuente",
             "plugins.triage.surface.sources.changedTitle": "Las fuentes configuradas cambiaron",
             "plugins.triage.surface.sources.conflict": "Tus fuentes configuradas cambiaron en otro lugar, por lo que esta fuente no se eliminó. Se muestra la lista actual; inténtalo de nuevo.",
+            "plugins.triage.surface.sources.loading": "Leyendo tus fuentes…",
             "plugins.triage.surface.sources.manage": "Gestionar fuentes",
             "plugins.triage.surface.sources.missing": "Esa fuente configurada ya no existe. Se muestra la lista actual.",
             "plugins.triage.surface.sources.none": "No hay fuentes configuradas",
@@ -81311,6 +81943,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "No se pudo contactar con tus fuentes",
             "plugins.triage.surface.tryAgain": "Reintentar",
             "plugins.triage.surface.upToDate": "Actualizado",
+            "plugins.triage.surface.updatedAgo": "Actualizado {age}",
+            "plugins.triage.surface.updatedJustNow": "Actualizado ahora mismo",
             "plugins.triage.surface.view.board": "Tablero",
             "plugins.triage.surface.view.label": "Vista",
             "plugins.triage.surface.view.list": "Lista",
@@ -81354,6 +81988,7 @@
             "plugins.triage.tasks.completed": "Completadas",
             "plugins.triage.tasks.create": "Crear tarea",
             "plugins.triage.tasks.description": "Tu trabajo y los agentes que te ayudan.",
+            "plugins.triage.tasks.draftUnavailable": "Este borrador de tarea ya no está disponible. Ábrelo de nuevo desde el mensaje o la acción.",
             "plugins.triage.tasks.edit": "Editar tarea",
             "plugins.triage.tasks.empty.description": "Prueba otra vista o crea una tarea.",
             "plugins.triage.tasks.empty.pending": "Ninguna tarea leída hasta ahora está en esta vista. Otras fuentes aún pueden responder.",
@@ -81361,8 +81996,10 @@
             "plugins.triage.tasks.everyone": "Todas",
             "plugins.triage.tasks.mine": "Mías",
             "plugins.triage.tasks.myTasks": "Mis tareas",
+            "plugins.triage.tasks.noCreateSource": "Añade en Fuentes una fuente que permita crear tareas.",
             "plugins.triage.tasks.save": "Guardar cambios",
             "plugins.triage.tasks.scope": "Repositorio o proyecto",
+            "plugins.triage.tasks.sourcesUnavailable": "Las fuentes de tareas no están disponibles",
             "plugins.triage.tasks.started": "Iniciadas",
             "plugins.triage.tasks.taskTitle": "Título",
             "plugins.triage.tasks.title": "Tareas",
@@ -81404,12 +82041,13 @@
             "plugins.triage.internal.description": "Gardez vos tâches personnelles dans votre compte Happier.",
             "plugins.triage.internal.existing": "Vos tâches existantes et sessions liées apparaissent dans Tâches.",
             "plugins.triage.internal.loading": "Lecture de la tâche…",
+            "plugins.triage.internal.on": "Activé",
             "plugins.triage.internal.personal": "Tâches personnelles",
-            "plugins.triage.internal.ready": "Prêt",
+            "plugins.triage.internal.retry": "Réessayer",
             "plugins.triage.internal.setupFailed": "Impossible d’activer les tâches Happier",
             "plugins.triage.internal.title": "Tâches Happier",
+            "plugins.triage.internal.turnOn": "Activer",
             "plugins.triage.internal.unavailable": "Impossible de lire cette tâche",
-            "plugins.triage.internal.use": "Utiliser les tâches Happier",
             "plugins.triage.picker.attach": "Joindre",
             "plugins.triage.picker.attachEntryLabel": "Joindre « {title} »",
             "plugins.triage.picker.attached": "Joint",
@@ -81596,8 +82234,8 @@
             "plugins.triage.surface.column.signal": "Signal",
             "plugins.triage.surface.column.where": "Où",
             "plugins.triage.surface.comparisonUnavailable": "Cette source ne peut pas ouvrir de comparaison pour cette pull request.",
-            "plugins.triage.surface.detail.accountError.description": "Happier ne peut pas atteindre ton compte, donc les détails de cette entrée ne sont pas disponibles pour le moment.",
-            "plugins.triage.surface.detail.accountError.title": "Ton compte ne peut pas être lu",
+            "plugins.triage.surface.detail.accountError.description": "Les détails de cette entrée sont indisponibles pour le moment. Réessaie lorsque la connexion sera disponible.",
+            "plugins.triage.surface.detail.accountError.title": "Ces détails n’ont pas pu être lus",
             "plugins.triage.surface.detail.agent.action": "A besoin de ton attention",
             "plugins.triage.surface.detail.agent.archived": "Archivée",
             "plugins.triage.surface.detail.agent.failed": "Échec",
@@ -81816,11 +82454,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Impossible de mettre cette page à jour",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Cet écran ne peut pas mettre à jour son emplacement partageable. La dernière vue confirmée a donc été restaurée.",
             "plugins.triage.surface.row.absent": "La source ne le signale plus",
-            "plugins.triage.surface.row.deselect": "Désélectionner {title}",
             "plugins.triage.surface.row.moreActions": "Plus d’actions pour {title}",
             "plugins.triage.surface.row.notSynchronized": "Pas encore synchronisé",
             "plugins.triage.surface.row.pin": "Épingler {title}",
-            "plugins.triage.surface.row.select": "Sélectionner {title}",
+            "plugins.triage.surface.row.pinShort": "Épingler",
             "plugins.triage.surface.row.stale": "Périmé",
             "plugins.triage.surface.row.staleSince": "Périmé, vu pour la dernière fois",
             "plugins.triage.surface.row.state.active": "Actif",
@@ -81879,6 +82516,7 @@
             "plugins.triage.surface.sources.add": "Ajouter une source",
             "plugins.triage.surface.sources.changedTitle": "Les sources configurées ont changé",
             "plugins.triage.surface.sources.conflict": "Tes sources configurées ont changé ailleurs ; cette source n’a donc pas été supprimée. La liste actuelle est affichée ; réessaie.",
+            "plugins.triage.surface.sources.loading": "Lecture de vos sources…",
             "plugins.triage.surface.sources.manage": "Gérer les sources",
             "plugins.triage.surface.sources.missing": "Cette source configurée n’existe plus. La liste actuelle est affichée.",
             "plugins.triage.surface.sources.none": "Aucune source configurée",
@@ -81891,6 +82529,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Tes sources n’ont pas pu être atteintes",
             "plugins.triage.surface.tryAgain": "Réessayer",
             "plugins.triage.surface.upToDate": "À jour",
+            "plugins.triage.surface.updatedAgo": "Mis à jour {age}",
+            "plugins.triage.surface.updatedJustNow": "Mis à jour à l’instant",
             "plugins.triage.surface.view.board": "Tableau",
             "plugins.triage.surface.view.label": "Vue",
             "plugins.triage.surface.view.list": "Liste",
@@ -81934,6 +82574,7 @@
             "plugins.triage.tasks.completed": "Terminées",
             "plugins.triage.tasks.create": "Créer une tâche",
             "plugins.triage.tasks.description": "Votre travail et les agents à vos côtés.",
+            "plugins.triage.tasks.draftUnavailable": "Ce brouillon de tâche n’est plus disponible. Ouvrez-le à nouveau depuis le message ou l’action.",
             "plugins.triage.tasks.edit": "Modifier la tâche",
             "plugins.triage.tasks.empty.description": "Essayez une autre vue ou créez une tâche.",
             "plugins.triage.tasks.empty.pending": "Aucune tâche lue ne correspond à cette vue. D’autres sources peuvent encore répondre.",
@@ -81941,8 +82582,10 @@
             "plugins.triage.tasks.everyone": "Toutes",
             "plugins.triage.tasks.mine": "Les miennes",
             "plugins.triage.tasks.myTasks": "Mes tâches",
+            "plugins.triage.tasks.noCreateSource": "Ajoutez dans Sources une source permettant de créer des tâches.",
             "plugins.triage.tasks.save": "Enregistrer",
             "plugins.triage.tasks.scope": "Dépôt ou projet",
+            "plugins.triage.tasks.sourcesUnavailable": "Les sources de tâches sont indisponibles",
             "plugins.triage.tasks.started": "Démarrées",
             "plugins.triage.tasks.taskTitle": "Titre",
             "plugins.triage.tasks.title": "Tâches",
@@ -81984,12 +82627,13 @@
             "plugins.triage.internal.description": "Conserva il lavoro personale nel tuo account Happier.",
             "plugins.triage.internal.existing": "Le attività esistenti e le sessioni collegate appaiono in Attività.",
             "plugins.triage.internal.loading": "Lettura attività…",
+            "plugins.triage.internal.on": "Attivo",
             "plugins.triage.internal.personal": "Attività personali",
-            "plugins.triage.internal.ready": "Pronto",
+            "plugins.triage.internal.retry": "Riprova",
             "plugins.triage.internal.setupFailed": "Impossibile attivare le attività Happier",
             "plugins.triage.internal.title": "Attività Happier",
+            "plugins.triage.internal.turnOn": "Attiva",
             "plugins.triage.internal.unavailable": "Impossibile leggere questa attività",
-            "plugins.triage.internal.use": "Usa le attività Happier",
             "plugins.triage.picker.attach": "Allega",
             "plugins.triage.picker.attachEntryLabel": "Allega “{title}”",
             "plugins.triage.picker.attached": "Allegato",
@@ -82176,8 +82820,8 @@
             "plugins.triage.surface.column.signal": "Segnale",
             "plugins.triage.surface.column.where": "Dove",
             "plugins.triage.surface.comparisonUnavailable": "Questa fonte non può aprire un confronto per questa pull request.",
-            "plugins.triage.surface.detail.accountError.description": "Happier non può raggiungere il tuo account, quindi le dettagli di questa voce non sono disponibili ora.",
-            "plugins.triage.surface.detail.accountError.title": "Impossibile leggere il tuo account",
+            "plugins.triage.surface.detail.accountError.description": "I dettagli di questa voce non sono disponibili al momento. Riprova quando la connessione sarà disponibile.",
+            "plugins.triage.surface.detail.accountError.title": "Impossibile leggere questi dettagli",
             "plugins.triage.surface.detail.agent.action": "Serve la tua attenzione",
             "plugins.triage.surface.detail.agent.archived": "Archiviata",
             "plugins.triage.surface.detail.agent.failed": "Non riuscita",
@@ -82396,11 +83040,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Impossibile aggiornare questa pagina",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Questa schermata non può aggiornare la posizione condivisibile, quindi è stata ripristinata l’ultima vista confermata.",
             "plugins.triage.surface.row.absent": "La fonte non lo segnala più",
-            "plugins.triage.surface.row.deselect": "Deseleziona {title}",
             "plugins.triage.surface.row.moreActions": "Altre azioni per {title}",
             "plugins.triage.surface.row.notSynchronized": "Non ancora sincronizzato",
             "plugins.triage.surface.row.pin": "Fissa {title}",
-            "plugins.triage.surface.row.select": "Seleziona {title}",
+            "plugins.triage.surface.row.pinShort": "Fissa",
             "plugins.triage.surface.row.stale": "Non aggiornato",
             "plugins.triage.surface.row.staleSince": "Non aggiornato, visto l’ultima volta",
             "plugins.triage.surface.row.state.active": "Attivo",
@@ -82459,6 +83102,7 @@
             "plugins.triage.surface.sources.add": "Aggiungi un'origine",
             "plugins.triage.surface.sources.changedTitle": "Le origini configurate sono cambiate",
             "plugins.triage.surface.sources.conflict": "Le origini configurate sono cambiate altrove, quindi questa origine non è stata rimossa. Viene mostrato l’elenco corrente; riprova.",
+            "plugins.triage.surface.sources.loading": "Lettura delle tue origini…",
             "plugins.triage.surface.sources.manage": "Gestisci origini",
             "plugins.triage.surface.sources.missing": "Questa origine configurata non esiste più. Viene mostrato l’elenco corrente.",
             "plugins.triage.surface.sources.none": "Nessuna origine configurata",
@@ -82471,6 +83115,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Non è stato possibile raggiungere le tue origini",
             "plugins.triage.surface.tryAgain": "Riprova",
             "plugins.triage.surface.upToDate": "Aggiornato",
+            "plugins.triage.surface.updatedAgo": "Aggiornato {age}",
+            "plugins.triage.surface.updatedJustNow": "Aggiornato ora",
             "plugins.triage.surface.view.board": "Bacheca",
             "plugins.triage.surface.view.label": "Vista",
             "plugins.triage.surface.view.list": "Elenco",
@@ -82514,6 +83160,7 @@
             "plugins.triage.tasks.completed": "Completate",
             "plugins.triage.tasks.create": "Crea attività",
             "plugins.triage.tasks.description": "Il tuo lavoro e gli agenti al tuo fianco.",
+            "plugins.triage.tasks.draftUnavailable": "Questa bozza di attività non è più disponibile. Riaprila dal messaggio o dall’azione.",
             "plugins.triage.tasks.edit": "Modifica attività",
             "plugins.triage.tasks.empty.description": "Prova un’altra vista o crea un’attività.",
             "plugins.triage.tasks.empty.pending": "Nessuna attività letta finora appartiene a questa vista. Altre origini potrebbero ancora rispondere.",
@@ -82521,8 +83168,10 @@
             "plugins.triage.tasks.everyone": "Tutte",
             "plugins.triage.tasks.mine": "Mie",
             "plugins.triage.tasks.myTasks": "Le mie attività",
+            "plugins.triage.tasks.noCreateSource": "Aggiungi in Origini un’origine che supporti la creazione di attività.",
             "plugins.triage.tasks.save": "Salva modifiche",
             "plugins.triage.tasks.scope": "Repository o progetto",
+            "plugins.triage.tasks.sourcesUnavailable": "Le origini delle attività non sono disponibili",
             "plugins.triage.tasks.started": "Iniziate",
             "plugins.triage.tasks.taskTitle": "Titolo",
             "plugins.triage.tasks.title": "Attività",
@@ -82564,12 +83213,13 @@
             "plugins.triage.internal.description": "Guarde o trabalho pessoal na sua conta Happier.",
             "plugins.triage.internal.existing": "As tarefas existentes e sessões associadas aparecem em Tarefas.",
             "plugins.triage.internal.loading": "A ler tarefa…",
+            "plugins.triage.internal.on": "Ativado",
             "plugins.triage.internal.personal": "Tarefas pessoais",
-            "plugins.triage.internal.ready": "Pronto",
+            "plugins.triage.internal.retry": "Tentar novamente",
             "plugins.triage.internal.setupFailed": "Não foi possível ativar as tarefas Happier",
             "plugins.triage.internal.title": "Tarefas Happier",
+            "plugins.triage.internal.turnOn": "Ativar",
             "plugins.triage.internal.unavailable": "Não foi possível ler esta tarefa",
-            "plugins.triage.internal.use": "Usar tarefas Happier",
             "plugins.triage.picker.attach": "Anexar",
             "plugins.triage.picker.attachEntryLabel": "Anexar “{title}”",
             "plugins.triage.picker.attached": "Anexado",
@@ -82756,8 +83406,8 @@
             "plugins.triage.surface.column.signal": "Sinal",
             "plugins.triage.surface.column.where": "Onde",
             "plugins.triage.surface.comparisonUnavailable": "Esta fonte não pode abrir uma comparação para este pull request.",
-            "plugins.triage.surface.detail.accountError.description": "Happier não conseguiu alcançar sua conta, então os detalhes desta entrada estão indisponíveis por enquanto.",
-            "plugins.triage.surface.detail.accountError.title": "Sua conta não pode ser lida",
+            "plugins.triage.surface.detail.accountError.description": "Os detalhes desta entrada estão indisponíveis no momento. Tente novamente quando a conexão estiver disponível.",
+            "plugins.triage.surface.detail.accountError.title": "Não foi possível ler estes detalhes",
             "plugins.triage.surface.detail.agent.action": "Precisa da sua atenção",
             "plugins.triage.surface.detail.agent.archived": "Arquivada",
             "plugins.triage.surface.detail.agent.failed": "Falhou",
@@ -82976,11 +83626,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "Não foi possível atualizar esta página",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Este ecrã não pode atualizar a localização partilhável, por isso a última vista confirmada foi restaurada.",
             "plugins.triage.surface.row.absent": "A fonte já não o comunica",
-            "plugins.triage.surface.row.deselect": "Desmarcar {title}",
             "plugins.triage.surface.row.moreActions": "Mais ações para {title}",
             "plugins.triage.surface.row.notSynchronized": "Ainda não sincronizado",
             "plugins.triage.surface.row.pin": "Fixar {title}",
-            "plugins.triage.surface.row.select": "Selecionar {title}",
+            "plugins.triage.surface.row.pinShort": "Afixar",
             "plugins.triage.surface.row.stale": "Desatualizado",
             "plugins.triage.surface.row.staleSince": "Desatualizado, visto pela última vez",
             "plugins.triage.surface.row.state.active": "Ativo",
@@ -83039,6 +83688,7 @@
             "plugins.triage.surface.sources.add": "Adicionar uma origem",
             "plugins.triage.surface.sources.changedTitle": "As origens configuradas foram alteradas",
             "plugins.triage.surface.sources.conflict": "As suas origens configuradas foram alteradas noutro local, por isso esta origem não foi removida. A lista atual é apresentada; tente novamente.",
+            "plugins.triage.surface.sources.loading": "Lendo suas origens…",
             "plugins.triage.surface.sources.manage": "Gerir origens",
             "plugins.triage.surface.sources.missing": "Essa origem configurada já não existe. A lista atual é apresentada.",
             "plugins.triage.surface.sources.none": "Nenhuma origem configurada",
@@ -83051,6 +83701,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "Não foi possível alcançar as suas origens",
             "plugins.triage.surface.tryAgain": "Tentar novamente",
             "plugins.triage.surface.upToDate": "Atualizado",
+            "plugins.triage.surface.updatedAgo": "Atualizado {age}",
+            "plugins.triage.surface.updatedJustNow": "Atualizado agora mesmo",
             "plugins.triage.surface.view.board": "Quadro",
             "plugins.triage.surface.view.label": "Visualização",
             "plugins.triage.surface.view.list": "Lista",
@@ -83094,6 +83746,7 @@
             "plugins.triage.tasks.completed": "Concluídas",
             "plugins.triage.tasks.create": "Criar tarefa",
             "plugins.triage.tasks.description": "Seu trabalho e os agentes ao seu lado.",
+            "plugins.triage.tasks.draftUnavailable": "Este rascunho de tarefa não está mais disponível. Abra-o novamente pela mensagem ou ação.",
             "plugins.triage.tasks.edit": "Editar tarefa",
             "plugins.triage.tasks.empty.description": "Tente outra vista ou crie uma tarefa.",
             "plugins.triage.tasks.empty.pending": "Nenhuma tarefa lida até agora está nesta vista. Outras origens ainda podem responder.",
@@ -83101,8 +83754,10 @@
             "plugins.triage.tasks.everyone": "Todas",
             "plugins.triage.tasks.mine": "Minhas",
             "plugins.triage.tasks.myTasks": "Minhas tarefas",
+            "plugins.triage.tasks.noCreateSource": "Adicione em Origens uma origem que permita criar tarefas.",
             "plugins.triage.tasks.save": "Salvar alterações",
             "plugins.triage.tasks.scope": "Repositório ou projeto",
+            "plugins.triage.tasks.sourcesUnavailable": "As origens das tarefas não estão disponíveis",
             "plugins.triage.tasks.started": "Iniciadas",
             "plugins.triage.tasks.taskTitle": "Título",
             "plugins.triage.tasks.title": "Tarefas",
@@ -83144,12 +83799,13 @@
             "plugins.triage.internal.description": "Desa la feina personal al teu compte de Happier.",
             "plugins.triage.internal.existing": "Les tasques existents i les sessions enllaçades apareixen a Tasques.",
             "plugins.triage.internal.loading": "Llegint la tasca…",
+            "plugins.triage.internal.on": "Activat",
             "plugins.triage.internal.personal": "Tasques personals",
-            "plugins.triage.internal.ready": "A punt",
+            "plugins.triage.internal.retry": "Torna-ho a provar",
             "plugins.triage.internal.setupFailed": "No s’han pogut activar les tasques de Happier",
             "plugins.triage.internal.title": "Tasques de Happier",
+            "plugins.triage.internal.turnOn": "Activa",
             "plugins.triage.internal.unavailable": "No s’ha pogut llegir aquesta tasca",
-            "plugins.triage.internal.use": "Utilitza les tasques de Happier",
             "plugins.triage.picker.attach": "Adjunta",
             "plugins.triage.picker.attachEntryLabel": "Adjunta «{title}»",
             "plugins.triage.picker.attached": "Adjunt",
@@ -83336,8 +83992,8 @@
             "plugins.triage.surface.column.signal": "Senyal",
             "plugins.triage.surface.column.where": "On",
             "plugins.triage.surface.comparisonUnavailable": "Aquesta font no pot obrir una comparació per a aquesta sol·licitud de canvis.",
-            "plugins.triage.surface.detail.accountError.description": "Happier no pot arribar al seu compte, així que els detalls d'aquesta entrada no estan disponibles ara mateix.",
-            "plugins.triage.surface.detail.accountError.title": "No es pot llegir el seu compte",
+            "plugins.triage.surface.detail.accountError.description": "Els detalls d’aquesta entrada no estan disponibles ara mateix. Torna-ho a provar quan la connexió estigui disponible.",
+            "plugins.triage.surface.detail.accountError.title": "No s’han pogut llegir aquests detalls",
             "plugins.triage.surface.detail.agent.action": "Necessita la teva atenció",
             "plugins.triage.surface.detail.agent.archived": "Arxivada",
             "plugins.triage.surface.detail.agent.failed": "Ha fallat",
@@ -83556,11 +84212,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "No s’ha pogut actualitzar aquesta pàgina",
             "plugins.triage.surface.routeWriteFailed.unavailable": "Aquesta pantalla no pot actualitzar la ubicació compartible, així que s’ha restaurat l’última vista confirmada.",
             "plugins.triage.surface.row.absent": "La font ja no ho informa",
-            "plugins.triage.surface.row.deselect": "Desselecciona {title}",
             "plugins.triage.surface.row.moreActions": "Més accions per a {title}",
             "plugins.triage.surface.row.notSynchronized": "Encara no s’ha sincronitzat",
             "plugins.triage.surface.row.pin": "Fixa {title}",
-            "plugins.triage.surface.row.select": "Selecciona {title}",
+            "plugins.triage.surface.row.pinShort": "Fixa",
             "plugins.triage.surface.row.stale": "Desactualitzat",
             "plugins.triage.surface.row.staleSince": "Desactualitzat, vist per darrera vegada",
             "plugins.triage.surface.row.state.active": "Actiu",
@@ -83619,6 +84274,7 @@
             "plugins.triage.surface.sources.add": "Afegeix una font",
             "plugins.triage.surface.sources.changedTitle": "Les fonts configurades han canviat",
             "plugins.triage.surface.sources.conflict": "Les teves fonts configurades han canviat en un altre lloc, així que aquesta font no s’ha eliminat. Es mostra la llista actual; torna-ho a provar.",
+            "plugins.triage.surface.sources.loading": "S’estan llegint les teves fonts…",
             "plugins.triage.surface.sources.manage": "Gestiona les fonts",
             "plugins.triage.surface.sources.missing": "Aquesta font configurada ja no existeix. Es mostra la llista actual.",
             "plugins.triage.surface.sources.none": "No hi ha fonts configurades",
@@ -83631,6 +84287,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "No s’ha pogut contactar amb les teves fonts",
             "plugins.triage.surface.tryAgain": "Torna-ho a provar",
             "plugins.triage.surface.upToDate": "Actualitzat",
+            "plugins.triage.surface.updatedAgo": "Actualitzat {age}",
+            "plugins.triage.surface.updatedJustNow": "Actualitzat ara mateix",
             "plugins.triage.surface.view.board": "Tauler",
             "plugins.triage.surface.view.label": "Vista",
             "plugins.triage.surface.view.list": "Llista",
@@ -83674,6 +84332,7 @@
             "plugins.triage.tasks.completed": "Completades",
             "plugins.triage.tasks.create": "Crea una tasca",
             "plugins.triage.tasks.description": "La teva feina i els agents que t’ajuden.",
+            "plugins.triage.tasks.draftUnavailable": "Aquest esborrany de tasca ja no està disponible. Torna a obrir-lo des del missatge o l’acció.",
             "plugins.triage.tasks.edit": "Edita la tasca",
             "plugins.triage.tasks.empty.description": "Prova una altra vista o crea una tasca.",
             "plugins.triage.tasks.empty.pending": "Cap tasca llegida fins ara és en aquesta vista. Altres fonts encara poden respondre.",
@@ -83681,8 +84340,10 @@
             "plugins.triage.tasks.everyone": "Totes",
             "plugins.triage.tasks.mine": "Meves",
             "plugins.triage.tasks.myTasks": "Les meves tasques",
+            "plugins.triage.tasks.noCreateSource": "Afegeix a Fonts una font que permeti crear tasques.",
             "plugins.triage.tasks.save": "Desa els canvis",
             "plugins.triage.tasks.scope": "Repositori o projecte",
+            "plugins.triage.tasks.sourcesUnavailable": "Les fonts de tasques no estan disponibles",
             "plugins.triage.tasks.started": "Iniciades",
             "plugins.triage.tasks.taskTitle": "Títol",
             "plugins.triage.tasks.title": "Tasques",
@@ -83724,12 +84385,13 @@
             "plugins.triage.internal.description": "在 Happier 账户中保存个人工作。",
             "plugins.triage.internal.existing": "现有任务和关联会话将显示在任务中。",
             "plugins.triage.internal.loading": "正在读取任务…",
+            "plugins.triage.internal.on": "已开启",
             "plugins.triage.internal.personal": "个人任务",
-            "plugins.triage.internal.ready": "已就绪",
+            "plugins.triage.internal.retry": "重试",
             "plugins.triage.internal.setupFailed": "无法启用 Happier 任务",
             "plugins.triage.internal.title": "Happier 任务",
+            "plugins.triage.internal.turnOn": "开启",
             "plugins.triage.internal.unavailable": "无法读取此任务",
-            "plugins.triage.internal.use": "使用 Happier 任务",
             "plugins.triage.picker.attach": "附加",
             "plugins.triage.picker.attachEntryLabel": "附加“{title}”",
             "plugins.triage.picker.attached": "已附加",
@@ -83916,8 +84578,8 @@
             "plugins.triage.surface.column.signal": "信号",
             "plugins.triage.surface.column.where": "位置",
             "plugins.triage.surface.comparisonUnavailable": "此来源无法打开此拉取请求的对比。",
-            "plugins.triage.surface.detail.accountError.description": "Happier无法到达您的账户，因此此条目的详细信息目前不可用。",
-            "plugins.triage.surface.detail.accountError.title": "无法读取您的账户",
+            "plugins.triage.surface.detail.accountError.description": "此条目的详情目前不可用。请在连接可用时重试。",
+            "plugins.triage.surface.detail.accountError.title": "无法读取这些详情",
             "plugins.triage.surface.detail.agent.action": "需要你的关注",
             "plugins.triage.surface.detail.agent.archived": "已归档",
             "plugins.triage.surface.detail.agent.failed": "失败",
@@ -84136,11 +84798,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "无法更新此页面",
             "plugins.triage.surface.routeWriteFailed.unavailable": "此屏幕无法更新可共享位置，因此已恢复上次确认的视图。",
             "plugins.triage.surface.row.absent": "来源已不再报告该条目",
-            "plugins.triage.surface.row.deselect": "取消选择 {title}",
             "plugins.triage.surface.row.moreActions": "{title} 的更多操作",
             "plugins.triage.surface.row.notSynchronized": "尚未同步",
             "plugins.triage.surface.row.pin": "置顶 {title}",
-            "plugins.triage.surface.row.select": "选择 {title}",
+            "plugins.triage.surface.row.pinShort": "置顶",
             "plugins.triage.surface.row.stale": "已过期",
             "plugins.triage.surface.row.staleSince": "已过期，最后一次读取于",
             "plugins.triage.surface.row.state.active": "进行中",
@@ -84199,6 +84860,7 @@
             "plugins.triage.surface.sources.add": "添加来源",
             "plugins.triage.surface.sources.changedTitle": "已配置的来源已更改",
             "plugins.triage.surface.sources.conflict": "你配置的来源已在其他位置更改，因此未移除此来源。正在显示当前列表，请重试。",
+            "plugins.triage.surface.sources.loading": "正在读取你的来源…",
             "plugins.triage.surface.sources.manage": "管理来源",
             "plugins.triage.surface.sources.missing": "该已配置来源已不存在。正在显示当前列表。",
             "plugins.triage.surface.sources.none": "没有已配置的来源",
@@ -84211,6 +84873,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "无法连接到你的来源",
             "plugins.triage.surface.tryAgain": "重试",
             "plugins.triage.surface.upToDate": "已更新",
+            "plugins.triage.surface.updatedAgo": "{age}更新",
+            "plugins.triage.surface.updatedJustNow": "刚刚更新",
             "plugins.triage.surface.view.board": "看板",
             "plugins.triage.surface.view.label": "视图",
             "plugins.triage.surface.view.list": "列表",
@@ -84254,6 +84918,7 @@
             "plugins.triage.tasks.completed": "已完成",
             "plugins.triage.tasks.create": "创建任务",
             "plugins.triage.tasks.description": "你的工作，以及与你协作的代理。",
+            "plugins.triage.tasks.draftUnavailable": "此任务草稿已不可用。请从消息或操作中重新打开。",
             "plugins.triage.tasks.edit": "编辑任务",
             "plugins.triage.tasks.empty.description": "尝试其他任务视图或创建任务。",
             "plugins.triage.tasks.empty.pending": "目前读取的任务都不在此视图中。其他来源可能仍会返回结果。",
@@ -84261,8 +84926,10 @@
             "plugins.triage.tasks.everyone": "全部",
             "plugins.triage.tasks.mine": "我的",
             "plugins.triage.tasks.myTasks": "我的任务",
+            "plugins.triage.tasks.noCreateSource": "请在“来源”中添加支持创建任务的来源。",
             "plugins.triage.tasks.save": "保存更改",
             "plugins.triage.tasks.scope": "仓库或项目",
+            "plugins.triage.tasks.sourcesUnavailable": "任务来源不可用",
             "plugins.triage.tasks.started": "已开始",
             "plugins.triage.tasks.taskTitle": "标题",
             "plugins.triage.tasks.title": "任务",
@@ -84304,12 +84971,13 @@
             "plugins.triage.internal.description": "在 Happier 帳戶中儲存個人工作。",
             "plugins.triage.internal.existing": "現有任務和關聯工作階段將顯示在任務中。",
             "plugins.triage.internal.loading": "正在讀取任務…",
+            "plugins.triage.internal.on": "已開啟",
             "plugins.triage.internal.personal": "個人任務",
-            "plugins.triage.internal.ready": "已就緒",
+            "plugins.triage.internal.retry": "重試",
             "plugins.triage.internal.setupFailed": "無法啟用 Happier 任務",
             "plugins.triage.internal.title": "Happier 任務",
+            "plugins.triage.internal.turnOn": "開啟",
             "plugins.triage.internal.unavailable": "無法讀取此任務",
-            "plugins.triage.internal.use": "使用 Happier 任務",
             "plugins.triage.picker.attach": "附加",
             "plugins.triage.picker.attachEntryLabel": "附加「{title}」",
             "plugins.triage.picker.attached": "已附加",
@@ -84496,8 +85164,8 @@
             "plugins.triage.surface.column.signal": "訊號",
             "plugins.triage.surface.column.where": "位置",
             "plugins.triage.surface.comparisonUnavailable": "此來源無法開啟此提取要求的比較。",
-            "plugins.triage.surface.detail.accountError.description": "Happier 无法連接到您的賬戶，因此此項目詳情目前無法使用。",
-            "plugins.triage.surface.detail.accountError.title": "您的賬戶無法讀取",
+            "plugins.triage.surface.detail.accountError.description": "此項目的詳情目前無法使用。請在連線可用時重試。",
+            "plugins.triage.surface.detail.accountError.title": "無法讀取這些詳情",
             "plugins.triage.surface.detail.agent.action": "需要你的注意",
             "plugins.triage.surface.detail.agent.archived": "已封存",
             "plugins.triage.surface.detail.agent.failed": "失敗",
@@ -84716,11 +85384,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "無法更新此頁面",
             "plugins.triage.surface.routeWriteFailed.unavailable": "此畫面無法更新可分享的位置，因此已還原上次確認的檢視。",
             "plugins.triage.surface.row.absent": "來源已不再回報此項目",
-            "plugins.triage.surface.row.deselect": "取消選取 {title}",
             "plugins.triage.surface.row.moreActions": "{title} 的更多操作",
             "plugins.triage.surface.row.notSynchronized": "尚未同步",
             "plugins.triage.surface.row.pin": "置頂 {title}",
-            "plugins.triage.surface.row.select": "選取 {title}",
+            "plugins.triage.surface.row.pinShort": "釘選",
             "plugins.triage.surface.row.stale": "已過期",
             "plugins.triage.surface.row.staleSince": "已過期，最後一次讀取於",
             "plugins.triage.surface.row.state.active": "進行中",
@@ -84779,6 +85446,7 @@
             "plugins.triage.surface.sources.add": "新增來源",
             "plugins.triage.surface.sources.changedTitle": "已設定的來源已變更",
             "plugins.triage.surface.sources.conflict": "你設定的來源已在其他位置變更，因此未移除此來源。目前顯示的是最新清單；請再試一次。",
+            "plugins.triage.surface.sources.loading": "正在讀取你的來源…",
             "plugins.triage.surface.sources.manage": "管理來源",
             "plugins.triage.surface.sources.missing": "該已設定來源已不存在。目前顯示的是最新清單。",
             "plugins.triage.surface.sources.none": "沒有已設定的來源",
@@ -84791,6 +85459,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "無法連線到你的來源",
             "plugins.triage.surface.tryAgain": "重試",
             "plugins.triage.surface.upToDate": "最新",
+            "plugins.triage.surface.updatedAgo": "{age}更新",
+            "plugins.triage.surface.updatedJustNow": "剛剛更新",
             "plugins.triage.surface.view.board": "看板",
             "plugins.triage.surface.view.label": "檢視",
             "plugins.triage.surface.view.list": "清單",
@@ -84834,6 +85504,7 @@
             "plugins.triage.tasks.completed": "已完成",
             "plugins.triage.tasks.create": "建立任務",
             "plugins.triage.tasks.description": "你的工作，以及與你協作的代理。",
+            "plugins.triage.tasks.draftUnavailable": "此任務草稿已無法使用。請從訊息或操作中重新開啟。",
             "plugins.triage.tasks.edit": "編輯任務",
             "plugins.triage.tasks.empty.description": "嘗試其他任務檢視或建立任務。",
             "plugins.triage.tasks.empty.pending": "目前讀取的任務都不在此檢視中。其他來源可能仍會傳回結果。",
@@ -84841,8 +85512,10 @@
             "plugins.triage.tasks.everyone": "全部",
             "plugins.triage.tasks.mine": "我的",
             "plugins.triage.tasks.myTasks": "我的任務",
+            "plugins.triage.tasks.noCreateSource": "請在「來源」中新增支援建立任務的來源。",
             "plugins.triage.tasks.save": "儲存變更",
             "plugins.triage.tasks.scope": "儲存庫或專案",
+            "plugins.triage.tasks.sourcesUnavailable": "任務來源無法使用",
             "plugins.triage.tasks.started": "已開始",
             "plugins.triage.tasks.taskTitle": "標題",
             "plugins.triage.tasks.title": "任務",
@@ -84884,12 +85557,13 @@
             "plugins.triage.internal.description": "個人の作業を Happier アカウントに保存します。",
             "plugins.triage.internal.existing": "既存のタスクとリンク済みセッションがタスクに表示されます。",
             "plugins.triage.internal.loading": "タスクを読み込み中…",
+            "plugins.triage.internal.on": "オン",
             "plugins.triage.internal.personal": "個人のタスク",
-            "plugins.triage.internal.ready": "準備完了",
+            "plugins.triage.internal.retry": "再試行",
             "plugins.triage.internal.setupFailed": "Happier タスクを有効にできませんでした",
             "plugins.triage.internal.title": "Happier タスク",
+            "plugins.triage.internal.turnOn": "オンにする",
             "plugins.triage.internal.unavailable": "このタスクを読み取れませんでした",
-            "plugins.triage.internal.use": "Happier タスクを使う",
             "plugins.triage.picker.attach": "添付",
             "plugins.triage.picker.attachEntryLabel": "「{title}」を添付",
             "plugins.triage.picker.attached": "添付済み",
@@ -85076,8 +85750,8 @@
             "plugins.triage.surface.column.signal": "シグナル",
             "plugins.triage.surface.column.where": "場所",
             "plugins.triage.surface.comparisonUnavailable": "このソースでは、このプルリクエストの比較を開けません。",
-            "plugins.triage.surface.detail.accountError.description": "Happierはあなたのアカウントに達できませんでしたので、このエントリの詳細は現在利用できません。",
-            "plugins.triage.surface.detail.accountError.title": "あなたのアカウントが読み取れませんでした",
+            "plugins.triage.surface.detail.accountError.description": "この項目の詳細は現在利用できません。接続が利用可能になったら再試行してください。",
+            "plugins.triage.surface.detail.accountError.title": "詳細を読み取れませんでした",
             "plugins.triage.surface.detail.agent.action": "対応が必要です",
             "plugins.triage.surface.detail.agent.archived": "アーカイブ済み",
             "plugins.triage.surface.detail.agent.failed": "失敗",
@@ -85296,11 +85970,10 @@
             "plugins.triage.surface.routeWriteFailed.title": "このページを更新できませんでした",
             "plugins.triage.surface.routeWriteFailed.unavailable": "この画面では共有可能な場所を更新できないため、最後に確定した表示を復元しました。",
             "plugins.triage.surface.row.absent": "ソースが報告しなくなりました",
-            "plugins.triage.surface.row.deselect": "{title} の選択を解除",
             "plugins.triage.surface.row.moreActions": "{title} のその他の操作",
             "plugins.triage.surface.row.notSynchronized": "まだ同期されていません",
             "plugins.triage.surface.row.pin": "{title} をピン留め",
-            "plugins.triage.surface.row.select": "{title} を選択",
+            "plugins.triage.surface.row.pinShort": "固定",
             "plugins.triage.surface.row.stale": "古い情報",
             "plugins.triage.surface.row.staleSince": "古い情報、最終取得",
             "plugins.triage.surface.row.state.active": "進行中",
@@ -85359,6 +86032,7 @@
             "plugins.triage.surface.sources.add": "ソースを追加",
             "plugins.triage.surface.sources.changedTitle": "設定済みの取得元が変更されました",
             "plugins.triage.surface.sources.conflict": "設定済みの取得元が別の場所で変更されたため、この取得元は削除されませんでした。現在の一覧を表示しています。もう一度お試しください。",
+            "plugins.triage.surface.sources.loading": "取得元を読み取り中…",
             "plugins.triage.surface.sources.manage": "取得元を管理",
             "plugins.triage.surface.sources.missing": "その設定済みの取得元は存在しません。現在の一覧を表示しています。",
             "plugins.triage.surface.sources.none": "設定済みの取得元はありません",
@@ -85371,6 +86045,8 @@
             "plugins.triage.surface.sourcesUnreachable.title": "取得元に接続できませんでした",
             "plugins.triage.surface.tryAgain": "再試行",
             "plugins.triage.surface.upToDate": "最新",
+            "plugins.triage.surface.updatedAgo": "{age}に更新",
+            "plugins.triage.surface.updatedJustNow": "たった今更新",
             "plugins.triage.surface.view.board": "ボード",
             "plugins.triage.surface.view.label": "表示",
             "plugins.triage.surface.view.list": "リスト",
@@ -85414,6 +86090,7 @@
             "plugins.triage.tasks.completed": "完了",
             "plugins.triage.tasks.create": "タスクを作成",
             "plugins.triage.tasks.description": "あなたの仕事と、一緒に働くエージェント。",
+            "plugins.triage.tasks.draftUnavailable": "このタスクの下書きは利用できなくなりました。メッセージまたはアクションからもう一度開いてください。",
             "plugins.triage.tasks.edit": "タスクを編集",
             "plugins.triage.tasks.empty.description": "別のタスク表示を試すか、タスクを作成してください。",
             "plugins.triage.tasks.empty.pending": "これまでに読み込んだタスクはこの表示に含まれません。ほかの作成元から結果が届く場合があります。",
@@ -85421,8 +86098,10 @@
             "plugins.triage.tasks.everyone": "すべて",
             "plugins.triage.tasks.mine": "自分",
             "plugins.triage.tasks.myTasks": "自分のタスク",
+            "plugins.triage.tasks.noCreateSource": "「取得元」でタスクの作成に対応した取得元を追加してください。",
             "plugins.triage.tasks.save": "変更を保存",
             "plugins.triage.tasks.scope": "リポジトリまたはプロジェクト",
+            "plugins.triage.tasks.sourcesUnavailable": "タスクの作成元を利用できません",
             "plugins.triage.tasks.started": "着手済み",
             "plugins.triage.tasks.taskTitle": "タイトル",
             "plugins.triage.tasks.title": "タスク",

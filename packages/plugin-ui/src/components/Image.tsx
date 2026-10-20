@@ -6,7 +6,7 @@ import { HappierBrandMark, HappierImage, type HappierImageSize } from '../presen
 import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
-import { usePluginHostApi } from '../hostApi/context.js';
+import { usePluginHostApi, usePluginHostApiMountedPluginId } from '../hostApi/context.js';
 import { usePageHeaderMarkGlyphPx } from './pageHeaderMark.js';
 
 function useImageDecodeDiagnostic(resource: PluginUiResourceReference): () => void {
@@ -96,8 +96,13 @@ export function BrandMark({ pluginId, size, pixelSize: requestedPixelSize, showN
   const pixelSize = requestedPixelSize ?? pageHeaderGlyphPx ?? (size === 'small' ? resolveHappierIconSize('small') : undefined);
   const presentationHost = useOptionalPluginUiPresentationHost();
   const displayName = usePluginBrandDisplayName(pluginId) ?? 'Plugin';
-  const targetPluginId = pluginId === undefined ? undefined : pluginId.trim();
-  const resource = targetPluginId ? undefined : presentationHost?.brand?.resource;
+  const mountedPluginId = usePluginHostApiMountedPluginId();
+  const requestedPluginId = pluginId?.trim();
+  const resource = requestedPluginId ? undefined : presentationHost?.brand?.resource;
+  // The package asset owner serves mounted and explicitly targeted marks. The
+  // surface entry already binds the package identity, even when the daemon has
+  // no Resource generation and the app owns the bundled artwork instead.
+  const targetPluginId = requestedPluginId || mountedPluginId || resource?.pluginId;
   const theme = usePluginTheme();
   if (targetPluginId) {
     const rendered = presentationHost?.renderBrandMark?.({

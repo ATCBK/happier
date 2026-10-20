@@ -3,6 +3,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import { resolveWorkReadPresentation, type WorkItem, type WorkProjection } from '@/components/sessions/work/workProjection';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import type { InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
+import type { InboxItem } from '@/components/inbox/inboxItems';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
@@ -81,6 +82,21 @@ function inboxItem(item: InboxWorkItem, scope: ServerAccountScope) {
     return { kind: item.kind, ...address };
 }
 
+function canonicalInboxItem(item: InboxItem, scope: ServerAccountScope) {
+    if (!areServerProfileIdentifiersEquivalent(item.source.serverId, scope.serverId)
+        || !areServerProfileIdentifiersEquivalent(item.focus.serverId, scope.serverId)) return null;
+    if (item.discussion && (item.discussion.accountId !== scope.accountId
+        || item.focus.kind !== 'discussion'
+        || item.discussion.messageRef.messageId !== item.focus.messageId
+        || item.discussion.messageRef.discussion.discussionId !== item.source.id
+        || !areServerProfileIdentifiersEquivalent(item.discussion.messageRef.discussion.serverId, scope.serverId))) return null;
+    return { key: item.key, producer: item.producer, type: item.type, view: item.view, title: item.title,
+        context: item.context, createdAt: item.createdAt, read: item.read, focus: item.focus,
+        pageRoute: item.pageRoute, source: item.source,
+        ...(item.question ? { question: item.question } : {}),
+        ...(item.discussion ? { discussion: item.discussion } : {}) };
+}
+
 export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellAction']> = async ({ actionId, input, context }) => {
     context.signal?.throwIfAborted();
     if (actionId !== 'session.work.get' && actionId !== 'inbox.get') throw new Error('unsupported_mounted_read');
@@ -119,6 +135,11 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
     if (model.spansHomes) return { status: 'unavailable' };
     const audienceScope = model.source.audienceScopes?.get(scope.serverId);
     if (audienceScope && !areServerAccountScopesEqual(audienceScope, scope)) return { status: 'unavailable' };
+    if (model.discussionAttention.source && !areServerAccountScopesEqual(model.discussionAttention.source.scope, scope)) {
+        return { status: 'unavailable' };
+    }
+    const items = model.items.map(item => canonicalInboxItem(item, scope));
+    if (items.some(item => item === null)) return { status: 'unavailable' };
     if (model.workGroups.some(group => group.items.some(item => item.kind === 'workflow_run'))
         && (!model.workflowAttention.serverId
             || !areServerProfileIdentifiersEquivalent(model.workflowAttention.serverId, scope.serverId))) return { status: 'unavailable' };
@@ -145,7 +166,8 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
         return { key: group.key, root, items };
     });
     if (groups.some(value => value === null)) return { status: 'unavailable' };
-    const result = AppShellActionOutputSchemas[actionId].parse({ status: 'ready', groups,
+    const result = AppShellActionOutputSchemas[actionId].parse({ status: 'ready', groups, items,
+        coverage: { discussions: model.discussionAttention.coverage },
         approvalIds: model.openApprovals.map(artifact => artifact.id),
         usageNoticeIds: model.openUsageNotices.map(entry => entry.artifact.id),
         accountNoticeIds: model.openAccountNotices.map(entry => entry.artifact.id),

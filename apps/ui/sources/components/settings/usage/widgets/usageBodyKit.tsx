@@ -404,11 +404,25 @@ const USAGE_ACCOUNTING_SOURCES = ['accounting'] as const;
 export function UsageBodyNoUsage(props: Readonly<{
   slice: UsageQueryResultSlice;
   testID: string;
+  onRetry: () => void;
   /** The shape the body will take, so its first read holds that room. */
   readingShape?: React.ComponentProps<typeof UsageBodyReading>['shape'];
 }>) {
   if (isUsageReadOutstanding(props.slice, ['accounting']))
     return <UsageBodyReading testID={`${props.testID}.loading`} waitingOn={{ slice: props.slice, sources: USAGE_ACCOUNTING_SOURCES }} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+  if (!props.slice.accounting)
+    return (
+      <SurfaceStateCard
+        testID={`${props.testID}.unavailable`}
+        kind={props.slice.sources.some(source => source.source === 'accounting' && source.status === 'error') ? 'error' : 'unavailable'}
+        layout="inline"
+        size="line"
+        replacesContent={false}
+        title={t('usage.board.page.readFailedTitle')}
+        reason={t('usage.board.page.readFailedReason')}
+        action={{ label: t('common.retry'), onPress: props.onRetry }}
+      />
+    );
   return (
     <UsageBodyInsufficient
       testID={`${props.testID}.empty`}

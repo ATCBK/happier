@@ -220,7 +220,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
         serverId: params.serverId, discussionAction: createDiscussionActionDeps({ credentials: params.credentials,
-          serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction });
+          serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction,
+        credentials: params.credentials, serverHttpBaseUrl: params.serverHttpBaseUrl });
       if ('failure' in bound) return bound.failure;
       if (bound.context.discussionReplyReturn && bound.context.actionRequestId) {
         // Sign the normalized Action and stable request identity. Altering an
@@ -289,7 +290,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
               && (!('creationLocalId' in input) || input.creationLocalId === undefined || request.request.creationLocalId === input.creationLocalId)
               && 'firstMessage' in input && input.firstMessage && typeof input.firstMessage === 'object'
               && (!('localId' in input.firstMessage) || input.firstMessage.localId === undefined || request.request.firstMessage.localId === input.firstMessage.localId)
-            : publicationActionId !== 'discussion.create' && 'discussionId' in input && request.discussionId === input.discussionId);
+            : publicationActionId !== 'discussion.create' && 'discussionId' in input
+              && !('operation' in request) && request.discussionId === input.discussionId);
           let sameDocMetadata = true;
           if (docMutation) {
             const expected = docMutation.actionId === 'discussion.create' ? docMutation.input.firstMessage : docMutation.input;

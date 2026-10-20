@@ -6,6 +6,7 @@ import {
     createTeamCredentialDirectMaterialStoredV1,
     encodeSessionTeamCredentialSlotKeyV1,
     TeamCredentialResourceErrorV1Schema,
+    TeamCredentialResourceSummaryV1Schema,
 } from "@happier-dev/protocol/teams";
 import {
     encodePasswordCredentialFieldV1,
@@ -15,6 +16,7 @@ import type { ProviderConnectionId } from "@happier-dev/protocol/providers/ids";
 
 import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountIdentityDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
+import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
@@ -1423,6 +1425,7 @@ describe("Team credential resource routes (SQLite integration)", () => {
             runtime: { health: "available" as const, modelCount: 1, checkedAt: 1 },
         };
         let describedConnections = [providerConnection];
+        let brokerRefusal: "application_unavailable" | "model_unavailable" | null = null;
         app.forwardRpcForUser = vi.fn(async (input: Readonly<{ method: string }>) => {
             if (input.method.endsWith("daemon.providers.connections.describe")) {
                 return { ok: true as const, result: {
@@ -1436,7 +1439,9 @@ describe("Team credential resource routes (SQLite integration)", () => {
                     availableTruncated: false,
                 } };
             }
-            return { ok: true as const, result: { status: "eligible" as const } };
+            return { ok: true as const, result: brokerRefusal === null
+                ? { status: "eligible" as const }
+                : { status: "unavailable" as const, reason: brokerRefusal } };
         });
 
         const listed = await post("/v1/teams/credential-resources/list", custodian.id, { teamId: team.id });
@@ -1511,6 +1516,21 @@ describe("Team credential resource routes (SQLite integration)", () => {
             readiness: { kind: "available" },
             brokerPresentation: { selectedTarget: { machineId: online.id, availability: "available" } },
         });
+
+        for (const reason of ["application_unavailable", "model_unavailable"] as const) {
+            brokerRefusal = reason;
+            for (const viewer of [custodian, manager]) {
+                const unavailable = await post("/v1/teams/credential-resources/get", viewer.id, { resourceId: resource.id });
+                expect(unavailable.statusCode, unavailable.body).toBe(200);
+                const summary = TeamCredentialResourceSummaryV1Schema.parse(unavailable.json());
+                expect(summary.readiness).toEqual({ kind: "broker_unavailable", reason });
+                if (viewer.id === manager.id) {
+                    expect(unavailable.body).not.toContain(online.id);
+                    expect(unavailable.body).not.toContain(source.connectionId);
+                }
+            }
+        }
+        brokerRefusal = null;
 
         for (const driftedConnections of [
             [{ ...providerConnection, teamCredentialSourceOffer: {
@@ -1848,7 +1868,7 @@ describe("Team credential resource routes (SQLite integration)", () => {
         app.forwardRpcForUser = rpc;
         app.machineDaemonPresence = {
             in: (room: string) => ({
-                fetchSockets: async () => room === `user:${custodian.id}`
+                fetchSockets: async () => room === getUserMachinesSocketRoom(custodian.id)
                     ? [{ data: { clientType: "machine-scoped", userId: custodian.id, machineId: sourceProjectionMachineId } }]
                     : [],
             }),
@@ -2133,13 +2153,14 @@ describe("Team credential resource routes (SQLite integration)", () => {
         } });
         app.machineDaemonPresence = {
             in: (room: string) => ({
-                fetchSockets: async () => room === `user:${custodian.id}`
+                fetchSockets: async () => room === getUserMachinesSocketRoom(custodian.id)
                     ? [machineA, machineB].map(machine => ({
                         data: { clientType: "machine-scoped", userId: custodian.id, machineId: machine.id },
                     }))
                     : [],
             }),
         };
+        const eligibilityOverrides = new Map<string, unknown>();
         const forwardRpcForUser = vi.fn(async (input: Readonly<{ method: string; params: unknown }>) => {
             const machineId = input.method.split(":", 1)[0]!;
             if (input.method.endsWith("daemon.providers.teamCredentialResourceTest.candidate")) {
@@ -2162,6 +2183,9 @@ describe("Team credential resource routes (SQLite integration)", () => {
                     : { ok: true as const, result: { status: "unavailable" as const, reason: "model_unavailable" as const } };
             }
             if (input.method.endsWith("daemon.providers.teamCredentialBroker.eligibility")) {
+                if (eligibilityOverrides.has(machineId)) {
+                    return { ok: true as const, result: eligibilityOverrides.get(machineId) };
+                }
                 return machineId === machineB.id
                     ? { ok: true as const, result: { status: "eligible" as const } }
                     : { ok: true as const, result: { status: "unavailable" as const, reason: "model_unavailable" as const } };
@@ -2321,6 +2345,30 @@ describe("Team credential resource routes (SQLite integration)", () => {
             (input.params as { refreshPolicy?: string }).refreshPolicy === "current_only"
         ))).toBe(true);
         expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ brokerMachineId: machineB.id }));
+
+        // Refusal details are a Pool fact only when every candidate agrees.
+        // Unknown transport/schema outcomes and differing refusals stay generic.
+        for (const scenario of [
+            { first: "model_unavailable", second: "model_unavailable", reason: "model_unavailable" },
+            { first: "application_unavailable", second: "application_unavailable", reason: "application_unavailable" },
+            { first: "model_unavailable", second: "application_unavailable", reason: null },
+            { first: "model_unavailable", second: null, reason: null },
+        ]) {
+            eligibilityOverrides.set(machineA.id, { status: "unavailable", reason: scenario.first });
+            eligibilityOverrides.set(machineB.id, scenario.second === null
+                ? {}
+                : { status: "unavailable", reason: scenario.second });
+            const unavailable = await post("/v1/teams/credential-resources/get", manager.id, { resourceId: resource.id });
+            expect(unavailable.statusCode, unavailable.body).toBe(200);
+            const summary = TeamCredentialResourceSummaryV1Schema.parse(unavailable.json());
+            expect(summary.readiness).toEqual({
+                kind: "broker_unavailable",
+                ...(scenario.reason === null ? {} : { reason: scenario.reason }),
+            });
+            expect(unavailable.body).not.toContain(machineA.id);
+            expect(unavailable.body).not.toContain(machineB.id);
+            expect(unavailable.body).not.toContain(pool.id);
+        }
     });
 
     it("qualifies restricted-Team activity reads and limit mutations before effects", async () => {

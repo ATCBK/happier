@@ -19,7 +19,7 @@ import { Typography } from '@/constants/Typography';
 import { SESSION_LIST_FILTER_ARCHIVED_DESTINATION_OPTION_ID } from './sessionListFilterEditorModel';
 
 /** The facets whose full list opens in place of the panel (searchable, paginated, or nested). */
-export type SessionListFilterDrillSection = 'tags' | 'audiences';
+export type SessionListFilterDrillSection = 'tags' | 'audiences' | 'projects';
 
 export type SessionListFilterPanelCopy = Readonly<{
     show: string;
@@ -32,6 +32,8 @@ export type SessionListFilterPanelCopy = Readonly<{
     homes: string;
     sharedWith: string;
     tags: string;
+    status: string;
+    project: string;
     source: string;
     clear: string;
     done: string;
@@ -46,6 +48,8 @@ export type SessionListFilterPanelProps = Readonly<{
     labels: SessionListFilterPanelCopy;
     /** Sessions the list shows for the current choices (the list's own count). */
     resultCount?: number;
+    /** A host whose result isn't a plain count (a live preview that can be partial) words it itself. */
+    resultSummary?: string;
     maxHeight?: number;
     /** Hands one model option id back to the editor's single writer. */
     onSelect(optionId: string): void;
@@ -54,6 +58,8 @@ export type SessionListFilterPanelProps = Readonly<{
     audiencesAvailable?: boolean;
     onReset(): void;
     onDone?: () => void;
+    /** Done waits until the host's result can be used (a preview still checking, or nothing to use). */
+    doneDisabled?: boolean;
 }>;
 
 /**
@@ -68,6 +74,14 @@ const FOOTER_MIN_HEIGHT = 52;
 const FOOTER_ACTION_GAP = 8;
 const ROW_TEXT = ITEM_TITLE_TEXT_METRICS.compact;
 const SUBTITLE_TEXT = ITEM_SUBTITLE_TEXT_METRICS.compact;
+
+/**
+ * The narrowest scope tile that holds its whole name: the compact tile's padding, icon slot and radio
+ * plus a text column for the longest single word a scope name has in any locale ("zugänglichen",
+ * "participação"). Narrower panels (the session list's sidebar popover, a phone sheet) drop to one
+ * column, so a name wraps between words and never mid-word.
+ */
+const SCOPE_TILE_MIN_WIDTH = 170;
 
 const SCOPE_ICONS: Readonly<Record<string, IconName>> = {
     'scope:my_work': 'user-circle',
@@ -97,6 +111,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sectionLabelFirst: {
         marginTop: 0,
+    },
+    /** A section label that shares its line with the section's own control (Project · Is | Isn't). */
+    sectionRow: {
+        marginTop: theme.space.s6,
+        marginBottom: theme.space.s4,
+        marginHorizontal: theme.space.s2,
+    },
+    sectionLabelInline: {
+        color: theme.colors.text.secondary,
+        ...Typography.variant('meta', 'medium'),
     },
     row: {
         minHeight: MINIMUM_INTERACTIVE_TARGET_SIZE,
@@ -280,6 +304,9 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
     const homeOptions = staticOptions(rootStep, 'homes');
     const audienceOptions = staticOptions(rootStep, 'audiences');
     const tagOptions = staticOptions(rootStep, 'tags');
+    const statusOptions = staticOptions(rootStep, 'status');
+    const projectOptions = staticOptions(rootStep, 'projects');
+    const projectModeOptions = staticOptions(rootStep, 'project-mode');
     const sourceOptions = staticOptions(rootStep, 'source');
 
     const needsMe = selectedIds.has('attention:needs_my_attention');
@@ -309,6 +336,18 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
         return [...selected, ...unselected].slice(0, INLINE_TAG_CHIP_COUNT);
     }, [selectedIds, tagOptions]);
     const hiddenTagCount = (tagOptions?.length ?? 0) - inlineTags.length;
+    const inlineProjects = React.useMemo(() => {
+        if (!projectOptions) return [];
+        const selected = projectOptions.filter((option) => selectedIds.has(option.id));
+        const unselected = projectOptions.filter((option) => !selectedIds.has(option.id));
+        return [...selected, ...unselected].slice(0, INLINE_TAG_CHIP_COUNT);
+    }, [projectOptions, selectedIds]);
+    const hiddenProjectCount = (projectOptions?.length ?? 0) - inlineProjects.length;
+    const projectModeTabs = React.useMemo(() => (projectModeOptions ?? []).map((option) => ({
+        id: option.id,
+        label: option.label,
+    })), [projectModeOptions]);
+    const activeProjectMode = projectModeTabs.find((tab) => selectedIds.has(tab.id))?.id ?? projectModeTabs[0]?.id;
     const selectedAudienceCount = React.useMemo(() => {
         let count = 0;
         for (const id of selectedIds) if (id.startsWith('audience:')) count += 1;
@@ -366,7 +405,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             value={selectedScopeId}
                             onChange={handleScopeChange}
                             density="compact"
-                            minimumColumns={2}
+                            minimumTileWidth={SCOPE_TILE_MIN_WIDTH}
                             accessibilityLabel={labels.scope}
                             testIdPrefix="session-list-filter-scope"
                         />
@@ -401,6 +440,65 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             onValueChange={handleCoordinatorsOnlyChange}
                         />
                     </View>
+                ) : null}
+
+                {statusOptions ? (
+                    <>
+                        <Text style={styles.sectionLabel}>{labels.status}</Text>
+                        <View style={styles.chips} accessibilityLabel={labels.status}>
+                            {statusOptions.map((option) => (
+                                <FilterChip
+                                    key={option.id}
+                                    testID={`session-list-filter:${option.id}`}
+                                    label={option.label}
+                                    selected={selectedIds.has(option.id)}
+                                    onPress={() => onSelect(option.id)}
+                                />
+                            ))}
+                        </View>
+                    </>
+                ) : null}
+
+                {projectOptions ? (
+                    <>
+                        <View style={[styles.row, styles.sectionRow]}>
+                            <Text style={[styles.sectionLabelInline, styles.rowText]}>{labels.project}</Text>
+                            {/* Is | Isn't qualifies chosen projects, so it appears once one is chosen. */}
+                            {projectModeTabs.length > 0 && activeProjectMode && inlineProjects.some((option) => selectedIds.has(option.id)) ? (
+                                <View>
+                                    <SegmentedTabBar<string>
+                                        role="radiogroup"
+                                        tabs={projectModeTabs}
+                                        activeTabId={activeProjectMode}
+                                        onSelectTab={onSelect}
+                                        segmentSizing="content"
+                                        accessibilityLabel={labels.project}
+                                        testIDPrefix="session-list-filter"
+                                    />
+                                </View>
+                            ) : null}
+                        </View>
+                        <View style={styles.chips} accessibilityLabel={labels.project}>
+                            {inlineProjects.map((option) => (
+                                <FilterChip
+                                    key={option.id}
+                                    testID={`session-list-filter:${option.id}`}
+                                    label={option.label}
+                                    selected={selectedIds.has(option.id)}
+                                    disabled={option.disabled === true}
+                                    onPress={() => onSelect(option.id)}
+                                />
+                            ))}
+                            {hiddenProjectCount > 0 ? (
+                                <FilterChip
+                                    kind="more"
+                                    testID="session-list-filter-projects-more"
+                                    label={labels.moreTags(hiddenProjectCount)}
+                                    onPress={() => props.onOpenDrill('projects')}
+                                />
+                            ) : null}
+                        </View>
+                    </>
                 ) : null}
 
                 {inactiveOptions && activeInactiveTab ? (
@@ -509,7 +607,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                     numberOfLines={1}
                     accessibilityLiveRegion="polite"
                 >
-                    {props.resultCount === undefined ? '' : labels.resultCount(props.resultCount)}
+                    {props.resultSummary ?? (props.resultCount === undefined ? '' : labels.resultCount(props.resultCount))}
                 </Text>
                 <IconButton
                     testID="session-list-filter-clear"
@@ -526,6 +624,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                         label={labels.done}
                         tone="primary"
                         onPress={props.onDone}
+                        disabled={props.doneDisabled}
                         testID="session-list-filter-done"
                         style={styles.footerButton}
                     />

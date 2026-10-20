@@ -34,6 +34,7 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     compatibilityOverrides?: ProviderContributionV1['compatibilityOverrides'];
     catalog?: ProviderContributionV1['catalog'];
     catalogModels?: readonly ProviderCatalogProbeModelV1[];
+    holdResponseForInput?: string;
 }>) {
     const { directory } = input;
     const happyHomeDir = input.happyHomeDir ?? join(directory, 'home');
@@ -90,7 +91,7 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
             await chmod(executablePath, 0o755);
         }
         const catalogModels = input.catalogModels ?? [{ id: 'example' }];
-        const script = `require("node:fs").writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));require("node:http").createServer((req,res)=>{if(req.url==="/v1/models"){res.setHeader("content-type","application/json");res.end(JSON.stringify({object:"list",data:${JSON.stringify(catalogModels.map(model => ({ ...model, object: 'model',
+        const script = `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-starts'))},String(process.pid)+"\\n");require("node:http").createServer((req,res)=>{if(req.method==="POST"&&req.url==="/v1/responses"){let body="";req.on("data",chunk=>{body+=chunk});req.on("end",()=>{let input;try{input=JSON.parse(body).input}catch{}fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-inputs'))},input+"\\n");if(${input.holdResponseForInput === undefined ? 'true' : `input!==${JSON.stringify(input.holdResponseForInput)}`})res.end("ok")});return;}if(req.url==="/v1/models"){res.setHeader("content-type","application/json");res.end(JSON.stringify({object:"list",data:${JSON.stringify(catalogModels.map(model => ({ ...model, object: 'model',
           ...(model.connectedAccountPurposes ? { happier_connected_account_purposes: model.connectedAccountPurposes,
             connectedAccountPurposes: undefined } : {}),
         })))} }));return;}res.end(req.url==="/pid"?String(process.pid):"ok")}).listen(Number(process.env.PORT),"127.0.0.1")`;

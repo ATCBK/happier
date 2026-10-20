@@ -18,7 +18,8 @@ import {
     applyLatestSessionTurnEndInTx,
     writeSessionRuntimeActivityObserverLossInTx,
 } from "@/app/session/sessionWriteService";
-import { inTx } from "@/storage/inTx";
+import { inTx, transactionResult } from "@/storage/inTx";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { resolveSessionTurnUpdateSkipSenderConnection } from "@/app/session/turns/publishSessionTurnMutationUpdate";
 import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
@@ -146,9 +147,9 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             latestTurnStatus,
             lastRuntimeIssue: nextStoredRuntimeIssue,
         });
-        return {
+        return transactionResult(() => ({
             status: "applied" as const,
-            recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(recipientCursors),
             badgeAttentionChanged,
             activeChanged: session.active,
             activeAt: params.observedAt,
@@ -159,7 +160,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             latestTurnStatus,
             latestTurnStatusObservedAt,
             lastRuntimeIssue,
-        };
+        }));
     });
 
     if (result.status !== "applied") return result;

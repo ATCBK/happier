@@ -94,6 +94,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
                     action: 'confirmExperimental',
                     ...(input.machineId ? { machineId: input.machineId } : {}),
                     connectionId: confirmation.connectionId,
+                    ...(confirmation.connectedAccountTarget ? { connectedAccountTarget: confirmation.connectedAccountTarget } : {}),
                     expectedConnectionRevision: confirmation.expectedConnectionRevision,
                     agentTargetKey: confirmation.agentTargetKey,
                     modelId: confirmation.modelId,

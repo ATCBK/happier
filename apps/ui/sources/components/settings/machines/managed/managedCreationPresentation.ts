@@ -19,7 +19,7 @@ export function managedCreationSetup(machine: ManagedMachineV1) {
 /** What the page knows beside the row: the controller's name and presence, and the provider's display name. */
 export type ManagedCreationContext = Readonly<{
     controller?: Readonly<{ name: string; online: boolean }>;
-    enrolledMachine?: Readonly<{ machineId: string; installationId: string; online: boolean; serviceManaged: boolean }>;
+    enrolledMachine?: Readonly<{ machineId: string; installationId: string; online: boolean; serviceManaged: boolean; activeAt?: number }>;
     provider?: string;
     providerAvailable?: boolean;
     operation?: ActionOperationProjection | null;
@@ -47,7 +47,11 @@ export function managedCreationState(machine: ManagedMachineV1, context: Managed
     }
     if (machine.submittedNativeEffect?.intent === 'delete') return { kind: 'cleanupPending' };
     if (machine.submittedNativeEffect?.intent === 'stop' && machine.observation?.power !== 'stopped') return { kind: 'stopPending' };
-    const pendingIntent = machine.submittedNativeEffect?.intent;
+    // A committed Start whose native submission is unconfirmed has no submitted effect yet (QB118), but the
+    // guest is still observed asleep: the request stands, so the page must not read as a machine at rest.
+    const retainedPowerIntent = machine.desired === 'start' && machine.observation?.power === 'stopped' ? 'start'
+        : machine.desired === 'resume' && machine.observation?.power === 'suspended' ? 'resume' : undefined;
+    const pendingIntent = machine.submittedNativeEffect?.intent ?? retainedPowerIntent;
     if ((pendingIntent === 'start' || pendingIntent === 'resume') && machine.observation?.power !== 'running'
         || pendingIntent === 'suspend' && machine.observation?.power !== 'suspended') {
         return { kind: 'powerPending', provider: context.provider ?? t('common.machine'), state: t(`managedMachines.actions.${pendingIntent}`) };
@@ -101,6 +105,11 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     context: Pick<ManagedCreationContext, 'enrolledMachine'> = {}): ActionOperationProjection | null {
     if (!operation) return null;
     const snapshot = operation.snapshot;
+    // Confirmed removal supersedes an earlier failed request on this resource.
+    // Keep history in Activity, and keep failures newer than the absence visible.
+    if (machine.desired === 'delete' && machine.allocation === 'confirmed-absent'
+        && machine.observation?.availability === 'absent' && snapshot.state === 'failed'
+        && snapshot.settledAt !== undefined && snapshot.settledAt <= machine.observation.observedAt) return null;
     if (snapshot.domainRef?.kind === 'machineEnvironment') {
         const reference = snapshot.domainRef;
         const scopeMatches = snapshot.actionId === 'machines.environment.apply' && snapshot.scope.machineId === machine.enrolledMachineId
@@ -117,13 +126,27 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
         && sameStrictJsonValue(reference.controller, machine.controller)
         : machine.allocation === 'unsubmitted' || machine.allocation === 'may-exist';
     if (!matches) return null;
+    const guest = context.enrolledMachine;
+    const healthyEnrollment = machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
+        && machine.archivedAt === undefined && machine.desired !== 'delete'
+        && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged;
+    // A failed inactivity read never admitted Stop/Delete. A newer connection
+    // from this enrolled service supersedes that observation on the creation
+    // card; Activity retains the actual failure. Explicit or submitted power
+    // effects, credential failures and unavailable history remain actionable.
+    if (healthyEnrollment && !machine.submittedNativeEffect && (machine.desired === 'start' || machine.desired === 'resume')
+        && machine.observation?.availability !== 'absent' && machine.observation?.availability !== 'unavailable'
+        && machine.observation?.storage !== 'lost' && machine.observation?.power !== 'stopped' && machine.observation?.power !== 'suspended'
+        && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
+        && snapshot.actionId === 'machines.managed.power.set' && snapshot.settledAt !== undefined
+        && guest.activeAt !== undefined && guest.activeAt > snapshot.settledAt
+        && snapshot.progress?.kind === 'phase'
+        && ['managed.intent.waiting-idle', 'managed.intent.activity-unknown', 'managed.intent.busy'].includes(snapshot.progress.phase)
+        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable'].includes(snapshot.error?.errorCode ?? '')) return null;
     // Existing 0.3 installation operations stored this CLI activation refusal as
     // action_failed. The enrolled guest's current connection resolves only that
     // readiness failure; unrelated bootstrap/setup failures remain actionable.
-    const guest = context.enrolledMachine;
-    if (machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
-        && machine.archivedAt === undefined && machine.desired !== 'delete'
-        && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged
+    if (healthyEnrollment
         && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
         && snapshot.error?.errorCode === 'action_failed'

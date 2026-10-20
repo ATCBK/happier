@@ -1,4 +1,4 @@
-import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentSessionConfigurationSnapshot, AgentSessionMcpToolPolicy, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError } from '@happier-dev/plugin-sdk';
 

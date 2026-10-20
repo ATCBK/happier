@@ -108,7 +108,10 @@ function readFolderName(
     display: unknown,
 ): string | null {
     const record = readDisplayRecord(displayState, display);
-    const name = typeof record?.name === 'string' ? record.name.trim() : '';
+    // The canonical value is `{ name, workspace }`; a bare name is an Action caller's shorthand for the same folder.
+    const bare = displayState.status === 'available' && typeof displayState.value === 'string' ? displayState.value
+        : isRecord(display) && display.t === 'plain' && typeof display.v === 'string' ? display.v : null;
+    const name = typeof record?.name === 'string' ? record.name.trim() : (bare ?? '').trim();
     return name || null;
 }
 

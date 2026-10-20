@@ -21,9 +21,13 @@ import type { InputOption, InputFieldHint } from './inputFields.js';
 import type { InputOptionsConsumerV1 } from './inputOptionsConsumer.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '../sessions/listing/query.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
+import { SessionAwarenessProjectionV1Schema, type SessionAwarenessProjectionV1 } from '../sessions/awareness/projectionV1.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
 import { normalizeUsageQuery, readUsageGroupByOptions, readUsagePeriodOptions } from './usageQuery.js';
 import { executeUsageAction } from '../actions/executor/usageActions.js';
@@ -183,6 +187,61 @@ function readDynamicOptionDirectory(
   return readNonEmptyString(input.directory) ?? readNonEmptyString(input.path);
 }
 
+const SESSION_GROUP_LABELS = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
+
+/**
+ * The one rule for which Sessions the picker offers, whether a Session arrives in the inventory scan or in a
+ * point read: archived Sessions are not offered (the scan also asks for `storage: 'active'`), a locked one is
+ * offered as a disabled option, and a gone one never arrives. Returns null when the Session is not offered.
+ */
+function readSessionAwarenessOption(serverId: string, session: SessionAwarenessProjectionV1) {
+  if (session.lifecycle === 'archived') return null;
+  const readable = isSessionAwarenessContentReadableV1(session.encryption);
+  const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
+  const option: InputOption = {
+    value: VoiceTrackedSessionAddressV1Schema.parse({ serverId, sessionId: session.sessionId }),
+    label: readable ? session.title ?? session.sessionId : session.sessionId,
+    description: SESSION_GROUP_LABELS[group],
+    ...(!readable ? { disabled: true } : {}),
+  };
+  return { group, option };
+}
+
+/**
+ * The `sessions` source's point check: each picked Session is answered by the one-Session status read
+ * instead of paging the whole Home, then judged by the same rule as the scan. A pick the Home reports gone
+ * has no option; a read that cannot answer is that read's own failure, not a reason to scan.
+ */
+async function readSessionOptionsForValues(params: Readonly<{
+  executor: Readonly<{ execute: (actionId: ActionId, input: unknown, ctx?: ActionExecutorContext) => Promise<ActionExecuteResult> }>;
+  ctx: ActionExecutorContext;
+  serverId: string;
+  values: readonly JsonValue[];
+}>): Promise<Extract<ActionExecuteResult, { ok: false }> | readonly InputOption[]> {
+  const options: InputOption[] = [];
+  for (const value of params.values) {
+    const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
+    // The inventory only ever offers this Home's Sessions, so any other pick has no option there either.
+    if (!address.success || address.data.serverId !== params.serverId) continue;
+    params.ctx.signal?.throwIfAborted();
+    const result = await params.executor.execute('session.status.get', { sessionId: address.data.sessionId }, params.ctx);
+    if (!result.ok) return result;
+    const status = readRecord(result.result);
+    if (status.ok === false) {
+      const code = typeof status.code === 'string' && status.code ? status.code : 'unavailable';
+      if (code === 'session_not_found') continue;
+      return { ok: false, errorCode: code, error: code };
+    }
+    const awareness = SessionAwarenessProjectionV1Schema.safeParse(status.awareness);
+    if (!awareness.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    // A host that resolves ids by prefix answers another Session when this exact id does not exist.
+    if (awareness.data.sessionId !== address.data.sessionId) continue;
+    const offered = readSessionAwarenessOption(params.serverId, awareness.data);
+    if (offered) options.push(offered.option);
+  }
+  return options;
+}
+
 /** Field choices restrict, never replace, the type's schema and declared Resource choices. */
 export async function resolveTypedInputFieldOptions(params: Omit<Parameters<typeof resolveInputOptions>[0], 'optionsSourceId'> &
   Readonly<{ field: InputFieldHint }>): ReturnType<typeof resolveInputOptions> {
@@ -220,6 +279,8 @@ export async function resolveInputOptions(params: Readonly<{
   optionsSourceId: string;
   input: Record<string, unknown>;
   consumer?: InputOptionsConsumerV1;
+  /** Picked values to check: a source that can answer them directly does not read its whole inventory. */
+  values?: readonly JsonValue[];
   includeSpawnModelCatalog?: boolean;
   readFailure: (result: unknown) => Extract<ActionExecuteResult, { ok: false }> | null;
   resolveSessionId: (input: unknown, ctx: ActionExecutorContext) => string | null;
@@ -281,6 +342,41 @@ export async function resolveInputOptions(params: Readonly<{
       .map(([value, label]) => ({ value, label })) };
   }
 
+  if (optionsSourceId === 'host-input:workspace') {
+    const selectedServerId = readNonEmptyString(ctx.serverId);
+    if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
+    if (!deps.projectWorkspaceRefs) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:projects.list' };
+    const result = await deps.projectWorkspaceRefs({ serverId: selectedServerId }, ctx);
+    const failure = params.readFailure(result);
+    if (failure) return failure;
+    ctx.signal?.throwIfAborted();
+    // Machine names only tell apart the same checkout on two machines; an unreadable list leaves the path to do that.
+    // A host marks a row `named: false` when its label is not a real name (hidden or still loading), and supplies the word
+    // for a machine it does not list (`unlistedLabel`), so every checkout is named the way the host's own screens name it.
+    const machineList = await deps.machinesList({ serverId: selectedServerId, purpose: 'input' });
+    const machineLabels = new Map<string, string>();
+    let unlistedLabel: string | undefined;
+    if (!params.readFailure(machineList)) {
+      unlistedLabel = readNonEmptyString(readRecord(machineList).unlistedLabel);
+      for (const machine of readRecordListProperty(machineList, 'items')) {
+        const id = readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id);
+        const label = readNonEmptyString(machine.label);
+        if (id && label && machine.named !== false) machineLabels.set(id, label);
+      }
+    }
+    const options: InputOption[] = [];
+    for (const row of readRecordListProperty(result, 'workspaceRefs')) {
+      const ref = WorkspaceRefV1Schema.safeParse(row);
+      if (!ref.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      // Recency changes whenever the checkout is opened; a saved pin must keep matching its option.
+      const { lastOpenedAtMs: _recency, ...stable } = ref.data;
+      const machineLabel = machineLabels.get(ref.data.machineId) ?? unlistedLabel;
+      options.push({ value: stable, label: ref.data.label ?? ref.data.rootPath.split(/[\\/]+/).filter(Boolean).at(-1) ?? ref.data.rootPath,
+        description: machineLabel ? `${machineLabel} · ${ref.data.rootPath}` : ref.data.rootPath });
+    }
+    return { ok: true, result: options };
+  }
+
   if (optionsSourceId === 'host-input:machine') {
     const selectedServerId = readNonEmptyString(ctx.serverId);
     if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
@@ -322,7 +418,7 @@ export async function resolveInputOptions(params: Readonly<{
   if (optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'session' })) {
     // The Usage Session type stores a session id on the current Home: the same Home sessions, by name,
     // chosen in place like the Period (no picker dialog).
-    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions' });
+    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions', values: undefined });
     if (!sessions.ok) return sessions;
     return { ok: true, result: sessions.result.map(option => ({ ...option,
       value: VoiceTrackedSessionAddressV1Schema.parse(option.value).sessionId })) };
@@ -345,8 +441,11 @@ export async function resolveInputOptions(params: Readonly<{
     // admitted corpus and marked-query admission also govern option discovery.
     const { createActionExecutor } = await import('../actions/actionExecutor.js');
     const executor = createActionExecutor(deps);
+    if (params.values) {
+      const direct = await readSessionOptionsForValues({ executor, ctx, serverId: sessionServerId, values: params.values });
+      return 'ok' in direct ? direct : { ok: true, result: direct };
+    }
     const groups: Record<'needsYou' | 'working' | 'recent', InputOption[]> = { needsYou: [], working: [], recent: [] };
-    const groupLabels = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
     const consumer = params.consumer;
     const project = consumer?.kind === 'widget' && consumer.surface.owner.kind === 'project'
       ? { serverId: consumer.surface.serverId, projectKey: consumer.surface.owner.projectId }
@@ -361,6 +460,8 @@ export async function resolveInputOptions(params: Readonly<{
         const result = await executor.execute('session.list', { view: 'awareness', ...(projectFilter ? { project: projectFilter } : {}), query: {
           v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
           audiences: [], tagIds: [], includeAttention: false,
+          // The picker reads the whole inventory, one round trip per page: ask for the largest page the Home's list allows.
+          limit: SESSION_LIST_PAGE_MAX_LIMIT,
           ...(cursor ? { cursor } : {}),
         } }, ctx);
         if (!result.ok) return result;
@@ -373,14 +474,8 @@ export async function resolveInputOptions(params: Readonly<{
             projectSessionIds.add(session.sessionId);
             continue;
           }
-          const readable = isSessionAwarenessContentReadableV1(session.encryption);
-          const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
-          groups[group].push({
-            value: VoiceTrackedSessionAddressV1Schema.parse({ serverId: sessionServerId, sessionId: session.sessionId }),
-            label: readable ? session.title ?? session.sessionId : session.sessionId,
-            description: groupLabels[group],
-            ...(!readable ? { disabled: true } : {}),
-          });
+          const offered = readSessionAwarenessOption(sessionServerId, session);
+          if (offered) groups[offered.group].push(offered.option);
         }
         cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
       } while (cursor);

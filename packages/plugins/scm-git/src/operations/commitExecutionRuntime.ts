@@ -2,7 +2,7 @@ import {
     createGitTemporaryIndex as createSharedGitTemporaryIndex,
     type GitTemporaryIndex as SharedGitTemporaryIndex,
     type GitTemporaryIndexSeed,
-} from '@happier-dev/cli-common/scm/gitTemporaryIndex';
+} from '@happier-dev/plugin-sdk/scm/git';
 
 import type { ScmCommitCreateResponse } from '@happier-dev/plugin-sdk/scm';
 import type { BackendCommandRunInput } from '@happier-dev/plugin-sdk/scm/backend';

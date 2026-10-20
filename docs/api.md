@@ -1238,13 +1238,18 @@ composed flow; missing or disabled support fails closed as `discussions_unavaila
 This is an in-progress 0.3 development contract, not a public release or a claim of completed
 package, database-reconciliation or loaded-runtime validation.
 
-The Discussion owns its access and lifecycle. An optional Session/message anchor grants no
+The Discussion owns its access and lifecycle. An optional Session/message, Doc or Task anchor grants no
 source access and imposes no parent archive or deletion cascade. Each read and mutation resolves
 current Discussion grants in the transaction through the shared resource-grant policy. Human
 invitations use direct grants; Team/Group grants are explicit audience expansion. View may read,
 edit may post, and owner/admin may manage. Mentions confer no access. Self-leave removes only the
 present person's direct grant; inherited access may remain, and an owner must transfer ownership
 or archive. Named-discussion absence and denial do not become an existence oracle.
+
+In development source, Task anchors and reply targets share `{ kind: 'task', entry }`,
+composing `TriageEntryRefV1Schema` from `@happier-dev/protocol/tasks/entryRefV1`.
+Task access, configured-source selection and navigation remain Tasks-owned; a private
+Discussion reply never invokes a provider-comment Action.
 
 Discussion titles and messages use the same strict stored-content envelope family as Session
 content. A Plain Discussion accepts only `{ t: 'plain', v }`; an E2EE Discussion accepts only
@@ -1487,9 +1492,10 @@ policy, publisher and request-snapshot version. Each new Follow input represents
 one original message or request; older development inputs without that proof
 remain unproven, with no invented backfill or encrypted-history scan.
 Destination intake reads original-backed updates from this admitted custody.
-While the host holds queued originals from a source, its optional manager
+While the host holds queued transcript originals from a source, its optional manager
 outcomes wait. They cannot consume the originals' context allowance or advance
-manager progress past their represented prefix.
+manager progress past their represented prefix. Foreground questions retain
+their separate exact waiting-Turn witness rule.
 Legacy manager intake retains Turn-only lifecycle evidence. Exact terminal
 transcript anchors and request-to-waiting-Turn witnesses prevent an admitted
 original from returning as another lifecycle update; later transcript ranges
@@ -1659,11 +1665,21 @@ claiming the daemon was unreachable. A confirmed rollback during catalog hydrati
 keeps its typed reason. Re-read the canonical resource before retrying an
 uncertain mutation.
 
+The same transaction owner recovers a native Prisma missing-transaction error
+when it occurs before its callback completes. Under transaction churn, Prisma
+can evict an expired transaction's diagnostic and return `P2028` without the
+expiry message. The callback has not returned, so the owner has not submitted a
+commit; recovery uses the existing attempt budget. A missing-transaction error
+after callback completion remains an unknown outcome and never authorizes replay.
+
 Session metadata tuple writes in current 0.3 source also preserve transaction
 failures through the global HTTP error handler. A confirmed rollback returns
 the same typed 503 response; unexpected failures retain their diagnostic cause
 for server logging. The tuple writer translates only its Team credential-binding
 domain rejection. It does not collapse database failures into an unclassified 500.
+Standalone tuple writes prepare the publication audience before the mutation
+attempt, then acquire and recheck its fence before the canonical CAS body.
+Composing callers acquire the same fence inside their containing transaction.
 Both tuple and legacy `PATCH /v2/sessions/:sessionId` acknowledge the committed
 mutation before starting current-view publication or its post-commit row read.
 A missing row, rejected projection or failed publication read after commit is
@@ -1746,6 +1762,10 @@ with the original source/message reference, without copying its text. Other
 Session messages retain their admitted projection. Account Voice uses its own
 explicit snippet-disclosure policy. Loaded-runtime validation of the development
 publication and delivery journey remains separate from these source contracts.
+
+Receiver catch-up stops a source range when an original's route or admission
+cannot be confirmed. Its later originals wait for the next existing reconciliation
+boundary, so their accepted progress cannot skip that original.
 
 The development Session router also registers
 `GET /v2/sessions/:destinationSessionId/follows/sessions` and
@@ -2210,6 +2230,16 @@ Artifact bytes and grants. See the
 [Source storage disclosure](encryption.md#project-source-metadata-03-development).
 
 ### Artifacts
+- In 0.3 development, `GET /v1/artifacts?kind=skill`
+  (also `prompt`, `plugin_ui`, `work_board`, or `other`) returns
+  `{items: [...], hasUnclassified: boolean}` with the same authorized header
+  projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
+  rows readable by the caller, including grants, independently of the current page.
+  The page and witness share one read snapshot; a true witness stays conservative
+  while classification or access changes, and the fallback scan rechecks access.
+  A true flag makes clients restart with the full inventory.
+  Omitting `kind` preserves the array response. Rows expose nullable plaintext
+  `kind`; clients still open and validate their private header before using content.
 - `GET /v1/artifacts?limit=...&cursor=...` lists Artifact headers in
   stable `updatedAt`, `id` order. The optional opaque cursor resumes after the
   last observed row, allowing typed clients to continue through sparse pages
@@ -2252,6 +2282,17 @@ Artifact bytes and grants. See the
 - `POST /v1/artifacts`
 - `POST /v1/artifacts/:id` (versioned update)
 - `DELETE /v1/artifacts/:id`
+
+The development kind-filtering extension accepts optional coarse `kind` on
+Artifact JSON create/update and restore writes (`artifactKind` in the framed binary
+upload metadata, whose `kind` already identifies create/update). Writers derive it
+from the logical header with Protocol's `deriveArtifactCoarseKindV1`, without a
+feature gate. Older writers remain valid; an opaque header write without kind
+clears the previous hint. The existing update
+route also accepts `{kind, expectedHeaderVersion}` alone for best-effort backfill.
+It requires header-edit authority and the current header version, and changes no
+header/body bytes or content versions. These changes are development-only and
+require the additive Artifact-kind migration before the new server is loaded.
 
 The in-progress 0.3 ordinary binary extension uses a strict body reference
 `{blobId,mime,sizeBytes,sha256}` within the normal plain/E2EE body envelope.
@@ -2752,6 +2793,12 @@ without editing the Artifact. Both use the existing Discussion create/post/reply
 operations and content codec. Plaintext passage routing contains only Doc ref and
 revision; quote and proposal text belong to the content envelope.
 
+These three Actions are also available through the existing Voice Action binding.
+Voice reads use the same source admission, and comments and proposals retain
+their exact passage and edit fields through the normal approval preview and
+execution path. Accept and Decline remain unavailable to Voice and require the
+authenticated person.
+
 `POST /v1/artifacts/doc-edit-proposals/accept` accepts the qualified proposal
 reference, full expected Doc revision and optional host-prepared body encoded
 with the existing Artifact codec. `POST /v1/artifacts/doc-edit-proposals/decline`
@@ -2776,11 +2823,19 @@ confirmation policy, not actor authority or execution credentials. See
 
 `session.status.get` accepts `{sessionId,readiness:true}`. The optional `readiness`
 result distinguishes saved configuration from `ready`, `unavailable` and `unknown`,
-with operation, Machine/Agent evidence, invocation access and cause. The current
-CLI reader reports conversation readiness only, with credential `not_required`;
-it does not certify an outward write or perform sign-in/repair. A result without
-readiness is not evidence of readiness. These are development contracts; the
-corresponding bylines and People/Bot presentation are still being integrated.
+with operation, Machine/Agent evidence, invocation access and cause. Omitted
+`operation` means conversation, with credential `not_required`. Requesting
+`operation:'credential'` and a qualified `credentialPurpose` reads the existing
+personal purpose binding. A Team operation also supplies the existing qualified
+`credentialTeamSelection` from its setup owner; the purpose, service and resource
+binding are checked against the current declaration and entitled catalog.
+Unavailable resources retain the owner's diagnostic and recovery facts. Missing or
+inaccessible binding evidence stays unknown, including another Account's private
+setup; the viewer's credentials cannot stand in for it. A result without the
+requested readiness is not evidence of readiness. This diagnostic performs no
+sign-in/repair and grants no outward-write authority. These are development
+contracts; the corresponding bylines and People/Bot presentation are still being
+integrated.
 
 ## Implementation references
 - API routes: `apps/server/sources/app/api/routes`

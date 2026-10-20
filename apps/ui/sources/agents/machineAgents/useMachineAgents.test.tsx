@@ -12,6 +12,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 
 // Install physical HTTP/Socket.IO before loading the real scoped-RPC owner.
 const network = await installSessionOpsNetworkBoundary();
+const { isAgentSelectableForNewSession } = await import('@/components/sessions/new/modules/newSessionAgentSelection');
 // This responder supplies daemon ACK bodies; it never replaces internal RPC logic.
 const rpc = vi.fn();
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -51,6 +52,98 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it('keeps an installed external Agent selectable across unrelated probe failures and reopening', async () => {
+        const server = await network.addHome('https://isolated-inventory-facts.example.test', 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: 'isolated-inventory-machine', active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: { v: 1, definitions: [] } }, true);
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: Object.fromEntries(
+            ['review', 'other-agent'].map(id => [id, { id, title: id, identity: { pluginId: 'acme.review', localId: id },
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }]),
+        ) });
+        let ownAnswer = 'cli.foreign-agent';
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: {
+                [ownAnswer]: { ok: true, checkedAt: Date.now(), data: { ...item,
+                    signIn: { status: 'unknown', loginSupport: 'login_terminal' } } },
+                'cli.other-agent': { ok: false, checkedAt: Date.now(), error: { code: 'probe_failed', message: 'Unavailable' } },
+                'tool.acpAgentInventory': { ok: true, checkedAt: Date.now(), data: { items: [] } },
+            } };
+            return { jobs: [] };
+        });
+        const target = { serverId: server.id, machineId: machine.id, accountLifetime };
+        await refreshMachineAgents(target);
+        const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
+        // A healthy answer wired to a different Agent cannot certify Review.
+        const unanswered = Object.fromEntries(machineAgentInventoryStore.read(key).agents.map(agent => [agent.agentId, agent]));
+        expect(unanswered.review).toMatchObject({ installed: false, stale: true, unavailableReason: { reason: 'missing_result' } });
+        expect(isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: unanswered })).toBe(false);
+        ownAnswer = 'cli.review';
+        await refreshMachineAgents({ ...target, force: true });
+        const read = () => useMachineAgents({ serverId: server.id, machineId: machine.id, load: false });
+        const assertEligibility = (snapshot: ReturnType<typeof read>) => {
+            const agents = Object.fromEntries(snapshot.agents.map(agent => [agent.agentId, agent]));
+            expect(snapshot.status).toBe('ready');
+            expect(agents.review).toMatchObject({ installed: true, stale: false, signIn: { status: 'unknown' } });
+            expect(isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: agents })).toBe(true);
+            expect(agents['other-agent']).toMatchObject({ state: 'unknown', stale: true,
+                unavailableReason: { reason: 'probe_failed', errorCode: 'probe_failed' } });
+            expect(isAgentSelectableForNewSession({ agentId: 'other-agent', machineAgentsById: agents })).toBe(false);
+        };
+        const initial = await renderHook(read);
+        try { assertEligibility(initial.getCurrent()); } finally { await initial.unmount(); }
+        const reopened = await renderHook(read);
+        try { assertEligibility(reopened.getCurrent()); } finally { await reopened.unmount(); }
+    });
+
+    it.each(['selected', 'picker'] as const)('rechecks a failed %s Agent probe on the next inventory read and admits only the matching successful answer', async (surface) => {
+        const server = await network.addHome(`https://probe-recovery-${surface}.example.test`, 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: `probe-recovery-${surface}`, active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: { v: 1, definitions: [] } }, true);
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: { review: {
+            id: 'review', title: 'Review', capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } });
+        const checkedAt = Date.now();
+        let answer: 'failed' | 'foreign' | 'ready' = 'failed';
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: {
+                [answer === 'foreign' ? 'cli.other-agent' : 'cli.review']: answer === 'failed'
+                    ? { ok: false, checkedAt, error: { code: 'probe_failed', message: 'Probe temporarily unavailable' } }
+                    : { ok: true, checkedAt, data: item },
+                'tool.acpAgentInventory': { ok: true, checkedAt, data: { items: [] } },
+            } };
+            return { jobs: [] };
+        });
+        const target = { serverId: server.id, machineId: machine.id, accountLifetime,
+            ...(surface === 'selected' ? { agentId: 'review' } : {}) };
+        await loadDaemonMergedProjectionInputs(target);
+        const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
+        const readAgent = () => machineAgentInventoryStore.read(key).agents.find(agent => agent.agentId === 'review');
+        const selectable = () => isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: { review: readAgent() } });
+        await refreshMachineAgents(target);
+        expect(machineAgentInventoryStore.read(key).status).toBe('ready');
+        expect(readAgent()).toMatchObject({ state: 'unknown', stale: true, unavailableReason: { reason: 'probe_failed' } });
+        expect(resolveMachineAgentStatus(readAgent() ?? null).kind).toBe('unknown');
+        expect(selectable()).toBe(false);
+
+        // A healthy answer for another Agent cannot recover this Agent's eligibility.
+        answer = 'foreign';
+        await refreshMachineAgents(target);
+        expect(selectable()).toBe(false);
+        answer = 'ready';
+        await refreshMachineAgents(target);
+        expect(readAgent()).toMatchObject({ state: 'ready', installed: true, stale: false });
+        expect(readAgent()?.unavailableReason).toBeUndefined();
+        expect(selectable()).toBe(true);
+    });
+
     it('releases a demanded inventory refresh on unmount and admits the next refresh of the same machine', async () => {
         const server = await network.addHome('https://cancel-inventory.example.test', 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };

@@ -162,6 +162,43 @@ describe("preview native HTTP transport", () => {
         expect((await proxy(fixture)).body.equals(gzipSync(html))).toBe(true);
     });
 
+    it.each(["http", "https"] as const)("injects a scheme-less loader that matches the page's own https origin when the proxy derived %s", async (externalProtocol) => {
+        const fixture = await upstream((_request, response) => {
+            response.setHeader("Content-Type", "text/html");
+            response.setHeader("Content-Security-Policy", "script-src https://preview.example.test");
+            response.end("<html><head></head><body>page</body></html>");
+        });
+        const config = { browserSessionId: "bs", viewId: "v", navigationGeneration: 1,
+            collector: { collectorId: "c", nonce: "pane_nonce", version: "1.0.0" }, webPostMessageTargetOrigin: "https://app.example.test" };
+        let headers: Readonly<Record<string, string | readonly string[]>> = {};
+        const bytes: Uint8Array[] = [];
+        await proxyLocalServicePreviewHttpRequest({ ...fixture,
+            request: { method: "GET", path: "/", search: `?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`,
+                headers: { host: "preview.example.test", "x-forwarded-proto": "https" }, externalProtocol },
+            response: { writeHead(_code, _message, value) { headers = value; }, write(chunk) { bytes.push(chunk); }, end() {}, destroy() {} },
+        });
+        expect(headers["x-happier-collector-state"]).toBe("collector_available");
+        expect(Buffer.concat(bytes).toString()).toContain('src="/__happier/collector-loader.js?');
+    });
+
+    it("forwards the configured public https protocol to the upstream service on the preview HTTP route", async () => {
+        let forwarded: string | undefined;
+        const fixture = await upstream((request, response) => {
+            forwarded = String(request.headers["x-forwarded-proto"]);
+            response.end("ok");
+        });
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        registerLocalServicePreviewRoutes(app as never, { ...fixture, resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: () => fixture.preview, hostOriginBaseDomain: 'example.test', externalProtocol: 'https',
+            validateAccess: () => ({ ok: true }) });
+        try {
+            const response = await app.inject({ method: 'GET', url: '/', headers: { host: 'preview.example.test', cookie: 'happier_preview_token=authorized' } });
+            expect(response.statusCode).toBe(200);
+            expect(forwarded).toBe('https');
+        } finally { await app.close(); }
+    });
+
     it.each([
         { policy: "script-src 'none'", meta: '' },
         { policy: "default-src 'none'", meta: '' },
@@ -219,8 +256,9 @@ describe("preview native HTTP transport", () => {
             if (!script || !('attrs' in script)) throw new Error('cooperative loader missing');
             const src = script.attrs.find((attr) => attr.name === 'src')?.value;
             if (!src) throw new Error('loader src missing');
-            const loaderUrl = new URL(src, 'http://preview.example.test');
-            expect(loaderUrl.origin).toBe('http://preview.example.test');
+            // The loader shares the origin of the document it is injected into, so it carries no scheme of its own.
+            expect(src).toMatch(/^\/__happier\/collector-loader\.js\?/);
+            const loaderUrl = new URL(src, 'https://preview.example.test');
             const loader = await app.inject({ method: 'GET', url: loaderUrl.pathname + loaderUrl.search, headers });
             expect(loader.statusCode).toBe(200);
             expect(loader.headers['content-type']).toContain('javascript');
@@ -256,6 +294,90 @@ describe("preview native HTTP transport", () => {
             expect(probe.json()).toEqual({ state: 'collector_available' });
             expect(probe.headers['access-control-allow-origin']).toBe(config.webPostMessageTargetOrigin);
             expect(probe.body).not.toContain('button');
+        } finally { await app.close(); }
+    });
+
+    it('carries the navigation reporter into every in-frame document of a bound relay preview and obeys only its own pane', async () => {
+        const upstreamCookies: Array<string | undefined> = [];
+        const fixture = await upstream((request, response) => {
+            upstreamCookies.push(request.headers.cookie);
+            if (request.url === '/asset.js') { response.setHeader('Content-Type', 'application/javascript'); response.end('window.asset=1'); return; }
+            response.setHeader('Content-Type', 'text/html');
+            response.end(`<html><head></head><body><a href="/other">${request.url}</a></body></html>`);
+        });
+        const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+            collector: { collectorId: 'c', nonce: 'pane_nonce', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        registerLocalServicePreviewRoutes(app as never, { ...fixture, resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: (host) => host === 'preview.example.test' ? fixture.preview : null,
+            hostOriginBaseDomain: 'example.test', validateAccess: ({ rawToken }) => rawToken === 'authorized' ? { ok: true } : { ok: false, reasonCode: 'token_invalid' } });
+        const frame = { host: 'preview.example.test', 'sec-fetch-dest': 'iframe' };
+        const authorized = 'happier_preview_token=authorized';
+        const loaderOf = (html: string) => {
+            const src = /<script defer src="([^"]+)"><\/script>/.exec(html)?.[1]?.replace(/&amp;/g, '&');
+            return src ? new URL(src, 'http://preview.example.test') : null;
+        };
+        // The guest realm: the loader's bytes run against a window whose Navigation API is the browser boundary.
+        const runLoader = (body: string, navigation: Record<string, unknown>) => {
+            const messages: Array<Record<string, unknown>> = [];
+            const parent = { postMessage: (data: string) => messages.push(JSON.parse(data)) };
+            const called: string[] = [];
+            const guest = Object.assign(new EventTarget(), { parent, navigation: Object.assign(new EventTarget(), navigation),
+                location: { href: `http://preview.example.test/other?app=1&__happierCollector=${encodeURIComponent(JSON.stringify(config))}` },
+                history: { back: () => called.push('back'), forward: () => called.push('forward') }, stop: () => called.push('stop'),
+                localStorage: { length: 0 }, sessionStorage: { length: 0 } });
+            runInNewContext(body, { window: guest, document: { title: 'Other', readyState: 'complete', documentElement: { nodeType: 1 }, querySelectorAll: () => [] },
+                console: { log() {}, info() {}, warn() {}, error() {}, debug() {} }, performance: { getEntriesByType: () => [] }, Event, URL });
+            const send = (origin: string, source: unknown, command: string, nonce = config.collector.nonce) => {
+                const event = new Event('message');
+                const data = JSON.stringify({ v: 1, kind: 'browser.collector.navigate', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce, command });
+                Object.defineProperties(event, { data: { value: data }, origin: { value: origin }, source: { value: source } });
+                guest.dispatchEvent(event);
+            };
+            return { messages, called, send, parent, guest };
+        };
+        try {
+            const entry = await app.inject({ method: 'GET', url: `/?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`, headers: { ...frame, cookie: authorized } });
+            const binding = [entry.headers['set-cookie']].flat().map(String).find((cookie) => cookie.startsWith('happier_preview_collector='));
+            expect(binding).toBeDefined();
+            expect(binding).toContain('HttpOnly');
+            const bound = `${authorized}; ${binding!.split(';')[0]}`;
+
+            // An in-frame link navigation carries no per-navigation query; the pane binding scopes it.
+            const other = await app.inject({ method: 'GET', url: '/other?app=1', headers: { ...frame, cookie: bound } });
+            const loaderUrl = loaderOf(other.body);
+            expect(loaderUrl).not.toBeNull();
+            expect(other.headers['x-happier-collector-state']).toBe('collector_available');
+            expect(upstreamCookies.every((cookie) => !cookie?.includes('happier_preview_collector'))).toBe(true);
+
+            const loader = await app.inject({ method: 'GET', url: loaderUrl!.pathname + loaderUrl!.search, headers: { host: frame.host, cookie: bound } });
+            expect(loader.statusCode).toBe(200);
+            const reporter = runLoader(loader.body, { canGoBack: true, canGoForward: false });
+            expect(reporter.messages).toContainEqual({ v: 1, kind: 'browser.collector.navigation', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+                collectorId: 'c', nonce: 'pane_nonce', loading: false, canGoBack: true, canGoForward: false, url: 'http://preview.example.test/other?app=1', title: 'Other' });
+            // An in-frame document is not re-admitted to page automation: it only reports and obeys navigation.
+            expect(reporter.messages.some((message) => message.kind === 'browser.collector.ready')).toBe(false);
+            reporter.send('https://evil.example.test', reporter.parent, 'back');
+            reporter.send(config.webPostMessageTargetOrigin, reporter.guest, 'back');
+            reporter.send(config.webPostMessageTargetOrigin, reporter.parent, 'back', 'other_pane');
+            expect(reporter.called).toEqual([]);
+            reporter.send(config.webPostMessageTargetOrigin, reporter.parent, 'back');
+            reporter.send(config.webPostMessageTargetOrigin, reporter.parent, 'forward');
+            reporter.send(config.webPostMessageTargetOrigin, reporter.parent, 'stop');
+            expect(reporter.called).toEqual(['back', 'forward', 'stop']);
+
+            // The pane's first document reports through the same module, and a pending cross-document navigation is a loading state.
+            const entryLoader = loaderOf(entry.body)!;
+            const first = runLoader((await app.inject({ method: 'GET', url: entryLoader.pathname + entryLoader.search, headers: { host: frame.host, cookie: bound } })).body, { canGoBack: false, canGoForward: false });
+            expect(first.messages).toContainEqual(expect.objectContaining({ kind: 'browser.collector.navigation', canGoBack: false, canGoForward: false, loading: false }));
+            first.guest.navigation.dispatchEvent(Object.assign(new Event('navigate'), { destination: { sameDocument: false } }));
+            expect(first.messages.at(-1)).toMatchObject({ kind: 'browser.collector.navigation', loading: true });
+
+            // No binding, no injection; sub-resources and top-level navigations are never touched.
+            expect(loaderOf((await app.inject({ method: 'GET', url: '/other', headers: { ...frame, cookie: authorized } })).body)).toBeNull();
+            expect((await app.inject({ method: 'GET', url: '/asset.js', headers: { host: frame.host, 'sec-fetch-dest': 'script', cookie: bound } })).body).toBe('window.asset=1');
+            expect(loaderOf((await app.inject({ method: 'GET', url: '/other', headers: { host: frame.host, 'sec-fetch-dest': 'document', cookie: bound } })).body)).toBeNull();
         } finally { await app.close(); }
     });
 

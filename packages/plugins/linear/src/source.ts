@@ -201,12 +201,22 @@ export async function readLinearIssue(input: Readonly<{ instance: TriageConfigur
 export async function getLinearEntry(input: unknown, context: PluginInvocationContext): Promise<TriageGetResultV1> {
   const parsed = TriageGetInputV1Schema.parse(input);
   try {
-    const read = await readLinearIssue(parsed, context);
+    const read = await readLinearIssue(parsed, context, true);
     const observation = projectLinearIssue(read.issue, read.viewer);
     const children = await collectLinearDetail(parsed, 'children', context).catch(() => undefined);
     const blockedBy = await collectLinearDetail(parsed, 'blockedBy', context).catch(() => undefined);
     const states = await collectLinearDetail(parsed, 'transitions', context).catch(() => undefined);
-    const enriched = { ...observation, snapshot: { ...observation.snapshot,
+    const labels = await collectLinearDetail(parsed, 'labels', context).catch(() => undefined);
+    const taskFields = {
+      title: read.issue.title,
+      ...(read.issue.description === undefined ? {} : { body: read.issue.description ?? '' }),
+      assigneeIds: read.issue.assignee === null ? [] : [read.issue.assignee.id],
+      ...(labels === undefined ? {} : { labelIds: labels.map(label => label.id) }),
+      projectId: read.issue.project?.id ?? null, priority: read.issue.priority,
+      dueDate: read.issue.dueDate, estimate: read.issue.estimate,
+      parent: read.issue.parent === null ? null : linearEntryRef(read.issue.parent.id),
+    };
+    const enriched = { ...observation, taskFields, snapshot: { ...observation.snapshot,
       relations: { ...observation.snapshot.relations,
         ...(children === undefined ? {} : { children: { total: children.length, entries: children.map((entry) => linearEntryRef(entry.id)), complete: true as const } }),
         ...(blockedBy === undefined ? {} : { blockedBy: blockedBy.map((entry) => linearEntryRef(entry.id)) }),

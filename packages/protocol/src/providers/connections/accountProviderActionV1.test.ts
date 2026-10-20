@@ -41,6 +41,24 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
 }
 
 describe('shared Provider Account Action producer', () => {
+  it.each(['account', 'group'] as const)('confirms an exact Connected Account source without creating a connection: %s', async kind => {
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const connectedAccountTarget = kind === 'account'
+      ? { kind, account: { service, accountId: 'account-a' } }
+      : { kind, service, groupId: 'pool-a' };
+    const row = accountRow();
+    const input = { action: 'confirmExperimental', connectionId: 'connected-source:catalog-a',
+      expectedConnectionRevision: 0, connectedAccountTarget,
+      agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.5',
+      compatibilityFingerprint: 'compatibility:v1:source-a' };
+    const result = await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', input), {});
+    expect(result).toMatchObject({ ok: true, result: { status: 'success', action: 'confirmExperimental' } });
+    expect(row.catalog.connections).toEqual([]);
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([{ v: 1, connectionId: input.connectionId,
+      connectedAccountTarget, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+      compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: 10 }]);
+    expect(row.writes).toBe(1);
+  });
   it('captures declaration facts when enabling Account access without machine observation', async () => {
     const row = accountRow();
     expect(await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', {

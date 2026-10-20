@@ -112,7 +112,7 @@ export async function listSessionsForAccount(params: Readonly<{
         });
     }
     let contributions: readonly SessionManagerContribution[] = [];
-    return await readSnapshotWithCurrentAdmission(async (tx) => {
+    return await readSnapshotWithCurrentAdmission(async (tx) => await params.timing.measureAsync("snapshot", async () => {
         const now = Date.now();
         const accessResolution = {
             where: buildSessionAccessWhere({
@@ -174,12 +174,12 @@ export async function listSessionsForAccount(params: Readonly<{
                 captureContributions: rows => { contributions = rows; },
             }),
         };
-    }, async (tx, captured) => {
+    }), async (tx, captured) => await params.timing.measureAsync("readmission", async () => {
         if (!captured) return captured;
         const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "legacy_owner_or_direct" as const };
         const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
         return { ...captured, sessions: await readmitCapturedSessionManagerReferencesInTx(tx, { ...admission, sessions, contributions }) };
-    }, { transactionClass: "session-listing-read" });
+    }), { transactionClass: "session-listing-read" });
 }
 
 async function listSessionRowsForAccount(params: Readonly<{
@@ -367,7 +367,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
     }
 
     let contributions: readonly SessionManagerContribution[] = [];
-    return await readSnapshotWithCurrentAdmission(async (tx) => {
+    return await readSnapshotWithCurrentAdmission(async (tx) => await params.timing.measureAsync("snapshot", async () => {
         const accessResolution = await resolveEffectiveSessionAccessWhere({
             tx,
             accountId: params.userId,
@@ -466,6 +466,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             accessMode: "effective_access_v1",
             allowProjectionFallback: false,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,
+            collectiveAccessSnapshot: accessResolution.collectiveAccessSnapshot,
             discussionReader: tx,
         };
         const page = await listSessionRowsForAccount({
@@ -505,7 +506,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
                 ? { metadataUpgradeRequiredCount: page.metadataUpgradeRequiredCount }
                 : {}),
         });
-    }, async (tx, captured) => {
+    }), async (tx, captured) => await params.timing.measureAsync("readmission", async () => {
         if (!captured) return captured;
         const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "effective_access_v1" as const };
         const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
@@ -516,5 +517,5 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             // during final admission, just as it removes that child's counts.
             sessions: query.coordinator === undefined ? current : current.filter(row => deriveSessionCoordinatorV1(row) === true),
         });
-    }, { transactionClass: "session-listing-read" });
+    }), { transactionClass: "session-listing-read" });
 }

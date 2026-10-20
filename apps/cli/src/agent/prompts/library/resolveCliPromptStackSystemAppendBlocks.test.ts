@@ -775,14 +775,14 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     await expect(resolve({ ...args, accountEntries: [optional, { ...optional, id: 'required-foreign', required: true }] }))
       .rejects.toMatchObject({ reason: 'not_found', cause: { code: 'profile_missing' } });
   });
-  it('keeps both optional and required selected context pending during a transient outage and recovers', async () => {
+  it('omits optional context but keeps required context pending during a transient outage and recovers', async () => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
     a.set('optional', 'Optional local context');
     a.fail(503);
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
     await expect(resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
-      .rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable',
+      .resolves.toMatchObject({ blocks: [],
         admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
     await expect(resolve({ surface: 'coding', accountEntries: [entry('optional')] }))
       .rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });

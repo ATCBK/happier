@@ -24,8 +24,30 @@ export function isAutonomousExchangeRootReceiptForAccount(value: unknown, accoun
 
 /** Foreign causes join the receiver's current local input/root, not the sender's private lineage. */
 export async function readReceiverAutonomousExchangeRootInTx(tx: Tx, input: Readonly<{
-    accountId: string; sessionId: string;
+    accountId: string; sessionId: string; selection?: 'latest_person';
 }>): Promise<AutonomousExchangeRoot | null> {
+    if (input.selection === 'latest_person') {
+        // Run wakes belong to the receiving person's exchange, not the root
+        // inherited by a later agent input. Follow notices are not person input.
+        let beforeSeq: number | undefined;
+        while (true) {
+            const candidate = await tx.sessionMessage.findFirst({
+                where: { sessionId: input.sessionId, targetExecutionRunId: null, sidechainId: null, authorAccountId: input.accountId,
+                    messageRole: 'user', localId: { not: null }, autonomousExchangeCause: null,
+                    ...(beforeSeq === undefined ? {} : { seq: { lt: beforeSeq } }) },
+                orderBy: { seq: 'desc' },
+                select: { seq: true, localId: true, inputAdmissionReceipt: true },
+            });
+            if (!candidate) return null;
+            const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(candidate.inputAdmissionReceipt);
+            if (candidate.localId && receipt.success && receipt.data.issuer === 'authenticatedAccount'
+                && receipt.data.actorAccountId === input.accountId && !receipt.data.followDeliveryV1
+                && !receipt.data.followSources && !receipt.data.followRelations) {
+                return { sessionId: input.sessionId, localId: candidate.localId };
+            }
+            beforeSeq = candidate.seq;
+        }
+    }
     const current = await tx.sessionMessage.findFirst({
         where: { sessionId: input.sessionId, targetExecutionRunId: null, messageRole: 'user', localId: { not: null } },
         orderBy: { seq: 'desc' },

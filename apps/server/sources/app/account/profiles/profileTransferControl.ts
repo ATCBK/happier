@@ -30,7 +30,7 @@ export function profileTransferControlReadResponseV1(result: ReservedAccountScop
     return result.status === 'present' ? { status: 'present', revision: result.revision, content: result.envelope } : result;
 }
 
-export async function markProfileTransferChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export async function markProfileTransferChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: PROFILE_TRANSFER_ACCOUNT_KV_KEY,
         hint: { profiles: true, revision: input.revision } });
 }

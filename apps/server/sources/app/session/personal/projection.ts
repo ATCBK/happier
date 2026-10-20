@@ -6,12 +6,14 @@ import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/session
 import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
+import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     buildSessionAccessProjectionSelect,
     buildSessionAccessProjectionSelectForAccounts,
     projectEffectiveSessionAccess,
     type EffectiveSessionAccess,
+    type SessionAccessProjectionContext,
 } from "@/app/session/access/sessionAccess";
 import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { applySessionTranscriptPublicationCeilingToProjection, resolveSessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -28,9 +30,9 @@ import {
 import { projectSessionFollowFacts } from "./followFacts";
 
 /** Select only the requesting Account's private relations beside canonical access facts. */
-export function createSessionPersonalProjectionSelect(accountId: string) {
+export function createSessionPersonalProjectionSelect(accountId: string, context: SessionAccessProjectionContext = {}) {
     return {
-        ...buildSessionAccessProjectionSelect(accountId),
+        ...buildSessionAccessProjectionSelect(accountId, context),
         archivedAt: true,
         responsibleAccountId: true,
         latestReadyEventSeq: true,
@@ -204,12 +206,13 @@ export function projectSessionViewer(params: Readonly<{
     qualifiedTeamIds?: ReadonlySet<string>;
     /** Exact access already admitted by the canonical point-operation owner. */
     effectiveAccess?: EffectiveSessionAccess;
+    recipientReadiness?: AccountRecipientEnvelopeReadinessReadScope;
     now?: number;
 }>): SessionViewerProjectionV1 {
     const { row, viewerAccountId, discussion } = params;
     const state = projectSessionViewerAttentionState({
         ...params,
-        contentAvailable: resolveViewerSessionNotificationContentAvailability(row),
+        contentAvailable: resolveViewerSessionNotificationContentAvailability(row, params.recipientReadiness),
     });
     return {
         readState: state.readState,
@@ -245,7 +248,7 @@ export function projectSessionViewer(params: Readonly<{
 
 /** Current Account/access admission also protects private read acknowledgments and push candidates. */
 export async function loadSessionViewerProjection(params: Readonly<{ accountId: string; sessionId: string; authentication: import("@/app/session/access/sessionAccessAuthentication").SessionAccessAuthentication }>): Promise<SessionViewerProjectionV1 | null> {
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { status: true } });
         if (account?.status !== "active") return null;
         const accessResolution = await resolveEffectiveSessionAccessWhere({
@@ -270,5 +273,5 @@ export async function loadSessionViewerProjection(params: Readonly<{ accountId: 
             discussion: discussion.get(params.sessionId) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,
         });
-    }, { isolationLevel: "Serializable" /* Personal projection combines Session, Follow, read-frontier and discussion facts in one snapshot. */ });
+    });
 }

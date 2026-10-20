@@ -114,6 +114,8 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
 vi.mock('@/components/ui/popover', () => ({
     PopoverBoundaryProvider: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement(React.Fragment, null, props.children),
+    PopoverScrollSourceProvider: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+        React.createElement(React.Fragment, null, props.children),
 }));
 
 vi.mock('@/components/sessions/new/attachments/useNewSessionAttachmentsController', () => ({
@@ -136,10 +138,6 @@ vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
 
 vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
     PathSelectionList: () => null,
-}));
-
-vi.mock('@/components/sessions/new/components/WizardSectionHeaderRow', () => ({
-    WizardSectionHeaderRow: () => null,
 }));
 
 vi.mock('@/components/profiles/ProfilesList', () => ({

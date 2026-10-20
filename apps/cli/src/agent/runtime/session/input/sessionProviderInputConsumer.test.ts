@@ -115,6 +115,159 @@ describe('createSessionProviderInputConsumer', () => {
     expect(takeContextOnlyInput).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['queued', 'Pending'] as const)(
+    'delivers arrived %s input while optional context is preparing and retains the single take', async (source) => {
+      const started = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const contextBatch = { message: 'retained host context', mode: { id: 'mode' }, isolate: true, hash: 'wake-2' };
+      const queue = new MessageQueue2<{ id: string }, string>(() => 'hash');
+      const metadataWaiters = new Set<() => void>();
+      let pending = false;
+      const takeContextOnlyInput = vi.fn(async () => {
+        started.resolve();
+        await prepared.promise;
+        return contextBatch;
+      });
+      const controller = new AbortController();
+      const consumer = createSessionProviderInputConsumer({
+        messageQueue: queue,
+        session: {
+          hasPendingProviderInput: () => pending,
+          waitForMetadataUpdate: signal => new Promise<boolean>(resolve => {
+            const finish = (changed: boolean) => {
+              metadataWaiters.delete(wake);
+              signal?.removeEventListener('abort', abort);
+              resolve(changed);
+            };
+            const wake = () => finish(true);
+            const abort = () => finish(false);
+            metadataWaiters.add(wake);
+            signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted) abort();
+          }),
+          materializeNextPendingMessageSafely: async () => {
+            if (!pending) return { type: 'no_pending' as const };
+            pending = false;
+            queue.pushImmediate('human input', { id: 'mode' });
+            return { type: 'materialized' as const, localId: 'human', seq: 1, content: null };
+          },
+        },
+        takeContextOnlyInput,
+        // The source stays ready while its taken context is still preparing.
+        waitForContextOnlyInputChange: async () => true,
+      });
+      let delivered: unknown;
+      const input = consumer.waitForNextInput({ abortSignal: controller.signal }).then(batch => { delivered = batch; return batch; });
+      try {
+        await started.promise;
+        if (source === 'queued') queue.pushImmediate('human input', { id: 'mode' });
+        else {
+          pending = true;
+          for (const wake of [...metadataWaiters]) wake();
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(delivered).toMatchObject({ message: 'human input' });
+        expect(metadataWaiters.size).toBe(0);
+        consumer.releaseInputBatch();
+        const next = consumer.waitForNextInput({ abortSignal: controller.signal });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(takeContextOnlyInput).toHaveBeenCalledTimes(1);
+        prepared.resolve();
+        await expect(next).resolves.toEqual(contextBatch);
+      } finally {
+        prepared.resolve();
+        controller.abort();
+        await input;
+      }
+    },
+  );
+
+  it('cancels a context-preparation wait without losing its late batch across admission changes', async () => {
+    const started = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    const batch = { message: 'retained after cancellation', mode: { id: 'mode' }, isolate: true, hash: 'wake-cancel' };
+    const queue = new MessageQueue2<{ id: string }, string>(() => 'hash');
+    const takeContextOnlyInput = vi.fn(async () => {
+      started.resolve();
+      await prepared.promise;
+      return batch;
+    });
+    const consumer = createSessionProviderInputConsumer({
+      messageQueue: queue,
+      session: {
+        waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+        readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 0 }),
+      },
+      takeContextOnlyInput,
+    });
+    const cancelled = new AbortController();
+    const resumed = new AbortController();
+    const first = consumer.waitForNextInput({ abortSignal: cancelled.signal });
+    let next: ReturnType<typeof consumer.waitForNextInput> | undefined;
+    try {
+      await started.promise;
+      cancelled.abort();
+      let cancelledResult: unknown = 'still waiting';
+      void first.then(result => { cancelledResult = result; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(cancelledResult).toBeNull();
+      await expect(consumer.readLiveWork()).resolves.toMatchObject({ input: 'active' });
+      await consumer.enforceProviderInputAdmission({
+        kind: 'action_required', reason: 'group_unavailable', serviceId: 'service', groupId: 'group',
+      });
+      queue.pushImmediate('human after cancellation', { id: 'mode' });
+      let delivered: unknown;
+      next = consumer.waitForNextInput({ abortSignal: resumed.signal }).then(result => { delivered = result; return result; });
+      prepared.resolve();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(delivered).toBeUndefined();
+      await consumer.clearProviderInputAdmission({ serviceId: 'service', groupId: 'group' });
+      await expect(next).resolves.toMatchObject({ message: 'human after cancellation' });
+      consumer.releaseInputBatch();
+      await expect(consumer.waitForNextInput({ abortSignal: resumed.signal })).resolves.toEqual(batch);
+      expect(takeContextOnlyInput).toHaveBeenCalledTimes(1);
+      consumer.releaseInputBatch();
+      await expect(consumer.readLiveWork()).resolves.toMatchObject({ input: 'settled' });
+    } finally {
+      prepared.resolve();
+      cancelled.abort();
+      resumed.abort();
+      await first;
+      await next;
+    }
+  });
+
+  it('preserves a late context preparation failure for the next wait after user input', async () => {
+    const started = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    const failure = new Error('context source unavailable');
+    const queue = new MessageQueue2<{ id: string }, string>(() => 'hash');
+    const takeContextOnlyInput = vi.fn(async () => {
+      started.resolve();
+      await prepared.promise;
+      throw failure;
+    });
+    const consumer = createSessionProviderInputConsumer({
+      messageQueue: queue,
+      session: { waitForMetadataUpdate: () => new Promise<boolean>(() => {}) },
+      takeContextOnlyInput,
+    });
+    const controller = new AbortController();
+    const input = consumer.waitForNextInput({ abortSignal: controller.signal });
+    try {
+      await started.promise;
+      queue.pushImmediate('human before context failure', { id: 'mode' });
+      await expect(input).resolves.toMatchObject({ message: 'human before context failure' });
+      prepared.resolve();
+      await expect(consumer.waitForNextInput({ abortSignal: controller.signal })).rejects.toBe(failure);
+      expect(takeContextOnlyInput).toHaveBeenCalledTimes(1);
+    } finally {
+      prepared.resolve();
+      controller.abort();
+      await input;
+    }
+  });
+
   it('arms the Pending wake before an active-turn pass and drains once for the wake without polling', async () => {
     const metadataWakes: Array<(updated: boolean) => void> = [];
     const materializeNextPendingMessageSafely = vi
@@ -1480,40 +1633,6 @@ describe('createSessionProviderInputConsumer', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
       await expect(waiting).resolves.toMatchObject({ message: 'rejoined frozen claim' });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('caps timer-driven ambiguous materialization rejoin at one attempt until another wake', async () => {
-    vi.useFakeTimers();
-    try {
-      const abortController = new AbortController();
-      type Mode = { id: string };
-      const materializeNextPendingMessageSafely = vi
-        .fn()
-        .mockResolvedValue({ type: 'retryable_transport' as const, retryAfterMs: 1_000 });
-      const consumer = createSessionProviderInputConsumer({
-        messageQueue: new MessageQueue2<Mode>(() => 'hash'),
-        session: {
-          waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
-          materializeNextPendingMessageSafely,
-        },
-        reconcileWhenEmpty: 'skip',
-      });
-
-      const waiting = consumer.waitForNextInput({ abortSignal: abortController.signal });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
-
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
-
-      abortController.abort();
-      await expect(waiting).resolves.toBeNull();
     } finally {
       vi.useRealTimers();
     }

@@ -9,6 +9,7 @@ import {
 import type { DiscordKnownChannel } from './discordEndpointResolution.js';
 import {
   normalizeDiscordGatewayUrl,
+  parseDiscordGatewaySessionStartLimit,
   type DiscordGatewaySessionStartLimit,
 } from './discordGateway.js';
 import type {
@@ -89,10 +90,6 @@ function nonEmptyString(value: unknown): string | null {
 
 function nonNegativeSafeInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function positiveSafeInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 const MAX_DISCORD_PERMISSION_BITS = (1n << 64n) - 1n;
@@ -208,23 +205,16 @@ function encodeJson(value: unknown): Uint8Array {
 function parseGatewayBot(value: unknown): DiscordGatewayBotInfo | null {
   if (!isRecord(value) || !isRecord(value.session_start_limit)) return null;
   const gatewayUrl = normalizeDiscordGatewayUrl(value.url);
-  const total = positiveSafeInteger(value.session_start_limit.total);
-  const remaining = nonNegativeSafeInteger(value.session_start_limit.remaining);
-  const resetAfterMs = positiveSafeInteger(value.session_start_limit.reset_after);
-  const maxConcurrency = positiveSafeInteger(value.session_start_limit.max_concurrency);
-  if (
-    !gatewayUrl
-    || total === null
-    || remaining === null
-    || remaining > total
-    || resetAfterMs === null
-    || maxConcurrency === null
-  ) {
-    return null;
-  }
+  const sessionStartLimit = parseDiscordGatewaySessionStartLimit({
+    total: value.session_start_limit.total,
+    remaining: value.session_start_limit.remaining,
+    resetAfterMs: value.session_start_limit.reset_after,
+    maxConcurrency: value.session_start_limit.max_concurrency,
+  });
+  if (!gatewayUrl || !sessionStartLimit) return null;
   return {
     gatewayUrl,
-    sessionStartLimit: { total, remaining, resetAfterMs, maxConcurrency },
+    sessionStartLimit,
   };
 }
 

@@ -11,6 +11,29 @@ import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/ac
 import { createDeferred } from '@/dev/testkit';
 
 describe('createArtifactWithHeaderViaApi', () => {
+  it('derives coarse kind from the actual header for create and update', async () => {
+    const writes: Record<string, unknown>[] = [];
+    let current: DecryptedArtifact | undefined;
+    const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      const wire = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push(wire);
+      return Response.json(path === '/v1/artifacts'
+        ? { ...wire, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }
+        : { success: true, headerVersion: 2, bodyVersion: 2 });
+    };
+    const { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi } = await import('./syncArtifacts');
+    const shared = { credentials: { token: 't' }, serverId: 'artifact-kind-home', encryption: null,
+      artifactDataKeys: new Map(), request };
+    const artifactId = await createArtifactWithHeaderViaApi({ ...shared,
+      header: { kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1', title: 'Skill' },
+      body: 'skill', addArtifact: artifact => { current = artifact; } });
+    await updateArtifactWithHeaderViaApi({ ...shared, artifactId,
+      header: { kind: 'prompt_doc.v2', title: 'Prompt' }, body: 'prompt',
+      getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
+    expect(writes.map(write => write.kind)).toEqual(['skill', 'prompt']);
+  });
   it('carries the exact decision source to Home on lazy create and existing-document correction', async () => {
     const { CoordinationMessageRefV1Schema } = await import('@happier-dev/protocol/discussions/references');
     const memoryDecisionSource = CoordinationMessageRefV1Schema.parse({ kind: 'session',

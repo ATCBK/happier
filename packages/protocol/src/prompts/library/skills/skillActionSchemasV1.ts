@@ -23,7 +23,13 @@ const createResult = lazyZodSchema(() => z.strictObject({ ok: z.literal(true), s
 const batchCreateResult = lazyZodSchema(() => z.strictObject({ skillIds: z.array(skillId), includedInSessionId: z.nullable(z.string()),
   incomplete: z.optional(z.array(z.strictObject({ skillId, step: z.enum(['rules', 'session_include']) }))) }));
 export const SkillInstallPreviewV1Schema = lazyZodSchema(() => z.strictObject({ path: z.string(), name: z.string(), description: z.nullable(z.string()),
-  files: z.array(SkillFileInputV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema, provenance: SkillProvenanceV1Schema }));
+  files: z.array(SkillFileInputV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema, provenance: SkillProvenanceV1Schema,
+  /** Existing library identity: Add opens/reuses it rather than creating another skill. */
+  inLibrary: z.optional(skillId),
+  /** Advisory: relative files `SKILL.md` points at that this bundle will not contain; absent when there are none. */
+  outsideReferences: z.optional(z.array(z.string())),
+  /** Other previewed skills (by `path`) of the same source tree that `SKILL.md` refers to, with the `outsideReferences` each one covers; absent when there are none. */
+  siblingSkills: z.optional(z.array(z.strictObject({ path: z.string(), references: z.array(z.string()) }))) }));
 export type SkillInstallPreviewV1 = z.infer<typeof SkillInstallPreviewV1Schema>;
 export const SkillInstallSourceV1Schema = lazyZodSchema(() => z.union([
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RegistryItemPointerV1Schema, { kind: z.literal('registry') })),

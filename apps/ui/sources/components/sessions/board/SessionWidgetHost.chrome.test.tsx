@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { StyleSheet } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -162,6 +163,16 @@ describe('SessionWidgetHost chrome', () => {
     });
     beforeEach(() => {
         standardCleanup();
+    });
+
+    it('gives Post a snapshot a region with real size to open from, because the popover measurer rejects zero-size anchors', async () => {
+        const screen = await renderCard();
+        const region = screen.findHostByTestId('widget-card-region');
+        expect(region).not.toBeNull();
+        const style = StyleSheet.flatten(region?.props.style) as { height?: number; top?: number; bottom?: number };
+        // Measured by the browser, a mark with no height has no rectangle; one laid over the card (top and bottom) has the card's.
+        const hasExtent = (style.height ?? 0) > 0 || (style.top !== undefined && style.bottom !== undefined);
+        expect(hasExtent).toBe(true);
     });
 
     it('publishes a qualified source without requiring a mounted Companion rail and preserves body selection', async () => {

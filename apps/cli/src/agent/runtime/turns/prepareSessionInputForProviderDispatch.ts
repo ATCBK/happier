@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { UsagePromptCompositionSchema, type UsagePromptComposition, type UsagePromptCompositionComponent } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
 import { createPromptCompositionScope, type PromptCompositionScope } from '@/agent/prompting/promptComposition';
 import { logger } from '@/ui/logger';
-import type { PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
+import { normalizePermissionModeQueuedPromptLocalIds, type PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
 import type { SessionClientInteractionApi } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
 import {
@@ -106,7 +106,9 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
       },
     } } : {}),
   });
-  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> = {}) => {
+  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> & {
+    runFollowDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
+  } = {}) => {
     const rendered = renderSessionInputContextPromptV1({
       provenanceBlock: input.prompt.inputContextBlock ?? '',
       ...context.promptContext,
@@ -115,9 +117,13 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
         ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer, text: input.transformedUserText }] : [])],
       transformedUserText: input.providerNativeCommand || input.prompt.returnedAnswer ? '' : input.transformedUserText,
     });
-    finalPrompt = input.providerNativeCommand
+    const runFollowNotices = (optionalContext.runFollowDeliveries ?? []).flatMap(({ delivery }) => 'source' in delivery.original
+      ? [`<happier_run_follow>${JSON.stringify({ original: delivery.original,
+        ...('event' in delivery ? { event: delivery.event } : {}) }).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')}</happier_run_follow>\nRead the original Run result.`] : []);
+    const nativePrompt = input.providerNativeCommand
       ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
       : rendered;
+    finalPrompt = [nativePrompt, ...runFollowNotices].filter(Boolean).join('\n');
     return finalPrompt;
   };
   const requiredPrompt = renderPrompt();
@@ -148,17 +154,25 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
   };
   return {
     async assertAdmission(): Promise<void> {
-      if (!input.prompt.discussionAddressing) return;
+      // Context-only input has its own host admission boundary. Every durable
+      // protected input must re-enter Pending after arbitrary-duration prompt
+      // preparation: materialization into the local queue is custody, not a
+      // grant to dispatch an input that has since been discarded.
+      if (input.prompt.hostContextOnly || (!input.prompt.discussionAddressing && !input.prompt.causalPermissionAuthority)) return;
       const reconcile = services?.reconcileSessionInputForProviderDispatch;
-      if (!reconcile || !input.localId) throw new SessionInputDispatchAdmissionError('outcomeUnknown');
-      let status: Awaited<ReturnType<typeof reconcile>>;
-      try {
-        status = await reconcile({ localId: input.localId, discussionAddressing: input.prompt.discussionAddressing, signal: input.signal });
-      } catch (error) {
-        if (isAbortLikeError(error)) throw error;
-        throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+      const localIds = normalizePermissionModeQueuedPromptLocalIds(input.prompt);
+      if (!reconcile || localIds.length === 0) throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+      for (const localId of localIds) {
+        let status: Awaited<ReturnType<typeof reconcile>>;
+        try {
+          status = await reconcile({ localId, ...(input.prompt.discussionAddressing
+            ? { discussionAddressing: input.prompt.discussionAddressing } : {}), signal: input.signal });
+        } catch (error) {
+          if (isAbortLikeError(error)) throw error;
+          throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+        }
+        if (status !== 'admitted') throw new SessionInputDispatchAdmissionError(status);
       }
-      if (status !== 'admitted') throw new SessionInputDispatchAdmissionError(status);
     },
     readComposition,
     retainComposition,
@@ -175,7 +189,7 @@ class SessionInputDispatchAdmissionError extends Error {
   readonly code: string;
   readonly retryable: boolean;
   constructor(status: 'rejected' | 'held' | 'outcomeUnknown') {
-    super('Discussion input is not currently admitted for provider dispatch');
+    super('Session input is not currently admitted for provider dispatch');
     this.code = status === 'rejected' ? 'session_input_rejected' : status === 'held' ? 'session_input_held' : 'session_input_admission_unavailable';
     this.retryable = status !== 'rejected';
   }

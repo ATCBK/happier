@@ -5,7 +5,9 @@ export const PENDING_INPUT_PROTOCOL_VERSION_V2 = 2 as const;
 export const PENDING_INPUT_PROTOCOL_VERSION_V3 = 3 as const;
 /** Identity-bound reset holds, installed Machine release and waiting metadata reads. */
 export const PENDING_INPUT_PROTOCOL_VERSION_V4 = 4 as const;
-export const CURRENT_PENDING_INPUT_PROTOCOL_VERSION = PENDING_INPUT_PROTOCOL_VERSION_V4;
+/** Current-publisher retained next-turn context may accompany a later input claim. */
+export const PENDING_INPUT_PROTOCOL_VERSION_V5 = 5 as const;
+export const CURRENT_PENDING_INPUT_PROTOCOL_VERSION = PENDING_INPUT_PROTOCOL_VERSION_V5;
 export const EXTERNAL_SESSION_IMPORT_PUBLICATION_FENCE_VERSION_V1 = 1 as const;
 export const EXTERNAL_SESSION_HOSTED_ADMISSION_VERSION_V2 = 2 as const;
 export const EXTERNAL_SESSION_RUNTIME_BOUND_ADMISSION_VERSION_V3 = 3 as const;

@@ -23,8 +23,11 @@ import { createDiscussionClient } from '@/sync/api/discussions/discussionActions
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 import { useDiscussionRepositorySnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readDiscussionRouteAnchor } from './discussionRoutes';
+import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readDiscussionRouteAnchor, readDiscussionRouteDraftId } from './discussionRoutes';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { Text } from '@/components/ui/text/Text';
+import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
+import { useArtifact } from '@/sync/domains/state/storage';
 
 const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 const NO_SERVER_IDS: readonly string[] = Object.freeze([]);
@@ -34,6 +37,8 @@ const styles = StyleSheet.create((theme) => ({
     // The index page's invitation sits in the middle of the page (lab T2-E).
     indexPage: { flex: 1, justifyContent: 'center' },
     headerButton: { minWidth: minimumInteractiveTargetSize, minHeight: minimumInteractiveTargetSize, alignItems: 'center', justifyContent: 'center' },
+    headerBackLabelled: { flexDirection: 'row', gap: theme.space.s8 },
+    headerBackLabel: { flexShrink: 1 },
 }));
 
 function readParam(value: string | string[] | undefined): string | null {
@@ -56,6 +61,8 @@ export function DiscussionRouteScreen(props: Readonly<{
         anchor?: string | string[];
         anchorSessionId?: string | string[];
         anchorMessageId?: string | string[];
+        returnArtifactId?: string | string[];
+        draftId?: string | string[];
     }>();
     const explicitServerId = readSessionRouteServerId(params);
     // An unqualified Home launcher captures its destination once. Changing the
@@ -72,6 +79,7 @@ export function DiscussionRouteScreen(props: Readonly<{
     const address = React.useMemo(() => serverId ? { serverId } : null, [serverId]);
     const discussionId = readParam(params.discussionId);
     const messageId = readParam(params.messageId);
+    const draftId = readDiscussionRouteDraftId(params.draftId);
     const anchorSessionId = readParam(params.anchorSessionId);
     const anchorMessageId = readParam(params.anchorMessageId);
     const anchorParam = readParam(params.anchor);
@@ -81,18 +89,23 @@ export function DiscussionRouteScreen(props: Readonly<{
     // focused route is the visible Discussion surface for read and presence.
     const routeFocused = useIsFocused();
     const sourceSurface = normalizeSessionMobileSurface(readParam(params.sourceSurface)) ?? 'discussions';
-    const fallbackHref = serverId ? buildDiscussionsRouteHref({ serverId }) : '/';
+    // Opened from a passage in a Doc: Back names that Doc and returns to it (lab K1-Ap).
+    const returnArtifactId = readParam(params.returnArtifactId);
+    const returnArtifact = useArtifact(returnArtifactId ?? '');
+    const returnLabel = returnArtifactId && returnArtifact ? (returnArtifact.title || t('artifacts.untitled')) : null;
+    const fallbackHref = returnArtifactId ? artifactViewRoute(returnArtifactId)
+        : serverId ? buildDiscussionsRouteHref({ serverId }) : '/';
     React.useEffect(() => {
-        if (explicitServerId || !address || anchor === null) return;
+        if (explicitServerId || !address || anchor === null || props.kind === 'new' && draftId === null) return;
         const href = props.kind === 'list'
             ? buildDiscussionsRouteHref(address)
             : props.kind === 'new'
-                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(anchor ? { anchor } : {}) }, sourceSurface })
+                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }, sourceSurface })
                 : discussionId
                     ? buildDiscussionRouteHref({ target: { kind: 'discussion', address, discussionId, ...(messageId ? { messageId } : {}) }, sourceSurface })
                     : null;
         if (href) router.replace(href as Href);
-    }, [address, anchor, discussionId, messageId, explicitServerId, props.kind, router, sourceSurface]);
+    }, [address, anchor, discussionId, draftId, messageId, explicitServerId, props.kind, router, sourceSurface]);
     const onBack = React.useCallback(() => safeRouterBack({
         router,
         navigation,
@@ -101,30 +114,38 @@ export function DiscussionRouteScreen(props: Readonly<{
     const headerLeft = React.useCallback(() => (
         <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t('common.back')}
+            accessibilityLabel={returnLabel ?? t('common.back')}
             testID="session-discussion-back"
             onPress={onBack}
-            style={({ pressed }) => [styles.headerButton, pressed ? { opacity: motionTokens.press.opacity } : null]}
+            style={({ pressed }) => [styles.headerButton, returnLabel ? styles.headerBackLabelled : null,
+                pressed ? { opacity: motionTokens.press.opacity } : null]}
         >
             <Icon name="arrow-left" size={20} color={theme.colors.chrome.header.foreground} />
+            {returnLabel ? (
+                <Text variant="body" emphasis="medium" numberOfLines={1} style={[styles.headerBackLabel, { color: theme.colors.chrome.header.foreground }]}>
+                    {returnLabel}
+                </Text>
+            ) : null}
         </Pressable>
-    ), [onBack, theme.colors.chrome.header.foreground]);
-    // Beside the column the page carries its own header band; a phone keeps the navigation bar.
+    ), [onBack, returnLabel, theme.colors.chrome.header.foreground]);
+    // Beside the column the page carries its own header band. On a phone a Discussion folds its header into
+    // its own navigation band (lab T2-Ap), so only the new page keeps the navigation bar.
     const columnVisible = useAppShellColumn().columnVisible;
     const screenOptions = React.useMemo(() => ({
-        headerShown: !columnVisible && props.kind !== 'list',
-        headerTitle: props.kind === 'new'
+        headerShown: !columnVisible && props.kind === 'new',
+        // The labelled Back already says where this thread lives; a second title would repeat it.
+        headerTitle: returnLabel ? '' : props.kind === 'new'
             ? t('session.collaboration.discussion.newDiscussion')
             : t('session.collaboration.discussion.title'),
         headerLeft,
-    }), [columnVisible, headerLeft, props.kind]);
+    }), [columnVisible, headerLeft, props.kind, returnLabel]);
 
     return (
         <View style={styles.root}>
             <Stack.Screen options={screenOptions} />
             {/* Beside the column the Discussion is a page; without it (a phone) it takes the phone step. */}
             <SurfaceStateSizeProvider size={columnVisible ? 'page' : 'phone'}>
-            {!address || (props.kind === 'new' && anchor === null) || (props.kind === 'discussion' && !discussionId) ? (
+            {!address || (props.kind === 'new' && (anchor === null || draftId === null)) || (props.kind === 'discussion' && !discussionId) ? (
                 <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} />
             ) : props.kind === 'list' ? (
                 !columnVisible
@@ -135,7 +156,7 @@ export function DiscussionRouteScreen(props: Readonly<{
             ) : (
                 <DiscussionDetailsView
                     target={props.kind === 'new'
-                        ? { kind: 'new', address, ...(anchor ? { anchor } : {}) }
+                        ? { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }
                         : { kind: 'discussion', address, discussionId: discussionId!, ...(messageId ? { messageId } : {}) }}
                     active={routeFocused}
                     standaloneSurface

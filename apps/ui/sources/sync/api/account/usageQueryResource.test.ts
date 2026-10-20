@@ -15,6 +15,7 @@ import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sy
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { UsageAnalyticsQueryRequestSchema, QualifiedConnectedAccountGroupV4Schema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -136,21 +137,22 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 
 describe('usage query captured Resource adapter', () => {
   it.each(['recovery', 'empty-success'] as const)('admits only successfully acquired interval evidence: %s', async scenario => {
-    const ids = ['healthy-turns', 'retry-turns'];
+    const ids = ['healthy-turns', 'retry-turns', 'empty-turns', 'unread', 'healthy-second'];
     let failedTurns = scenario === 'recovery';
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json(value);
-      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns)$/.exec(request.path);
+      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)$/.exec(request.path);
+      if (detail?.[1] === 'unread' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
       if (detail) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
         createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
-      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns)\/turns$/.exec(request.path);
+      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)\/turns$/.exec(request.path);
       if (turn) {
         const id = turn[1]!;
         if (id === 'retry-turns' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
         return Response.json({ v: 1, sessionId: id, updatedAt: 900,
-          turns: id === 'retry-turns' && scenario === 'empty-success' ? [] : [
+          turns: id === 'empty-turns' || id === 'unread' || id === 'retry-turns' && scenario === 'empty-success' ? [] : [
             { turnId: `${id}-turn`, agentId: 'codex', status: 'completed', startedAt: 100,
-              terminalAt: id === 'healthy-turns' ? 400 : 700, updatedAt: 900 },
+              terminalAt: id === 'retry-turns' ? 700 : 400, updatedAt: 900 },
           ] });
       }
       return undefined;
@@ -169,6 +171,8 @@ describe('usage query captured Resource adapter', () => {
     try {
       await entry.refresh();
       expect(slice().pending).toBe(false);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: scenario === 'recovery' ? 3 : 5 });
+      expect(slice().coach?.sessionCoverage).toEqual(slice().howYouWork?.sessionCoverage);
       if (scenario === 'recovery') {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
         expect(slice().howYouWork?.intervals).toBeNull();
@@ -176,18 +180,20 @@ describe('usage query captured Resource adapter', () => {
         expect(observed.every(row => row.howYouWork?.intervals == null)).toBe(true);
       } else {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
-        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(300);
+        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(600);
       }
       const attemptsBeforeRetry = sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns').length;
       failedTurns = false;
       // No Session/store marker changes: Retry must reacquire only failed evidence.
       await entry.refresh();
-      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 900 : 300);
+      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 1200 : 600);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+      expect(slice().coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
       expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
       expect(sessionRequests().filter(request => request.path === '/v1/sessions/healthy-turns/turns')).toHaveLength(1);
       expect(sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns'))
         .toHaveLength(attemptsBeforeRetry + (scenario === 'recovery' ? 1 : 0));
-      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns)(\/|$)/.test(request.path))).toEqual([]);
+      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)(\/|$)/.test(request.path))).toEqual([]);
     } finally { release(); }
   });
 
@@ -381,6 +387,7 @@ describe('usage query captured Resource adapter', () => {
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json({ ...value, contributions: [{ ...workContribution, sessionId: 'coach-session' }] });
       if (request.path === '/v2/sessions/coach-session') { sessionRequested.resolve(); return privateSession.promise; }
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/account/entity-rows/mcp') { catalogRequested.resolve(); return catalogRead.promise; }
       if (request.path === '/v1/sessions/coach-session/messages') return Response.json({ messages: [{ id: 'mcp-row', seq: 1,
         localId: null, createdAt: 500, content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: 'mcp-window',
@@ -1063,19 +1070,26 @@ describe('usage query captured Resource adapter', () => {
       profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
     const digestGate = createDeferred<void>();
     const originalDigest = platformDigest.digest;
-    const digest = vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
-      if (digest.mock.calls.length === 1) await digestGate.promise;
+    const submitted: string[] = [];
+    vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
+      const text = new TextDecoder().decode(bytes);
+      // Bootstrap shares the crypto boundary; only this Resource's revisions
+      // belong to the coalescing contract (as in the adjacent digest test).
+      if (text.startsWith('{"v":1,"results":[')) {
+        submitted.push(text);
+        if (submitted.length === 1) await digestGate.promise;
+      }
       return await originalDigest(algorithm, bytes);
     });
     const entry = getUsageQueryResourceStore(captured)
       .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
-      await expect.poll(() => digest.mock.calls.length).toBe(1);
+      await expect.poll(() => submitted.length).toBe(1);
       await flushHookEffects();
       digestGate.resolve();
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
-      expect(digest).toHaveBeenCalledTimes(2);
+      expect(submitted).toHaveLength(2);
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting).toMatchObject(value);
     } finally { digestGate.resolve(); release(); }
   });
@@ -2223,6 +2237,7 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/staged-session') return session.promise;
+      if (request.path === '/v1/sessions/staged-session/turns') return Response.json({ v: 1, sessionId: 'staged-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/staged-session/messages') return Response.json({ messages: [], hasMore: false });
       return undefined;
     });
@@ -2260,6 +2275,35 @@ describe('usage query captured Resource adapter', () => {
       expect(completed?.howYouWork?.detailStatus).toBe('partial');
       expect(completed?.sources.some(source => source.source === 'how_you_work' && source.status === 'pending')).toBe(false);
     } finally { release(); }
+  });
+
+  it('keeps same-scope approval waits consistent across Coach and Human loop while empty turn history stays unknown', async () => {
+    const nowMs = Date.now();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/truth') return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 'truth',
+        createdAt: 1, updatedAt: nowMs, seq: 1, active: true, activeAt: nowMs, metadataVersion: 1, agentStateVersion: 1 }),
+        agentState: JSON.stringify({ completedRequests: { approval: { tool: 'Bash', arguments: {},
+          createdAt: nowMs - 1000, completedAt: nowMs - 500, status: 'approved' } } }) } });
+      if (request.path === '/v1/sessions/truth/turns') return Response.json({ v: 1, sessionId: 'truth', updatedAt: nowMs, turns: [] });
+      if (request.path === '/v1/sessions/truth/messages') return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: { truth: createSessionFixture({ id: 'truth', seq: 1,
+      serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+    const parallel = normalizeUsageQuery({ period: { relative: '7days' }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const humanLoop = normalizeUsageQuery({ ...parallel, includeTranscriptEvidence: true });
+    const batch = await readUiUsageQueryBatch(captured, { queries: [parallel, humanLoop] });
+    for (const slice of batch.results) {
+      expect(slice.accounting?.totals.tokens.total).toBe(value.totals.tokens.total);
+      expect(slice.howYouWork?.todayInParallel, 'empty retained turn history cannot establish no runs today').toBeNull();
+      expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 1, decisionLatencyMs: 500 });
+      const finding = slice.coach?.findings.find(row => row.detectorId === 'approval_friction');
+      expect(finding?.measurements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ metric: 'permission_wait', value: 500 }),
+        expect.objectContaining({ metric: 'permission_requests', value: 1 }),
+      ]));
+    }
   });
 
   it('settles a summary slice while a sibling transcript in the same batch is held or fails', async () => {
@@ -2436,6 +2480,7 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/coach-session') return Response.json({ session: coachSession });
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/coach-session/messages') {
         // Real role filtering is the HTTP boundary: a user-only read cannot see host events.
         const admitted = request.url.searchParams.get('roles')?.split(',').includes('event');
@@ -2585,6 +2630,7 @@ describe('usage query captured Resource adapter', () => {
         metadataVersion: 1, metadata: JSON.stringify({ name: 'Opened' }),
         agentStateVersion: 1, agentState: null, share: null,
       } });
+      if (request.path === '/v1/sessions/fresh-session/turns') return Response.json({ v: 1, sessionId: 'fresh-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/fresh-session/messages') return Response.json({ messages: [{
         id: 'accepted-row', seq: 2, localId: 'accepted-input', createdAt: 300,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'private prompt text' } } },
@@ -2654,6 +2700,7 @@ describe('usage query captured Resource adapter', () => {
         agentState: JSON.stringify({ completedRequests: { request: { tool: 'Bash', arguments: {},
           turnId: 'turn', createdAt: 200, completedAt: 400, status: 'approved' } } }), share: null,
       } });
+      if (request.path === '/v1/sessions/page-session/turns') return Response.json({ v: 1, sessionId: 'page-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/page-session/messages') return Response.json({ messages:
         pageKind === 'empty' ? [] : pageKind === 'unopened' ? unopenedRows : pageKind === 'legacy' ? [{
           id: 'legacy-row', seq: 3, localId: 'legacy-input', createdAt: 500,
@@ -3004,6 +3051,76 @@ describe('usage query captured Resource adapter', () => {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
       await expect.poll(agentTime).toBeUndefined();
     } finally { release(); }
+  });
+
+  it.each(['accounting', 'sessions'] as const)('keeps Account Coach membership on a failed %s refresh and isolates a Session-scoped sibling', async failureSource => {
+    const ids = ['first', 'second', 'third'];
+    let membership = ids;
+    let failing = false;
+    const captured = await context(request => {
+      if (failing && failureSource === 'sessions' && request.path === '/v2/sessions/read-batch') {
+        return Response.json({ error: 'unavailable' }, { status: 503 });
+      }
+      if (request.path === '/v2/usage/query') {
+        const pinned = UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.sessionIds;
+        if (failing && failureSource === 'accounting' && !pinned?.length) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return Response.json({ ...value, contributions: membership.filter(id => !pinned?.length || pinned.includes(id))
+          .map(id => ({ ...workContribution, id, sessionId: id, turnId: null })) });
+      }
+      const detail = /^\/v2\/sessions\/(first|second|third)$/.exec(request.path);
+      if (detail) return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
+        seq: 1, updatedAt: 900, agentStateVersion: 1 }), agentState: JSON.stringify({ completedRequests: {
+          approval: { tool: 'Bash', arguments: {}, turnId: 'turn', createdAt: 100, completedAt: 200, status: 'approved' },
+        } }) } });
+      const turns = /^\/v1\/sessions\/(first|second|third)\/turns$/.exec(request.path);
+      if (turns) return Response.json({ v: 1, sessionId: turns[1]!, updatedAt: 900, turns: [] });
+      if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    const serverId = captured.accountLifetime.scope.serverId;
+    // Accounting admits historical Sessions independently of the small hydrated detail cache.
+    storage.setState({ sessions: { first: createSessionFixture({ id: 'first', serverId, encryptionMode: 'plain' }) } });
+    const store = getUsageQueryResourceStore(captured);
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const broad = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ ...query, session: 'first' })],
+    }) });
+    const coach = (entry: typeof broad) => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!.coach!;
+    await broad.refresh();
+    await pinned.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    const finding = coach(broad).findings.find(row => row.detectorId === 'approval_friction')!;
+    expect(finding.measurements.find(row => row.metric === 'permission_requests')?.value).toBe(3);
+    // Failed A retains the same displayed accounting; private evidence must use that same population.
+    // Alternate success/failure and a scoped sibling as periodic background reads do.
+    for (let pass = 0; pass < 2; pass++) {
+      await pinned.refresh();
+      failing = true;
+      if (failureSource === 'sessions') publishHomeAccountChange(serverId);
+      await broad.refresh();
+      expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+      expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
+      if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+      else {
+        expect.soft(failed.results[0]!.pending, 'failed evidence has settled, rather than reading forever').toBe(false);
+        expect.soft(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }));
+      }
+      expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+      if (failureSource === 'sessions') {
+        await broad.refresh();
+        expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
+        expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      }
+      failing = false;
+      await broad.refresh();
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    }
+    membership = ['first'];
+    await broad.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
   });
 
   it('reuses a list-only Session marker and refreshes it when that row advances', async () => {

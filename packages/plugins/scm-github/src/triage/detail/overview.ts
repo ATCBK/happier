@@ -34,8 +34,20 @@ function readCount(value: unknown): number | null {
 export function readGithubNamedMembers(
   value: unknown,
   member: string,
+  mode: 'display' | 'exact' = 'display',
 ): readonly string[] | null {
   if (!Array.isArray(value)) return null;
+  if (mode === 'exact') {
+    const names: string[] = [];
+    for (const entry of value) {
+      const name = typeof entry === 'string' ? entry : isRecord(entry) ? entry[member] : undefined;
+      // A replacement edit needs the entire collection, including significant
+      // whitespace. A malformed member makes this field unavailable, not empty.
+      if (typeof name !== 'string' || name.trim().length === 0) return null;
+      names.push(name);
+    }
+    return Object.freeze(names);
+  }
   return Object.freeze(value.flatMap((entry) => {
     if (typeof entry === 'string') return entry.trim().length > 0 ? [entry.trim()] : [];
     if (!isRecord(entry)) return [];

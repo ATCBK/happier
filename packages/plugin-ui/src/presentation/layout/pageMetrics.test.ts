@@ -208,7 +208,7 @@ describe('HAPPIER_COLLECTION_RAIL_WIDTH_PX', () => {
           authorEntry,
         ).not.toContain(symbol);
       }
-      expect(readFileSync(join(srcRoot, 'presentation/index.ts'), 'utf8')).toContain(symbol);
+      expect(readFileSync(join(srcRoot, 'advanced/index.public.ts'), 'utf8')).toContain(symbol);
     },
   );
 });

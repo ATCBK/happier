@@ -80,6 +80,7 @@ describe('useNewSessionWizardProps', () => {
                     },
                     depStatus: null,
                 }],
+                capabilitiesCacheKeySalt: 17,
                 selectedMachineCapabilities: { status: 'loaded' },
                 cliAvailability: { timestamp: 1, available: {} },
                 tmuxRequested: false,
@@ -165,6 +166,11 @@ describe('useNewSessionWizardProps', () => {
         const props = observed as ReturnType<typeof useNewSessionWizardProps> | null;
         props?.agent.installableDepInstallers?.[0]?.refreshStatus();
         await vi.waitFor(() => expect(capabilityBoundary.rpc).toHaveBeenCalled());
+        expect(capabilityBoundary.rpc.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+            payload: { requests: [{ id: 'dep.acme.cli' }] },
+        }));
+        const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
+        expect(getMachineCapabilitiesCacheState('machine-1', null, 17)?.status).toBe('loading');
         props?.agent.installableDepInstallers?.[0]?.refreshLatestVersion?.();
         await act(async () => { await Promise.resolve(); });
         expect(signal?.aborted).toBe(false);
@@ -172,10 +178,9 @@ describe('useNewSessionWizardProps', () => {
         expect(signal?.aborted).toBe(true);
         await screen.unmount();
         expect(signal?.aborted).toBe(true);
-        const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
         props?.agent.installableDepInstallers?.[0]?.refreshStatus();
         await act(async () => { await Promise.resolve(); });
-        expect(getMachineCapabilitiesCacheState('machine-1')?.status).toBe('idle');
+        expect(getMachineCapabilitiesCacheState('machine-1', null, 17)?.status).toBe('idle');
     });
 
     it('updates memoized agent and typed Provider launch recovery fields', async () => {

@@ -160,28 +160,38 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
     // layouts are ignored for reservation purposes until the row remounts in its collapsed state.
     const [hasRowLocalLayoutMutation, setHasRowLocalLayoutMutation] = React.useState(false);
     const [hasContentLayoutMutation, setHasContentLayoutMutation] = React.useState(false);
+    // The signature whose cached exact height the row's own content has contradicted (see
+    // `handleContentLayout`): reserving it again would only repaint the stale gap.
+    const [contradictedSignatureKey, setContradictedSignatureKey] = React.useState<string | null>(null);
     const latestSignatureRef = React.useRef(props.signature);
     latestSignatureRef.current = props.signature;
-    const reservedMinHeight = hasRowLocalLayoutMutation || hasContentLayoutMutation ? undefined : reservation?.minHeight;
+    const reservedMinHeight = hasRowLocalLayoutMutation || hasContentLayoutMutation || contradictedSignatureKey === signatureKey
+        ? undefined
+        : reservation?.minHeight;
     const shellStyle = React.useMemo(() => (
         reservedMinHeight === undefined ? undefined : { minHeight: reservedMinHeight }
     ), [reservedMinHeight]);
 
+    // The shell's `minHeight` is applied to the very node this layout would measure, so the shell can
+    // only read its own reservation back: recording it would make a stale cached height permanent. The
+    // row's measurement is its natural content, taken from the child wrapper below.
+    const [naturalLayout, setNaturalLayout] = React.useState<Readonly<{ heightPx: number }> | null>(null);
+    const handleContentLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const height = event?.nativeEvent?.layout?.height;
+        if (typeof height === 'number' && Number.isFinite(height)) setNaturalLayout({ heightPx: Math.max(1, Math.trunc(height)) });
+    }, []);
+
     const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
         const height = event?.nativeEvent?.layout?.height;
         if (typeof height === 'number' && Number.isFinite(height)) {
-            const heightPx = Math.max(1, Math.trunc(height));
-            if (!hasRowLocalLayoutMutation) {
-                props.reconciler.recordMeasuredHeight({ signature: props.signature, heightPx });
-            }
             setHasContentLayoutMutation(false);
             props.onRowMeasured?.({
                 itemId: props.itemId,
                 rowKind: props.signature.kind,
-                heightPx,
+                heightPx: Math.max(1, Math.trunc(height)),
             });
         }
-    }, [hasRowLocalLayoutMutation, props.reconciler, props.itemId, props.onRowMeasured, props.signature]);
+    }, [props.itemId, props.onRowMeasured, props.signature.kind]);
 
     React.useLayoutEffect(() => {
         if (lastSignatureKeyRef.current === signatureKey) return;
@@ -205,6 +215,26 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
             rowKind: props.signature.kind,
         });
     }, [props.onRowLayoutMutation, props.reconciler, props.itemId, signatureKey, props.signature]);
+    // A layout is committed from here, under the signature current with it, rather than from the layout
+    // callback: a resize lays rows out before the width bucket in their signature moves, and a callback
+    // would file the new width's height under the old one. A signature change alone commits nothing, as
+    // the content may not have been laid out at the new geometry yet; the next real layout does.
+    const committedNaturalLayoutRef = React.useRef<typeof naturalLayout>(null);
+    React.useLayoutEffect(() => {
+        const layoutArrived = committedNaturalLayoutRef.current !== naturalLayout;
+        committedNaturalLayoutRef.current = naturalLayout;
+        if (naturalLayout === null || hasRowLocalLayoutMutation) return;
+        if (layoutArrived) {
+            props.reconciler.recordMeasuredHeight({ signature: props.signature, heightPx: naturalLayout.heightPx });
+        }
+        // A cached exact height claims the row is exactly that tall at this geometry. Natural content that is
+        // shorter refutes it (a height can be cached from a transient layout), and the content does not lay
+        // out again to say so when the signature settles on a width it already fits: reserving it would only
+        // repaint the blank band under the row.
+        if (reservation?.kind === 'exact' && naturalLayout.heightPx < reservation.minHeight) {
+            setContradictedSignatureKey(signatureKey);
+        }
+    }, [hasRowLocalLayoutMutation, naturalLayout, props.reconciler, props.signature, reservation, signatureKey]);
     const handleChildRowLayoutMutation = React.useCallback((mutation: TranscriptRowLayoutMutation) => {
         if (mutation.reason === 'collapse' || mutation.reason === 'content-change') {
             props.reconciler.resetReservationForStructuralChange({
@@ -229,7 +259,9 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
                 style={shellStyle}
                 onLayout={handleLayout}
             >
-                {props.children}
+                <View testID={`transcript-row-content-${props.itemId}`} onLayout={handleContentLayout}>
+                    {props.children}
+                </View>
             </View>
         </TranscriptRowLayoutMutationProvider>
     );

@@ -18,7 +18,7 @@ export type PortableSettingStorageV1 = Readonly<{
   options?: readonly unknown[];
   mode?: string;
   /** Some settings require the answering client's platform or picture release catalog. */
-  prerequisite?: 'ui_platform' | 'ui_picture_catalog';
+  prerequisite?: 'ui_platform' | 'ui_picture_catalog' | 'ui_account_encryption_requirement';
 }>;
 export type PortableSettingDeclarationV1 = Readonly<{
   anchor: string;

@@ -9,13 +9,16 @@ import { Item } from '@/components/ui/lists/Item';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { t } from '@/text';
 import { getSupportedThemeProfileImportFormats, importThemeProfileFromJson } from '@/theme/profiles/themeProfileImportExport';
 import { nativePickFiles, type NativePickedFile } from '@/utils/files/nativePickFiles';
 import { nowThemeProfileTimestamp, upsertThemeProfile } from './themeProfileScreenUtils';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { THEMES_SETTINGS } from './themesSettings';
 
 async function readPickedThemeFile(entry: NativePickedFile): Promise<string> {
     if (entry.kind === 'web') {
@@ -28,7 +31,8 @@ async function readPickedThemeFile(entry: NativePickedFile): Promise<string> {
 export const ThemeProfileImportScreen = React.memo(function ThemeProfileImportScreen() {
     const { theme } = useUnistyles();
     const router = useRouter();
-    const [themeProfiles, setThemeProfiles] = useLocalSettingMutable('themeProfiles');
+    const themeProfiles = useLocalSetting('themeProfiles');
+    const { setSetting } = useSettingActionFeedback();
     const [json, setJson] = React.useState('');
     const [error, setError] = React.useState<string | null>(null);
     const [warnings, setWarnings] = React.useState(0);
@@ -37,7 +41,7 @@ export const ThemeProfileImportScreen = React.memo(function ThemeProfileImportSc
         [],
     );
 
-    const submit = React.useCallback(() => {
+    const submit = React.useCallback(async () => {
         const result = importThemeProfileFromJson(json, {
             now: nowThemeProfileTimestamp(),
             existingProfileIds: new Set(themeProfiles.profiles.map((profile) => profile.id)),
@@ -48,12 +52,13 @@ export const ThemeProfileImportScreen = React.memo(function ThemeProfileImportSc
             return;
         }
         setError(null);
+        if (!await setSetting(THEMES_SETTINGS.settings.yourThemes,
+            SettingsDeclarationValueV1Schema.parse(upsertThemeProfile(themeProfiles, result.profile)))) return;
         setWarnings(result.warnings.length);
-        setThemeProfiles(upsertThemeProfile(themeProfiles, result.profile));
         if (result.warnings.length === 0) {
             router.back();
         }
-    }, [json, router, setThemeProfiles, themeProfiles]);
+    }, [json, router, setSetting, themeProfiles]);
 
     const pickFile = React.useCallback(async () => {
         try {

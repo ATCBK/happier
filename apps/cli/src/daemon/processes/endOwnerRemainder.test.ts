@@ -14,11 +14,50 @@ import type { TrackedSession } from '../types';
 import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
 import { spawn } from 'node:child_process';
 
-it('protects a captured generation reowned during the final native identity read', async () => {
+it.each(['absent', 'zombie', 'unreadable'] as const)('settles a departed captured tree using its native evidence (%s)', async state => {
+    const owner = { kind: 'session', sessionId: 'departed-tree' } as const;
+    let censusReads = 0;
+    const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
+        async readdir() { censusReads++; return [String(process.pid), ...(state === 'absent' ? [] : ['5100'])]; },
+        async readlink() { return '/fixture'; },
+        async readFile(path) {
+            const pid = Number(path.split('/')[2]);
+            if (pid === 5100 && state === 'unreadable') throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+            if (path.endsWith('/status')) return 'Uid:\t1000\n';
+            if (path.endsWith('/stat')) return pid + ' (fixture) ' + [pid === 5100 ? 'Z' : 'S', '1', '5000', '1', '0', '0',
+                ...Array(13).fill('0'), pid === 5100 ? '110' : '10', '0', '0'].join(' ');
+            return '';
+        },
+    } };
+    const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: '123456789abc',
+        censusDependencies, listRoots: () => [] });
+    const signals: number[] = [];
+    const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
+        daemonScopeKey: '123456789abc', firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
+            kill(pid) { signals.push(pid); return true; } } });
+    const roots = Array.from({ length: 70 }, (_, index): HappierProcessRoot => ({ owner, pid: 5100 + index,
+        start: { startTimeMs: 1100 + index }, live: true, ownerCreatedAtMs: 0 }));
+    const result = await remainder.end(owner, { scope: 'subtree', ownership: [], roots });
+    expect(result.outcomes).toHaveLength(roots.length);
+    expect(signals).toEqual([]);
+    if (state === 'unreadable') {
+        expect(result.status).toBe('incomplete');
+        expect(result.outcomes).toContainEqual({ pid: 5100, outcome: 'refused', reason: 'identity_unavailable' });
+        return;
+    }
+    expect(result.status).toBe('complete');
+    expect(result.outcomes.every(outcome => outcome.outcome === 'gone_before')).toBe(true);
+    // A fresh complete census already proves all captured generations absent.
+    // Repeating whole-machine reads per departed PID delays the owning respawn.
+    expect(censusReads).toBe(1);
+});
+
+it('protects a captured generation reowned during the final native identity read while retiring other targets', async () => {
     const owner = { kind: 'session', sessionId: 'departed' } as const;
     const root: HappierProcessRoot = { owner: { kind: 'session', sessionId: 'resumed' },
         pid: 5101, start: { startTimeMs: 1100 }, live: true, ownerCreatedAtMs: 0 };
-    const rows = new Map([[process.pid, { parent: 1, ticks: 10 }], [5101, { parent: 1, ticks: 110 }]]);
+    const rows = new Map([[process.pid, { parent: 1, ticks: 10 }],
+        [5101, { parent: 1, ticks: 110 }], [5102, { parent: 1, ticks: 120 }]]);
     let rootReads = 0;
     let reowned = false;
     const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
@@ -42,9 +81,50 @@ it('protects a captured generation reowned during the final native identity read
     const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
         daemonScopeKey: '123456789abc', firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
             kill(pid) { signals.push(pid); rows.delete(pid); return true; } } });
-    await remainder.end(owner, { scope: 'subtree', ownership: [], roots: [{ ...root, owner }] });
+    const result = await remainder.end(owner, { scope: 'subtree', ownership: [], roots: [
+        { ...root, owner, pid: 5102, start: { startTimeMs: 1200 } }, { ...root, owner },
+    ] });
     expect(reowned).toBe(true);
-    expect(signals).toEqual([]);
+    expect(signals).toEqual([5102]);
+    expect(result).toMatchObject({ status: 'incomplete', outcomes: expect.arrayContaining([
+        { pid: 5101, outcome: 'refused', reason: 'containment_authority_changed' }, { pid: 5102, outcome: 'ended' },
+    ]) });
+});
+
+it('retires other captured targets while preserving a live reowned root and its subtree', async () => {
+    const owner = { kind: 'session', sessionId: 'departed' } as const;
+    const root: HappierProcessRoot = { owner: { kind: 'session', sessionId: 'resumed' },
+        pid: 5101, start: { startTimeMs: 1100 }, live: true, ownerCreatedAtMs: 0 };
+    const rows = new Map([[process.pid, { parent: 1, ticks: 10 }],
+        [5101, { parent: 1, ticks: 110 }], [5102, { parent: 1, ticks: 120 }],
+        [5103, { parent: 5101, ticks: 130 }]]);
+    const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
+        async readdir() { return [...rows.keys()].map(String); }, async readlink() { return '/fixture'; },
+        async readFile(path) {
+            const pid = Number(path.split('/')[2]);
+            const row = rows.get(pid);
+            if (!row) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            if (path.endsWith('/status')) return 'Uid:\t1000\n';
+            if (path.endsWith('/stat')) return pid + ' (fixture) ' + ['S', String(row.parent), '5000', '1', '0', '0',
+                ...Array(13).fill('0'), String(row.ticks), '0', '0'].join(' ');
+            return '';
+        },
+    } };
+    const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: '123456789abc', censusDependencies,
+        listRoots: () => [root] });
+    const signals: number[] = [];
+    const retained: HappierProcessRoot[] = [];
+    const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
+        daemonScopeKey: '123456789abc', firstPass: () => {}, retainEndedRoots: roots => { retained.push(...roots); },
+        systemBoundary: { platform: 'linux', censusDependencies,
+            kill(pid) { signals.push(pid); rows.delete(pid); return true; } } });
+    const result = await remainder.end(owner, { scope: 'subtree', ownership: [], roots: [5101, 5102, 5103].map(pid => ({
+        ...root, owner, pid, start: { startTimeMs: rows.get(pid)!.ticks * 10 },
+    })) });
+    expect(result).toMatchObject({ status: 'complete', outcomes: [{ pid: 5102, outcome: 'ended' }] });
+    expect(signals).toEqual([5102]);
+    expect([...rows.keys()].sort()).toEqual([process.pid, 5101, 5103].sort());
+    expect(retained.map(root => root.pid)).toEqual([5102]);
 });
 
 it.each(['exit', 'stop'] as const)('retires a Run-tagged native child with its captured Session generation after refresh (%s)', async retirement => {

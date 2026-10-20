@@ -7,6 +7,7 @@ import { createProviderProbeObservationIdentityV1 } from '@happier-dev/protocol/
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema } from '@happier-dev/protocol/providers/ids';
 import type { ProviderErrorV1, ProviderObservationAuthorizationFingerprintV1, ProviderProbeObservationIdentityV1 } from '@happier-dev/protocol';
+import type { DaemonProviderModelRowV1, DaemonProviderModelsResponseV1 } from '@happier-dev/protocol/rpc/providers';
 
 import type {
   ContributedProviderCatalogParserBinding,
@@ -58,25 +59,16 @@ export type ResolvedProviderProbeRpcRequest = Readonly<{
   }>;
 }>;
 
-export type ProviderSavedModelsRpcRow = Readonly<{
-  id: string;
-  name?: string;
-  source: 'manual' | 'static' | 'probe';
-  stale: boolean;
-  loadState: 'loaded' | 'unloaded' | 'unknown';
-  visibility: 'visible' | 'hidden_all_agents';
-}>;
+export type ProviderSavedModelsRpcRow = Readonly<DaemonProviderModelRowV1>;
 
+/** Host projections accept string identities and immutable rows; the RPC
+ * schema owns validation/branding and all wire fields and discriminants. */
 export type ProviderSavedModelsRpcResult =
-  | Readonly<{
-      status: 'success';
+  | Readonly<Omit<Extract<DaemonProviderModelsResponseV1, { status: 'success' }>, 'connectionId' | 'models'> & {
       connectionId: string;
-      connectionRevision: number;
-      manualModelPolicy: 'allowed' | 'catalog-only';
-      modelLoadAction: 'available' | 'descriptor_absent' | 'feature_disabled';
       models: readonly ProviderSavedModelsRpcRow[];
     }>
-  | Readonly<{ status: 'error'; error: ReturnType<typeof createProviderErrorV1> }>;
+  | Extract<DaemonProviderModelsResponseV1, { status: 'error' }>;
 
 /** A transport caller owns only its interest in shared scheduler work. */
 export type ProviderProbeWaiterLifetime = Readonly<Pick<

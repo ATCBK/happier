@@ -7,6 +7,32 @@ import { listWorkflowAcceptedLeafSelectionsV1 } from './workflowStepSelectionV1.
 import { ActionSessionAddressV1Schema } from '../actions/sessionTargetV1.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
 import { readWorkflowValuePathV1 } from './workflowReferenceV1.js';
+import { DiscussionAddressV1Schema, DiscussionAddressingV1Schema } from '../discussions/references.js';
+import { FollowPolicyV1Schema } from '../sessions/follow/sessionFollowPolicyV1.js';
+import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
+
+/** A committed C3 frontier, frozen inside the existing accepted Run envelope. */
+export const WorkflowDiscussionOriginV1Schema = lazyZodSchema(() => z.strictObject({
+  discussion: DiscussionAddressV1Schema,
+  messageId: DiscussionAddressingV1Schema.shape.messageId,
+  throughSeq: DiscussionAddressingV1Schema.shape.throughSeq,
+}));
+export type WorkflowDiscussionOriginV1 = z.infer<typeof WorkflowDiscussionOriginV1Schema>;
+
+export const WorkflowRunOnCompleteV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('originating_session') }),
+  z.strictObject({ kind: z.literal('originating_discussion') }),
+]));
+
+export const WorkflowDiscussionResultDeliveryV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('originating_discussion'), ...WorkflowDiscussionOriginV1Schema.shape,
+}));
+
+export const WorkflowResultDeliveryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('originating_session'),
+    originSessionId: preservedBoundedNfcString(191, 'Session ids'), reportPolicy: z.optional(FollowPolicyV1Schema) }),
+  WorkflowDiscussionResultDeliveryV1Schema,
+]));
 
 /** Authored structure has one leaf traversal for admission and destination projections. */
 export function collectWorkflowLeavesV1(definition: WorkflowDefinitionV1): WorkflowLeafV1[] {

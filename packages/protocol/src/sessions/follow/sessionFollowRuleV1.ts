@@ -9,6 +9,8 @@ import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
 import { FollowReceiverRefV1Schema, type FollowReceiverRefV1 } from './sessionDeliveryMuteV1.js';
 import { SessionFollowFrontierV1Schema } from './sessionFollowFrontierV1.js';
 import { SessionFollowPublisherGenerationV1Schema, SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from './sessionFollowSourceOccurrenceV1.js';
+import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema } from './sessionFollowInputV1.js';
+import { DiscussionMessageRefV1Schema } from '../../discussions/messageRefs.js';
 
 export const SESSION_FOLLOW_RULES_ROUTE_V1 = '/v2/account/session-follow-rules' as const;
 export const SESSION_FOLLOW_RULE_ACCOUNT_PREFIX_V1 = '@happier/account/session-follow-rules/v1/' as const;
@@ -31,6 +33,9 @@ export const SessionFollowPersonalProgressRequestV1Schema = lazyZodSchema(() => 
     requestIds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1), z.refine(ids => new Set(ids).size === ids.length)),
   })).check(z.refine(rules => new Set(rules.map(rule => rule.ruleId)).size === rules.length));
   return z.union([
+    z.strictObject({ discussion: z.strictObject({ original: DiscussionMessageRefV1Schema,
+      seq: z.number().check(z.int(), z.positive()) }) }),
+    z.strictObject({ original: z.union([ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema]) }),
     z.strictObject({ ...fields, rules: messageRules, sourceMessage: SessionFollowSourceMessageV1Schema, sourceRequests: z.optional(z.never()) }),
     z.strictObject({ ...fields, rules: requestRules, sourceRequests: SessionFollowSourceRequestsV1Schema, sourceMessage: z.optional(z.never()) }),
   ]);

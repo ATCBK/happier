@@ -50,7 +50,7 @@ function resolveAckTimeoutMs(timeoutMs?: number): number {
   return resolveSessionControlSocketAckTimeoutMs();
 }
 
-function ensureSocketConnected(socket: AckableSocket, event: string): void {
+function ensureSocketConnected(socket: Pick<AckableSocket, 'connected'>, event: string): void {
   if (socket.connected === false) {
     throw new SocketAckError({ code: 'socket_not_connected', event });
   }

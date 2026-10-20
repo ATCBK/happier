@@ -300,6 +300,10 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         invocation: request,
       });
       if (!mediaReadRoots.ok) return mediaReadRoots;
+      if (request.includeAccountingSource === false) return bounded({
+        source: validation.value.publicSource,
+        transcriptMediaReadRoots: mediaReadRoots.value,
+      }, request.maxSerializedBytes, 'Codex source result cannot fit the result byte bound.');
       const roots = mediaReadRoots.value.flatMap((home) => [join(home, 'sessions'), join(home, 'archived_sessions')]);
       const inventory = await discoverAgentAccountingJsonlSource(roots, request.signal);
       return bounded(
@@ -308,6 +312,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           transcriptMediaReadRoots: mediaReadRoots.value,
           accountingSource: {
             accountingSources: [CODEX_NATIVE_ACCOUNTING_SOURCE],
+            discoveredFileCount: inventory.files.length,
             ...(mediaReadRoots.value.length === 1 ? { rootPath: mediaReadRoots.value[0], rootField: 'homePath' } : {}),
             resourceKey: `codex:accounting:${createHash('sha256').update(JSON.stringify(roots)).digest('base64url')}`,
             changeObservation: 'watch_file_changes' as const,

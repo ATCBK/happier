@@ -337,40 +337,20 @@ describe('Api server error handling', () => {
             output.restore();
         });
 
-        it('should return null when Happy server times out (ETIMEDOUT)', async () => {
+        it.each(['ETIMEDOUT', 'ECONNABORTED', 'ECONNRESET'])('preserves an uncertain creation receipt (%s)', async (code) => {
             connectionState.reset();
             const output = captureConsoleText();
 
-            // Mock axios to throw timeout error
-            mockPost.mockRejectedValue({ code: 'ETIMEDOUT' });
+            mockPost.mockRejectedValue({ code });
 
-            const result = await api.getOrCreateSession({
+            await expect(api.getOrCreateSession({
                 tag: 'test-tag',
                 metadata: testMetadata,
                 state: null
-            });
+            })).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code } });
 
-            expect(result).toBeNull();
-            expect(connectionState.isOffline()).toBe(true);
-            expect(output.text()).toContain('server unreachable');
-            output.restore();
-        });
-
-        it('should return null when Axios aborts bootstrap on timeout (ECONNABORTED)', async () => {
-            connectionState.reset();
-            const output = captureConsoleText();
-
-            mockPost.mockRejectedValue({ code: 'ECONNABORTED' });
-
-            const result = await api.getOrCreateSession({
-                tag: 'test-tag',
-                metadata: testMetadata,
-                state: null
-            });
-
-            expect(result).toBeNull();
-            expect(connectionState.isOffline()).toBe(true);
-            expect(output.text()).toContain('server unreachable');
+            expect(connectionState.isOffline()).toBe(false);
+            expect(output.text()).not.toContain('server unreachable');
             output.restore();
         });
 
@@ -544,18 +524,18 @@ describe('Api server error handling', () => {
             expect(connectionState.isOffline()).toBe(false);
         });
 
-        it('should re-throw non-connection errors', async () => {
+        it('keeps an unclassified response loss uncertain rather than inventing an authentication refusal', async () => {
             const output = captureConsoleText();
 
             try {
-                // Mock axios to throw a different type of error (e.g., authentication error)
-                const authError = new Error('Invalid API key');
-                (authError as any).code = 'UNAUTHORIZED';
-                mockPost.mockRejectedValue(authError);
+                // A transport label without an HTTP refusal cannot prove that
+                // the Home rejected or rolled back this mutation.
+                const transportError = Object.assign(new Error('No response received'), { code: 'UNAUTHORIZED' });
+                mockPost.mockRejectedValue(transportError);
 
                 await expect(
                     api.getOrCreateSession({ tag: 'test-tag', metadata: testMetadata, state: null })
-                ).rejects.toThrow('Failed to get or create session: Invalid API key');
+                ).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code: 'UNAUTHORIZED' } });
                 expect(connectionState.isOffline()).toBe(false);
 
                 // Should not show the offline mode message

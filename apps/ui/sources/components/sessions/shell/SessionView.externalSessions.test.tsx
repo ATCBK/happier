@@ -2636,33 +2636,14 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     const agentInput = findAgentInput(screen);
-    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: {
-      key: string;
-      controlId?: string;
-      collapsedOptionsPopover?: {
-        presentation?: 'picker' | 'list';
-        rootStep?: { sections: ReadonlyArray<{ kind: 'static' | 'dynamic'; options?: ReadonlyArray<{ id: string }> }> };
-        selectedOptionId?: string | null;
-        onSelect?: (id: string) => void;
-      };
-    }) => chip.key === 'participants-recipient');
-
-    expect(recipientChip).toEqual(expect.objectContaining({
-      key: 'participants-recipient',
-      controlId: 'recipient',
-    }));
-    expect(recipientChip?.collapsedOptionsPopover?.presentation).toBe('list');
-    const recipientFirstSection = recipientChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
-    const recipientOptions = recipientFirstSection?.kind === 'static'
-      ? recipientFirstSection.options ?? []
-      : [];
-    expect(recipientOptions.map((option: { id: string }) => option.id)).toEqual([
-      'lead',
-      'member-1',
-      'run-1',
-    ]);
-    expect(recipientChip?.collapsedOptionsPopover?.selectedOptionId).toBe('run-1');
-    expect(typeof recipientChip?.collapsedOptionsPopover?.onSelect).toBe('function');
+    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: { key: string }) => chip.key === 'participants-recipient');
+    expect(recipientChip).toEqual(expect.objectContaining({ key: 'participants-recipient', controlId: 'recipient' }));
+    const picker = recipientChip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 400 });
+    if (!React.isValidElement<{ participants: { targets: ReadonlyArray<{ key: string }>; recipient: unknown } | null }>(picker)) {
+      throw new Error('Expected the session talk picker');
+    }
+    expect(picker.props.participants?.targets.map((target) => target.key)).toEqual(['member-1', 'run-1']);
+    expect(picker.props.participants?.recipient).toEqual({ kind: 'execution_run', runId: 'run-1' });
     expect((agentInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).toContain('execution-run-requested-action');
   });
 
@@ -2796,7 +2777,8 @@ describe('SessionView (direct sessions)', () => {
     participantTargetsState.current = [];
     const emptyScreen = await renderSessionViewAndSettle();
     const emptyInput = findAgentInput(emptyScreen);
-    expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).not.toContain('participants-recipient');
+    // The To chip stays on a session's composer (other sessions, Post update) with no roster at all.
+    expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).toContain('participants-recipient');
     expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).not.toContain('execution-run-requested-action');
     await act(async () => { emptyScreen.unmount(); });
     recipientStateState.current = {
@@ -2836,11 +2818,13 @@ describe('SessionView (direct sessions)', () => {
       recipient: ParticipantRecipientV1Schema.parse(renderedDelivery.props.recipient),
     })).toEqual({ type: 'session_message', recipient: { kind: 'execution_run', runId: 'run-1' } });
     const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: { key: string }) => chip.key === 'participants-recipient');
-    const section = recipientChip?.collapsedOptionsPopover?.rootStep?.sections[0];
-    expect(section?.kind).toBe('static');
-    expect(section?.options.map((option: { id: string }) => option.id)).toEqual(['lead']);
+    const picker = recipientChip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 400 });
+    if (!React.isValidElement<{ participants: { targets: readonly unknown[]; recipient: unknown;
+      onRecipientChange: (next: null) => void } | null }>(picker)) throw new Error('Expected the session talk picker');
+    // Only the way back (This session) is offered for the retained Run recipient: no live roster rows.
+    expect(picker.props.participants?.targets).toEqual([]);
     expect(readCanonicalDraftRecipient()).toEqual({ kind: 'execution_run', runId: 'run-1' });
-    await act(async () => { section.options[0].onSelect(); });
+    await act(async () => { picker.props.participants?.onRecipientChange(null); });
     expect(readCanonicalDraftRecipient()).toBeNull();
   });
 

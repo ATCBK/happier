@@ -1,5 +1,4 @@
 import React from 'react';
-import Color from 'color';
 import { describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -87,8 +86,11 @@ describe('AgentInput composer decoration interactive targets', () => {
         <AgentInput value="Keep this draft" onChangeText={() => {}} onSend={() => {}} placeholder="p" disabled={false} autocompleteKinds={[]} autocompleteSuggestions={async () => []} />
       </GlassRuntimeEnvironmentProvider>
     </GlassMaterialSettingsProvider>, { wrapper: runtime.Wrapper });
+    // On web the surface itself is transparent: its material is the backdrop layer painted beneath the
+    // content, and that layer reads the card material's published opacity (`glassDocumentPresentation`).
     const surface = screen.tree.findHostByTestId('agent-input-material-surface')!;
-    expect(Color(String(flattenStyle(surface.props.style).backgroundColor)).alpha()).toBeCloseTo(glassPresetMaterials('clear').card.opacity, 2);
+    const paint = surface.findAll((node) => typeof node.type === 'string' && node.props.dataSet?.happyGlassBackdrop === 'true')[0]!;
+    expect(String(flattenStyle(paint.props.style).backgroundColor)).toContain('--happier-glass-card-opacity');
   });
   it('gives composer link decorations the canonical minimum target without overlapping their stacked neighbour', async () => {
     const screen = await renderComposerWithDecorations();

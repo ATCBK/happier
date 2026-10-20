@@ -1,3 +1,4 @@
+import type { DetailsOpenerRegion } from '@/components/ui/panels/paneBreakpoints';
 import { usePaneRegion } from '../paneRegion';
 import { usePanePresentation } from '../panePresentation';
 import { createBuiltinPaneDestination } from '../model/selectedPaneDestination';
@@ -68,7 +69,8 @@ export type AppPaneScopeApi = {
     setBottomTab: (tabId: string) => void;
     selectBottomDestination: (destination: SelectedPaneDestinationV1) => void;
     setBottomTabState: (tabId: string, nextState: unknown) => void;
-    openDetailsTab: (tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean }>) => void;
+    /** `origin` names the pane column a lent opener came from; it defaults to this caller's own column. */
+    openDetailsTab: (tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean; origin?: DetailsOpenerRegion }>) => void;
     replaceDetailsTab: (tabKey: string, tab: DetailsTab, options?: Readonly<{
         intent?: 'default' | 'pinned' | 'preview';
         restoreSourceOnRehydrate?: boolean;
@@ -186,7 +188,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         dispatch({ type: 'setBottomTabState', scopeId, tabId, nextState });
     }, [dispatch, scopeId]);
 
-    const openDetailsTab = React.useCallback((tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean }>) => {
+    const openDetailsTab = React.useCallback((tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean; origin?: DetailsOpenerRegion }>) => {
         const intent = options?.intent ?? 'default';
         const behavior = detailsPaneTabsBehavior === 'persistent' ? 'persistent' : 'preview';
         const nowMs = Date.now();
@@ -202,7 +204,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         });
         lastPreviewOpenRef.current = decision.nextLastPreviewOpen;
         const openAs = decision.openAs;
-        dispatch({ type: 'openDetailsTab', scopeId, tab, openAs, origin: paneRegion });
+        dispatch({ type: 'openDetailsTab', scopeId, tab, openAs, origin: options?.origin ?? paneRegion });
         if (options?.present !== false) presentPane?.({ scopeId, pane: 'details', tab });
     }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId]);
 

@@ -1215,11 +1215,9 @@ describe('Channels mounted provider setup recovery', () => {
               outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
             };
       }
-      if (typeof request.action === 'object'
-        && request.action !== null
-        && request.action.pluginId === providerSetupRemediationOperation.action.pluginId
-        && request.action.localId === providerSetupRemediationOperation.action.localId) {
+      if (request.action === 'connection/setup-remediate-v1') {
         remediationInput = request.input;
+        expect(request.selectedActionInput).toEqual({ operation: providerSetupRemediationOperation, result: submittedRemediation });
         return { kind: 'remediated' };
       }
       throw new Error(`Unexpected mounted Action: ${String(request.action)}`);
@@ -1245,7 +1243,7 @@ describe('Channels mounted provider setup recovery', () => {
       await vi.waitFor(() => {
         expect(executeAction.mock.calls.map(([request]) => request.action)).toEqual([
           CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
-          expect.objectContaining(providerSetupRemediationOperation.action),
+          'connection/setup-remediate-v1',
           CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
         ]);
       });
@@ -1253,7 +1251,8 @@ describe('Channels mounted provider setup recovery', () => {
       expect(selectActionInput.mock.calls[1]?.[0].request).toEqual({
         operation: providerSetupRemediationOperation,
       });
-      expect(remediationInput).toEqual(submittedRemediation.input);
+      expect(remediationInput).toEqual({ providerSelection: submittedRemediation.selection,
+        providerRemediationInput: submittedRemediation.input, credentialRef: null });
       await expect(fixture.getByRole('button', { name: 'Create connection' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
@@ -1351,10 +1350,7 @@ describe('Channels mounted provider setup recovery', () => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare) {
         return { kind: 'requiresRemediation' };
       }
-      if (typeof action === 'object'
-        && action !== null
-        && action.pluginId === providerSetupRemediationOperation.action.pluginId
-        && action.localId === providerSetupRemediationOperation.action.localId) {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate) {
         throw new PluginError({ code: 'timeout', message: 'provider mutation timed out' });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
@@ -1380,7 +1376,7 @@ describe('Channels mounted provider setup recovery', () => {
       });
       expect(executeAction.mock.calls.map(([request]) => request.action)).toEqual([
         CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
-        expect.objectContaining(providerSetupRemediationOperation.action),
+        CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate,
       ]);
       expect(selectActionInput).toHaveBeenCalledTimes(2);
     } finally {

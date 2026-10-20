@@ -215,6 +215,51 @@ rule matches do not create enrollment rows. Other Accounts' identities, rules, p
 delivery receipts are never part of that census.
 Revoking source access refuses the read; revoking receiver access withdraws that receiver.
 
+Follow list inspection in 0.3 development accepts an optional `limit` and a source-owned
+`cursor`. With no limit, the owner returns the complete admitted list. A limited read
+returns `continuation` while more source relations remain, and the Action reports partial
+coverage until the last page. Cursors bind the exact Account and inspection direction;
+each page applies current access again and does not freeze membership. Private rules are
+returned with the first Following page, rather than repeated on every source page.
+
+In development source, configured Execution Run and Workflow Run follows read
+the Run's own terminal original through the Follow occurrence-route owner.
+Execution Runs retain their terminal occurrence id, including recovered host
+loss; Workflow Runs retain their revision and typed state. Source notifications
+and receiver reconnect both use that read. Session receivers then use the shared
+policy and Pending admission. They do not substitute a parent Session's transcript frontier for a
+Run result. Repeated observations reuse the original's destination-scoped input
+identity; accepted input and source-owned progress determine replay. Mute,
+source access and destination admission are checked again before delivery.
+Run wake admission uses the receiving Session's most recent protected,
+person-written input as its existing check-in root, not a later agent input's
+inherited source root. Without a person input, the exact Run occurrence's
+deterministic destination input is the root. Actual native starts count through
+the existing Pending/check-in owner; quiet delivery and personal Inbox
+acceptance are not starts.
+For Account receivers, the captured authorized Account daemon uses the same
+dispatcher and the existing private Inbox
+notice and personal Follow progress. Only acceptance of that notice advances
+the Run cursor and admits one outward channel attempt; channel success is not
+the acceptance fact. A crash after that acceptance can leave the Inbox notice
+without a channel alert. Explicit Run Follow choices suppress the incumbent
+implicit Workflow report, so the two adapters do not send the same original.
+Discussion personal follows retain the exact Discussion message reference and
+original committed producer classification, but reuse the source-backed
+Discussion Inbox item rather than creating a second private notice with a
+separate read lifecycle. The existing personal Follow progress admits the
+outward channel attempt.
+
+Private, encrypted person Follow settings are not evaluated by Home. Evaluation
+belongs to the Account's own online app/daemon context; the captured authorized
+daemon performs the private outward-channel dispatch. With no evaluator online,
+the app's next-open Account invalidation and badge refresh recover Discussion
+attention through the existing source-backed Inbox reader, not a new server
+notifier or an app-side outward Follow publisher. Existing Discussion grant
+owners establish that reader's cursor; Follow does not create another read
+cursor. Discussion participant, mention and request alerts remain on C3's
+existing server path. `submitSessionActivityRemoteAlerts` remains Session-only.
+
 **The direct-share rule.** An explicit `mark-read` / `mark-unread` is admitted for *any* active
 Account holding `readTranscript` — a direct-share recipient with `view` access included — and
 seeds that Account's own read-state row through the single tracking-entry seam
@@ -225,12 +270,11 @@ Session unread is not choosing to follow it. Automatic tracking keeps the older 
 predicate itself is owner-or-active-Follow, resolved through a narrow Follow-fact port, and
 cursor presence is deliberately kept out of it.
 
-Auto-follow runs only from new relationship evidence inside the canonical assignment or access
-transaction. `applySessionAutoFollowForRelationshipChangeInTx` resolves the whole Account set
-through set-oriented owners — preference, existing row, structural `readTranscript`, tracked
-predicate — so a bulk Team or directory change never degrades into a per-Account authorization
-loop, and a genuinely new follower starts at the then-current ceiling rather than replaying the
-interval it was away.
+Relationship attention defaults are normalized into the Account's default Follow rules; assignment and
+access transactions do not enroll per-Session follows. Current rule matching uses the canonical
+filter and delivery policy, without creating an explicit relation or a read-state baseline.
+Explicit Follow remains a separate choice, and an existing opt-out or retained read frontier
+is not replaced when defaults change. Owner tracking remains implicit.
 
 In current development source, a newly committed direct grant and an assignment by another
 Account publish a content-free `session-personal-event` to the named recipient. The shared
@@ -269,8 +313,8 @@ being live yet. There is no released 0.3 Mute UI claim here.
 ## First-class Home Discussions (development)
 
 The 0.3 development refactor makes a Discussion an independent Home resource, with its
-own owner, grants, encryption mode and data key. An optional Session or identity-only Doc
-anchor is a source link: it neither grants access nor owns the Discussion's lifecycle.
+own owner, grants, encryption mode and data key. An optional Session, identity-only Doc
+or Task anchor is a source link: it neither grants access nor owns the Discussion's lifecycle.
 A Doc anchor reuses the existing `{ ref, revision }` reference with its exact Home; it
 carries no passage or grants. The Session People pane is an anchored-list consumer of the
 same Discussion owner. Archiving or deleting a source does not archive or delete the
@@ -363,12 +407,53 @@ excludes already admitted people and backing Sessions; candidate labels and read
 display facts, not permission to invite, start work or disclose content. The hook runs only
 when selection is demanded and retires with its captured Account lifetime.
 
-The ordinary Discussion `@` picker uses the shared Session-reference suggestion kind.
-Its current roster admits existing Sessions/Bots and bound model backing Sessions; a
-cached Session title supplies display only and cannot admit an outsider. An unbound model
-slot is not addressable yet, while an invited idle/offline Session remains addressable.
-Selection emits the existing typed Session mention through the shared range/application
-owner, and the server rechecks membership when committing the message.
+Session invite/reviewer candidates retain the ordinary Session display `label` and
+expose `titleReadable`, derived by the existing Home-qualified
+`readableSessionDisplayTitle` owner. A locked placeholder is not a readable title;
+the flag lets the presenting surface group or hide unreadable choices without
+comparing translated strings or retaining a second title store. It is display
+availability, never permission to invite or disclose content.
+
+Operational `discussion.invite` accepts a SessionTarget in `participant.sessionId`;
+`discussion.create` accepts independently-one SessionTarget operands in Session entries
+of `participants`. The shared Action SessionTarget front door resolves these before
+approval and storage. A `discussion:` selector reads that Home's authorized current
+executable roster, including bound model Sessions, without requiring a fabricated source
+Session. Unbound model selections are not executable participants. A model launch's saved
+client Home label is not membership authority; the admitted roster and concrete Session
+admission remain authoritative.
+
+An initial invitation array creates one Discussion and first message, not one resource
+per target. Approval custody retains the concrete targets and their participant slots;
+replay does not enumerate the selector again. The UI repository retains those same concrete
+participants in its existing create intent for uncertain-response retries. Removal and
+answer-policy operands remain exact participant identities. Selection neither supplies a
+grant nor makes a runtime's Discussion key ready: initial Session admission reuses the
+existing invitation owner inside the create transaction, and a refusal rolls back the
+resource, initial grants, bindings and first post. Account recipient-envelope preparation
+remains separate from executable Session admission.
+
+A refused initial audience fails only that proposed creation, retaining its mutation
+and draft recovery plus unrelated loaded Discussions. A refused creation-local-id
+reconciliation read remains uncertain; it cannot prove that the whole Home was revoked.
+Known-resource refusal remains resource-scoped, and actual Account retirement uses the
+existing Account lifetime owner. The separate Doc-comment delegation has no configurable
+initial-audience operand and rejects nonempty participants before writing, rather than
+silently discarding them.
+
+The ordinary Discussion `@` picker uses its current admitted roster: existing
+Sessions/Bots, bound model backing Sessions, and invited model slots whose Session
+has not started yet. Cached titles supply display only and cannot admit an outsider.
+An unstarted model is named by the existing Agent/model/Machine display owner;
+selecting it retains its real slot reference in the existing Discussion draft and
+does not launch anything. On explicit Send, the Discussion owner rereads current
+membership and resolves that exact slot through the existing invitation/rejoin
+and ordinary Session-birth path, preserving the saved launch and answer policy.
+An already-bound slot uses its real Session without another start. Only confirmed
+backing identities become the existing typed Session mentions in posted content;
+pending, approval or failed birth leaves the question drafted rather than posting
+a fabricated Session reference. The server still rechecks membership at commit,
+and invited idle/offline Sessions remain addressable.
 
 Summary `latestMessage.content` carries the original stored envelope, not a server-readable
 preview copy. `createDiscussionActionAdapter` opens it through the same resource key and
@@ -394,6 +479,22 @@ this preview as `null` in an actual protected addressed-Agent context, including
 results from mutations, and mark list results incomplete.
 Current summaries are not cutoff snapshots; U2's admitted `discussion.read` remains the bounded
 content port for that turn.
+
+`useDiscussionListSearch` searches the captured Account's already-opened Discussion
+titles, participant display names and available source labels. A nonempty query demands
+`DiscussionRepository.loadCompleteList` for the selected active or archived corpus,
+continuing the ordinary list's retained cursor rather than creating a second list or a
+server content query. The Home column omits `anchorSessionId`; an anchored pane may
+explicitly supply it. Existing presentation filters apply to the resulting items.
+Message bodies, opaque ids and ciphertext are not search inputs. Partial page/read failures
+retain received matches and expose the repository's error and completeness state.
+
+The returned `DiscussionListSearchSnapshot.sourceLabelsUnavailable` is an active-query
+availability fact: a referenced Session/qualified Doc has no usable opened label, or a
+Task label producer is absent. It triggers neither fetching nor loading and does not make
+the corpus incomplete. When the query is empty, the flag is false because source-label
+availability is not demanded. Source labels reuse scoped Session naming and decrypted
+Account Artifact headers; a foreign Home or Account's same raw id cannot supply a label.
 
 The data binding `useDiscussionListRows` exposes transient attention facts through
 `buildDiscussionListAttention`, consuming the Inbox owner's strict approval-Artifact reader
@@ -424,6 +525,12 @@ while attention is demanded, Doc Artifact changes refresh that same projection; 
 in-flight page cannot restore a proposal after a newer owner refresh. Cached, unmounted
 threads are not hydrated merely because the Inbox is open. Account retirement and explicit
 read refusal withdraw the corresponding projection.
+
+Summary `lastReadSeq` is the viewing Account's private, nullable cursor, not a participant
+read receipt. Grant entry can initialize that cursor at the current message sequence;
+this baseline does not establish that the person read those messages. The admitted
+participant roster and human presence projection expose no peer read frontier. Presence
+can describe viewers and typing, but cannot supply a “read up to” marker for another person.
 
 Participant profile display uses `useDiscussionParticipantProfiles` over the admitted roster,
 batching the existing people API under the captured Home/Account. Its required `accountLifetime`
@@ -482,8 +589,12 @@ Administration's selected per-plugin execution origin and the daemon's existing
 Composer renderer catalog. They do not infer an execution Machine from the
 Discussion's optional Session anchor. Package and loaded-runtime acceptance
 remain separate from the source contract.
-Task reply routing remains a separate integration with the task source owner; private
-Discussion publication must not become a tracker comment write.
+Development Task anchors and reply targets carry `{ kind: 'task', entry }`, using
+the canonical `TriageEntryRefV1Schema` from Protocol's `tasks/entryRefV1` leaf.
+The reference grants no Task access and selects no configured source connection.
+Task reads and navigation remain with the Tasks source owner; an unavailable source
+does not remove the private Discussion or its authored replies. `discussion.reply`
+publishes only into the Discussion, never into a tracker's provider comments.
 
 ### Second-opinion composition (development integration)
 
@@ -520,11 +631,64 @@ anchored quote. Create, quote and question keep distinct retained retry ids;
 uncertain responses retry those identities and current admission, not a new
 Discussion or model slot. Multiple reviewers currently return the typed
 `fresh_opinions_unavailable` result before effects: this path cannot substitute
-a Session origin or local multi-reviewer loop for FIN's Discussion Workflow
-start/result contract. The controller and optional committed-answer opener are
+a Session origin or local multi-reviewer loop for the missing Fresh opinions
+builtin. The controller and optional committed-answer opener are
 data bindings; rendered L7 composition and loaded desktop/phone validation are
 still integration work, not released availability. The separate background
 Agent Second opinion role is unchanged.
+
+### Discussion Pattern bindings (development integration)
+
+Discussion Run uses the existing Pattern picker, composer and `workflow.run.start`
+owner. Its Discussion origin names a committed addressing message; admission
+resolves and freezes that message's actual sequence, not a caller-authored
+cutoff. A draft is posted through the ordinary Discussion submit/rejoin owner
+only on explicit Run. Opening the picker or reviewing inputs posts nothing.
+Uncertain post and Run-start responses retain their respective original ids.
+The submitted question is the reviewed main text input, committed as ordinary
+unaddressed Discussion content; it must not also start the separate Ask fanout.
+
+The Workflow input owner reads Discussion context through the authorized C3
+paging and encryption owners. Addressing context stays at the frozen question;
+`discussion_context` with scope `so_far` captures the current readable frontier
+once in the invocation's existing materialized input. Recovery reuses that input
+rather than widening it with later replies. Missing keys or revoked access do
+not become plaintext or an empty-history fallback.
+
+Accepted Session-executed leaf output publishes through the existing trusted Discussion publisher
+after the exact invocation result is durable. The original input, accepted turn,
+Run, invocation, attempt and executing Session must agree. The sole append
+transaction records the canonical C2 `publicationRef` for a published answer and settles
+the original; recovery rejoins that identity rather than executing the Agent or
+posting a generic final answer again. Structural Workflow containers do not
+publish duplicate answer bodies. Private-draft review remains with its existing
+Discussion approval owner; accepting a Workflow result does not release a held draft.
+Selected model participant slots use C3's
+ordinary reservation and Session birth; implicit Workflow execution leaves keep
+their existing Run-step ownership.
+Ordinary admitted replies use the existing default approval policy; explicit
+Require settings still apply. A known publication refusal becomes actionable
+Run attention. Retrying its structural root reuses the completed leaf and input
+instead of executing the Agent again; an unknown transport result stays uncertain.
+Current Discussion reply delivery requires Session-executed steps. A
+`detached_run` leaf has no consumed C2 Discussion-result producer and is refused
+before start effects; ordinary non-Discussion detached runs are unchanged.
+Existing participant Sessions must also be supported by the Run Account's
+current execution authority; a shared Home is not cross-Account delegation.
+
+Discussion timeline bindings query the existing managed Run list/store by
+Discussion origin, with the captured Home and Account lifetime. Header and
+controls use managed lifecycle/progress and the existing Run detail actions,
+not native Session Workflow activity. Another round uses the same accepted-start
+preparation and `workflow.run.start` replay intent, whose owner supplies prior
+results. Discussion access does not grant access to private Run content.
+
+These are data/hooks for the Discussion composition owner, not a claim that the
+visible Run header or controls have been mounted or validated in a loaded app.
+Fresh opinions remains unavailable until its canonical builtin exists.
+`workflow.definition.capture` is not registered, so Save as pattern reports
+`workflow_definition_capture_unavailable`; it does not create a local graph,
+save through a different Action or run automatically.
 
 ### Model participant birth (development integration)
 
@@ -535,7 +699,9 @@ identity. Human invitations remain grants, outside this executable selection.
 
 The existing participant owner reserves a stable `participantSlotId` and launch
 selection. An unresolved start retries that slot rather than selecting another
-creation identity. Ordinary Session birth carries the strict `discussion`
+creation identity. An unstarted slot selected in the Discussion composer is also
+resolved through that same owner on explicit Ask/Send, never through a composer-local
+launcher; editing or opening/selecting a mention alone does not start it. Ordinary Session birth carries the strict `discussion`
 origin and exact Discussion/slot correspondence; the server validates the
 current reservation, creator and launch before committing its backing Session.
 An authenticated creation-tag retry also revalidates current participation
@@ -558,6 +724,24 @@ Actions; the latter detaches without archiving. Owned provenance and historical
 messages remain available to reconcile a lost removal response. Discussion
 administration does not grant control of another Account's Session. Readiness
 and start uncertainty are separate from authorization and must remain visible.
+After ordinary Unarchive, an explicit existing-Session invitation can readmit a
+removed child under the current input, disclosure and key-readiness checks.
+Unarchive alone restores neither membership nor delivery. Readmission preserves
+the original model slot, launch, creator and Session ownership; it does not turn
+later owned removal into detach-only or allocate another Session. The new
+invitation uses its requested answer policy, or the ordinary when-addressed
+default, and the existing Follow owner starts at the current message sequence.
+Withdrawn older asks stay withdrawn. A blind replay of a removed model-selection
+request is still refused while that slot remains removed.
+The existing stop owner also confirms an already-stopped Session when the exact
+daemon finds no runtime and a fresh authorized Home read reports it inactive.
+The UI producer preserves that canonical `already_stopped` result alongside its
+legacy presentation fields, so owned removal can continue to ordinary archive.
+Offline appearance alone, a cached inactive row or an uncertain acknowledgement
+does not supply that proof; the Discussion composition adds no liveness reader.
+An archive endpoint refusal remains a failed ordinary Action, not a completed
+owned removal merely because its participant binding was already detached.
+Retry keeps the same owned Session descriptor and re-enters that lifecycle.
 The composed answer, removal, package and loaded-runtime journeys are still
 being integrated; schema presence does not establish completion or release
 availability.
@@ -571,6 +755,18 @@ belongs to the authenticated execution Account; trusted provenance must agree wi
 `DiscussionProducerV1` is display metadata, never caller-selected authority. Human invitations
 remain grants; executable participation binds an existing Session separately and requires
 runtime-control and pairwise disclosure admission. Neither invitation starts a turn.
+
+For a protected reply return, the append writer reopens the exact original reply progress
+and stamps its content-free `actionRequestAttributionV1` beside `producerV1.replyReturn`.
+Neither authored input nor the reply target supplies this cause. Retained producers use
+the tolerant stored reader; current writes and known fields remain strict. Message,
+latest-row and mutation responses project `requesterAccountActor` through the same sanitized
+Account display projector used by transcript authors and Team rosters, only for a requester
+on this Home. This needs no friendship, profile store or expanded Team roster disclosure.
+An autonomous/unknown or other-Home requester has no local Account-name projection. These
+facts describe who asked and who posted; they do not prove the Account or credential used
+by a separate outward operation. Reply custody without that exact operation actor leaves
+the result's “using” identity unknown.
 
 Account-placed agent Actions publish through the current Session's existing authenticated
 publisher. The host's private Session RPC adapter verifies its active admission witness, or
@@ -606,9 +802,12 @@ that edge. Observation carries this persisted policy and the committed original
 event into the shared C1 resolver. An addressed question is needs-you/decision
 (wait); an ambient watch original is person-wrote for a human publication or
 message for ordinary Agent chat. Unaddressed non-watch chat creates no input.
-Quiet queues selected originals for the next turn without waking; Custom/off
-creates no input; Important wakes for addressed questions, not ambient chat.
-The existing receiver admission, Pending custody and source mute still apply.
+An explicitly addressed original carrying a C2 answer obligation is a direct
+ask regardless of that Follow level: wake an idle receiver, use the next boundary
+when busy, and retain the existing hold when person-stopped. Quiet queues only
+selected unaddressed/informational events without waking; Custom/off suppresses
+those events. The existing receiver admission, Pending custody and source mute
+still apply; changing the Follow level does not opt out of a direct ask.
 
 Answer policy belongs to the existing executable participant row. The
 `discussion.participant.policy.set` Action changes that row; invitation defaults
@@ -624,9 +823,27 @@ Its immutable `discussionDraftReview: true` presentation fact distinguishes an
 open deliberate draft from ordinary Action confirmation in the private Inbox;
 it grants no decision or publication authority.
 
-Explicit addressed drafts and final-result fallback retain the original
-question/participant/turn identity. Rejoining that approval must preserve its
-first captured body and terminal decision rather than opening another review.
+The native explicit post/reply policy check reads participants as a companion of
+the original signed Account Action, not a newly signed `discussion.participants.list`
+effect. Home accepts only its canonical GET roster route with absent body/query and
+matching route operands; original root, current installation, signature and resource
+access remain independently required. The daemon normalizes the exact addressed
+C2 return identity before signing, including deliberate drafts. A downstream
+signed recheck cannot rewrite that identity:
+if policy has changed to draft review, it refuses and requires preparation there.
+Already-bound return context skips rebinding through its existing return marker;
+signed informational input remains informational after a level/policy change.
+
+Explicit addressed replies, deliberate drafts and final-result fallback retain
+the original question/participant/turn identity. The fallback reconciles the
+original C2 obligation before preparing an Action: a committed explicit reply
+needs neither another publication nor another approval. If the explicit reply
+is still awaiting approval, both paths rejoin that existing approval, preserving
+its first captured body and terminal decision rather than opening another review.
+The final-return producer captures the fresh canonical Home identity through the
+existing Machine execution-origin resolver, retaining the CLI profile identifier
+separately. Approval currentness compares that Home identity, not a browser's or
+daemon's local profile alias; unavailable Home identity holds preparation closed.
 The private publisher verifies the executing approval before stamping a draft
 review assertion on its trusted socket publication. Neither a public post nor
 an authored private publisher request accepts that assertion.
@@ -688,6 +905,11 @@ composed SQLite coverage; package and loaded native integration remain unverifie
 The protected Pending request, receipt and native admission witness retain the
 question/participant/cutoff tuple. Happier-supplied context and `discussion.read`
 cannot exceed that cutoff, and provider dispatch rechecks the original custody.
+That recheck reads the original's settled authority and exact admission receipt:
+initial settlement deliberately removes the untrusted request metadata. It
+retains the original authority and encrypted content while revalidating current
+permissions, mute, participation and Pending admission. It does not restore a
+request into the transcript or treat authority-free held custody as admitted.
 Two queued questions retain separate contexts rather than merging their
 cutoffs. These checks cannot erase content already ingested by a retained native
 continuation; the composed native-independence live proof remains open.

@@ -1,0 +1,198 @@
+import { randomUUID } from "node:crypto";
+import { PrismaClient, type Prisma } from "@prisma/client";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { getDbProviderFromEnv, initDbPostgres, shutdownDbClient } from "@/storage/db";
+import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
+import { readSessionMetadataOwnerAccountModes } from "@/app/session/metadata/sessionMetadataRecipientProjection";
+import { findV2SessionListRows, mapV2SessionListRows, V2_SESSION_LIST_ORDER_BY } from "./page";
+
+interface PlanNode {
+    "Node Type": string;
+    "Relation Name"?: string;
+    "Actual Loops": number;
+    Plans?: PlanNode[];
+}
+
+function relationLoops(plan: PlanNode, relation: string): number {
+    return (plan["Relation Name"] === relation ? plan["Actual Loops"] : 0)
+        + (plan.Plans ?? []).reduce((sum, child) => sum + relationLoops(child, relation), 0);
+}
+
+describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Session listing PostgreSQL query work", () => {
+    const queries: Prisma.QueryEvent[] = [];
+    const client = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+    beforeAll(async () => {
+        if (!process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL
+            || process.env.DATABASE_URL !== process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL) {
+            throw new Error("Use the disposable PostgreSQL DB-contract harness");
+        }
+        client.$on("query", query => { queries.push(query); });
+        initDbPostgres();
+        await client.$connect();
+    });
+    afterAll(async () => { await client.$disconnect(); await shutdownDbClient(); });
+
+    it("reuses captured membership facts while preserving rollback and current collective access", async () => {
+        const prefix = `query-plan-${randomUUID()}`;
+        const accountId = `${prefix}-viewer`;
+        const sessionCount = 2748;
+        const ownedSessionCount = 1413;
+        const pageSize = 200;
+        const teamCount = 16;
+        const sessionIds = Array.from({ length: sessionCount }, (_, i) => `${prefix}-session-${i}`);
+        const teamIds = Array.from({ length: teamCount }, (_, i) => `${prefix}-team-${i}`);
+        await client.account.createMany({ data: Array.from({ length: 200 }, (_, i) => ({
+            id: i === 0 ? accountId : `${prefix}-account-${i}`, publicKey: `${prefix}-key-${i}`, encryptionMode: "plain",
+        })) });
+        try {
+            await client.team.createMany({ data: teamIds.map(id => ({ id, name: id })) });
+            await client.teamMembership.createMany({ data: Array.from({ length: 27 }, (_, i) => ({
+                teamId: teamIds[i % teamCount], accountId: i === 0 ? accountId : `${prefix}-account-${i}`,
+                role: "member", sessionAccessStartsAt: null,
+            })) });
+            await client.teamGroup.create({ data: {
+                id: `${prefix}-group`, teamId: teamIds[0], name: "Group", nameKey: "group",
+            } });
+            await client.session.createMany({ data: sessionIds.map((id, i) => ({
+                id, accountId: i < ownedSessionCount ? accountId : `${prefix}-account-${(i % 199) + 1}`,
+                tag: id, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+                meaningfulActivityAt: new Date(i),
+            })) });
+            await client.sessionTurn.createMany({ data: sessionIds.map(sessionId => ({
+                sessionId, turnId: "turn", status: "completed", startedAt: 1, updatedAt: 2,
+                rollbackState: "eligible", transcriptAnchorsJson: '{"startUserMessageSeq":3}',
+            })) });
+            await client.sessionTeamGrant.createMany({ data: sessionIds.slice(0, 4).map(sessionId => ({
+                sessionId, teamId: teamIds[0], effectiveAt: new Date(1),
+            })) });
+            await client.sessionGroupGrant.createMany({ data: sessionIds.slice(0, 4).map(sessionId => ({
+                sessionId, teamGroupId: `${prefix}-group`, effectiveAt: new Date(1),
+            })) });
+            await client.sessionTeamGrant.deleteMany({ where: { sessionId: { in: sessionIds } } });
+            await client.sessionGroupGrant.deleteMany({ where: { sessionId: { in: sessionIds } } });
+            // Fresh sparse grant tables have reltuples=-1 until analyzed. This
+            // is the observed hot database topology, not a planner override.
+            await client.$executeRawUnsafe('ANALYZE "Session", "Team", "TeamMembership", "Account", "SessionTurn"');
+            queries.length = 0;
+            const measured = await client.$transaction(async reader => {
+                const access = await resolveEffectiveSessionAccessWhere({
+                    tx: reader, accountId, capability: "readTranscript", mode: "effective_access_v1",
+                    authentication: createPresentUserSessionAccessAuthentication(),
+                });
+                queries.length = 0;
+                const read = async (kind: "baseline" | "snapshot" | "legacy") => {
+                    const started = performance.now();
+                    const rows = await findV2SessionListRows({
+                        userId: accountId, orderBy: V2_SESSION_LIST_ORDER_BY, take: pageSize,
+                        source: { kind: "effective", reader, baseWhere: { accountId },
+                            accessMode: kind === "legacy" ? "legacy_owner_or_direct" : "effective_access_v1",
+                            qualifiedTeamIds: access.qualifiedTeamIds, allowProjectionFallback: false,
+                            ...(kind === "baseline" ? {} : { collectiveAccessSnapshot: access.collectiveAccessSnapshot }) },
+                    });
+                    return { kind, rows, elapsedMs: performance.now() - started, queries: queries.splice(0) };
+                };
+                return [await read("baseline"), await read("snapshot"), await read("legacy")];
+            }, { isolationLevel: "RepeatableRead", timeout: 120_000 });
+            const rows = measured[1].rows;
+            expect(rows).toEqual(measured[0].rows);
+            expect(rows).toEqual(measured[2].rows);
+            const captured = measured.flatMap(result => result.queries
+                .filter(query => query.query.startsWith("SELECT") && !query.query.includes("pg_"))
+                .map((query, i) => ({ ...query, label: `${result.kind}-${i}` })));
+            const logDetails = process.env.HAPPIER_TEST_SESSION_QUERY_PLAN_LOG === "1";
+            if (logDetails) console.info("DBPERF_QUERY", JSON.stringify({ queries: captured.map(query => ({
+                label: query.label, query: query.query, params: JSON.parse(query.params), actorId: accountId,
+                sessionIds: rows.map(row => row.id),
+            })) }));
+            const plans: Array<{ label: string; executionMs: number; membershipLoops: number; plan: PlanNode }> = [];
+            for (const query of captured) {
+                const explained = await client.$queryRawUnsafe<Array<{ "QUERY PLAN": Array<{ Plan: PlanNode; "Execution Time": number }> }>>(
+                    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query.query}`, ...JSON.parse(query.params),
+                );
+                const plan = explained[0]["QUERY PLAN"][0];
+                plans.push({ label: query.label, executionMs: plan["Execution Time"],
+                    membershipLoops: relationLoops(plan.Plan, "TeamMembership"), plan: plan.Plan });
+            }
+            console.info("DBPERF_PLAN", JSON.stringify({ sessionCount, ownedSessionCount, pageSize, teamCount,
+                timings: measured.map(({ kind, elapsedMs }) => ({ kind, elapsedMs })),
+                plans: plans.map(plan => logDetails ? plan : { ...plan, plan: undefined }),
+            }));
+            expect(rows.map(row => row.id)).toEqual(sessionIds.slice(0, ownedSessionCount).reverse().slice(0, pageSize));
+            const projected = mapV2SessionListRows({ rows, userId: accountId, qualifiedTeamIds: new Set(teamIds) });
+            expect(projected.sessions).toHaveLength(pageSize);
+            expect(projected.sessions.every(row => row.rollbackEligibleTurnStarts?.includes(3))).toBe(true);
+            // With no grants, no Team membership can contribute to the page.
+            // A membership-first inverse join must not multiply work across
+            // every selected Session merely to rediscover empty grant tables.
+            expect(plans.filter(plan => !plan.label.startsWith("baseline"))
+                .reduce((sum, plan) => sum + plan.membershipLoops, 0)).toBe(0);
+
+            // The optimization cannot discard collective facts: a real shared
+            // row must retain its stronger Group grant beside its Team grant.
+            const sharedId = `${prefix}-shared`;
+            sessionIds.push(sharedId);
+            await client.session.create({ data: {
+                id: sharedId, accountId: `${prefix}-account-1`, tag: sharedId,
+                metadata: '{"v":1}', metadataLayoutVersion: 1, ownerMetadata: '{"t":"plain","v":{"v":1}}',
+                encryptionMode: "plain", currentStorageState: "hosted",
+            } });
+            const membership = await client.teamMembership.findUniqueOrThrow({
+                where: { teamId_accountId: { teamId: teamIds[0], accountId } },
+            });
+            await client.teamGroupMembership.create({ data: {
+                teamId: teamIds[0], teamGroupId: `${prefix}-group`, teamMembershipId: membership.id,
+                nativeContribution: true, sessionAccessStartsAt: null,
+            } });
+            await client.sessionTeamGrant.createMany({ data: [
+                { sessionId: sharedId, teamId: teamIds[0], effectiveAt: new Date(1), accessLevel: "view" },
+                { sessionId: sharedId, teamId: teamIds[1], effectiveAt: new Date(1), accessLevel: "admin" },
+            ] });
+            await client.sessionGroupGrant.create({ data: {
+                sessionId: sharedId, teamGroupId: `${prefix}-group`, effectiveAt: new Date(1), accessLevel: "edit",
+            } });
+            const readShared = async () => await client.$transaction(async reader => {
+                const access = await resolveEffectiveSessionAccessWhere({
+                    tx: reader, accountId, capability: "readTranscript", mode: "effective_access_v1",
+                    authentication: createPresentUserSessionAccessAuthentication(),
+                });
+                const rows = await findV2SessionListRows({ userId: accountId, orderBy: { id: "asc" },
+                    where: { id: sharedId }, source: { kind: "effective", reader, baseWhere: access.where,
+                        accessMode: "effective_access_v1", qualifiedTeamIds: access.qualifiedTeamIds,
+                        allowProjectionFallback: false, ...{ collectiveAccessSnapshot: access.collectiveAccessSnapshot } },
+                });
+                const ownerAccountModes = await readSessionMetadataOwnerAccountModes(reader, rows.map(row => row.accountId));
+                return mapV2SessionListRows({ rows, userId: accountId, qualifiedTeamIds: access.qualifiedTeamIds, ownerAccountModes }).sessions;
+            }, { isolationLevel: "RepeatableRead", timeout: 120_000 });
+            expect(await readShared()).toMatchObject([{ id: sharedId, effectiveAccess: { level: "edit" } }]);
+            await client.teamMembership.update({ where: { id: membership.id }, data: { role: "guest" } });
+            expect(await readShared()).toMatchObject([{ id: sharedId, effectiveAccess: { level: "edit" } }]);
+            await client.teamGroup.update({ where: { id: `${prefix}-group` }, data: { archivedAt: new Date() } });
+            expect(await readShared()).toEqual([]);
+            await client.teamGroup.update({ where: { id: `${prefix}-group` }, data: { archivedAt: null } });
+            expect(await readShared()).toMatchObject([{ id: sharedId, effectiveAccess: { level: "edit" } }]);
+            await client.teamGroupMembership.update({
+                where: { teamGroupId_teamMembershipId: { teamGroupId: `${prefix}-group`, teamMembershipId: membership.id } },
+                data: { sessionAccessStartsAt: new Date(1) },
+            });
+            expect(await readShared()).toEqual([]);
+            await client.teamMembership.update({ where: { id: membership.id }, data: { role: "member" } });
+            expect(await readShared()).toMatchObject([{ id: sharedId, effectiveAccess: { level: "view" } }]);
+            await client.teamMembership.delete({ where: { id: membership.id } });
+            const rejoined = await client.teamMembership.create({ data: {
+                teamId: teamIds[0], accountId, role: "member", sessionAccessStartsAt: new Date(1),
+            } });
+            expect(rejoined.id).not.toBe(membership.id);
+            expect(await readShared()).toEqual([]);
+            await client.teamMembership.update({ where: { id: rejoined.id }, data: { sessionAccessStartsAt: null } });
+            expect(await readShared()).toMatchObject([{ id: sharedId, effectiveAccess: { level: "view" } }]);
+            await client.team.update({ where: { id: teamIds[0] }, data: { archivedAt: new Date() } });
+            expect(await readShared()).toEqual([]);
+        } finally {
+            await client.session.deleteMany({ where: { id: { in: sessionIds } } });
+            await client.team.deleteMany({ where: { id: { in: teamIds } } });
+            await client.account.deleteMany({ where: { publicKey: { startsWith: `${prefix}-key-` } } });
+        }
+    }, 180_000);
+});

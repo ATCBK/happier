@@ -7,9 +7,9 @@ import {
 } from '@happier-dev/agents';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
-import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta, readSessionInputAuthority, readSessionInputSenderSessionIdV1, deriveWorkflowSessionInputLocalIdV2, buildTrustedHostSessionInputAdmissionV1, type SessionInputReplyIntentV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta, readSessionInputAuthority, readSessionInputSenderSessionIdV1, deriveWorkflowSessionInputLocalIdV2, buildTrustedHostSessionInputAdmissionV1, type SessionInputReplyIntentV1, type SessionInputEnqueueResultV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { withSessionMessageModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
-import type { ProviderErrorV1, SessionInputRequest, SessionMessageProvenance, SessionInputAdmissionRejectionCodeV1, SessionInputAdmissionResultV1, SessionMessageSendResultV1, SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2, PendingRequestedActionV1, ParticipantRecipientV1, ExecutionRunInputTurnV1, ExecutionRunPublicState } from '@happier-dev/protocol';
+import type { ProviderErrorV1, SessionInputRequest, SessionMessageProvenance, SessionInputAdmissionRejectionCodeV1, SessionMessageSendResultV1, SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2, PendingRequestedActionV1, ParticipantRecipientV1, ExecutionRunInputTurnV1, ExecutionRunPublicState } from '@happier-dev/protocol';
 import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { normalizeParticipantRecipientRoutingIdentityV1, withParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { ExecutionRunGetResponseSchema, ExecutionRunInputTurnV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -89,7 +89,7 @@ export type SendSessionMessageResult =
       suppressed?: true;
       /** The exact localId is already terminal, so there is no Pending work to start. */
       terminal?: true;
-      admissionResult?: SessionInputAdmissionResultV1;
+      admissionResult?: SessionInputEnqueueResultV1;
       /** Admission intent only: Pending custody does not prove provider consumption. */
       receiverDelivery?: SessionReceiverDeliveryDecisionV1;
       receiverResumeFailure?: Extract<InactiveSessionResumeResult, { ok: false }>;
@@ -106,7 +106,7 @@ export type SendSessionMessageResult =
       candidates?: string[];
       message?: string;
       providerError?: ProviderErrorV1;
-      admissionResult?: SessionInputAdmissionResultV1;
+      admissionResult?: SessionInputEnqueueResultV1;
       /** Proven terminal settlement for one exact admitted Execution Run input. */
       settlementResult?: Extract<SessionMessageSendResultV1, { status: 'failed' | 'cancelled' }>;
     }>;
@@ -258,7 +258,7 @@ type SendSessionMessageParams = Readonly<{
   machineAdmissionTransport?: (
     request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2,
     options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number; callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1 }>,
-  ) => Promise<SessionInputAdmissionResultV1>;
+  ) => Promise<SessionInputEnqueueResultV1>;
   /** Exact creation target when admission precedes the Session metadata projection. */
   targetMachineId?: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
@@ -269,7 +269,7 @@ type SendProtectedSessionMessageParams = SendSessionMessageParams & Readonly<{
 }>;
 
 type SendProtectedSessionMessageResult = SendSessionMessageResult & Readonly<{
-  admissionResult: SessionInputAdmissionResultV1;
+  admissionResult: SessionInputEnqueueResultV1;
 }>;
 
 function parsePermissionIntentOrThrow(raw: string): PermissionIntent {
@@ -300,7 +300,7 @@ function cancelledBeforeAdmission(
 
 function rejectedProtectedInputBeforeAdmission(
   code: Extract<SendSessionMessageResult, Readonly<{ ok: false }>>['code'],
-): SessionInputAdmissionResultV1 {
+): SessionInputEnqueueResultV1 {
   if (code === 'session_archived') {
     return { status: 'rejected', code: 'session_input_archived' };
   }
@@ -606,16 +606,15 @@ type CurrentPromptDeliveryOutcome =
 
 type FulfilledReplyObservation = Readonly<{ kind: 'fulfilled'; outcome: SessionMessageReplyOutcomeV1 }>;
 
-async function readOriginalReplyOutcome(params: Readonly<{
+async function readOriginalReply(params: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
   localId: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: ResolveSessionMessageAuthorizationHeaders;
-}>): Promise<SessionMessageReplyOutcomeV1 | undefined> {
+}>) {
   const { readSessionMessageReply } = await import('./sessionMessageReply');
-  const original = await readSessionMessageReply(params);
-  return original.status === 'available' ? original.progress.outcome : undefined;
+  return readSessionMessageReply(params);
 }
 
 function formatBlockedPromptDeliveryFailure(reason: PendingQueueDeliveryBlockedReason): string {
@@ -667,7 +666,8 @@ async function waitForCurrentPromptDelivery(params: CurrentPromptDeliveryObserva
       if (materialized) return { kind: 'materialized', message: materialized };
       if (params.replyCredentials) {
         try {
-          const outcome = await readOriginalReplyOutcome({ ...params, credentials: params.replyCredentials });
+          const original = await readOriginalReply({ ...params, credentials: params.replyCredentials });
+          const outcome = original.status === 'available' ? original.progress.outcome : undefined;
           params.signal?.throwIfAborted();
           // Pre-provider failure/cancellation can settle original Pending custody
           // without ever producing a committed transcript input or answer.
@@ -710,7 +710,10 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
   finalAssistantMessageId?: string;
   usage?: SessionInputUsageV1;
 }>> {
-  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1, params.precedingTurnEndSeq ?? 0);
+  const readCommittedTurnText = params.turn?.status === 'completed'
+    && typeof params.turn.transcriptAnchors?.finalAssistantMessageSeq !== 'number';
+  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1,
+    readCommittedTurnText ? 0 : params.precedingTurnEndSeq ?? 0);
   let currentUserSeq = Math.max(0, Math.trunc(params.materializedSeq));
   let observedAgentProgress = false;
   let sawCompletion = params.turn?.transcriptAnchors?.finalAssistantMessageSeq === null;
@@ -761,12 +764,17 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
         continue;
       }
       if (params.resultMessageId && row.id !== params.resultMessageId) continue;
-      const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+      const endSeq = readCommittedTurnText ? undefined : params.turn?.transcriptAnchors?.endSeqInclusive;
       if (typeof endSeq === 'number' && row.seq > endSeq) break;
       const decrypted = decryptTranscriptRowContent({
         content: row.content,
         ctx: params.ctx,
       });
+      const meta = asRecord(asRecord(decrypted)?.meta);
+      // Retained terminal projections can predate their complete anchors.
+      // Only the host's exact native turn tag can fill that correspondence;
+      // transcript adjacency and later turns cannot supply it.
+      if (readCommittedTurnText && meta?.runtimeTurnId !== params.turn?.turnId) continue;
       // The exact input's terminal proof closes this scan. A later input
       // starts another turn and must not become a fallback result for this
       // input when a legacy transcript lacks an explicit turn anchor.
@@ -788,8 +796,11 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
       const decoded = decodeTranscriptBody(decrypted);
       addTurnUsage(decrypted);
+      const segment = asRecord(meta?.happierStreamSegmentV1);
+      const committedTurnText = readCommittedTurnText && (meta?.runtimeEventKind === 'transcript-message-committed'
+        || segment?.segmentKind === 'assistant' && segment.segmentState === 'complete');
       if (decoded?.semanticRole === 'assistant' && (params.resultMessageId || decoded.sidechainId === undefined) && decoded.text
-        && (!params.turn || row.seq === params.turn.transcriptAnchors?.finalAssistantMessageSeq)) {
+        && (!params.turn || row.seq === params.turn.transcriptAnchors?.finalAssistantMessageSeq || committedTurnText)) {
         finalAssistantText = decoded.text;
         finalAssistantMessageId = row.id || undefined;
         if (params.turn || params.resultMessageId) sawCompletion = true;
@@ -813,7 +824,7 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
     }
 
-    const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+    const endSeq = readCommittedTurnText ? undefined : params.turn?.transcriptAnchors?.endSeqInclusive;
     if (orderedRows.length < ASSISTANT_TURN_SCAN_PAGE_LIMIT
       || (typeof endSeq === 'number' && (orderedRows.at(-1)?.seq ?? 0) >= endSeq)) {
       const usage = currentUsage();
@@ -837,6 +848,8 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   materializedSeq: number;
   materializedContent?: TranscriptMessageLookupResult['content'];
   resultMessageId?: string;
+  /** Original input custody, never supplied by transcript content. */
+  acceptedTurnId?: string;
   ctx: Readonly<{
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
@@ -846,16 +859,23 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   const projection = params.resultMessageId ? null : await fetchSessionTurnsProjection(params);
   const input = params.materializedContent
     ? asRecord(decryptTranscriptRowContent({ content: params.materializedContent, ctx: params.ctx })) : null;
-  const workflowInput = readSessionInputAuthority(input?.meta, 'stored')?.producer === 'workflow';
-  const turn = projection?.turns.find(candidate => candidate.transcriptAnchors?.userMessageSeqs?.includes(params.materializedSeq)
-    || candidate.transcriptAnchors?.startUserMessageSeq === params.materializedSeq
-    || (candidate.workflowInvocation && deriveWorkflowSessionInputLocalIdV2({
+  const inputAuthority = readSessionInputAuthority(input?.meta, 'stored');
+  const workflowInput = inputAuthority?.producer === 'workflow';
+  const matchesWorkflowInput = (candidate: SessionTurnV1) => Boolean(candidate.workflowInvocation && deriveWorkflowSessionInputLocalIdV2({
       purpose: 'invocation', ...candidate.workflowInvocation,
-    }) === params.localId));
+    }) === params.localId);
+  const turn = projection?.turns.find(candidate => params.acceptedTurnId
+    ? candidate.turnId === params.acceptedTurnId && matchesWorkflowInput(candidate)
+      && (inputAuthority?.producer === 'workflow'
+        ? deriveWorkflowSessionInputLocalIdV2(inputAuthority.workflow) === params.localId
+        : isSessionContextOnlyHostInput(input))
+    : candidate.transcriptAnchors?.userMessageSeqs?.includes(params.materializedSeq)
+      || candidate.transcriptAnchors?.startUserMessageSeq === params.materializedSeq || matchesWorkflowInput(candidate));
   // A queued input can be materialized before the current provider turn ends.
   // Neither that turn's text nor the next input's transcript position owns it.
   if (!params.resultMessageId && (
-    !projection && (workflowInput || isSessionContextOnlyHostInput(input))
+    params.acceptedTurnId && !turn
+    || !projection && (workflowInput || isSessionContextOnlyHostInput(input))
     || projection && (!turn || turn.status === 'in_progress')
   )) return { kind: 'missing' };
   const precedingTurnEndSeq = turn && projection ? projection.turns.reduce((latest, candidate) => {
@@ -925,10 +945,17 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
       const revision = events.currentRevision();
       try {
         let replyOutcome: SessionMessageReplyOutcomeV1 | undefined;
+        let originalHasNoReply = false;
+        let acceptedTurnId: string | undefined;
         if (params.reply) {
-          replyOutcome = await readOriginalReplyOutcome({ credentials: params.reply.credentials,
+          const original = await readOriginalReply({ credentials: params.reply.credentials,
             sessionId: params.sessionId, localId: params.localId, ...(params.signal ? { signal: params.signal } : {}),
             ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}) });
+          // Historical inputs have no obligation; unavailable custody never
+          // authorizes falling back to an unrelated or merely later final.
+          originalHasNoReply = original.status === 'none';
+          replyOutcome = original.status === 'available' ? original.progress.outcome : undefined;
+          acceptedTurnId = original.status === 'available' && !replyOutcome ? original.progress.acceptedTurnId : undefined;
           if (replyOutcome) {
             params.reply.onOutcome(replyOutcome);
             if (replyOutcome.kind !== 'answer' || 'publicationRef' in replyOutcome) {
@@ -937,10 +964,16 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           }
         }
         const outcome = await readAssistantTurnOutcomeAfterCurrentUserTurn({ ...params,
+          ...(acceptedTurnId ? { acceptedTurnId } : {}),
           ...(replyOutcome?.kind === 'answer' && 'result' in replyOutcome
             && replyOutcome.result.sessionId === params.sessionId
             ? { resultMessageId: replyOutcome.result.messageId } : {}) });
-        if (!params.reply && outcome.kind !== 'missing') return outcome;
+        if ((!params.reply || originalHasNoReply) && outcome.kind !== 'missing') return outcome;
+        // The original accepted Workflow turn can remain observable after its
+        // runner exits without fulfilling reply custody. Reuse the same exact
+        // result reader; explicit pass/failure/cancellation above stays final.
+        if (acceptedTurnId && (outcome.kind === 'failed' || outcome.kind === 'cancelled'
+          || outcome.kind === 'completed' && outcome.finalAssistantText !== null)) return outcome;
         if (replyOutcome?.kind === 'answer' && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
           && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) return outcome;
@@ -1290,14 +1323,22 @@ export async function sendSessionMessage(
 ): Promise<SendSessionMessageResult> {
   const cancelledAtStart = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
   if (cancelledAtStart) return cancelledAtStart;
-  const sessionTarget = await resolveSessionTransportContext({
-    credentials: params.credentials,
-    idOrPrefix: params.idOrPrefix,
-    ...(params.resolveAuthorizationHeaders
-      ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
-      : {}),
-    ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
-  });
+  let sessionTarget: Awaited<ReturnType<typeof resolveSessionTransportContext>>;
+  try {
+    sessionTarget = await resolveSessionTransportContext({
+      credentials: params.credentials,
+      idOrPrefix: params.idOrPrefix,
+      ...(params.resolveAuthorizationHeaders
+        ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
+        : {}),
+      ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    const cancelled = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
+    if (cancelled) return cancelled;
+    throw error;
+  }
   const cancelledAfterResolution = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
   if (cancelledAfterResolution) return cancelledAfterResolution;
   if (!sessionTarget.ok) {
@@ -1378,8 +1419,6 @@ export async function sendSessionMessage(
     }
   }
   const originalAdmission = params.inputAdmission ?? (params.replyIntent ? buildTrustedHostSessionInputAdmissionV1('cli') : undefined);
-  if (params.replyIntent && originalAdmission?.request.v !== 1) return { ok: false, code: 'unsupported',
-    admissionResult: { status: 'rejected', code: 'session_input_target_update_required' } };
   let protectedAdmission: NonNullable<typeof originalAdmission> | null;
   try {
     protectedAdmission = originalAdmission ? {
@@ -1390,7 +1429,7 @@ export async function sendSessionMessage(
   } catch {
     return { ok: false, code: 'admission_rejected', admissionResult: { status: 'rejected', code: 'session_input_invalid' } };
   }
-  const replyIntent = protectedAdmission?.request.v === 1 ? protectedAdmission.request.replyIntent : undefined;
+  const replyIntent = protectedAdmission?.request.replyIntent;
   if (replyIntent) {
     const { supportsSessionMessageReply } = await import('./sessionMessageReply');
     if (!(await supportsSessionMessageReply({ credentials: params.credentials, sessionId,
@@ -1399,15 +1438,17 @@ export async function sendSessionMessage(
         admissionResult: { status: 'rejected', code: 'session_input_target_update_required' } };
   }
   const replyAdmission = replyIntent ? { ...replyIntent,
-    ...(protectedAdmission?.request.v === 1 && protectedAdmission.request.discussionAddressing
+    ...(protectedAdmission?.request.discussionAddressing
       ? { discussion: protectedAdmission.request.discussionAddressing } : {}),
+    ...(protectedAdmission?.request.v === 2 && protectedAdmission.request.discussionAddressing
+      ? { workflow: protectedAdmission.request.workflow } : {}),
     ...(protectedAdmission?.request.actionRequestAttributionV1
       ? { actionRequestAttributionV1: protectedAdmission.request.actionRequestAttributionV1 } : {}),
     ...(protectedAdmission?.request.sourceSession ? { sourceSession: protectedAdmission.request.sourceSession } : {}) } : undefined;
   // Completed returns carry an actual protected sender without inventing a live
   // causal turn. Display-only answer attribution never selects receiver policy.
   const senderSessionId = protectedAdmission ? readSessionInputSenderSessionIdV1(protectedAdmission.request) : undefined;
-  const discussionAddressing = protectedAdmission?.request.v === 1 ? protectedAdmission.request.discussionAddressing : undefined;
+  const discussionAddressing = protectedAdmission?.request.discussionAddressing;
   let receiverPolicyAvailable = true;
   if (senderSessionId || discussionAddressing) {
     const scopes = await readSessionDeliveryMutedScopes({
@@ -1558,7 +1599,7 @@ export async function sendSessionMessage(
   }
 
   let enqueueResult: Awaited<ReturnType<typeof enqueuePendingQueueV2MessageViaHttp>>;
-  let admissionResult: SessionInputAdmissionResultV1 | undefined;
+  let admissionResult: SessionInputEnqueueResultV1 | undefined;
   let machineAdmissionInvoked = false;
   try {
     if (requiresMachineAdmission) {

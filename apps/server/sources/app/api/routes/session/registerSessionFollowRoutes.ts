@@ -1,4 +1,6 @@
-import { GetSessionFollowResponseSchema, SetSessionFollowRequestSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, SessionFollowErrorResponseSchema, ReplaceSessionVoiceInclusionsRequestSchema, ReplaceSessionVoiceInclusionsResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
+import { GetOtherAccountFollowResponseV1Schema, SetOtherAccountFollowResponseV1Schema, GetSessionFollowResponseSchema, SetSessionFollowRequestSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, SessionFollowErrorResponseSchema, ReplaceSessionVoiceInclusionsRequestSchema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
+import { FollowPolicyV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { parseOtherFollowSourceRefPathV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefPathV1';
 import { SessionAutoFollowPreferencesV1Schema } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import {
     ChangeDeliveryMuteRequestV1Schema,
@@ -12,6 +14,7 @@ import { createServerFeatureGatePreHandler } from "@/app/features/catalog/server
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import {
     getAccountSessionFollow, setAccountSessionFollow, removeAccountSessionFollow,
+    getOtherAccountFollow, setOtherAccountFollow, removeOtherAccountFollow,
     getSessionAutoFollowPreferences, setSessionAutoFollowPreferences,
     replaceAccountSessionVoiceInclusions,
     type AccountFollowFailure,
@@ -26,14 +29,18 @@ import { SESSION_FOLLOW_RULES_ROUTE_V1, SessionFollowRuleIdV1Schema, SessionFoll
 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { getAccountFollowRule, listAccountFollowRules, setAccountFollowRule, removeAccountFollowRule } from '@/app/session/follow/accountFollowRuleService';
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
+import { FollowListPageQueryV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 import { listAccountSessionFollows } from '@/app/session/follow/accountFollowService';
 import { SESSION_FOLLOW_PERSONAL_PROGRESS_ROUTE_V1, SessionFollowPersonalProgressRequestV1Schema,
     SessionFollowPersonalProgressResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { acceptAccountFollowPersonalProgress } from '@/app/session/follow/accountFollowPersonalProgress';
+import { readCurrentExecutionRunFollowSource } from '@/app/session/follow/executionRunFollowSource';
 
 const paramsSchema = z.strictObject({ sessionId: z.string().check(z.minLength(1)) });
+const otherSourceParamsSchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
 const FAILURE_STATUS: Readonly<Record<AccountFollowFailure, 400 | 403 | 404 | 409>> = {
     invalid_parameters: 400, account_inactive: 403, session_not_found: 404, session_archived: 409,
+    source_not_found: 404, source_unavailable: 409,
 };
 const errorResponses = {
     400: SessionFollowErrorResponseSchema,
@@ -63,19 +70,63 @@ export function registerSessionFollowRoutes(app: Fastify) {
     const ruleConfig = { allowApiToken: true as const,
         restrictedCredentialBinding: { scope: 'account' as const, allowSessionRuntime: false } };
     const ruleFeature = createServerFeatureGatePreHandler('sessions.following', process.env, { error: 'feature_unavailable' });
+    app.get(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
+        config: { ...ruleConfig, apiTokenSessionAction: 'follow.get' },
+        schema: { params: otherSourceParamsSchema, response: { 200: GetOtherAccountFollowResponseV1Schema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        if (!source) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await getOtherAccountFollow({ accountId: request.userId, source,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+    app.put(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
+        config: { ...ruleConfig, apiTokenSessionAction: 'follow.set' },
+        schema: { params: otherSourceParamsSchema, response: { 200: SetOtherAccountFollowResponseV1Schema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const body = z.strictObject({ policy: FollowPolicyV1Schema }).safeParse(request.body);
+        if (!source || !body.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const executionRunFrontier = source.kind === 'execution_run'
+            ? await readCurrentExecutionRunFollowSource({ app, accountId: request.userId,
+                sessionId: source.sessionId, runId: source.runId, authentication }) : null;
+        const result = await setOtherAccountFollow({ accountId: request.userId, source, policy: body.data.policy,
+            authentication, ...(executionRunFrontier?.ok ? { executionRunFrontier: executionRunFrontier.value } : {}) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+    app.delete(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
+        config: { ...ruleConfig, apiTokenSessionAction: 'follow.remove' },
+        schema: { params: otherSourceParamsSchema, response: { 200: RemoveSessionFollowResponseSchema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = otherSourceParamsSchema.safeParse(request.params);
+        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        if (!source) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await removeOtherAccountFollow({ accountId: request.userId, source,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
     app.post(SESSION_FOLLOW_PERSONAL_PROGRESS_ROUTE_V1, { preHandler: [app.authenticate, ruleFeature],
         config: { ...ruleConfig, apiTokenSessionAction: 'follow.set' },
         schema: { body: SessionFollowPersonalProgressRequestV1Schema,
             response: { 200: SessionFollowPersonalProgressResponseV1Schema, ...ruleErrors } },
     }, async (request, reply) => {
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const source = 'original' in request.body ? request.body.original.source : null;
+        const frontier = source?.kind === 'execution_run' ? await readCurrentExecutionRunFollowSource({ app,
+            accountId: request.userId, authentication, sessionId: source.sessionId, runId: source.runId }) : null;
         const result = await acceptAccountFollowPersonalProgress({ accountId: request.userId,
-            authentication: readSessionAccessAuthenticationFromRequest(request), occurrence: request.body });
+            authentication, occurrence: request.body, ...(frontier?.ok ? { executionRunFrontier: frontier.value } : {}) });
         return result.ok ? reply.send(result.value) : reply.code(ruleFailureStatus[result.error]).send({ error: result.error });
     });
     app.get('/v2/account/session-follows', { preHandler: [app.authenticate, ruleFeature], config: { ...ruleConfig, apiTokenSessionAction: 'follow.list' },
-        schema: { response: { 200: ListAccountSessionFollowsResponseV1Schema, ...errorResponses } },
+        schema: { querystring: FollowListPageQueryV1Schema, response: { 200: ListAccountSessionFollowsResponseV1Schema, ...errorResponses } },
     }, async (request, reply) => {
-        const result = await listAccountSessionFollows({ accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request) });
+        const query = FollowListPageQueryV1Schema.safeParse(request.query);
+        if (!query.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await listAccountSessionFollows({ accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
     });
     app.get(SESSION_FOLLOW_RULES_ROUTE_V1, { preHandler: [app.authenticate, ruleFeature], config: { ...ruleConfig, apiTokenSessionAction: 'follow.list' },

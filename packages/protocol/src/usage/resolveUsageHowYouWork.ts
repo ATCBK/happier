@@ -3,7 +3,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { resolveUsageCalendarInstant } from './usageCalendar.js';
 import { projectUsageFootprint, UsageFootprintProjectionSchema } from './usageFootprint.js';
-import { isUsageNightHour, projectUsageWorkIntervals, UsageNightHoursV1Schema, UsageWorkIntervalsProjectionSchema, type UsageWorkIntervalFact,
+import { isUsageNightHour, projectUsageWorkIntervals, selectUsageWorkPermissions, UsageNightHoursV1Schema, UsageWorkIntervalsProjectionSchema, type UsageWorkIntervalFact,
     type UsageWorkPermissionFact, type UsageWorkIntervalsInput } from './usageWorkIntervals.js';
 import type { UsageCoachReadEvidence } from './coach/coachFinding.js';
 
@@ -36,8 +36,14 @@ const UsageAutopsyEventSchema = lazyZodSchema(() => z.strictObject({
 export type UsageAutopsyEvent = z.infer<typeof UsageAutopsyEventSchema>;
 const CountSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const DurationSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+/** Coverage of the exact Session evidence read, including admitted empty Sessions. */
+export const UsageSessionEvidenceCoverageSchema = lazyZodSchema(() => z.strictObject({
+    selected: CountSchema, admitted: CountSchema,
+}).check(z.refine(value => value.admitted <= value.selected)));
+export type UsageSessionEvidenceCoverage = z.infer<typeof UsageSessionEvidenceCoverageSchema>;
 export const UsageHowYouWorkSchema = lazyZodSchema(() => z.strictObject({
     detailStatus: z.enum(['available', 'partial', 'unknown']),
+    sessionCoverage: z.optional(UsageSessionEvidenceCoverageSchema),
     autopsy: z.optional(z.strictObject({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) })),
     intervals: z.nullable(UsageWorkIntervalsProjectionSchema),
     todayInParallel: z.nullable(z.strictObject({ date: z.string(), startMs: z.number().check(z.int()), endMs: z.number().check(z.int()),
@@ -73,6 +79,7 @@ export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 export function resolveUsageHowYouWork(input: Readonly<{
     period: UsageWorkIntervalsInput['period']; timeZoneOffsetMinutes: number; nowMs?: number;
     accounting?: UsageAnalyticsQueryResponse; detail?: UsageHowYouWorkDetailInput; nightHours?: UsageWorkIntervalsInput['nightHours'];
+    sessionCoverage?: UsageSessionEvidenceCoverage;
     /** Already admitted private projection for this exact query, only while its source is pending. */
     retained?: UsageHowYouWork;
 }>): UsageHowYouWork {
@@ -98,9 +105,17 @@ export function resolveUsageHowYouWork(input: Readonly<{
     const todayIntervals = detail?.facts !== undefined && todayPeriod && todayPeriod.startMs < todayPeriod.endMs
         ? projectUsageWorkIntervals({ period: todayPeriod, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, facts: detail.facts }) : null;
     const result: UsageHowYouWork = {
+        ...((input.sessionCoverage ?? retained?.sessionCoverage) === undefined ? {} : {
+            sessionCoverage: input.sessionCoverage ?? retained?.sessionCoverage,
+        }),
         ...(retained?.autopsy === undefined ? {} : { autopsy: retained.autopsy }),
         detailStatus: !detail ? retained?.detailStatus ?? 'unknown' : detail.status === 'partial' || intervals?.coverage === 'partial' ? 'partial' : 'available',
-        intervals, todayInParallel: todayIntervals && today ? { date: today.date, ...todayIntervals.period,
+        // An empty historical subset cannot establish that no work ran today.
+        // Keep complete observed emptiness distinct from missing lifecycle coverage.
+        intervals, todayInParallel: todayIntervals && today && (
+            detail?.status === 'available' && todayIntervals.coverage === 'complete_for_supplied_facts'
+            || todayIntervals.lanes.some(lane => lane.busy.length > 0 || lane.waits.length > 0))
+            ? { date: today.date, ...todayIntervals.period,
             agentTimeMs: todayIntervals.agentTimeMs, elapsedBusyMs: todayIntervals.elapsedBusyMs,
             parallelBusyMs: todayIntervals.parallelBusyMs, maxParallel: todayIntervals.maxParallel } : retained?.todayInParallel ?? null,
         nightShift, activity: input.accounting?.activity ?? null, footprint: input.accounting ? projectUsageFootprint(input.accounting) : null,
@@ -119,21 +134,16 @@ export function resolveUsageHowYouWork(input: Readonly<{
             decisionLatencyMs: null, unknownRequestTimeCount: 0, unknownDecisionTimeCount: 0,
             byAnsweringClient: { ios: 0, android: 0, web: 0, desktop: 0, unknown: 0 }, byTool: [] };
         const tools = new Map<string | null, NonNullable<UsageHowYouWork['permissions']>['byTool'][number]>();
-        const seenPermissions = new Set<string>();
-        for (const fact of detail.permissions ?? []) {
-            const key = JSON.stringify([fact.workId, fact.requestId]);
-            if (seenPermissions.has(key)) continue;
-            seenPermissions.add(key);
-            if (!(fact.requestedAtMs !== null && inPeriod(fact.requestedAtMs))
-                && !(fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs))) continue;
+        const selectedPermissions = selectUsageWorkPermissions(detail.permissions ?? [], input.period);
+        const pairedPermissions = new Set(selectedPermissions.paired);
+        for (const fact of selectedPermissions.requests) {
             permissions.requestCount += 1;
             if (fact.requestedAtMs === null) permissions.unknownRequestTimeCount += 1;
             if (fact.decidedAtMs === null) permissions.unknownDecisionTimeCount += 1;
             if (fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs)) permissions.byAnsweringClient[fact.answeringClientCategory ?? 'unknown'] += 1;
             const tool = tools.get(fact.toolId) ?? { toolId: fact.toolId, requestCount: 0, pairedDecisionCount: 0, decisionLatencyMs: null };
             tool.requestCount += 1;
-            if (fact.requestedAtMs !== null && fact.decidedAtMs !== null && fact.decidedAtMs >= fact.requestedAtMs
-                && Number.isSafeInteger(fact.requestedAtMs) && inPeriod(fact.decidedAtMs)) {
+            if (pairedPermissions.has(fact) && fact.requestedAtMs !== null && fact.decidedAtMs !== null) {
                 permissions.pairedDecisionCount += 1;
                 permissions.decisionLatencyMs = (permissions.decisionLatencyMs ?? 0) + fact.decidedAtMs - fact.requestedAtMs;
                 tool.pairedDecisionCount += 1;
@@ -153,7 +163,7 @@ export function resolveUsageHowYouWork(input: Readonly<{
             inputs.byDeliveryKind[fact.deliveryKind] += 1;
             if (fact.deliveryKind === 'steer') inputs.steeringCount += 1;
         }
-        if (detail.permissions !== undefined) result.permissions = permissions;
+        if (detail.permissions !== undefined && (detail.status === 'available' || permissions.requestCount > 0)) result.permissions = permissions;
         if (detail.acceptedInputs !== undefined) result.inputs = inputs;
     }
     return result;

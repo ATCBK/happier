@@ -71,6 +71,7 @@ describe('Channels V1 public management barrel', () => {
             connectionCreate: management.ConversationConnectionCreateManagementActionDeclarationV1,
             connectionTransfer: management.ConversationConnectionTransferManagementActionDeclarationV1,
             connectionPrepare: management.ConversationConnectionPrepareManagementActionDeclarationV1,
+            connectionSetupRemediate: management.ConversationConnectionSetupRemediateManagementActionDeclarationV1,
             connectionRetest: management.ConversationConnectionRetestManagementActionDeclarationV1,
             connectionUpdate: management.ConversationConnectionUpdateManagementActionDeclarationV1,
             connectionDelete: management.ConversationConnectionDeleteManagementActionDeclarationV1,

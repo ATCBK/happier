@@ -34,6 +34,8 @@ import type {
 import { prepareSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type SessionInputDispatchServices } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 import type { RuntimeTurnPromptMeta } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { HostPreparedContext } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
+import type { SessionProviderInputConsumer } from '@/api/session/sessionClientPort';
+import type { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 
 /**
  * Config change carried by a steered message that the backend must own BEFORE the text joins the
@@ -107,7 +109,7 @@ export type InFlightSteerController = Readonly<{
   /** Register a localId-correlated host effect consumed by canonical provider acceptance. */
   registerProviderAcceptedEffect: (
     localId: string,
-    onAccepted: (() => void) | null,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
   ) => void;
   /** Collect destination-owned Follow context at the steer provider-effect boundary. */
   prepareHostContext?: (input: Readonly<{
@@ -165,7 +167,8 @@ export type InFlightSteerController = Readonly<{
 export function registerPermissionModeMessageQueueBinding(opts: {
   session: PermissionModeQueueSessionBinding;
   agentTargetKey?: string;
-  queue: SpecialCommandQueue<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
+  queue: SpecialCommandQueue<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>
+    & Pick<MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>, 'getContextOnlyMessages'>;
   getCurrentPermissionMode: () => PermissionMode | undefined;
   setCurrentPermissionMode: (mode: PermissionMode | undefined) => void;
   inFlightSteer?: InFlightSteerController | null;
@@ -256,7 +259,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const inputProvenance = readSessionMessageProvenance(message.meta, 'stored') ?? undefined;
     const authority = readSessionInputAuthority(message.meta, 'stored');
     const returnedAnswer = authority?.v === 1 ? authority.returnedAnswer : undefined;
-    const discussionAddressing = authority?.v === 1 ? authority.discussionAddressing : undefined;
+    const discussionAddressing = authority?.discussionAddressing;
     if (discussionAddressing) {
       try { assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt }); }
       catch { return true; }
@@ -266,9 +269,8 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const admittedFollow = (() => {
       if (!followDelivery) return undefined;
       try {
-        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt });
-        return true;
-      } catch { return false; }
+        return assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt });
+      } catch { return undefined; }
     })();
     if (followDelivery && !admittedFollow) {
       try {
@@ -399,7 +401,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ...(inputContextBlock ? { inputContextBlock } : {}),
       ...(inputProvenance ? { inputProvenance } : {}),
       ...(returnedAnswer ? { returnedAnswer } : {}),
-      ...(followDelivery && admittedFollow && localId ? { followDeliveries: [{ delivery: followDelivery, localInputId: localId, userMessageSeq }] } : {}),
+      ...(followDelivery && admittedFollow && localId ? { followDeliveries: [{ delivery: followDelivery, localInputId: localId, userMessageSeq,
+        ...((admittedFollow.followRelations?.length || admittedFollow.followSources?.length) ? { followMatches: [
+          ...(admittedFollow.followRelations ?? []).map(({ relation }) => ({ kind: 'relation' as const, relation })),
+          ...(admittedFollow.followSources?.length ? [{ kind: 'rule' as const }] : []),
+        ] } : {}),
+      }] } : {}),
     };
 
     if (discussionAddressing) {
@@ -418,7 +425,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     if (returnedAnswer) {
       // Information is never a slash command, in-flight steer, or queue-clear.
       // Continue answers remain retained context until a real input arrives.
-      opts.queue.push(queuedPrompt, queueMode);
+      opts.queue.pushIsolate(queuedPrompt, queueMode);
       if (returnedAnswer.delivery === 'wake' && opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
       return true;
     }
@@ -432,6 +439,9 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           message: queuedPrompt,
           text,
           mode: queueMode,
+          // Protected originals can be independently withdrawn after queueing.
+          // Keep their native dispatch and rejection settlement independent too.
+          isolate: Boolean(causalPermissionAuthority),
         });
       }
       if (opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
@@ -713,9 +723,9 @@ export function registerPermissionModeMessageQueueBinding(opts: {
                 ? { sessionFollowUpdates: preparedSessionFollowContext.updates, workerUpdates: preparedSessionFollowContext.workerUpdates }
                 : {}),
             });
-            await preparedDispatch.assertAdmission();
-            if (stopForUnavailableSteer()) return;
             await preparedSessionFollowContext?.commitWorkerUpdateEvents?.();
+            if (stopForUnavailableSteer()) return;
+            await preparedDispatch.assertAdmission();
             if (stopForUnavailableSteer()) return;
             const confirmProviderPromptAccepted = (): void => {
               const settle = settleReplaySeedOnProviderAcceptance;
@@ -733,13 +743,13 @@ export function registerPermissionModeMessageQueueBinding(opts: {
               steer.registerProviderAcceptedEffect(
                 localId,
                 settleReplaySeedOnProviderAcceptance || preparedSessionFollowContext
-                  ? () => {
+                  ? (pendingSettlement) => {
                       if (settleReplaySeedOnProviderAcceptance) confirmProviderPromptAccepted();
                       preparedSessionFollowContext?.acknowledgeAccepted({
                         kind: 'admitted_input',
                         localInputId: localId,
                         userMessageSeq,
-                      });
+                      }, pendingSettlement);
                     }
                   : null,
               );
@@ -864,7 +874,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     currentBindingGeneration += 1;
     handledUserPromptLocalIds.clear();
     handledUserPromptSeqs.clear();
-    session.onUserMessage((message) => handleMessage(session, message));
+    session.onUserMessage(Object.assign((message: UserMessage) => handleMessage(session, message), {
+      readRetainedContextLocalIds: () => session !== currentSession ? [] : [...new Set(
+        opts.queue.getContextOnlyMessages().flatMap(prompt => [prompt.localId, ...(prompt.localIds ?? [])])
+          .filter((localId): localId is string => typeof localId === 'string' && readPendingLocalId(localId) !== null),
+      )],
+    }));
   };
 
   bindSession(opts.session);
@@ -894,7 +909,7 @@ function resolveModelOverrideFromUserMessage(
 }
 
 type PermissionModeQueueSessionBinding = {
-  onUserMessage: (handler: (message: UserMessage) => boolean | void) => void;
+  onUserMessage: (handler: SessionProviderInputConsumer) => void;
   updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
   getMetadataSnapshot?: () => unknown;
   refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;

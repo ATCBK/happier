@@ -4,6 +4,7 @@ import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/mac
 import { buildQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { UiContributedActionExecuteRequestV1Schema, UiContributedActionExecuteResponseV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
+import type { MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { ActionDefinitionSummaryV1 } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -73,6 +74,7 @@ export type CurrentUiContextVoiceCommandInvocationInput = Readonly<{
 export type CurrentUiContextVoiceActionInvocationInput = Readonly<{
     action: PluginContributionIdentityV1;
     input?: PluginUiJsonValueV1;
+    messageActionReference?: MessageActionReferenceV1;
     signal?: AbortSignal;
     expectedContributorOccurrenceId?: string;
     defaultSessionId?: string;
@@ -357,7 +359,7 @@ export function createCurrentUiContextVoiceToolPort(
             return { ok: false, code: 'denied', errorCode: 'plugin_action_read_requires_safe', actionHandlerInvocation: 'notStarted' };
         }
         const currentSessionId = input.reader.readCurrentSessionId?.() ?? null;
-        const sessionId = request.defaultSessionId ?? currentSessionId;
+        const sessionId = request.defaultSessionId ?? request.messageActionReference?.sessionId ?? currentSessionId;
         // Only an implicit viewed-Session binding retires on navigation. An
         // explicitly invoking Session (or a global Action) does not borrow it.
         const followsViewedSession = includeCurrentUiContext
@@ -424,6 +426,7 @@ export function createCurrentUiContextVoiceToolPort(
                 pluginUiProjection: input.readProjection(),
                 clientAction: {
                     ...(sessionId ? { sessionId } : {}),
+                    ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
                     openSurface,
                     ...(includeCurrentUiContext
                         ? {
@@ -437,6 +440,7 @@ export function createCurrentUiContextVoiceToolPort(
                     ? {
                         contributedAction: {
                             ...(sessionId ? { sessionId } : {}),
+                            ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
                             machineId: resolved.origin.machineId,
                             serverId: resolved.origin.serverId,
                         },
@@ -452,7 +456,7 @@ export function createCurrentUiContextVoiceToolPort(
                 // retains this canonical terminal result by stable effect ID.
                 return { ok: false, code: 'outcome_unknown' };
             }
-            return { ok: false, code: outcome.code };
+            return { ok: false, code: outcome.code, errorCode: outcome.reason };
         } catch {
             return isCurrent() ? internalError() : stale();
         } finally {
@@ -675,7 +679,8 @@ export function createCurrentUiContributedActionRpcHandler(input: Readonly<{
             return { ok: false, errorCode: 'contributed_action_unavailable', error: 'current_ui_action_unavailable', actionHandlerInvocation: 'notStarted' };
         }
         try {
-            const result = await input.execute('action.invoke', { action: request.action, input: request.input }, {
+            const result = await input.execute('action.invoke', { action: request.action, input: request.input,
+                ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}) }, {
                 surface: request.surface,
                 serverId: input.serverId,
                 expectedContributedActionOccurrenceId: request.expectedContributorOccurrenceId,

@@ -17,8 +17,24 @@ import {
     WORK_STATUS_PILL_VARIANT,
 } from '@/components/work/status/resolveWorkStatusTone';
 import { t } from '@/text';
+import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
+import { supportsWorkflowAnotherRoundV1 } from '@happier-dev/protocol/workflows';
 
 export { isTerminalWorkflowRunState, isWorkflowRunStopping, isWorkflowRunStopPending };
+
+/** The full Run page and inline controls offer the same accepted continuation. */
+export function canStartWorkflowAnotherRound(params: Readonly<{
+    run: WorkflowRunSummaryV1;
+    definition: Pick<WorkflowDefinitionV1, 'inputs'> | null;
+    canEdit: boolean;
+    hasAcceptedContext: boolean;
+    supportsAnotherRound?: boolean;
+    cancelRequested?: boolean;
+}>): boolean {
+    return params.canEdit && params.hasAcceptedContext && isTerminalWorkflowRunState(params.run.state)
+        && !isWorkflowRunStopPending({ ...params.run, cancelRequested: params.cancelRequested })
+        && (params.definition ? supportsWorkflowAnotherRoundV1(params.definition) : params.supportsAnotherRound === true);
+}
 
 /**
  * The one neutral presenter for the managed Workflow invocation lifecycle.
@@ -200,8 +216,9 @@ export function describeWorkflowRunState(
     // own state word ("Running") in the attention tone would claim healthy and urgent at once.
     // A held Run uses that same short word before attention membership catches up. A terminal
     // Run reports its outcome; an explicit composed headline stays the caller's.
+    // "Interrupted" is already an attention word that says why the person is needed, so it stays.
     const needsYou = context?.word === undefined && (state === 'waiting_for_review'
-        || context?.inAttentionWindow === true && !isTerminalWorkflowRunState(state));
+        || context?.inAttentionWindow === true && !isTerminalWorkflowRunState(state) && state !== 'interrupted');
     const status = resolveWorkStatusTone({ kind: 'workflow_run', facts: {
         state,
         word: context?.word ?? (needsYou ? t('workStatus.buckets.needs_you') : t(`workflows.runState.${state}`)),

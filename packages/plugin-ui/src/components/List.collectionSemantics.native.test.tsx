@@ -230,6 +230,31 @@ describe('plugin-ui selectable List collection semantics on native', () => {
     expect(Array.from(store.getSnapshot().selectedKeys)).toEqual(['b']);
   });
 
+  it('adds to a live selection from the row menu, and offers Deselect for a chosen row', () => {
+    // The row menu is the only way a finger builds a set. Once a set exists, its Select must add the row rather
+    // than replace everything chosen so far, and a chosen row offers the way back out.
+    const store = createListMultiSelectionStore({ scopeKey: 'native-menu-add', visibleOrderedKeys: [] });
+    renderSelectableList(store);
+    act(() => { store.replaceWith('a'); });
+    const openMenu = (testID: string) => {
+      const row = renderer!.root.find((node) => node.type === 'Pressable' && node.props.testID === testID);
+      act(() => { row.props.onLongPress?.({}); });
+      return renderer!.root.findAllByType(ContextMenu).find((node) => node.props.open);
+    };
+    const menu = openMenu('row-b');
+    const select = (menu?.props.items as readonly { id: string; label: string }[]).find((item) => item.id === 'selection.select');
+    expect(select?.label).toBe('Select');
+    act(() => { menu?.props.onSelect('selection.select'); });
+    expect(Array.from(store.getSnapshot().selectedKeys).sort()).toEqual(['a', 'b']);
+    act(() => { menu?.props.onOpenChange?.(false); });
+
+    const again = openMenu('row-b');
+    const deselect = (again?.props.items as readonly { id: string; label: string }[]).find((item) => item.id === 'selection.select');
+    expect(deselect?.label).toBe('Deselect');
+    act(() => { again?.props.onSelect('selection.select'); });
+    expect(Array.from(store.getSnapshot().selectedKeys)).toEqual(['a']);
+  });
+
   it('projects grid rows as selected row/cell structure with native positions', () => {
     const context = createSurfaceContext();
     act(() => {

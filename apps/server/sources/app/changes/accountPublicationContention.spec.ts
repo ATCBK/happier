@@ -16,6 +16,46 @@ function lazyQuery(operation: () => unknown) {
 }
 
 describe('Account contention query observer', () => {
+    it('awaits an optional peer hook before consuming the native lazy query', async () => {
+        const events: string[] = [];
+        let release!: () => void;
+        const peerCommitted = new Promise<void>(resolve => { release = resolve; });
+        const observed = observeLazyPrismaQuery(lazyQuery(() => {
+            events.push('query');
+            return 'row';
+        }), () => ({
+            started: () => { events.push('started'); },
+            settled: succeeded => { events.push(succeeded ? 'fulfilled' : 'rejected'); },
+        }), async () => {
+            events.push('peer started');
+            await peerCommitted;
+            events.push('peer committed');
+        });
+        expect(events).toEqual([]);
+        const consumed = Promise.resolve(observed);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        try {
+            expect(events).toEqual(['peer started']);
+        } finally {
+            release();
+        }
+        expect(await consumed).toBe('row');
+        expect(events).toEqual(['peer started', 'peer committed', 'started', 'query', 'fulfilled']);
+        expect(await observed).toBe('row');
+        expect(events).toHaveLength(5);
+    });
+
+    it('propagates a peer hook rejection without consuming the native query', async () => {
+        const error = new Error('peer publication rejected');
+        let nativeConsumed = false;
+        const observed = observeLazyPrismaQuery(lazyQuery(() => { nativeConsumed = true; }), () => ({
+            started: () => {}, settled: () => {},
+        }), async () => { throw error; });
+        await expect(observed).rejects.toBe(error);
+        await expect(observed).rejects.toBe(error);
+        expect(nativeConsumed).toBe(false);
+    });
+
     it('leaves construction lazy and starts inside the scheduler only when consumed', async () => {
         const events: string[] = [];
         const query = lazyQuery(() => { events.push('query'); return { id: 'row' }; });

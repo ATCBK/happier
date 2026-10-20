@@ -78,10 +78,10 @@ describe("Follow at the Session archive HTTP owner", () => {
             accountId: owner.id, tag: crypto.randomUUID(), metadata: "{}", encryptionMode: "plain", archivedAt: new Date(),
         } });
         const where = { accountId_sessionId: { accountId: owner.id, sessionId: source.id } };
-        await db.$executeRaw`INSERT INTO AccountSessionFollow (accountId, sessionId, following, notificationLevel, includeInVoice, voiceDeliveredFrontier)
-            VALUES (${owner.id}, ${source.id}, true, 'important', true, ${frontier(9)})`;
-        await db.$executeRaw`INSERT INTO AccountSessionFollow (accountId, sessionId, following, notificationLevel, includeInVoice)
-            VALUES (${suppressed.id}, ${source.id}, false, 'none', false)`;
+        await db.accountSessionFollow.create({ data: { accountId: owner.id, sessionId: source.id,
+            following: true, notificationLevel: 'important', includeInVoice: true, voiceDeliveredFrontier: frontier(9) } });
+        await db.accountSessionFollow.create({ data: { accountId: suppressed.id, sessionId: source.id,
+            following: false, notificationLevel: 'none', includeInVoice: false } });
         const readFollow = async (accountId = owner.id) => {
             const rows = await db.$queryRaw<Array<{ following: boolean; includeInVoice: boolean; voiceDeliveredFrontier: string | null }>>`
                 SELECT following, includeInVoice, voiceDeliveredFrontier FROM AccountSessionFollow

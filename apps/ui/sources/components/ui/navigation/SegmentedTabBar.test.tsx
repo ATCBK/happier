@@ -37,6 +37,9 @@ installNavigationCommonModuleMocks({
 const { useGlassMaterialColorResolver } = await import('@/components/ui/glass/useGlassSurfaceColor');
 const { useUnistyles } = await import('react-native-unistyles');
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./SegmentedTabBar');
+
 const theme = lightTheme;
 
 const TABS: ReadonlyArray<SegmentedTab<'alpha' | 'beta' | 'gamma'>> = [

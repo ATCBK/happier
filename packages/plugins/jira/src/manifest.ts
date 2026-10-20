@@ -6,6 +6,7 @@ import {
     TriageTaskWriteResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { withTriageSourceSettingsTranslationsV1 } from '@happier-dev/triage-sources/translations';
+import { JIRA_UI_TRANSLATIONS } from './ui/translations.js';
 import { JIRA_ACCOUNT_PURPOSE, JIRA_ACTIONS, JIRA_PLUGIN_ID, JIRA_SOURCE_ID } from './contracts.js';
 import { jiraAccountRuntime } from './connect.js';
 import { getJiraEntry, listJiraInstances, scanJiraSource } from './source/operations.js';
@@ -39,7 +40,7 @@ export const JIRA_PLUGIN = definePlugin({
         settingsGroups: [{ id: 'jira', title: 'Jira', icon: 'settings' }],
         settingsPages: [{ id: 'jira-sources', group: { kind: 'plugin', localId: 'jira' }, title: 'PRs, Issues & Tasks',
             subtitle: 'Choose which Jira Cloud projects appear in PRs, Issues & Tasks.', keywords: ['jira', 'issues', 'tasks'], icon: 'settings', renderer: 'jira-source-settings' }],
-        translations: withTriageSourceSettingsTranslationsV1([{ locale: 'en', messages: {} }]),
+        translations: withTriageSourceSettingsTranslationsV1(JIRA_UI_TRANSLATIONS),
     },
     connectedAccountDescriptors: {
         [JIRA_ACCOUNT_PURPOSE]: {

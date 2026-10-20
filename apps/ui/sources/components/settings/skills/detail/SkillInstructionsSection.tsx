@@ -188,7 +188,7 @@ export function SkillInstructionsSection(
     skillId: string;
     skillMd: string;
     /** Host-owned (built in or from a plugin): never edited here; its note says whose it is. */
-    readOnly: false | Readonly<{ note: string }>;
+    readOnly: false | Readonly<{ note?: string }>;
     /** The draft page starts in the editor and never autosaves (the person adds it once). */
     draft?: Readonly<{ text: string; onChange: (text: string) => void }>;
     onSave: (text: string) => Promise<SkillChangeResult>;
@@ -425,7 +425,7 @@ export function SkillInstructionsSection(
             </View>
           ) : (
             <SectionContentRow showDivider testID={`${props.testID}:preview`}>
-              <MarkdownView markdown={body} selectable />
+              <MarkdownView markdown={body} selectable profile="document" />
             </SectionContentRow>
           )}
           <SectionContentRow
@@ -465,7 +465,7 @@ export function SkillInstructionsSection(
                   setClipped(event.nativeEvent.layout.height > clipHeight);
               }}
             >
-              <MarkdownView markdown={body} selectable />
+              <MarkdownView markdown={body} selectable profile="document" />
             </View>
           </View>
           {clipped ? (

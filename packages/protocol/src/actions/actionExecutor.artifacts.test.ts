@@ -85,6 +85,25 @@ const ids = ['artifact.create', 'artifact.get', 'artifact.list', 'artifact.updat
   'artifact.publish_from_file', 'artifact.revisions.list', 'artifact.revisions.restore', 'artifact.storage.usage'] as const;
 
 describe('ordinary Artifact Actions', () => {
+  it('admits owned notice reads and exact CAS dismissal from host Voice with the ordinary dangerous approval default', async () => {
+    const initial = accountNoticeArtifact();
+    const boundary = openedArtifactBoundary(initial);
+    const executor = createActionExecutor({ artifactAction: boundary.action, isActionApprovalRequired: usageNoticeApprovalPolicy });
+    const context = { surface: 'voice', authority: 'account_automation', runtimeAccountId: 'owner', actionCaller: { kind: 'host' } } as const;
+    expect(await executor.execute('artifact.get', { artifactId: initial.artifactId }, context))
+      .toMatchObject({ ok: true, result: { artifact: initial } });
+    expect(await executor.execute('artifact.get', { artifactId: initial.artifactId }, { ...context, expectedAccountId: 'foreign' }))
+      .toMatchObject({ ok: false, errorCode: 'artifact_kind_internal' });
+    expect(resolveActionApprovalRouting({ actionId: 'artifact.update', spec: getActionSpec('artifact.update'), context }).required).toBe(true);
+    const admitted = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { 'artifact.update': ['voice'] } }) };
+    const update = { artifactId: initial.artifactId, expectedRevision: initial.revision,
+      header: { ...initial.header, status: 'dismissed' }, body: initial.body };
+    expect(await executor.execute('artifact.update', { ...update, expectedRevision: { headerVersion: 2, bodyVersion: 2 } }, admitted))
+      .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+    expect(await executor.execute('artifact.update', update, admitted)).toMatchObject({ ok: true });
+    expect(boundary.read()?.header.status).toBe('dismissed');
+  });
   it('admits binary export as an approved machine write and refuses internal document egress', async () => {
     expect(ActionIdSchema.safeParse('artifact.export').success).toBe(true);
     const spec = getActionSpec('artifact.export');

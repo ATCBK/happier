@@ -227,8 +227,15 @@ describe('paired terminal Action admission', () => {
             if (!outputSchema) throw new Error('Fixture requires a schema-backed Action');
             const expected = { ok: true, result: outputSchema.parse(output) };
             // HTTP is the boundary; credential, exact daemon discovery and Action composition stay real.
-            vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected Home request'));
-            vi.spyOn(axios, 'post').mockResolvedValue({ status: 401, data: { error: 'invalid_token' } });
+            vi.spyOn(axios, 'get').mockImplementation(async url => {
+                if (actionId === 'session.role.set' && url.endsWith('/v1/account/encryption/currentness')) return { status: 200,
+                    data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+                throw new Error('Unexpected Home request');
+            });
+            vi.spyOn(axios, 'post').mockImplementation(async url => actionId === 'session.role.set' && url.endsWith('/v2/sessions/lookup-by-tags')
+                ? { status: 200, data: { sessions: [createSessionRecordFixture({ id: 'session-one', encryptionMode: 'plain', share: null,
+                    metadata: JSON.stringify({ machineId: 'own-machine', path: '/workspace', flavor: 'claude' }) })] } }
+                : { status: 401, data: { error: 'invalid_token' } });
             vi.stubGlobal('fetch', async (url: unknown, options: RequestInit) => {
                 expect(String(url)).toBe('http://127.0.0.1:43123/actions/root/execute');
                 expect(options.headers).toMatchObject({ 'x-happier-daemon-token': 'fixture-control-token' });

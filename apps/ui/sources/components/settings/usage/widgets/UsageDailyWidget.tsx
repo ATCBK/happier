@@ -230,7 +230,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   const height = shape.plotPx;
   if (!view || count === 0)
     // Until the first read answers, the body holds the settled chart's shape (its plot, axis and legend room).
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={shape} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={shape} onRetry={props.model.refresh} />;
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.daily`}>
       <StackedSeriesChart

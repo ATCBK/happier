@@ -6,10 +6,10 @@ import { probeTerminalHostForRecovery } from '@/integrations/terminal/host/recov
 import type { StoredCredentials } from '@/persistence';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
-import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { buildTerminalHostProbeHandleFromMetadata } from '@/terminal/runtime/terminalMetadata';
 import { incompleteStopSession, type StopSessionResult } from './stopSessionContract';
 import { verifySessionMetadataMutationCurrentness, type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
+import type { TerminalControlServiceabilityRetirementTarget } from './retireTerminalControlServiceability';
 
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -24,14 +24,15 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
   currentness?: SessionMetadataMutationCurrentness;
   resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
   expectedAttachmentId?: string;
+  /** Explicit Stop request evidence; observational recovery leaves lifecycle unchanged. */
+  stoppedAt?: number;
   loadTerminalHostAdapters: () => Promise<Readonly<Partial<Record<TerminalHostAdapter['kind'], TerminalHostAdapter>>>>;
   fetchSession?: typeof fetchSessionByIdCompat;
   resolveAccountEncryptionMode?: (token: string) => Promise<'plain' | 'e2ee'>;
   retireExactTerminalControlServiceability: (input: Readonly<{
     sessionId: string;
-    attachmentId: string;
-    terminalMode: TerminalMode;
-  }>) => Promise<'retired' | 'superseded'>;
+    stoppedAt?: number;
+  }> & TerminalControlServiceabilityRetirementTarget) => Promise<'retired' | 'superseded'>;
 }>): Promise<StopSessionResult | null> {
   const currentMachineId = params.currentMachineId.trim();
   if (!currentMachineId) return null;
@@ -66,9 +67,18 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
     }
     // Only the owning machine can prove this runner absent. The RPC server captures
     // publisher authority before Stop and fences the inactive transition after this proof.
-    return isPidProvablyAbsent(pid)
-      ? { status: 'stopped' }
-      : incompleteStopSession('tracked_runner_absent');
+    if (!isPidProvablyAbsent(pid)) return incompleteStopSession('tracked_runner_absent');
+    if (params.stoppedAt === undefined) return { status: 'stopped' };
+    try {
+      const retirement = await params.retireExactTerminalControlServiceability({
+        sessionId: params.sessionId, terminalMode: 'plain', stoppedAt: params.stoppedAt,
+        expectedRunner: { pid, ...(typeof metadata.hostProcessStartTimeMs === 'number'
+          ? { startTimeMs: metadata.hostProcessStartTimeMs } : {}) },
+      });
+      return retirement === 'retired' ? { status: 'stopped' } : incompleteStopSession('attachment_mismatch');
+    } catch {
+      return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+    }
   }
   if (!parsedTerminal.success) return null;
   const terminal = parsedTerminal.data;
@@ -95,13 +105,14 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
   const probe = await probeTerminalHostForRecovery({ adapter, handle });
   if (probe.status === 'alive') return incompleteStopSession('tracked_runner_absent');
   if (probe.status === 'inconclusive') return incompleteStopSession('missing_topology_proof');
-  if (serviceability.retired === true) return { status: 'stopped' };
+  if (serviceability.retired === true && params.stoppedAt === undefined) return { status: 'stopped' };
 
   try {
     const retirement = await params.retireExactTerminalControlServiceability({
       sessionId: params.sessionId,
       attachmentId,
       terminalMode: terminal.mode,
+      ...(params.stoppedAt === undefined ? {} : { stoppedAt: params.stoppedAt }),
     });
     return retirement === 'retired'
       ? { status: 'stopped' }

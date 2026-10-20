@@ -43,6 +43,9 @@ import {
     createSessionViewerTagWhere,
 } from "./query";
 import { createV2SessionListServerTiming } from "./timing";
+import tweetnacl from "tweetnacl";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
+import * as accountCurrentness from "@/app/encryption/accountContentKeyAdmission";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -60,6 +63,89 @@ describe("Session listing predicate composition (SQLite)", () => {
 
     it("filters exact folder ANY and tag ANY together before stable cursor paging", async () => {
         await verifyFolderSessionListing();
+    });
+
+    it("verifies one recipient Account binding per listing snapshot and verifies again on the next read", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 3; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const rows = await findV2SessionListRows({ userId: owner.id, authentication,
+            orderBy: V2_SESSION_LIST_ORDER_BY });
+        // Transparent counter of the profiled signature-verifying owner; all
+        // currentness, readiness and projection logic still executes.
+        const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+        try {
+            const mapped = mapV2SessionListRows({ rows, userId: owner.id });
+            expect(mapped.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(1);
+            mapV2SessionListRows({ rows, userId: owner.id });
+            expect(verify).toHaveBeenCalledTimes(2);
+            const invalidRows = rows.map(row => ({ ...row, dataKeyEnvelopes: row.dataKeyEnvelopes.map(value => ({
+                ...value, recipientAccount: { ...value.recipientAccount, contentPublicKeySig: Buffer.alloc(64) },
+            })) }));
+            const invalid = mapV2SessionListRows({ rows: invalidRows, userId: owner.id });
+            expect(invalid.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(3);
+        } finally { verify.mockRestore(); }
+    });
+
+    it("keeps page reads and Account derivations independent of the number of own Sessions", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 6; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const measure = async (limit: number) => {
+            const requests: string[] = [];
+            let projectionReads = 0;
+            const stop = observeSqliteRequests({ before: request => {
+                if (request.model) requests.push(`${request.model}.${request.action}`);
+                const args = request.args as { select?: { metadata?: boolean } } | undefined;
+                if (request.model === "Session" && request.action === "findMany" && args?.select?.metadata) {
+                    projectionReads += 1;
+                }
+            } });
+            const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+            try {
+                const timing = createV2SessionListServerTiming({ headers: { "x-happier-session-list-timing": "1" } });
+                const page = await listSessionsForAccount({ userId: owner.id, authentication,
+                    source: { kind: "legacy", storage: "active", limit }, rowRepresentabilityWhere: {},
+                    timing });
+                expect(page?.sessions).toHaveLength(limit);
+                expect(projectionReads).toBe(1);
+                let serverTiming = "";
+                timing.apply({ header: (_name, value) => { serverTiming = value; } });
+                expect(serverTiming).toMatch(/happier_v2_sessions_snapshot;dur=[0-9.]+/);
+                expect(serverTiming).toMatch(/happier_v2_sessions_readmission;dur=[0-9.]+/);
+                console.info("r194 page census", JSON.stringify({ limit, requests, derivations: verify.mock.calls.length, serverTiming }));
+                return { requests, derivations: verify.mock.calls.length };
+            } finally { stop(); verify.mockRestore(); }
+        };
+        const single = await measure(1);
+        const five = await measure(5);
+        expect(five).toEqual(single);
     });
 
     async function fixture() {

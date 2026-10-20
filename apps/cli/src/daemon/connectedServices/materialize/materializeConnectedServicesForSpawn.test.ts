@@ -1,18 +1,24 @@
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+import { buildConnectedServiceCredentialRecord, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
+import { ApiClient } from '@/api/api';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { reloadConfiguration } from '@/configuration';
 import { logger } from '@/utils/logger';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
+import { resolveExecutionRunConnectedServicesEnv } from '@/agent/runtime/bridges/executionRun/runtime/connectedServicesEnv';
+import { resolveRequesterSessionRuntimeDirectories } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
+import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createForegroundPurposeOwnerFixture } from '@/daemon/agentRuntime/prepareForegroundAdmission.connectedServices.testkit';
 import {
   resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn,
 } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -24,9 +30,16 @@ import {
   runSerializedMaterialization,
 } from './materializeConnectedServicesForSpawn';
 import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
+import { resolveConnectedServicesMaterializationBaseDir } from './resolveConnectedServicesMaterializationBaseDir';
+import { createConnectedServiceMaterializedHomeCleanupScheduler } from './cleanup/createConnectedServiceMaterializedHomeCleanupScheduler';
 import { resolveConnectedServiceHomeDir } from '../homes/resolveConnectedServiceHomeDir';
 import { readConnectedServiceStateSharingManifest } from '../stateSharing/connectedServiceStateSharingManifest';
 import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { createExecutionRunConnectedServicesBridge } from '../runs/executionRunMaterialization';
+import { createConnectedAccountRequestAuthSubjectRegistry } from '../requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
+import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
+import { verifyResumeReachableThroughCatalog } from '../catalogHooks';
+import { resolveConnectedServiceAuthForSpawn } from '../resolveConnectedServiceAuthForSpawn';
 import { materializeExactV021ConnectedServiceCredential } from '../compatibility/exactV021ConnectedServiceMaterialization';
 import {
   HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY,
@@ -681,15 +694,196 @@ describe('materializeConnectedServicesForSpawn', () => {
     }
   });
 
-  it('preserves a Session home and its local rollout through exit and credential rematerialization', async () => {
+  it.each([
+    { displacedPrefix: false, missingState: false, siblingSessionId: 'parent' },
+    { displacedPrefix: true, missingState: false, siblingSessionId: 'parent' },
+    { displacedPrefix: false, missingState: true, siblingSessionId: 'parent' },
+    { displacedPrefix: false, missingState: false, siblingSessionId: 'other-owned-session' },
+  ])('prepares the retained thread after Stop and resume ($displacedPrefix prefix, $missingState missing, $siblingSessionId sibling)', async ({ displacedPrefix, missingState, siblingSessionId }) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-retained-run-link-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: join(root, 'cli') });
+      reloadConfiguration();
+      const vendorResumeId = '019fea40-8040-7d00-9b7e-9b8f3b5cfca8';
+      const rolloutName = `rollout-2026-09-07T12-00-00-${vendorResumeId}.jsonl`;
+      const nativeHome = join(root, 'native');
+      await mkdir(join(nativeHome, 'sessions'), { recursive: true });
+      const record = buildConnectedServiceCredentialRecord({
+        now: 10, serviceId: 'openai-codex', profileId: 'retained-account', kind: 'oauth', expiresAt: 100000,
+        oauth: { accessToken: 'fixture-access', refreshToken: 'fixture-refresh', idToken: null,
+          scope: null, tokenType: null, providerAccountId: null, providerEmail: null },
+      });
+      const bindings = { v: 2 as const, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: record.profileId },
+      } };
+      const requesterWorkAttributionV1 = { serverId: 'home', accountId: 'owner', machineId: 'machine', installationId: 'installation' };
+      const params: MaterializeParams = {
+        agentId: 'codex', materializationKey: 'retained-review-run', activeServerDir: join(root, 'server'),
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map([['openai-codex', record]]),
+        processEnv: { CODEX_HOME: nativeHome },
+        accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+          v: 1, defaults: { configMode: 'isolated', stateMode: 'shared' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        } },
+      };
+      const published = await materializeConnectedServicesForSpawn(params);
+      const home = published!.env.CODEX_HOME!;
+      // The native process publishes its history through the shared entry.
+      const metadata = `${JSON.stringify({ type: 'session_meta', payload: { id: vendorResumeId } })}\n`;
+      const publishedHistory = `${metadata}${JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Retained review' } })}\n`;
+      await writeFile(join(home, 'sessions', rolloutName), publishedHistory);
+      if (displacedPrefix) {
+        const displaced = join(home, 'sessions.local-1700000000000');
+        await mkdir(displaced);
+        await writeFile(join(displaced, rolloutName), metadata);
+      }
+      await writeFile(join(nativeHome, 'sessions', 'unrelated-session.jsonl'), 'other conversation\n');
+      await retainExecutionRunState({
+        runId: params.materializationKey, callId: 'call', sidechainId: 'side', sessionId: 'parent', depth: 0,
+        intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+        instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
+        ioMode: 'streaming', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2,
+        launch: { connectedServicesSelection: bindings },
+        requesterWorkAttributionV1,
+        resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: vendorResumeId },
+      });
+      const siblingRunId = 'retained-sibling-review-run';
+      const siblingVendorResumeId = '019fea40-8040-7d00-9b7e-9b8f3b5cfca9';
+      const siblingRolloutName = `rollout-2026-09-07T12-00-00-${siblingVendorResumeId}.jsonl`;
+      const siblingMetadata = `${JSON.stringify({ type: 'session_meta', payload: { id: siblingVendorResumeId } })}\n`;
+      const siblingHistory = `${siblingMetadata}${JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Sibling retained review' } })}\n`;
+      if (!missingState) {
+        await writeFile(join(nativeHome, 'sessions', siblingRolloutName), siblingHistory);
+        if (displacedPrefix) {
+          await writeFile(join(home, 'sessions.local-1700000000000', siblingRolloutName), siblingMetadata);
+        }
+        await retainExecutionRunState({
+          runId: siblingRunId, callId: 'sibling-call', sidechainId: 'sibling-side', sessionId: siblingSessionId, depth: 0,
+          intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+          instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
+          ioMode: 'streaming', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2,
+          launch: { connectedServicesSelection: bindings },
+          requesterWorkAttributionV1,
+          resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: siblingVendorResumeId },
+        });
+        // A sealed Run from another Session does not authorize importing that
+        // Account's history, even when its bytes are in the borrowed store.
+        await retainExecutionRunState({
+          runId: 'foreign-run', callId: 'foreign-call', sidechainId: 'foreign-side', sessionId: 'another-account-session', depth: 0,
+          intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+          instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
+          ioMode: 'streaming', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2,
+          launch: { connectedServicesSelection: bindings },
+          requesterWorkAttributionV1: { ...requesterWorkAttributionV1, accountId: 'another-owner' },
+          resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb0' },
+        });
+        await writeFile(join(nativeHome, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'),
+          `${JSON.stringify({ type: 'session_meta', payload: { id: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb0' } })}\n`);
+      }
+      await published!.cleanupOnExit!();
+      if (missingState) await rm(join(nativeHome, 'sessions', rolloutName));
+      const registry = new ConnectedServiceRuntimeRegistry();
+      const { owner: purposeOwner } = createForegroundPurposeOwnerFixture({
+        consumer: { pluginId: 'happier.agent.codex', localId: 'codex' },
+        service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: record.profileId,
+        materializeAccount: async input => await materializeExactV021ConnectedServiceCredential({
+          registry: runtimeFixture!.registry, serviceId: 'openai-codex', account: input.account,
+          record, request: input.request, signal: input.signal,
+        }),
+      });
+      const credentials = { token: 'fixture-token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } };
+      const api = await ApiClient.create(credentials);
+      const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+      const accounts = QualifiedConnectedAccountListResponseV4Schema.parse({ service, accounts: [{
+        ref: { service, accountId: record.profileId }, status: 'connected', authenticationModeId: 'oauth',
+        revisionSemantics: 'revisioned', credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+        configurationReady: true, configurationRevision: null, kind: 'oauth', expiresAt: null, scopes: [],
+      }] });
+      const bridge = createExecutionRunConnectedServicesBridge({
+        // Account credential retrieval is the external boundary; retain the
+        // spawn auth gate, home, catalog, purpose owner and Run registry.
+        resolveAuthForSpawn: input => resolveConnectedServiceAuthForSpawn({
+          ...input, activeServerDir: params.activeServerDir, baseDir: params.baseDir,
+          accountSettings: params.accountSettings, processEnv: params.processEnv,
+          allowNativeAccountState: false, connectedAccountsOwner: purposeOwner, credentials, api,
+          qualifiedConnectedAccountApi: {
+            listAccounts: async () => accounts,
+            readGroup: async () => { throw new Error('A profile-bound Run must not read a group'); },
+          },
+        }),
+        registerRunTargets: registration => { registry.registerRunTarget({ ...registration, pid: registration.runnerPid,
+          connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw }); },
+        unregisterRunTargets: runKey => registry.unregisterRunKey(runKey),
+        resolveRunMaterializedRoot: () => home,
+        createAdoptedRootCleanup: () => null,
+        captureRunnerIdentity: ({ runId }) => ({ identity: params,
+          parentSessionId: runId === siblingRunId ? siblingSessionId : 'parent', isCurrent: () => true }),
+        acquireAgentPurposeContributions: async () => ({
+          contributions: runtimeFixture!.registry.contributes,
+          catalogEntry: await runtimeFixture!.registry.acquireAgentCatalogEntry?.('codex'),
+          resolveAgentContributionIdentity: async () => ({ pluginId: 'happier.agent.codex', localId: 'codex',
+            sourceCustody: runtimeFixture!.registry.readPluginSourceCustody!('happier.agent.codex')! }),
+          isCurrent: () => true, release: async () => undefined,
+        }),
+        purposeBindingOwner: { activatePurposeBindings: input => ({ lease: purposeOwner.activatePurposeBindings(input) }) },
+        requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
+        resolveRequestAuthHttpPort: () => 42427,
+        createRedactionLease: () => ({ add() {}, close() {} }),
+        clearTerminalCleanupReceipt: async () => undefined,
+      });
+      const activationId = randomUUID();
+      const resumed = await bridge.materialize({ activationId, runId: params.materializationKey,
+        runnerPid: process.pid, agentId: 'codex', connectedServices: bindings, cwd: root });
+      if (missingState) {
+        expect(resumed).toMatchObject({ ok: false, errorCode: 'provider_session_state_unavailable_for_resume' });
+        if (resumed.ok) throw new Error('Missing conversation unexpectedly materialized');
+        await expect(resolveExecutionRunConnectedServicesEnv({
+          runId: params.materializationKey, backendId: 'codex', backendSourceKind: 'built_in', cwd: root,
+          resolvedSelection: { bindings, source: 'explicit', hadCredentials: true },
+          deps: { runnerPid: process.pid, requestMaterialization: async () => resumed,
+            release: async () => ({ ok: true, released: true }), readCredentials: async () => credentials,
+            resolveSessionSpawnDefaults: async () => null },
+        })).rejects.toMatchObject({ code: 'AGENT_RESUME_PROVIDER_STATE_MISSING',
+          executionRunErrorCode: 'provider_session_state_unavailable_for_resume' });
+        expect(existsSync(join(nativeHome, 'sessions', 'unrelated-session.jsonl'))).toBe(true);
+        return;
+      }
+      expect(resumed).toMatchObject({ ok: true, env: { CODEX_HOME: home } });
+      expect((await lstat(join(home, 'sessions'))).isSymbolicLink()).toBe(false);
+      expect(await readFile(join(home, 'sessions', rolloutName), 'utf8')).toBe(publishedHistory);
+      expect(await verifyResumeReachableThroughCatalog('codex', { targetMaterializedRoot: home, vendorResumeId }))
+        .toMatchObject({ ok: true });
+      expect(existsSync(join(home, 'sessions', 'unrelated-session.jsonl'))).toBe(false);
+      expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'))).toBe(false);
+      // The source remains available to its original owner.
+      expect(await readFile(join(nativeHome, 'sessions', rolloutName), 'utf8')).toContain(vendorResumeId);
+      expect(await readFile(join(nativeHome, 'sessions', siblingRolloutName), 'utf8')).toBe(siblingHistory);
+      const siblingActivationId = randomUUID();
+      const sibling = await bridge.materialize({ activationId: siblingActivationId,
+        runId: siblingRunId, runnerPid: process.pid, agentId: 'codex', connectedServices: bindings, cwd: root });
+      expect(sibling).toMatchObject({ ok: true, env: { CODEX_HOME: home } });
+      expect(await readFile(join(home, 'sessions', siblingRolloutName), 'utf8')).toBe(siblingHistory);
+      expect(await readFile(join(home, 'sessions', rolloutName), 'utf8')).toBe(publishedHistory);
+      await bridge.release({ activationId: siblingActivationId, runId: siblingRunId, runnerPid: process.pid });
+      await bridge.release({ activationId, runId: params.materializationKey, runnerPid: process.pid });
+    } finally { envScope.restore(); reloadConfiguration(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('preserves a requester Session home through daemon startup sweep and pending-resume rematerialization', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-session-native-home-'));
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
     try {
       envScope.patch({ HAPPIER_HOME_DIR: join(root, 'cli') });
       reloadConfiguration();
+      const materializationIdentity = { v: 1 as const, id: 'csm_retained-session', createdAt: 1_000 };
+      const baseDir = resolveConnectedServicesMaterializationBaseDir(join(root, 'cli'));
+      const directories = resolveRequesterSessionRuntimeDirectories({
+        activeServerDir: join(root, 'server'), connectedServicesMaterializationBaseDir: baseDir,
+        attribution: { accountId: 'requester-A' },
+      });
       const params: MaterializeParams = {
-        agentId: 'codex', materializationKey: 'csm_retained-session', activeServerDir: root,
-        baseDir: join(root, 'materialized'), recordsByServiceId: new Map(), allowNativeAccountState: false,
+        agentId: 'codex', materializationKey: materializationIdentity.id, activeServerDir: directories.activeServerDir,
+        baseDir: directories.connectedServicesMaterializationBaseDir, recordsByServiceId: new Map(), allowNativeAccountState: false,
         isAccountRuntimeCurrent: async () => true,
       };
       const first = await materializeConnectedServicesForSpawnProduction(params);
@@ -703,7 +897,30 @@ describe('materializeConnectedServicesForSpawn', () => {
       await mkdir(shared);
       await writeFile(join(shared, 'another-session.jsonl'), 'another account');
       await symlink(shared, join(home, 'sessions', 'shared'), 'dir');
-      const second = await materializeConnectedServicesForSpawnProduction(params);
+      // Restart loses all tracked processes. The custodian's complete Session
+      // scan cannot reference a foreign requester's Session. Age the namespace
+      // beyond the production orphan TTL, independently of the rollout's age.
+      await utimes(join(baseDir, 'requester-accounts'), new Date(1_000), new Date(1_000));
+      const restartedCleanup = createConnectedServiceMaterializedHomeCleanupScheduler({
+        baseDir, pidToTrackedSession: new Map(), nowMs: () => 8 * 24 * 60 * 60_000,
+        orphanTtlMs: 7 * 24 * 60 * 60_000, getRetainedMaterializationKeys: async () => [],
+      });
+      await restartedCleanup.reconcile();
+      expect(await readFile(join(home, 'sessions', 'rollout.jsonl'), 'utf8')).toContain('session-thread');
+      const resumedOptions = buildInactiveSessionResumeSpawnOptions({
+        sessionId: 'session', rawSession: { path: root, machineId: 'machine' },
+        metadata: { path: root, machineId: 'machine', flavor: 'codex', codexSessionId: 'session-thread',
+          connectedServiceMaterializationIdentityV1: materializationIdentity },
+      });
+      expect(resumedOptions?.connectedServiceMaterializationIdentityV1).toEqual(materializationIdentity);
+      const resumedDirectories = resolveRequesterSessionRuntimeDirectories({
+        activeServerDir: join(root, 'server'), connectedServicesMaterializationBaseDir: baseDir,
+        attribution: { accountId: 'requester-A' },
+      });
+      const second = await materializeConnectedServicesForSpawnProduction({ ...params,
+        materializationKey: resumedOptions!.connectedServiceMaterializationIdentityV1!.id,
+        activeServerDir: resumedDirectories.activeServerDir, baseDir: resumedDirectories.connectedServicesMaterializationBaseDir });
+      expect(second!.env.CODEX_HOME).toBe(home);
       await second!.cleanupOnExit!();
       expect(await readFile(join(home, 'sessions', 'rollout.jsonl'), 'utf8')).toContain('session-thread');
       await expect(lstat(join(home, 'sessions', 'shared'))).rejects.toMatchObject({ code: 'ENOENT' });

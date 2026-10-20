@@ -1,7 +1,7 @@
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
 import type { Prisma } from '@prisma/client';
 import { log } from '@/utils/logging/log';
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { tombstoneSessionDraftForLifecycleInTx } from '@/app/account/sessionDrafts/sessionDraftService';
 import { SessionDeletedChangeHintV1Schema } from '@happier-dev/protocol/changes';
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx, resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
@@ -135,7 +135,7 @@ export async function deleteSessionWithRecipientsInTx(
             }
             : null),
     };
-    const recipientCursors: Array<{ accountId: string; cursor: number }> = [];
+    const recipientCursors: AccountChangePublication[] = [];
     const deletionHint = SessionDeletedChangeHintV1Schema.parse({
         v: 1,
         lifecycle: 'deleted',
@@ -180,11 +180,11 @@ export async function deleteSessionWithRecipientsInTx(
             },
             'Session deleted successfully',
         );
-        void Promise.all(recipientCursors.map(({ accountId, cursor }) =>
+        void Promise.all(recipientCursors.map(publication =>
             emitSessionDeletedUpdate({
                 sessionId: params.sessionId,
-                accountId,
-                cursor,
+                accountId: publication.accountId,
+                cursor: publication.resolveCursor(),
             }),
         )).catch((error: unknown) => {
             log(

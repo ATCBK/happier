@@ -148,18 +148,23 @@ describe('AgentInputSelectionPopover', () => {
         windowWidthState.value = 1440;
         const { resolveHappierPopoverPlacement } = await import('@happier-dev/plugin-ui/presentation');
         const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
-        const { AgentInputPopoverClearanceContext } = await import('./useAgentInputPopoverLayout');
+        const { AgentInputPopoverClearanceContext, AgentInputPopoverColumnContext } = await import('./useAgentInputPopoverLayout');
         const anchorRef = { current: { nodeType: 'View' } } as any;
         const composerRef = { current: { nodeType: 'View' } } as any;
+        const columnRef = { current: { nodeType: 'View' } } as any;
         await renderScreen(
             <AgentInputPopoverClearanceContext.Provider value={composerRef}>
-                <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
-                    {() => <React.Fragment />}
-                </AgentInputSelectionPopover>
+                <AgentInputPopoverColumnContext.Provider value={columnRef}>
+                    <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
+                        {() => <React.Fragment />}
+                    </AgentInputSelectionPopover>
+                </AgentInputPopoverColumnContext.Provider>
             </AgentInputPopoverClearanceContext.Provider>,
         );
         // The chip itself is the vertical anchor: the picker may overlap the composer's text.
         expect(capturedPopoverProps.current?.clearanceRef).toBeUndefined();
+        // Horizontally it stays inside the composer: a chip near its end does not hang a wide picker past it.
+        expect(capturedPopoverProps.current?.horizontalBoundaryRef).toBe(columnRef);
         const decide = (available: Readonly<{ top: number; bottom: number }>) => resolveHappierPopoverPlacement({
             placement: capturedPopoverProps.current?.placement as 'top' | 'bottom',
             preferredMinAvailable: (capturedPopoverProps.current?.placementMinSpace as number | undefined) ?? 560,

@@ -10,6 +10,7 @@ import {
   deriveBoxPublicKeyFromSeed,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExternalSessionLinkEnsureResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { z } from 'zod/mini';
 
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -18,9 +19,9 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { Credentials } from '@/persistence';
 import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 
 const { mockIo, readCredentialsMock } = vi.hoisted(() => ({
   mockIo: vi.fn(),
@@ -51,33 +52,35 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
   let server: Server | null = null;
   let happyHomeDir = '';
   let claudeConfigDir = '';
-  let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
+  let loseCreationReceipt = false;
 
   const sessionsByTag = new Map<string, any>();
   const sessionsById = new Map<string, any>();
 
   beforeAll(async () => {
-    runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
-      resolveRuntimeRegistry: async () =>
-        await resolveExecutablePluginRuntimeRegistry({
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: {
           contributes: getResolvedContributionRegistry(),
           pluginIds: [
             'happier.agent.claude',
             'happier.agent.codex',
           ],
-        }),
+      },
     });
   });
 
   afterAll(async () => {
-    await runtimeRegistryLease?.release();
-    runtimeRegistryLease = null;
+    await runtime?.dispose();
+    runtime = null;
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   });
 
   beforeEach(async () => {
     sessionsByTag.clear();
     sessionsById.clear();
+    loseCreationReceipt = false;
     envScope = createEnvKeyScope(envKeys);
     happyHomeDir = await createTempDir('happier-externalSessions-linkEnsure-');
     claudeConfigDir = join(happyHomeDir, 'claude');
@@ -285,6 +288,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
         sessionsByTag.set(tag, session);
         sessionsById.set(session.id, session);
 
+        if (loseCreationReceipt) {
+          res.destroy();
+          return;
+        }
+
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ session }));
@@ -354,6 +362,29 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
 
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
+  });
+
+  it('preserves an unknown link outcome when the Home commits creation but loses its receipt', async () => {
+    const { registerMachineExternalSessionsRpcHandlers } = await import('./rpcHandlers.externalSessions');
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain' });
+    const registration = registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager });
+    loseCreationReceipt = true;
+    try {
+      const result = ExternalSessionLinkEnsureResponseSchema.parse(await rpcHandlerManager.handleRequest({
+        method: `machine_1:${RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE}`,
+        timeoutMs: null,
+        params: {
+          machineId: 'machine_1', agentId: 'claude', remoteSessionId: 'remote_123',
+          source: { kind: 'claudeConfig', configDir: claudeConfigDir, projectId: 'proj-a' },
+        },
+      }));
+      // Losing the response proves neither rollback nor failure to create. Keep
+      // the released error class while exposing the precise safe outcome token.
+      expect(sessionsByTag.size).toBe(1);
+      expect(result).toEqual({ ok: false, errorCode: 'internal_error', error: 'external_session_outcome_unknown' });
+    } finally {
+      registration.dispose();
+    }
   });
 
   it('creates a linked direct session row and returns created=true on first call', async () => {

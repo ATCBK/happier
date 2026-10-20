@@ -1,6 +1,6 @@
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { getSessionStatus, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 
 import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
 import { normalizeActivityPreviewText } from '@/activity/attention/buildActivityPreviewText';
@@ -13,7 +13,6 @@ import {
 import type { ActivitySurfaceSessionViewModel } from '@/activity/presentation/activitySurfaceViewModels';
 import { resolveSessionContextLine } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
-import { t } from '@/text';
 
 function resolveViewModelTitle(params: Readonly<{
     candidate: SessionActivityAttention;
@@ -26,7 +25,7 @@ function resolveViewModelTitle(params: Readonly<{
     // An off-app surface also honours the Home's notification ceiling, so it never falls back to
     // the in-app name of content this device opened; an unread candidate's title is already safe.
     if (!params.mayShowPrivateContent) {
-        return params.candidateNamesContent ? t('sessionBoard.item.locked.title') : params.candidate.title;
+        return params.candidateNamesContent ? readLockedSessionName() : params.candidate.title;
     }
     if (params.privacyMode === 'status_only') {
         return params.statusText;

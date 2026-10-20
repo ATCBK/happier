@@ -578,7 +578,7 @@ export const zhHant = {
     connectedServices_accounts_revoke: "撤銷已連線帳號",
     connectedServices_accounts_default_set: "設定預設已連線帳號",
     connectedServices_accounts_purposeDefault_set: "選擇代理程式預設登入帳號",
-    connectedServices_purposes_default_set: "選擇資源預設已連線帳號",
+    connectedServices_purposes_default_set: "選擇預設已連線帳號",
     connectedServices_pools_create: "建立已連線服務帳號池",
     connectedServices_pools_patch: "編輯已連線服務帳號池",
     connectedServices_pools_delete: "刪除已連線服務帳號池",

@@ -6,7 +6,7 @@ import {
 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { decodeAccountScopedKvJson, encodeAccountScopedKvJson } from '@/app/kv/accountScopedKv';
-import { applyUserKvMutationsInTx } from '@/app/kv/kvMutate';
+import { applyUserKvMutationsInTx, UserKvMutationConflictError } from '@/app/kv/kvMutate';
 import type { Tx } from '@/storage/inTx';
 
 /**
@@ -42,7 +42,12 @@ export async function updateAccountFollowCreationPreferencesInTx(tx: Tx, input: 
     if (value === null) throw new Error('Follow creation preferences could not be encoded');
     const result = await applyUserKvMutationsInTx(tx, { uid: input.accountId }, [{
         key: SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1, version: row.version, value,
-    }]);
+    }]).catch((error: unknown) => {
+        if (error instanceof UserKvMutationConflictError) {
+            throw Object.assign(new Error('Follow creation preferences changed concurrently', { cause: error }), { code: 'follow_preferences_unavailable' });
+        }
+        throw error;
+    });
     if (!result.success) throw Object.assign(new Error('Follow creation preferences changed concurrently'), { code: 'follow_preferences_unavailable' });
     return { policies, changed: true };
 }

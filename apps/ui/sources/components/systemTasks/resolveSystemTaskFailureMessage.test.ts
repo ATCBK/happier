@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
 
 describe('resolveSystemTaskFailureMessage', () => {
+    it('replaces a managed controller request code with localized recovery copy', async () => {
+        const { resolveSystemTaskFailureMessage } = await import('./resolveSystemTaskFailureMessage');
+        expect(resolveSystemTaskFailureMessage({ code: 'managed_controller_request_failed', message: 'managed_controller_request_failed' }))
+            .toBe(t('managedMachines.detail.controllerRequestFailed'));
+    });
     it('replaces a remote guest update failure with actionable app copy', async () => {
         const { resolveSystemTaskFailureMessage } = await import('./resolveSystemTaskFailureMessage');
         const message = resolveSystemTaskFailureMessage({ code: 'remote_cli_update_required', message: 'legacy daemon diagnostic' });

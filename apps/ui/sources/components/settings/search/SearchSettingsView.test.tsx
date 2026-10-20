@@ -11,6 +11,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -61,6 +62,10 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ params: () => routeParams.value }).module;
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpcSpy }));
+// Search settings never renders the vendor's DOM streaming renderer.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown reveal in Search settings'); },
+}));
 
 beforeEach(async () => {
     routeParams.value = {};
@@ -267,6 +272,62 @@ async function decideClear(artifactId: string, decision: 'approve' | 'reject') {
 }
 
 describe('SearchSettingsView', () => {
+    it.each(['parked', 'remounted'] as const)('reads the selected machine again after navigating away and returning to Search (%s)', lifecycle => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        const { SearchSettingsView } = await import('./SearchSettingsView');
+        const { RetainedPanelSurface } = await import('@/components/ui/panels/RetainedPanelSurface');
+        const page = (visible: boolean) => React.createElement(React.Fragment, null,
+            !visible && lifecycle === 'remounted' ? null
+                : React.createElement(RetainedPanelSurface, { isActive: visible, suspendWhenHidden: true,
+                    children: React.createElement(SearchSettingsView) }));
+        const screen = await renderScreen(page(true), { flushOptions: { runOnlyPendingTimers: true } });
+        await renderedControl(screen, 'search-settings-standard');
+        await screen.update(page(false));
+        // A Home refresh/presence update may settle while this tab is parked.
+        await act(async () => { storage.setState(state => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        })); });
+        await screen.update(page(true));
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
+    it('reads the selected online machine while its scoped inventory refreshes and exposes the search controls', () => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        await account.selectMachine(serverId, null, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory);
+        // A refresh retains the admitted Home rows while socket presence has
+        // already replaced the active display objects for those same machines.
+        storage.setState((state) => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        }));
+        const screen = await renderSearchSettings();
+        expect(screen.findHostByTestId('search-settings-standard')).toBeNull();
+
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        const option = screen.findHostByTestId('search-settings-target.picker-option:m1');
+        expect(option).not.toBeNull();
+        expect(option!.props.disabled ?? option!.props.accessibilityState?.disabled ?? option!.props['aria-disabled']).not.toBe(true);
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect(storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory])
+            .toEqual({ serverIdentityId, machineId: 'm1' });
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        expect(machineRpcSpy.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET)
+            .map(([request]) => request)).toContainEqual(expect.objectContaining({ machineId: 'm1', serverId }));
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
     it.each(['error', 'unsupported'] as const)('ends loading after a terminal %s Agent projection and offers recovery', async (projectionFailure) => {
         const held = createDeferred<void>();
         const options: { readProjectionAfter: PromiseLike<void>; projectionFailure?: 'error' | 'unsupported' } = { readProjectionAfter: held.promise, projectionFailure };

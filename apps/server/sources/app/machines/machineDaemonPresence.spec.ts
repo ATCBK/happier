@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { getSocketRooms } from "@/app/api/socketRooms";
+
 import { getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity } from "./machineDaemonPresence";
 
 describe("exact Machine socket identity and inventory", () => {
@@ -10,6 +12,22 @@ describe("exact Machine socket identity and inventory", () => {
         expect(readMachineDaemonSocketIdentity({ userId: "alice", clientType: "user-scoped", machineId: "machine-a" })).toBeNull();
     });
 
+    it("discovers joined Machine daemons but excludes ephemeral machine-runtime sockets", async () => {
+        const daemon = { userId: "alice", clientType: "machine-scoped", machineId: "machine-a" } as const;
+        const ephemeral = { userId: "alice", clientType: "machine-scoped", machineId: "machine-runtime" } as const;
+        const sockets = [
+            { data: daemon, rooms: getSocketRooms(daemon) },
+            { data: ephemeral, rooms: getSocketRooms({ ...ephemeral, includeUserMachinesRoom: false }) },
+        ];
+        // Model only the Socket.IO adapter: membership comes from the real room producer.
+        const io = { in: (room: string) => ({
+            fetchSockets: async () => sockets.filter(socket => socket.rooms.includes(room)),
+        }) };
+
+        expect(await getMachineDaemonPresenceInventory({ accountId: "alice", io }))
+            .toEqual({ state: "known", machineIds: new Set(["machine-a"]) });
+    });
+
     it("collapses duplicates and excludes foreign and non-machine sockets", async () => {
         const sockets = [
             { data: { userId: "alice", clientType: "machine-scoped", machineId: "machine-a" } },
@@ -18,7 +36,7 @@ describe("exact Machine socket identity and inventory", () => {
             { data: { userId: "alice", clientType: "session-scoped", machineId: "machine-c" } },
         ];
         const io = { in: (room: string) => {
-            expect(room).toBe("user:alice");
+            expect(room).toBe("user-machines:alice");
             return { fetchSockets: async () => sockets };
         } };
         expect(await getMachineDaemonPresenceInventory({ accountId: "alice", io }))

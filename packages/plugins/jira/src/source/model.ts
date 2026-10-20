@@ -1,7 +1,7 @@
 import {
     MAX_TRIAGE_ROW_FACT_VALUE_UTF8_BYTES_V1, TriageSourceEntryLocalRefV1Schema,
     TriageSourceEntrySnapshotV1Schema, projectTriageDisplayTextV1,
-    type TriageRowFactV1, type TriageGetResultV1,
+    type TriageRowFactV1, type TriageGetResultV1, TriageTaskFieldsV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { numericId, object, string, invalidJira } from '../api.js';
 import { JIRA_PLUGIN_ID, JIRA_SOURCE_ID } from '../contracts.js';
@@ -108,4 +108,24 @@ export function jiraAdfText(raw: unknown): string {
     if (node.type === 'inlineCard') return string(object(node.attrs).url) ?? '';
     const content = Array.isArray(node.content) ? node.content.map(jiraAdfText).join('') : '';
     return ['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'tableRow'].includes(String(node.type)) ? `${content}\n` : content;
+}
+
+/** Full values from Get issue, distinct from the normalized row projection. */
+export function jiraTaskFields(issue: JiraIssue, origin: string) {
+    const fields = issue.fields;
+    const description = fields.description;
+    const descriptionAvailable = description === null || typeof description === 'string'
+        || (object(description).type === 'doc' && Array.isArray(object(description).content));
+    return TriageTaskFieldsV1Schema.parse({
+        ...(typeof fields.summary === 'string' && fields.summary.length > 0 ? { title: fields.summary } : {}),
+        ...(descriptionAvailable ? { body: description === null ? '' : jiraAdfText(description) } : {}),
+        ...(Array.isArray(fields.labels) && fields.labels.every(label => typeof label === 'string') ? { labelIds: fields.labels } : {}),
+        ...(fields.assignee === null ? { assigneeIds: [] } : typeof object(fields.assignee).accountId === 'string'
+            ? { assigneeIds: [object(fields.assignee).accountId] } : {}),
+        ...(fields.priority === null ? { priority: null } : typeof object(fields.priority).id === 'string'
+            ? { priority: object(fields.priority).id } : {}),
+        ...(typeof fields.duedate === 'string' || fields.duedate === null ? { dueDate: fields.duedate } : {}),
+        ...(fields.parent === null ? { parent: null } : numericId(object(fields.parent).id)
+            ? { parent: jiraRelatedRef(origin, String(object(fields.parent).id)) } : {}),
+    });
 }

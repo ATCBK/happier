@@ -5,6 +5,25 @@ import { ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS } from './registry/local/loc
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
+    it('defaults haptics on and keeps its opt-out device-local without coupling visual preferences', () => {
+        expect(localSettingsParse({})).toMatchObject({ hapticsEnabled: true });
+        const parsed = localSettingsParse({ hapticsEnabled: false, uiBackdropBlurEnabled: false, themePreference: 'dark' });
+        expect(parsed).toMatchObject({ hapticsEnabled: false, uiBackdropBlurEnabled: false, themePreference: 'dark' });
+        expect(applyLocalSettings(parsed, { hapticsEnabled: true })).toMatchObject({
+            hapticsEnabled: true,
+            uiBackdropBlurEnabled: false,
+            themePreference: 'dark',
+        });
+    });
+
+    it('defaults malformed haptics values without resetting other local preferences', () => {
+        expect(localSettingsParse({ hapticsEnabled: 'disabled', uiItemDensity: 'compact', themePreference: 'dark' })).toMatchObject({
+            hapticsEnabled: true,
+            uiItemDensity: 'compact',
+            themePreference: 'dark',
+        });
+    });
+
     it('retains nested local settings despite extras without replacing unrelated preferences with defaults', () => {
         const placement = { side: 'right', y: 0.7, tucked: true };
         expect(localSettingsParse({

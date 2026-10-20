@@ -2,12 +2,35 @@ import { readDatabaseTransactionConfigFromEnv, resolveTransactionRetryDelayMs, t
 import { recordDatabaseTransactionRetry } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { delay } from "@/utils/runtime/delay";
 import { db } from "@/storage/db";
-import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
+import { getDbProviderFromEnv, getPooledTransactionAdmission, isPrismaErrorCode, prismaRuntime, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
+import { isLockAdmissionDeadlineExceededError, LockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
+import { flushAccountChangesInTx } from '@/app/changes/markAccountChanged';
 
 export type Tx = TransactionClient;
+const transactionResultSymbol = Symbol('transaction-result');
+/** Explicit projection of values that are allocated by terminal publication. */
+export interface TransactionResult<T> {
+    readonly [transactionResultSymbol]: true;
+    resolveResult(): T;
+}
+
+export type ResolvedTransactionResult<T> = T extends TransactionResult<infer Result> ? Result : T;
+
+export function transactionResult<T>(resolveResult: () => T): TransactionResult<T> {
+    return { [transactionResultSymbol]: true, resolveResult };
+}
+
+function resolveTransactionResult<T>(value: T): ResolvedTransactionResult<T> {
+    if (value && typeof value === 'object' && transactionResultSymbol in value
+        && value[transactionResultSymbol] === true && 'resolveResult' in value
+        && typeof value.resolveResult === 'function') {
+        return value.resolveResult();
+    }
+    return value as ResolvedTransactionResult<T>;
+}
 export type InTxOptions = Readonly<{
     readOnly?: boolean;
     isolationLevel?: "Serializable" | "RepeatableRead" | "ReadCommitted";
@@ -20,12 +43,15 @@ export type InTxOptions = Readonly<{
 }>;
 
 /** A coherent read view, without certifying a serial ordering with writers. */
-export function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: Pick<InTxOptions, "transactionClass">): Promise<T> {
-    return inTx(read, {
+export async function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: Pick<InTxOptions, "transactionClass">): Promise<T> {
+    // A snapshot captures caller-owned data; only write transaction results
+    // participate in terminal publication projection.
+    const captured = await inTx(async tx => ({ value: await read(tx) }), {
         ...options,
         readOnly: true,
         isolationLevel: getDbProviderFromEnv(process.env, "postgres") === "postgres" ? "RepeatableRead" : "Serializable",
     });
+    return captured.value;
 }
 
 export type TransactionReplayReason = "session-account-audience-changed"
@@ -91,6 +117,22 @@ class TransactionAttemptDeadlineExceededError extends Error {
 }
 
 const symbol = Symbol();
+interface TransactionContext extends TransactionContextView {
+    callbacks: (() => void)[];
+}
+
+export interface TransactionContextView {
+    readonly readOnly: boolean;
+}
+
+/** Native Prisma transaction proxies may share their property backing target. */
+export function getTransactionContext(tx: Tx): object;
+export function getTransactionContext(tx: Tx, options: Readonly<{ optional: true }>): TransactionContextView | undefined;
+export function getTransactionContext(tx: Tx, options?: Readonly<{ optional: true }>): object | undefined {
+    const context = (tx as Tx & { [symbol]?: TransactionContext })[symbol];
+    if (!context && !options?.optional) throw new Error('Account publication requires an inTx() transaction');
+    return context;
+}
 
 function errorMessage(err: unknown): string {
     if (err instanceof Error && typeof err.message === "string") return err.message;
@@ -101,7 +143,7 @@ function errorMessage(err: unknown): string {
     return "";
 }
 
-function readPostgresTransactionSqlState(error: unknown): "40001" | "40P01" | "55P03" | "57014" | undefined {
+export function readPostgresTransactionSqlState(error: unknown): "40001" | "40P01" | "55P03" | "57014" | undefined {
     if (isPrismaErrorCode(error, "40001")) return "40001";
     if (isPrismaErrorCode(error, "40P01")) return "40P01";
     if (isPrismaErrorCode(error, "55P03")) return "55P03";
@@ -130,7 +172,9 @@ export function isRetryableTransactionError(params: Readonly<{ provider: string;
 
     if (params.provider === "postgres") {
         const sqlState = readPostgresTransactionSqlState(params.err);
-        if (sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03") return true;
+        // 57014 is the transaction's own statement budget (SET LOCAL
+        // statement_timeout) ending a lock wait; it aborts the transaction.
+        if (sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03" || sqlState === "57014") return true;
         // Retain historical recovery heuristics without treating them as
         // confirmed rollback when recovery ultimately fails.
         const message = errorMessage(params.err).toLowerCase();
@@ -154,10 +198,17 @@ function readTransactionErrorMessage(error: unknown): string {
     return errorMessage(error);
 }
 
+/** Prisma names the operation that found the expired transaction: query, batch query or commit. */
 function isExpiredTransactionError(error: unknown): boolean {
     return isPrismaErrorCode(error, "P2028")
         && readTransactionErrorMessage(error).toLowerCase()
-            .includes("a query cannot be executed on an expired transaction");
+            .includes("cannot be executed on an expired transaction");
+}
+
+function isMissingPrismaTransactionError(error: unknown): boolean {
+    return error instanceof prismaRuntime.PrismaClientKnownRequestError
+        && error.code === "P2028"
+        && readTransactionErrorMessage(error).startsWith("Transaction not found.");
 }
 
 export function isTransactionAcquisitionTimeout(error: unknown): boolean {
@@ -177,11 +228,9 @@ export function afterTx(tx: Tx, callback: () => void) {
     // - Instead, schedule them with afterTx so they only fire after commit.
     //
     // `afterTx` is only valid for transactions created via `inTx()`.
-    const callbacks = (tx as any)[symbol] as (() => void)[] | undefined;
-    if (!callbacks) {
-        throw new Error('afterTx(tx, ...) called outside inTx() transaction');
-    }
-    callbacks.push(callback);
+    const context = (tx as Tx & { [symbol]?: TransactionContext })[symbol];
+    if (!context) throw new Error('afterTx(tx, ...) called outside inTx() transaction');
+    context.callbacks.push(callback);
 }
 
 function canStartAnotherSqliteTransactionAttempt(params: Readonly<{
@@ -283,23 +332,25 @@ async function withPostgresStatementBudget(tx: Tx, timeoutMs: number, startedAtM
     });
 }
 
-export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions): Promise<T> {
+export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions): Promise<ResolvedTransactionResult<T>> {
     const provider = getDbProviderFromEnv(process.env, "postgres");
     if (provider === "sqlite" && options?.readOnly) {
         if (options.prepare) {
             const fence = await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass);
             return await withSqliteReadSnapshot(async tx => {
                 await fence(tx);
-                return fn(tx);
+                return resolveTransactionResult(await fn(tx));
             }, { deadlineAtMs: options.deadlineAtMs });
         }
-        return await withSqliteReadSnapshot(fn, { deadlineAtMs: options.deadlineAtMs });
+        return await withSqliteReadSnapshot(async tx => resolveTransactionResult(await fn(tx)), { deadlineAtMs: options.deadlineAtMs });
     }
     const transactionConfig = readDatabaseTransactionConfigFromEnv(process.env, provider);
+    const admission = provider === "postgres" ? getPooledTransactionAdmission() : undefined;
     let counter = 0;
     const startedAtMs = Date.now();
     let ambiguousAttemptFailure: { error: unknown } | undefined;
     let transactionCallbackEntered = false;
+    let transactionCallbackCompleted = false;
     let wrapped = async (tx: Tx, timeoutMs: number, fence?: (tx: Tx) => Promise<void>) => {
         const attemptStartedAtMs = Date.now();
         transactionCallbackEntered = true;
@@ -318,50 +369,72 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             // an expired callback cannot retain a pooled connection indefinitely.
             tx = await withPostgresStatementBudget(tx, timeoutMs, attemptStartedAtMs);
         }
-        (tx as any)[symbol] = [];
+        // Keep all per-attempt state on this closure-owned object, rather than
+        // assigning through Prisma's proxy onto a potentially shared client.
+        const context: TransactionContext = { callbacks: [], readOnly: options?.readOnly === true };
+        tx = new Proxy(tx, {
+            get(target, property) {
+                return property === symbol ? context : Reflect.get(target, property, target);
+            },
+        });
         if (fence) await fence(tx);
         let result = await timeWebLatencyPhase('db.transaction.callback', () => fn(tx), options?.transactionClass);
-        let callbacks = (tx as any)[symbol] as (() => void)[];
-        return { result, callbacks };
+        await flushAccountChangesInTx(tx);
+        const resolvedResult = resolveTransactionResult(result);
+        let callbacks = context.callbacks;
+        transactionCallbackCompleted = true;
+        return { result: resolvedResult, callbacks };
     }
     while (true) {
         transactionCallbackEntered = false;
+        transactionCallbackCompleted = false;
         try {
             const fence = options?.prepare
                 ? await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass)
                 : undefined;
-            const remainingMs = options?.deadlineAtMs === undefined
-                ? null
-                : Math.floor(options.deadlineAtMs - Date.now());
-            if (remainingMs !== null && remainingMs < 2) {
-                throw new TransactionDeadlineExceededError(null, options?.transactionClass);
-            }
             const configuredMaxWaitMs = options?.maxWaitMs ?? transactionConfig.maxWaitMs;
-            const configuredTimeoutMs = options?.timeoutMs ?? transactionConfig.timeoutMs;
-            const boundedMaxWaitMs = remainingMs === null
-                ? configuredMaxWaitMs
-                : Math.max(1, Math.min(configuredMaxWaitMs, Math.floor(remainingMs / 3)));
-            const boundedTimeoutMs = remainingMs === null
-                ? configuredTimeoutMs
-                : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
-            // Account-local writes take their existing Account fence before
-            // admission reads, then use this ReadCommitted default. A fence
-            // cannot safely change isolation after a caller has read rows.
-            // Keep Serializable opt-in for predicates not protected by those
-            // locks/CAS (for example another Account's shared-secret grants).
-            // Coherent readers use inReadSnapshot rather than joining SSI.
-            const txOpts =
-                provider === "sqlite"
-                    ? {
-                          timeout: boundedTimeoutMs,
-                          maxWait: boundedMaxWaitMs,
-                      }
-                    : {
-                          isolationLevel: options?.isolationLevel ?? "ReadCommitted",
-                          timeout: boundedTimeoutMs,
-                          maxWait: boundedMaxWaitMs,
-                      };
-            let result = await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, fence), txOpts), options?.transactionClass);
+            const acquisitionStartedAtMs = Date.now();
+            const acquisitionDeadlineAtMs = Math.min(acquisitionStartedAtMs + configuredMaxWaitMs, options?.deadlineAtMs ?? Infinity);
+            const attempt = async () => {
+                const remainingMs = options?.deadlineAtMs === undefined
+                    ? null
+                    : Math.floor(options.deadlineAtMs - Date.now());
+                if (remainingMs !== null && remainingMs < 2) {
+                    throw new TransactionDeadlineExceededError(null, options?.transactionClass);
+                }
+                // Local admission and Prisma acquisition consume the same budget.
+                // Recompute after queueing, before opening any pooled transaction.
+                const remainingMaxWaitMs = admission
+                    ? configuredMaxWaitMs - (Date.now() - acquisitionStartedAtMs) : configuredMaxWaitMs;
+                if (remainingMaxWaitMs < 1) throw new LockAdmissionDeadlineExceededError();
+                const configuredTimeoutMs = options?.timeoutMs ?? transactionConfig.timeoutMs;
+                const boundedMaxWaitMs = remainingMs === null
+                    ? remainingMaxWaitMs
+                    : Math.max(1, Math.min(remainingMaxWaitMs, Math.floor(remainingMs / 3)));
+                const boundedTimeoutMs = remainingMs === null
+                    ? configuredTimeoutMs
+                    : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
+                // Admission stability precedes domain reads; resource locks/CAS
+                // protect domain writes and Account publication flushes last.
+                // Keep Serializable opt-in for predicates not protected by those
+                // locks/CAS. Isolation cannot change after a caller has read rows.
+                // Coherent readers use inReadSnapshot rather than joining SSI.
+                const txOpts =
+                    provider === "sqlite"
+                        ? {
+                              timeout: boundedTimeoutMs,
+                              maxWait: boundedMaxWaitMs,
+                          }
+                        : {
+                              isolationLevel: options?.isolationLevel ?? "ReadCommitted",
+                              timeout: boundedTimeoutMs,
+                              maxWait: boundedMaxWaitMs,
+                          };
+                return await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, fence), txOpts), options?.transactionClass);
+            };
+            const result = admission
+                ? await admission.inLock(attempt, { deadlineAtMs: acquisitionDeadlineAtMs })
+                : await attempt();
             for (let callback of result.callbacks) {
                 try {
                     callback();
@@ -380,18 +453,30 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             }
             return result.result;
         } catch (e) {
-            const acquisitionTimeout = isTransactionAcquisitionTimeout(e) && !transactionCallbackEntered;
+            // P2024 is the pool-acquisition form of the same pre-callback
+            // failure. Reuse this owner's recovery budget and no-effect result;
+            // a failure after callback entry must retain its outcome certainty.
+            const acquisitionTimeout = !transactionCallbackEntered
+                && (isLockAdmissionDeadlineExceededError(e) || isTransactionAcquisitionTimeout(e) || isPrismaErrorCode(e, "P2024"));
             const sqlState = provider === "postgres" ? readPostgresTransactionSqlState(e) : undefined;
+            // Prisma evicts old closed-transaction diagnostics under churn. A
+            // missing native transaction before our callback completes cannot
+            // have committed: only $transaction may commit after that return.
+            // After the return, the same error remains an unknown outcome.
+            const missingBeforeCommit = transactionCallbackEntered && !transactionCallbackCompleted
+                && isMissingPrismaTransactionError(e);
             const retryable = acquisitionTimeout
+                || missingBeforeCommit
                 || (transactionCallbackEntered && e instanceof TransactionReplayRequiredError)
                 || isRetryableTransactionError({ provider, err: e });
             const confirmedRollback = (transactionCallbackEntered && e instanceof TransactionReplayRequiredError)
+                || missingBeforeCommit
                 || (transactionCallbackEntered && e instanceof TransactionAttemptDeadlineExceededError)
                 || isPrismaErrorCode(e, "P2034")
                 // Prisma has already rolled back an expired interactive
                 // transaction. Other P2028 states do not prove no commit.
                 || isExpiredTransactionError(e)
-                || sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03";
+                || sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03" || sqlState === "57014";
             // Retryable transport failures and legacy message heuristics do
             // not prove an earlier attempt failed to commit. Later rollback or
             // acquisition failure cannot erase that unknown outcome.

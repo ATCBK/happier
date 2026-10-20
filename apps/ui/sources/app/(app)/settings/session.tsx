@@ -23,10 +23,10 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SessionGestureSettingsRows } from '@/components/settings/session/SessionGestureSettingsRows';
 import {
-    resolveSessionListViewOptionSelectionDelta,
     resolveSessionListViewOptionsPresentation,
 } from '@/components/sessions/shell/sessionListViewOptionsPresentation';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSessionListViewOptionWriter } from '@/components/sessions/shell/useSessionListViewOptionWriter';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionListLayoutChoice } from '@/hooks/session/sessionListLayoutIntent';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -35,7 +35,8 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     const preferredLanguage = useSettingsSelector(getPreferredLanguage);
     const router = useRouter();
     const popoverBoundaryRef = React.useRef<any>(null);
-    const [codingPromptBehavior, setCodingPromptBehavior] = useSettingMutable('codingPromptBehaviorV1');
+    const [codingPromptBehavior] = useSettingMutable('codingPromptBehaviorV1');
+    const { setSetting } = useSettingActionFeedback();
     const [rememberLastProjectSessionSelections, setRememberLastProjectSessionSelections] = useSettingMutable('rememberLastProjectSessionSelections');
     const [rememberLastEngineSelections, setRememberLastEngineSelections] = useSettingMutable('rememberLastEngineSelectionsV1');
     const [useEnhancedSessionWizard, setUseEnhancedSessionWizard] = useSettingMutable('useEnhancedSessionWizard');
@@ -65,7 +66,7 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     const [sessionListActiveGroupingV1] = useSettingMutable('sessionListActiveGroupingV1');
     const [sessionListInactiveGroupingV1] = useSettingMutable('sessionListInactiveGroupingV1');
     const [sessionListSectionModeV1] = useSettingMutable('sessionListSectionModeV1');
-    const applySettings = useApplySettings();
+    const applySessionListViewOption = useSessionListViewOptionWriter();
     // Account settings intentionally describe the currently selected Home set;
     // exact Session/Team/list-row surfaces scope their own admission separately.
     const sessionFoldersFeatureEnabled = useFeatureEnabled('sessions.folders', { scopeKind: 'main_selection' });
@@ -119,12 +120,9 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     ], [preferredLanguage]);
     const setSessionTitleUpdatesMode = React.useCallback(
         (mode: CodingPromptSessionTitleUpdatesModeV1) => {
-            setCodingPromptBehavior({
-                ...normalizedCodingPromptBehavior,
-                sessionTitleUpdates: mode,
-            } satisfies CodingPromptBehaviorV1);
+            void setSetting(SESSION_SETTINGS.settings.renameSessions, mode);
         },
-        [normalizedCodingPromptBehavior, setCodingPromptBehavior],
+        [setSetting],
     );
     const handleSessionTitleUpdatesModeSelect = React.useCallback((itemId: string) => {
         if (itemId !== 'disabled' && itemId !== 'initial' && itemId !== 'ongoing') return;
@@ -132,12 +130,9 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     }, [setSessionTitleUpdatesMode]);
     const setCodingPromptResponseOptionsEnabled = React.useCallback(
         (enabled: boolean) => {
-            setCodingPromptBehavior({
-                ...normalizedCodingPromptBehavior,
-                responseOptions: enabled ? 'agent' : 'disabled',
-            } satisfies CodingPromptBehaviorV1);
+            void setSetting(SESSION_SETTINGS.settings.suggestReplyOptions, enabled);
         },
-        [normalizedCodingPromptBehavior, setCodingPromptBehavior],
+        [setSetting],
     );
 
     // Settings hosts no list, so this resolves to the stored preference; it still
@@ -154,15 +149,6 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
         sessionListFolderSortModeV1,
         foldersFeatureEnabled: sessionFoldersFeatureEnabled,
     }, sessionListLayoutChoice);
-    const applySessionListViewOption = React.useCallback((itemId: string) => {
-        const delta = resolveSessionListViewOptionSelectionDelta(itemId, {
-            sessionListOrderingModeV1,
-        });
-        if (delta) applySettings(delta);
-    }, [
-        applySettings,
-        sessionListOrderingModeV1,
-    ]);
     const sessionListDensityItems = React.useMemo(() => [
         {
             id: 'detailed' as const,

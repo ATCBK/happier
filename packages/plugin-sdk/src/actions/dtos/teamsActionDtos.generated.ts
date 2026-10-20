@@ -990,6 +990,7 @@ export type TeamsActionResultById = {
                 kind: 'source_unavailable';
             } | {
                 kind: 'broker_unavailable';
+                reason?: 'application_unavailable' | 'model_unavailable' | undefined;
             } | {
                 kind: 'update_required';
             } | {
@@ -1222,6 +1223,7 @@ export type TeamsActionResultById = {
                 kind: 'source_unavailable';
             } | {
                 kind: 'broker_unavailable';
+                reason?: 'application_unavailable' | 'model_unavailable' | undefined;
             } | {
                 kind: 'update_required';
             } | {
@@ -1350,6 +1352,7 @@ export type TeamsActionResultById = {
             kind: 'source_unavailable';
         } | {
             kind: 'broker_unavailable';
+            reason?: 'application_unavailable' | 'model_unavailable' | undefined;
         } | {
             kind: 'update_required';
         } | {
@@ -1421,6 +1424,7 @@ export type TeamsActionResultById = {
                 kind: 'source_unavailable';
             } | {
                 kind: 'broker_unavailable';
+                reason?: 'application_unavailable' | 'model_unavailable' | undefined;
             } | {
                 kind: 'update_required';
             } | {
@@ -1643,6 +1647,7 @@ export type TeamsActionResultById = {
             kind: 'source_unavailable';
         } | {
             kind: 'broker_unavailable';
+            reason?: 'application_unavailable' | 'model_unavailable' | undefined;
         } | {
             kind: 'update_required';
         } | {
@@ -1722,6 +1727,7 @@ export type TeamsActionResultById = {
             kind: 'source_unavailable';
         } | {
             kind: 'broker_unavailable';
+            reason?: 'application_unavailable' | 'model_unavailable' | undefined;
         } | {
             kind: 'update_required';
         } | {

@@ -91,6 +91,8 @@ it('captures the live runner chain and ends its reparented child before requeste
     if (initial.status !== 'ok') throw new Error('Native census unavailable');
     const root = initial.rows.find(row => row.pid === parent.pid);
     if (!root) throw new Error('Owned runner missing from native census');
+    const child = initial.rows.find(row => row.pid === childPid);
+    if (!child) throw new Error('Owned child missing from native census');
     const tracked: TrackedSession = { startedBy: 'daemon', pid: root.pid, childProcess: parent,
       happySessionId: owner.sessionId, processStartTimeMs: root.start.startTimeMs,
       spawnOptions: { directory: process.cwd(), terminal: { mode: 'plain' } } };
@@ -106,7 +108,8 @@ it('captures the live runner chain and ends its reparented child before requeste
       waitForTrackedRunnersExit: async () => { await departed; return true; },
     });
     expect(await stop(owner.sessionId)).toEqual({ status: 'stopped' });
-    expect(tracked.ownerRemainderCapture?.ownership.find(row => row.pid === childPid)?.level).toBe('proven');
+    expect(tracked.ownerRemainderCapture?.scope).toBe('subtree');
+    expect(tracked.ownerRemainderCapture?.roots).toContainEqual(expect.objectContaining({ pid: child.pid, start: child.start }));
     const final = await readProcessCensus({ freshness: 'fresh', pids: [childPid] });
     expect(final.status).toBe('ok');
     expect(final.status === 'ok' && final.rows.some(row => row.pid === childPid && row.state !== 'zombie')).toBe(false);

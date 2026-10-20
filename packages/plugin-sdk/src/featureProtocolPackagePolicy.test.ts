@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, describe, expect, it } from 'vitest';
 import ts from 'typescript';
+import { collectBundledPrepublicationAuthorPackageNames } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 
 import { runBoundedFixtureCommand } from './test-support/boundedFixtureCommand.js';
 import {
@@ -759,7 +760,7 @@ function assertFeatureProtocolSdkImport(
     if (!allowedSymbols) {
         throw new Error(`${packageName} imports unapproved SDK subpath ${reference.specifier} from ${sourcePath}`);
     }
-    if ((reference.kind !== 'named' && reference.kind !== 'import-type') || reference.names.length === 0) {
+    if ((reference.kind !== 'named' && reference.kind !== 'import-type' && reference.kind !== 're-export') || reference.names.length === 0) {
         throw new Error(`${packageName} must use named SDK imports from ${reference.specifier} in ${sourcePath}`);
     }
     for (const name of reference.names) {
@@ -1178,6 +1179,13 @@ afterAll(async () => {
 });
 
 describe('feature-protocol package policy', () => {
+    it('resolves the policy fixtures\' SDK peer and dev ranges through the shared prepublication rule', () => {
+        for (const fixture of [featureProtocolFixture, featureProtocolWireFixture]) {
+            expect(collectBundledPrepublicationAuthorPackageNames(fixture.packageJson))
+                .toEqual([SDK_PACKAGE_NAME]);
+        }
+    });
+
     it('classifies valid third-party scoped and unscoped protocol packages without reserving Happier\'s scope', () => {
         for (const name of [
             '@happier-dev/example-protocol',

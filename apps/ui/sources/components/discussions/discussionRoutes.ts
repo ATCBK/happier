@@ -4,12 +4,20 @@ import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/message
 import { DiscussionAnchorV1Schema, type DiscussionAnchorV1 } from '@happier-dev/protocol/discussions/replyTargets';
 import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { SessionDraftAddressV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
 export type DiscussionSourceSurface = SessionMobileSurface | 'discussions';
 export type AnchoredDiscussionSourceLink = Readonly<{ discussion: DiscussionAddressV1; source: SessionMessageRefV1; href: string }>;
 
 export function buildDiscussionsRouteHref(address: DiscussionHomeAddress): string {
     return `/discussions?${new URLSearchParams({ serverId: address.serverId })}`;
+}
+
+/** A supplied invalid key is unavailable, never the ordinary singleton draft. */
+export function readDiscussionRouteDraftId(value: string | string[] | undefined): string | null | undefined {
+    if (value === undefined) return undefined;
+    const parsed = SessionDraftAddressV2Schema.safeParse({ kind: 'newDiscussion', draftId: value });
+    return parsed.success && parsed.data.kind === 'newDiscussion' && parsed.data.draftId !== undefined ? parsed.data.draftId : null;
 }
 
 /** Null is an invalid supplied anchor; absence is distinct so a route cannot silently drop its source. */
@@ -23,7 +31,9 @@ export function readDiscussionRouteAnchor(input: Readonly<{
     let value: unknown;
     try { value = JSON.parse(input.anchor); } catch { return null; }
     const parsed = DiscussionAnchorV1Schema.safeParse(value);
-    return parsed.success && parsed.data.kind === 'doc'
+    if (!parsed.success) return null;
+    if (parsed.data.kind === 'task') return input.serverId ? parsed.data : null;
+    return parsed.data.kind === 'doc'
         && areServerProfileIdentifiersEquivalent(parsed.data.doc.ref.serverId, input.serverId) ? parsed.data : null;
 }
 
@@ -47,17 +57,24 @@ export function readAnchoredDiscussionSourceLinks(input: Readonly<{
 export function buildDiscussionRouteHref(input: Readonly<{
     target: DiscussionDetailsTarget;
     sourceSurface?: DiscussionSourceSurface;
+    /** Opened from a passage in this Doc: Back names it and returns to it. */
+    returnArtifactId?: string;
 }>): string {
     const query = new URLSearchParams({ serverId: input.target.address.serverId });
     if (input.sourceSurface) query.set('sourceSurface', input.sourceSurface);
+    if (input.returnArtifactId) query.set('returnArtifactId', input.returnArtifactId);
     if (input.target.kind === 'discussion' && input.target.messageId) query.set('messageId', input.target.messageId);
+    if (input.target.kind === 'new' && input.target.draftId !== undefined) {
+        const address = SessionDraftAddressV2Schema.parse({ kind: 'newDiscussion', draftId: input.target.draftId });
+        if (address.kind === 'newDiscussion' && address.draftId !== undefined) query.set('draftId', address.draftId);
+    }
     if (input.target.kind === 'new' && input.target.anchor) {
         const anchor = DiscussionAnchorV1Schema.parse(input.target.anchor);
         if (anchor.kind === 'session') {
             query.set('anchorSessionId', anchor.sessionId);
             if (anchor.messageId) query.set('anchorMessageId', anchor.messageId);
         } else {
-            if (!areServerProfileIdentifiersEquivalent(anchor.doc.ref.serverId, input.target.address.serverId)) throw new Error('server_target_mismatch');
+            if (anchor.kind === 'doc' && !areServerProfileIdentifiersEquivalent(anchor.doc.ref.serverId, input.target.address.serverId)) throw new Error('server_target_mismatch');
             query.set('anchor', JSON.stringify(anchor));
         }
     }

@@ -29,7 +29,6 @@ import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from './sessionListSty
 import { resolveProjectGroupHeaderMenuItems } from './resolveProjectGroupHeaderMenuItems';
 import { resolveNewSessionGroupTarget } from './resolveSessionListHeaderActionHandlers';
 import {
-    resolveSessionListViewOptionSelectionDelta,
     resolveSessionListViewOptionsPresentation,
     type SessionListViewOptionDescriptor,
 } from './sessionListViewOptionsPresentation';
@@ -39,7 +38,7 @@ import { resolveWorkspaceRootTreeRowId, treeRowId } from './drop-resolution/tree
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSessionListViewOptionWriter } from './useSessionListViewOptionWriter';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 const HEADER_ACTION_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
@@ -148,7 +147,7 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
         sessionFolderViewModeV1,
         sessionListFolderSortModeV1,
     };
-    const applySettings = useApplySettings();
+    const applyViewOption = useSessionListViewOptionWriter();
     const sessionFoldersFeatureEnabled = useFeatureEnabled('sessions.folders', props.serverId
         ? { scopeKind: 'spawn', serverId: props.serverId }
         : { scopeKind: 'main_selection' });
@@ -292,20 +291,18 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
         } satisfies DropdownMenuItem] : []),
     ], [actionIconColor, organize.available, presentation, selectedTitle, theme.colors.text.secondary, withSelection]);
 
-    const handleMenuSelect = React.useCallback((itemId: string) => {
+    const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (itemId === SESSION_LIST_ORGANIZE_MENU_ITEM_ID) {
             setMenuOpen(false);
             organize.enter();
             return;
         }
-        const delta = resolveSessionListViewOptionSelectionDelta(itemId, settings);
-        if (!delta) return;
+        if (!await applyViewOption(itemId)) return;
         // An explicit layout choice retires the host's opening intent, so the
         // choice applies here and now instead of only after leaving the route.
         if (itemId.startsWith('layout:')) yieldLayoutIntent();
-        applySettings(delta);
         setMenuOpen(false);
-    }, [applySettings, organize, settings, yieldLayoutIntent]);
+    }, [applyViewOption, organize, yieldLayoutIntent]);
 
     return (
         <DropdownMenu

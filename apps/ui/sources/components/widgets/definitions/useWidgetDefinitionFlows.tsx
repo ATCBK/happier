@@ -72,10 +72,11 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     scope: WidgetSurfaceRefV1 | null;
     anchorRef: React.RefObject<View | null>;
     /**
-     * Post a snapshot opens on its own card, not at the ⋯: `anchorRef` sits at the card's top edge and
-     * `reveal` brings the card into view first, so the panel never opens over a sibling.
+     * A card that sits among siblings opens every flow on its own card, not at the ⋯: the card's own
+     * `anchorRef` sits at its top edge and `reveal` brings the card into view first, so a panel never opens over a
+     * sibling or from a ⋯ that has scrolled away. Without it the flows open at the ⋯ (`anchorRef`).
      */
-    snapshotCard?: Readonly<{ anchorRef: React.RefObject<View | null>; reveal: () => void }>;
+    card?: Readonly<{ anchorRef: React.RefObject<View | null>; reveal: () => void }>;
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     sessionItem?: WidgetDefinitionSessionItem | null;
     providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
@@ -91,7 +92,9 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     const [flow, setFlow] = React.useState<Flow | null>(null);
     const [slot] = React.useState(createWidgetSnapshotCaptureSlot);
     const capturable = useWidgetSnapshotCaptureAvailable(slot);
-    const { instance, scope, anchorRef, editInputs, sessionItem, testID } = input;
+    const { instance, scope, editInputs, sessionItem, testID } = input;
+    const card = input.card;
+    const anchorRef = card?.anchorRef ?? input.anchorRef;
     const artifactId = instance?.definition.kind === 'artifact' ? instance.definition.artifactId : null;
     // Add to… chooses its place in the shared chooser first; the copy's setup then opens at setup width.
     const [copyTo, setCopyTo] = React.useState<string | null>(null);
@@ -109,14 +112,14 @@ export function useWidgetDefinitionFlows(input: Readonly<{
         setCopyTo(next);
         setPlacing({ ...placing, remaining });
     }, [close, placing]);
-    const about = React.useMemo(() => (instance && scope ? () => setFlow('about') : undefined), [instance, scope]);
+    const open = React.useCallback((next: Flow) => { card?.reveal(); setFlow(next); }, [card]);
+    const about = React.useMemo(() => (instance && scope ? () => open('about') : undefined), [instance, open, scope]);
     const addTo = React.useMemo(() => (instance && scope && (scope.owner.kind !== 'sessionBoard'
-        || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => setFlow('addTo') : undefined), [instance, scope]);
+        || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => open('addTo') : undefined), [instance, open, scope]);
     const onBoard = scope?.owner.kind === 'sessionBoard';
-    const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => setFlow('save') : undefined), [onBoard, sessionItem?.savable]);
-    const snapshotCard = input.snapshotCard;
-    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => { snapshotCard?.reveal(); setFlow('snapshot'); } : undefined),
-        [capturable, onBoard, sessionItem?.canEdit, snapshotCard]);
+    const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => open('save') : undefined), [onBoard, open, sessionItem?.savable]);
+    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => open('snapshot') : undefined),
+        [capturable, onBoard, open, sessionItem?.canEdit]);
 
     let panel: React.ReactElement | null = null;
     if (flow === 'about' && scope && instance) {
@@ -132,7 +135,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
             : flow === 'addTo' ? t('widgetFrame.groupAddTo') : t('widgetDefinition.snapshotTitle');
         const account = { serverId: scope.serverId, accountId: scope.accountId };
         panel = (
-            <WidgetFlowShell anchorRef={flow === 'snapshot' && snapshotCard ? snapshotCard.anchorRef : anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
+            <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
                 {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
                 {flow === 'addTo' && placeInstance && copyTo !== null ? (
                     <WidgetCopyPanel instance={placeInstance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}

@@ -13,6 +13,7 @@ import {
 import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 import { readTriageSessionLinksPageV1 } from '../sessions/readEntrySessionLinks.js';
 import { createTriageSourceSessionRelations, type TriageSourceSessionLinkV1 } from '../sessions/sourceSessionRelations.js';
+import type { TriageReadSourceSessionLinksResultV1 } from './sessionLinksProtocol.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
 import { isTriageAccountCaller, isTriageHostActionCaller, resolveTriageCallerSource } from './callerSource.js';
 import type {
@@ -59,7 +60,7 @@ export type TriageReadEntryDetailDepsV1 = Readonly<{
     sessionLinks: Pick<CorpusCollectionHandleV1, 'query' | 'identityTag'>;
     readSessionSummary: TriageLinkedSessionSummaryReaderV1;
     readSourceLinks?: (input: Readonly<{ entryRef: TriageEntryRefV1; sourceInstanceId: string }>) => Promise<Readonly<{
-        kind: 'complete' | 'failed'; links: readonly TriageSourceSessionLinkV1[]; sourceOwned: boolean;
+        kind: TriageReadSourceSessionLinksResultV1['kind']; links: readonly TriageSourceSessionLinkV1[]; sourceOwned: boolean;
     }>>;
     signal?: AbortSignal;
 }>;
@@ -136,7 +137,7 @@ export async function readTriageEntryDetail(
     }
 
     const sourceLinks = await deps.readSourceLinks?.({ entryRef: input.entryRef, sourceInstanceId: input.sourceInstanceId });
-    if (sourceLinks?.kind === 'failed') throw new Error('triage:sessionLinks:sourceUnavailable');
+    if (sourceLinks !== undefined && sourceLinks.kind !== 'complete') throw new Error('triage:sessionLinks:sourceUnavailable');
     const linkedSessionPage = await readLinkedSessions(
         input.entryRef,
         deps,

@@ -1,5 +1,7 @@
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useCallback } from 'react';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
 
 export function useSessionListStorageKind(): Readonly<{
@@ -9,7 +11,10 @@ export function useSessionListStorageKind(): Readonly<{
 }> {
     const externalSessionsDecision = useFeatureDecision('sessions.direct');
     const externalSessionsEnabled = externalSessionsDecision?.state === 'enabled';
-    const [sessionsListStorageFilter, setSessionsListStorageFilter] = useLocalSettingMutable('sessionsListStorageFilter');
+    const sessionsListStorageFilter = useLocalSetting('sessionsListStorageFilter');
+    const setSessionsListStorageFilter = useCallback((next: SessionListStorageFilter) => {
+        getStorage().getState().applyLocalSettings({ sessionsListStorageFilter: next }, { source: 'ui' });
+    }, []);
 
     return {
         externalSessionsEnabled,

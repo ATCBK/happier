@@ -24,7 +24,8 @@ import { getKokoroAssetSetOptions } from '@/voice/kokoro/assets/kokoroAssetSets'
 import { resolveKokoroDaemonTtsPackId } from '@/voice/kokoro/assets/resolveKokoroDaemonTtsPackId';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { isKokoroRuntimeSupported } from '@/voice/kokoro/runtime/kokoroSupport';
-import { localNeuralTtsPreviewController, previewLocalNeuralTts } from './providers/localNeural/previewLocalNeuralTts';
+import { BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
+import { useRealtimeCatalogPreview } from '../realtime/realtimeVoiceCatalogMenu';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
@@ -91,53 +92,15 @@ export function LocalNeuralTtsSettings(props: {
     ? daemonVoiceSelection.selectedVoiceId
     : props.cfgKokoro.voiceId ?? installSummary?.manifest?.defaultVoiceId ?? deviceVoices[0]?.id ?? null;
 
-  const previewingVoiceId = React.useSyncExternalStore(localNeuralTtsPreviewController.subscribe,
-    localNeuralTtsPreviewController.read, localNeuralTtsPreviewController.read);
-  const pickerPreview = React.useRef<ReturnType<typeof localNeuralTtsPreviewController.begin> | null>(null);
-
-  const retirePickerPreview = React.useCallback(() => {
-    pickerPreview.current?.finish();
-    pickerPreview.current = null;
-  }, []);
-
-  const stopPreview = React.useCallback(() => {
-    localNeuralTtsPreviewController.stop();
-    pickerPreview.current = null;
-  }, []);
-  React.useEffect(() => retirePickerPreview, [retirePickerPreview]);
+  const { previewingId: previewingVoiceId, playPreview, retirePreview } = useRealtimeCatalogPreview(
+    BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID,
+    { targetKey: JSON.stringify([effectiveAssetSetId, props.cfgKokoro.execution]) },
+  );
 
   React.useEffect(() => {
     if (openMenu === 'voiceId') return;
-    retirePickerPreview();
-  }, [openMenu, retirePickerPreview]);
-
-  const playPreview = React.useCallback(
-    async (voiceId: string) => {
-      if (previewingVoiceId === voiceId) {
-        stopPreview();
-        return;
-      }
-
-      const attempt = localNeuralTtsPreviewController.begin(voiceId);
-      pickerPreview.current = attempt;
-
-      try {
-        await previewLocalNeuralTts({
-          sample: t('settingsVoice.local.testTtsSample'),
-          config: { ...props.cfgKokoro, assetId: effectiveAssetSetId, voiceId },
-          timeoutMs: Math.max(60000, props.networkTimeoutMs),
-          registerPlaybackStopper: attempt.registerPlaybackStopper,
-          isCurrent: attempt.isCurrent,
-        });
-      } catch {
-        // The picker keeps sample failures local; custody is retired below.
-      } finally {
-        attempt.finish();
-        if (pickerPreview.current === attempt) pickerPreview.current = null;
-      }
-    },
-    [effectiveAssetSetId, previewingVoiceId, props.cfgKokoro, props.networkTimeoutMs, stopPreview],
-  );
+    retirePreview();
+  }, [openMenu, retirePreview]);
 
   const buildLabel = formatModelPackBuildLabel((installSummary as any)?.manifest);
   const readyDetail = buildLabel ? `${t('settingsVoice.local.kokoro.modelStatus.ready')} • ${buildLabel}` : t('settingsVoice.local.kokoro.modelStatus.ready');
@@ -213,7 +176,7 @@ export function LocalNeuralTtsSettings(props: {
         onSelect={(id) => {
           props.setKokoro({ ...props.cfgKokoro, assetId: id || null });
           setOpenMenu(null);
-          retirePickerPreview();
+          retirePreview();
         }}
       />
       </SettingAnchor>
@@ -301,7 +264,8 @@ export function LocalNeuralTtsSettings(props: {
       <SettingAnchor {...(usesDaemonExecution
         ? { settings: [VOICE_CONVERSATIONS_SETTINGS.settings.ttsPreview] }
         : { setting: VOICE_CONVERSATIONS_SETTINGS.settings.ttsPreview })}>
-      <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsVoiceId}>
+      <SettingAnchor settings={[VOICE_CONVERSATIONS_SETTINGS.settings.ttsVoiceId,
+        VOICE_CONVERSATIONS_SETTINGS.settings.ttsCatalog, VOICE_CONVERSATIONS_SETTINGS.settings.ttsCatalogRetry]}>
       <DropdownMenu
         open={openMenu === 'voiceId'}
         onOpenChange={(next) => setOpenMenu(next ? 'voiceId' : null)}
@@ -332,7 +296,7 @@ export function LocalNeuralTtsSettings(props: {
                 size={ACCESSORY_TARGET_SIZE}
                 onPress={(e) => {
                   e?.stopPropagation?.();
-                  void playPreview(v.id);
+                  fireAndForget(playPreview({ id: v.id, name: v.title }), { tag: 'LocalNeuralTtsSettings.preview' });
                 }}
                 icon={<Icon
                   name={previewingVoiceId === v.id ? 'pause-circle' : 'play'}

@@ -6,7 +6,7 @@ import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 
 import { SessionAgentActivitySummary } from '@/components/sessions/agents/presentation/SessionAgentActivitySummary';
 import type { SessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
-import { useSessionManagedWorkflowRunFlow } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRunFlow } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { useWorkTheme } from '@/components/work/map/WorkMapView';
 import { WorkflowFlowView } from '@/components/workflows/flow/WorkflowFlowView';
 import { projectObservedWorkflowFlow } from '@/components/workflows/flow/workflowFlowProjection';
@@ -244,6 +244,8 @@ type WorkItemRowProps = Readonly<{
      */
     titleTailStart?: number;
     selected?: boolean;
+    /** One operation on the row, set beside it outside the press owner (an archived Session's Unarchive). */
+    trailingAccessory?: React.ReactNode;
     onOpen: (item: WorkItem) => void;
     onShowInTranscript?: (item: WorkItem) => void;
 }>;
@@ -336,10 +338,14 @@ const WorkItemRowBody = React.memo((props: WorkItemRowProps & Readonly<{
 }>) => {
     const { item, onOpen } = props;
     const facts = props.facts;
-    const presentation = React.useMemo(
-        () => (facts ? { ...presentWorkItem(item), facts } : presentWorkItem(item)),
-        [facts, item],
-    );
+    const hasOperation = props.trailingAccessory != null;
+    const presentation = React.useMemo(() => {
+        const base = presentWorkItem(item);
+        // A row with its own operation beside it (an archived Session's Unarchive) is named by its
+        // section, so its state word is not written a second time at the row's edge.
+        const own = hasOperation ? { ...base, statusLabel: '' } : base;
+        return facts ? { ...own, facts } : own;
+    }, [facts, hasOperation, item]);
     const onPress = React.useCallback(() => onOpen(item), [item, onOpen]);
     const localRowRef = React.useRef<View>(null);
     const rowRef = props.anchorRef ?? localRowRef;
@@ -353,6 +359,7 @@ const WorkItemRowBody = React.memo((props: WorkItemRowProps & Readonly<{
                 accessibilityLabel={presentation.accessibilityLabel}
                 selected={props.selected}
                 level={item.level}
+                trailingAccessory={props.trailingAccessory}
                 onPress={onPress}
                 onLongPress={props.onLongPress}
                 onContextMenu={props.onContextMenu}
@@ -361,7 +368,7 @@ const WorkItemRowBody = React.memo((props: WorkItemRowProps & Readonly<{
                     testID={`session-work-summary:${item.key}`}
                     presentation={presentation}
                     titleTailStart={props.titleTailStart}
-                    trailingState={{ word: item.status.word, tone: item.status.tone }}
+                    trailingState={hasOperation ? undefined : { word: item.status.word, tone: item.status.tone }}
                 />
             </WorkRowShell>
             {liveMapRunId === null ? null : (

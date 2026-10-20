@@ -72,6 +72,9 @@ vi.mock('@/sync/sync', async () => (
   (await import('@/dev/testkit/harness/chatListHarness')).createChatListHarnessSyncModuleMock()
 ));
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+const { ChatList } = await import('./ChatList');
+
 describe('ChatList (turn thinking expansion wiring)', () => {
   afterEach(() => {
     standardCleanup();
@@ -143,7 +146,6 @@ describe('ChatList (turn thinking expansion wiring)', () => {
       { kind: 'message', id: initialAgentMessage.id, messageId: initialAgentMessage.id, createdAt: initialAgentMessage.createdAt, seq: null },
     ]);
 
-    const { ChatList } = await import('./ChatList');
     const screen = await renderChatListHarnessSession();
 
     const firstUserProps = renderedMessageViewProps.find((p) => p?.message?.id === 'u1');

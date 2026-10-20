@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { buildSessionReadableAccountWhereInTx } from "./sessionAccessWhere";
+import type { SessionCollectiveAccessSnapshot } from "./sessionAccessWhere";
 import { verifyCurrentMaterializedRunnerPrincipalInTx } from "@/app/ephemeralRunner/materializedRunnerPrincipalCurrentness";
 import {
     qualifySessionTeamAuthenticationInTx,
@@ -70,10 +71,27 @@ export function buildSessionAccessMembershipWhere(accountIds: readonly string[],
     };
 }
 
-export function buildSessionAccessProjectionSelectForAccounts(accountIds: readonly string[]) {
-    const teamMembership = buildSessionAccessMembershipWhere(accountIds, false);
-    const groupMembership = { teamMembership: buildSessionAccessMembershipWhere(accountIds, true) };
-    const collectiveEnabled = isSessionCollaborationEnabled();
+export interface SessionAccessProjectionContext {
+    readonly mode?: "effective_access_v1" | "legacy_owner_or_direct";
+    /** Membership facts captured by the access owner in this same read snapshot. */
+    readonly collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot;
+}
+
+export function buildSessionAccessProjectionSelectForAccounts(accountIds: readonly string[], context: SessionAccessProjectionContext = {}) {
+    const snapshot = context.collectiveAccessSnapshot;
+    if (snapshot && (accountIds.length !== 1 || snapshot.accountId !== accountIds[0])) {
+        throw new Error("Session access projection snapshot belongs to another Account");
+    }
+    const membershipIdentity = snapshot ? { id: { in: snapshot.memberships.map(membership => membership.id) } } : {};
+    const teamMembership = { ...buildSessionAccessMembershipWhere(accountIds, false), ...membershipIdentity };
+    const groupMembership = { teamMembership: { ...buildSessionAccessMembershipWhere(accountIds, true), ...membershipIdentity } };
+    const collectiveEnabled = context.mode !== "legacy_owner_or_direct" && isSessionCollaborationEnabled();
+    const teamIds = !collectiveEnabled ? [] : snapshot
+        ? [...new Set(snapshot.memberships.filter(membership => membership.role !== "guest").map(membership => membership.teamId))]
+        : undefined;
+    const groupIds = !collectiveEnabled ? [] : snapshot
+        ? [...new Set(snapshot.memberships.flatMap(membership => membership.groupMemberships.map(group => group.teamGroupId)))]
+        : undefined;
     return {
         id: true,
         primaryTeamId: true,
@@ -81,14 +99,20 @@ export function buildSessionAccessProjectionSelectForAccounts(accountIds: readon
         account: { select: { status: true } },
         shares: { where: { sharedWithUserId: { in: [...accountIds] }, sharedWithUser: { status: "active" } }, select: { id: true, sharedWithUserId: true, accessLevel: true, canApprovePermissions: true } },
         teamGrants: {
-            where: { ...(collectiveEnabled ? {} : { teamId: { in: [] } }), team: { archivedAt: null, memberships: { some: teamMembership } } },
+            // Reuse the list's already-captured membership audience. Repeating
+            // its inverse EXISTS here lets sparse grant tables drive a nested
+            // Team/membership/Account scan for every Session. The nested select
+            // retains exact membership identity, status and horizon facts.
+            where: { ...(teamIds ? { teamId: { in: teamIds } } : {}), team: { archivedAt: null,
+                ...(snapshot || !collectiveEnabled ? {} : { memberships: { some: teamMembership } }) } },
             select: {
                 teamId: true, effectiveAt: true, accessLevel: true, canApprovePermissions: true, requiredByTeamPolicy: true,
                 team: { select: { authenticationPolicy: true, memberships: { where: teamMembership, select: { accountId: true, sessionAccessStartsAt: true } } } },
             },
         },
         groupGrants: {
-            where: { ...(collectiveEnabled ? {} : { teamGroupId: { in: [] } }), teamGroup: { archivedAt: null, team: { archivedAt: null }, memberships: { some: groupMembership } } },
+            where: { ...(groupIds ? { teamGroupId: { in: groupIds } } : {}), teamGroup: { archivedAt: null, team: { archivedAt: null },
+                ...(snapshot || !collectiveEnabled ? {} : { memberships: { some: groupMembership } }) } },
             select: {
                 teamGroupId: true, effectiveAt: true, accessLevel: true, canApprovePermissions: true,
                 teamGroup: { select: { teamId: true, team: { select: { authenticationPolicy: true } }, memberships: {
@@ -98,8 +122,8 @@ export function buildSessionAccessProjectionSelectForAccounts(accountIds: readon
         },
     } as const satisfies Prisma.SessionSelect;
 }
-export function buildSessionAccessProjectionSelect(accountId: string) {
-    return buildSessionAccessProjectionSelectForAccounts([accountId]);
+export function buildSessionAccessProjectionSelect(accountId: string, context: SessionAccessProjectionContext = {}) {
+    return buildSessionAccessProjectionSelectForAccounts([accountId], context);
 }
 export type SessionAccessProjectionRow = Prisma.SessionGetPayload<{ select: ReturnType<typeof buildSessionAccessProjectionSelect> }>;
 

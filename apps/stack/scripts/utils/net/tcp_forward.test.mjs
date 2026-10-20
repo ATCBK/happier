@@ -3,6 +3,7 @@ import net from 'node:net';
 import test from 'node:test';
 
 import { startTcpForwarder, startTcpForwarderGroup, stopTcpForwarder } from './tcp_forward.mjs';
+import { observeTcpPortAvailability } from './ports.mjs';
 
 async function startEchoServer(label) {
   const sockets = new Set();
@@ -45,6 +46,25 @@ async function waitClosed(socket) {
   if (socket.destroyed) return;
   await new Promise((resolve) => socket.once('close', resolve));
 }
+
+test('forwarder stop confirms listener close before reporting stopped', async () => {
+  const upstream = await startEchoServer('stop');
+  const forwarder = await startTcpForwarder({
+    listenHost: '127.0.0.1', listenPort: 0,
+    targetHost: '127.0.0.1', targetPort: upstream.port,
+    label: 'tcp-forward-stop-test',
+  });
+  let closed = false;
+  forwarder.server.once('close', () => { closed = true; });
+  try {
+    await stopTcpForwarder(forwarder.server, 'tcp-forward-stop-test');
+    assert.equal(closed, true, 'stop must await the actual listener close, not only listening=false');
+    assert.equal((await observeTcpPortAvailability(forwarder.port)).status, 'free');
+  } finally {
+    await stopTcpForwarder(forwarder.server, 'tcp-forward-stop-test');
+    await upstream.stop();
+  }
+});
 
 test('upstream flip affects new connections and drain closes active sockets', { timeout: 5000 }, async () => {
   const oldUpstream = await startEchoServer('old');

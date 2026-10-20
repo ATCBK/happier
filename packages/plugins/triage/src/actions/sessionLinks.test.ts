@@ -15,7 +15,7 @@ import { fromCorpusStoredRow } from '../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../corpus/collections/rows.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 import { testkitEntryRef, testkitLocator } from '../corpus/testkit/observations.test-support.js';
-import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1 } from './sessionLinksProtocol.js';
+import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema } from './sessionLinksProtocol.js';
 import { TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 } from './entrySessionProtocol.js';
 import { TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1 } from './entryDetailProtocol.js';
 import { triageEntryDragSourceRuntime, triageEntrySessionDropTargetRuntime } from '../ui/list/entryDragDrop.js';
@@ -96,6 +96,56 @@ async function readLinkRows(
 }
 
 describe('the session-link writer Action', () => {
+    it.each(['cli', 'agent', 'self'] as const)('returns healthy source links and explicit unavailable coverage to %s callers', async (caller) => {
+        const { collections, control } = createTestkitCorpusCollections();
+        const configured = testkitConfiguredInstance();
+        const unavailable = { ...configured,
+            instance: { source: { pluginId: 'acme.uninstalled', localId: 'items' },
+                sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+            locator: { v: 1 as const, displayLabel: 'Retained source' },
+        };
+        for (const [index, instance] of [configured, unavailable].entries()) control.sourceInstances.seed(toCorpusStoredValue({
+            instanceTag: `${index}${'a'.repeat(42)}`, lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active,
+            configuredAtMs: 1, sourceQualifiedId: `${instance.instance.source.pluginId}/${instance.instance.source.localId}`,
+            configured: instance,
+        }));
+        const base = createContext(collections);
+        const snapshot = testkitReadOnlySourceSnapshot();
+        let unavailableRead = false;
+        const context = { ...base, surface: caller === 'self' ? 'ui' : caller,
+            ...(caller === 'self' ? { caller: { kind: 'plugin', pluginId: 'happier.triage' } } : {}),
+            services: { ...base.services,
+                targetedContributions: { observeForSelf: () => ({ readCurrent: async () => ({ contributions: [
+                    { ...snapshot.contributions[0], operations: { readSessionLinks: { role: 'readSessionLinks' } } },
+                ] }), dispose: () => {} }) },
+                // The host's admitted-operation transport is the boundary; the
+                // registered aggregate and relationship read below stay real.
+                actions: { executeAdmittedTargetedOperation: async () => unavailableRead
+                    ? { kind: 'failed', failure: { class: 'transient', code: 'accountDataUnavailable' } }
+                    : ({ kind: 'complete', links: [{
+                    localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                    sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Healthy linked work',
+                }] }) },
+            },
+        } as unknown as PluginInvocationContext;
+        const raw = await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
+            { v: 1, sessionId: 'session-a' }, context);
+        const result = TriageReadSourceSessionLinksResultV1Schema.parse(raw);
+        expect(result).toMatchObject({ kind: 'partial', links: [{ entryRef: testkitEntryRef(), displayPath: 'Healthy linked work' }],
+            lanes: expect.arrayContaining([{ source: unavailable.instance.source,
+                sourceInstanceId: unavailable.instance.sourceInstanceId, displayLabel: 'Retained source',
+                health: { kind: 'unavailable' },
+            }]),
+        });
+        unavailableRead = true;
+        expect(TriageReadSourceSessionLinksResultV1Schema.parse(await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
+            { v: 1, sessionId: 'session-a' }, context))).toMatchObject({ kind: 'failed', links: [],
+            lanes: expect.arrayContaining([expect.objectContaining({ source: configured.instance.source,
+                health: { kind: 'failed', failure: { class: 'transient', code: 'accountDataUnavailable' } },
+            })]),
+        });
+    });
+
     it('uses an admitted source relationship role instead of also creating an external row', async () => {
         const { collections, control } = createTestkitCorpusCollections();
         const configured = testkitConfiguredInstance();
@@ -163,7 +213,7 @@ describe('the session-link writer Action', () => {
         expect(await readLinkRows(collections, 'session-a')).toHaveLength(0);
         expect(sessionActions.callsFor('session.message.send')).toHaveLength(1);
         expect(await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
-            { v: 1, sessionId: 'session-a' }, sourceContext)).toEqual({ kind: 'complete', links: [{
+            { v: 1, sessionId: 'session-a' }, sourceContext)).toMatchObject({ kind: 'complete', links: [{
                 entryRef: testkitEntryRef(), sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Personal task',
             }] });
         expect(await registeredLinkHandler(TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1)({

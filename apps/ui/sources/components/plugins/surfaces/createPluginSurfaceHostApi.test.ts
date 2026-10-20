@@ -45,7 +45,7 @@ describe('createPluginSurfaceHostApi', () => {
             [domainResult, 'result'],
         ] as const) {
             const hostApi = createPluginSurfaceHostApi({ surfaceContext,
-                resolveUnavailableMessage: () => 'Studio Mac is unavailable',
+                resolveUnavailableError: error => ({ ...error, message: 'Studio Mac is unavailable' }),
                 handlers: { executeAction: async () => value },
             });
             const result = await settlePluginSurfaceHostApiRequest(invocation, () => hostApi.handleRequest(invocation));
@@ -150,7 +150,7 @@ describe('createPluginSurfaceHostApi', () => {
                 watchResource: async () => ({ ok: true }),
             },
             isMethodAvailable: (method) => method === 'context' || daemonReachable,
-            resolveUnavailableMessage: () => 'Studio Mac is unavailable',
+            resolveUnavailableError: error => ({ ...error, message: 'Studio Mac is unavailable' }),
         });
 
         // Structurally installed, momentarily unreachable. Reporting it as

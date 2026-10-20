@@ -637,6 +637,8 @@ export function PlanOptionRow(
         subtitleEllipsizeMode={props.option.subtitleEllipsizeMode}
         icon={icon}
         rightElement={itemRightElement}
+        // A row's trailing facts and its selected check are never cut; the label gives way instead.
+        accessoryMaxWidth="row"
         rightElementOutsidePressable={
           !isCard && props.option.rightAccessoryOutsidePressable === true
         }

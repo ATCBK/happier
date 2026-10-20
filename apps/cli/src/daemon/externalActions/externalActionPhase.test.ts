@@ -6,6 +6,22 @@ import { refuseExternalActionPhase, runTracedExternalActionStage, runTracedExter
 import { executeExternalAction } from './executeExternalAction';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+it.each(['session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required'])(
+  'keeps the known Session diagnostic %s without private exception content', code => {
+    const error = Object.assign(new Error('private-response\n    at /PRIVATE_SENTINEL.js:1:2'), {
+      name: 'HttpStatusError', code, response: { status: 403, data: 'private-body', headers: { Authorization: 'private-bearer' } },
+    });
+    expect(readUnexpectedActionErrorDiagnosticV1(error)).toMatchObject({ errorClass: 'HttpStatusError', errorCode: code, httpStatus: 403,
+      stackFrames: expect.arrayContaining([expect.objectContaining({ file: expect.stringContaining('externalActionPhase.test.ts') })]),
+    });
+    expect(JSON.stringify(readUnexpectedActionErrorDiagnosticV1(error))).not.toMatch(/private-|PRIVATE_SENTINEL/);
+    expect(readUnexpectedActionErrorDiagnosticV1(Object.assign(new Error('private'), {
+      name: 'private-name', code: 'private-code', response: { status: '403' },
+    }))).toMatchObject({ errorClass: 'Error', errorCode: null, httpStatus: null });
+  },
+);
 
 it.each(['session.stop', 'session.archive', 'session.unarchive', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
   vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', actionId === 'plugins.list' || actionId === 'session.archive' || actionId === 'session.unarchive' ? '0' : '1');

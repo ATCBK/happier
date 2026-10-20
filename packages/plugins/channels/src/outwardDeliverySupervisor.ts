@@ -103,6 +103,8 @@ export type ConversationOutwardDeliveryCycleOptions = Readonly<{
   retentionSweep?: ConversationOutwardRetentionSweepState;
   createAttemptId?: () => string;
   observeSession?: (sessionId: string) => Promise<void>;
+  /** Generation-local terminal reads, invalidated by binding/Session changes. */
+  unavailablePermissionBindings?: Set<string>;
 }>;
 
 export type ConversationOutwardDeliveryCycleResult = Readonly<{
@@ -585,6 +587,7 @@ export async function runConversationOutwardDeliveryCycle(
     } catch (error) {
       workFailed('transcript-projection', { error, bindingId });
     }
+    if (input.unavailablePermissionBindings?.has(bindingId)) continue;
     let pending: ConversationPendingPermissionProjection;
     try {
       // The complete projection, not its first bounded page: a permission wait
@@ -601,7 +604,16 @@ export async function runConversationOutwardDeliveryCycle(
       });
     } catch (error) {
       if (!context.signal.aborted) {
-        workFailed('permission-mediation', { error, bindingId });
+        const failure = classifySupervisorFailure(error);
+        if (failure?.code === 'ownerMachineUnavailable' && !failure.retryable) {
+          // No exact live Session owner can answer. Keep custody and its
+          // existing Session watch; a delivery deadline cannot change this
+          // fact. Binding or Session invalidation admits the next read.
+          input.unavailablePermissionBindings?.add(bindingId);
+          logOutwardDeliverySupervisorWorkFailure(context, 'permission-mediation', { error, bindingId });
+        } else {
+          workFailed('permission-mediation', { error, bindingId });
+        }
       }
       continue;
     }
@@ -862,20 +874,29 @@ export function createConversationOutwardDeliverySupervisor(
     const wake = createSupervisorWake(supervisorController.signal);
     const observations: Array<{ dispose(): void }> = [];
     const sessions = new Map<string, { dispose(): void }>();
+    const unavailablePermissionBindings = new Set<string>();
+    let permissionSourcesInvalidated = false;
     const invalidate = () => {
       deliveryCursor = undefined;
       deliveryDeadline = undefined;
       retentionSweep = undefined;
       wake.wake();
     };
+    const invalidatePermissionSources = () => {
+      permissionSourcesInvalidated = true;
+      unavailablePermissionBindings.clear();
+      invalidate();
+    };
     running = (async () => {
       try {
         const account = requireChannelsAccountStorage(context);
         for (const definition of [CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION]) {
-          observations.push(account.collection(definition).watch({ kind: 'collection' }, invalidate));
+          observations.push(account.collection(definition).watch({ kind: 'collection' },
+            definition === CHANNEL_STATE_COLLECTION ? invalidatePermissionSources : invalidate));
         }
         while (!supervisorController.signal.aborted) {
           wake.reset();
+          permissionSourcesInvalidated = false;
           const observedSessions = new Set<string>();
           let nextWakeAt: number | undefined;
           const workerContext = {
@@ -888,17 +909,21 @@ export function createConversationOutwardDeliverySupervisor(
               context: workerContext,
               now: clock.now,
               staleAttemptAfterMs,
+              unavailablePermissionBindings,
               observeSession: async sessionId => {
                 observedSessions.add(sessionId);
                 if (sessions.has(sessionId)) return;
                 const session = await context.services.sessions.get(sessionId, { signal: supervisorController.signal });
-                if (session !== null) sessions.set(sessionId, session.watch(invalidate));
+                if (session !== null) sessions.set(sessionId, session.watch(invalidatePermissionSources));
               },
               ...(deliveryCursor === undefined ? {} : { deliveryCursor }),
               ...(retentionSweep === undefined ? {} : { retentionSweep }),
             });
             deliveryCursor = cycle.nextDeliveryCursor;
             retentionSweep = cycle.nextRetentionSweep;
+            // An invalidation during the pending read must not be overwritten
+            // by that read's later terminal failure.
+            if (permissionSourcesInvalidated) unavailablePermissionBindings.clear();
             if (wake.isInvalidated()) {
               deliveryCursor = undefined;
               retentionSweep = undefined;

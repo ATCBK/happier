@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Tx } from "@/storage/inTx";
+import type { ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { createDbTransactionMock, installDbModuleMock } from "../api/testkit/dbMocks";
 
 const sessionUpdate = vi.fn();
@@ -30,7 +30,7 @@ installDbModuleMock(() => ({ db: wrapDb({}) }));
 
 const nulRegressionWriter = await import("./sessionTranscriptWrite");
 
-async function runInTransaction<T>(operation: (tx: Tx) => Promise<T>): Promise<T> {
+async function runInTransaction<T>(operation: (tx: Tx) => Promise<T>): Promise<ResolvedTransactionResult<T>> {
     const { inTx } = await import("@/storage/inTx");
     return await inTx(operation);
 }

@@ -159,7 +159,8 @@ describe('sessionDraftService (SQLite integration)', () => {
 
     it('converts both Discussion draft families with complete coverage and exact replay in both directions', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
-        const addresses = [{ kind: 'discussion' as const, discussionId: randomUUID() }, { kind: 'newDiscussion' as const }];
+        const addresses = [{ kind: 'discussion' as const, discussionId: randomUUID() }, { kind: 'newDiscussion' as const },
+            { kind: 'newDiscussion' as const, draftId: randomUUID() }];
         const contents = addresses.map(address => ({ t: 'plain' as const,
             v: SessionDraftPrivatePayloadV2Schema.parse(plainContentV2(address).v) }));
         for (const [index, address] of addresses.entries()) {

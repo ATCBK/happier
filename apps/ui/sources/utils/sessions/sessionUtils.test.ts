@@ -170,6 +170,20 @@ function createPendingUserMessage(overrides: Partial<PendingMessage> = {}): Pend
 }
 
 describe('shared transient session titles', () => {
+    it('can name a freshly authorized snapshot without adopting a cached same-id title', async () => {
+        const { getSessionName, readSessionNameIfNamed } = await import('./sessionUtils');
+        const session = createBaseSession({ serverId: 'home-a', metadata: { path: '/project', host: 'devbox' } });
+        const cached = createSessionListRenderableSessionFixture({
+            id: session.id, metadata: { path: '/private', summaryText: 'Previous Account private title' },
+        });
+        storage.setState({
+            sessionListRowsByServerId: { 'home-a': { [session.id]: cached } },
+            sessions: { [session.id]: { ...session, metadata: { path: '/private', host: 'old-host', machineId: 'old-machine' } } },
+        });
+        expect(getSessionName(session, 'home-a')).toBe('Previous Account private title');
+        expect(readSessionNameIfNamed(session, 'home-a', { snapshotOnly: true })).toBe('project');
+    });
+
     it('names full Sessions and their roster/list/Talk rows consistently before a summary arrives', async () => {
         const { getSessionName } = await import('./sessionUtils');
         const session = createBaseSession({
@@ -1805,7 +1819,7 @@ describe('useSessionStatus', () => {
         }
     });
 
-    it('expires stale permission presentation without erasing the unresolved request', async () => {
+    it('keeps a live permission visible across the former request-age expiry', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000_000);
         try {
@@ -1826,7 +1840,7 @@ describe('useSessionStatus', () => {
 
             await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
 
-            expect(hook.getCurrent().state).toBe('waiting');
+            expect(hook.getCurrent().state).toBe('permission_required');
             expect(listPendingPermissionRequests(session)).toEqual([
                 expect.objectContaining({ id: 'req1', tool: 'Bash', createdAt }),
             ]);

@@ -34,6 +34,7 @@ import {
     getAccountSessionSocketRoom,
     getMachineBoundSessionSocketRoom,
     getMachineSocketRoom,
+    getUserMachinesSocketRoom,
 } from "@/app/api/socketRooms";
 
 export type ServerOwnedRpcForwardRequest = Omit<Parameters<typeof forwardRpcCall>[0], 'io'>;
@@ -171,7 +172,7 @@ class EventRouter {
             this.io.to([
                 getAccountRevocationSocketRoom(accountId),
                 `user:${accountId}`,
-                `user-machines:${accountId}`,
+                getUserMachinesSocketRoom(accountId),
             ]).disconnectSockets(true);
             return;
         }
@@ -656,7 +657,7 @@ class EventRouter {
             case "machine-only":
                 return `machine:${filter.machineId}:${userId}`;
             case "user-machine-scoped-only":
-                return `user-machines:${userId}`;
+                return getUserMachinesSocketRoom(userId);
             case "account-stored-content-v3":
                 return getAccountStoredContentV3SocketRoom(userId);
             case "all-user-authenticated-connections":

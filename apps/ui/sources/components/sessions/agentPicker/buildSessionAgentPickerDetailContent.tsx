@@ -19,7 +19,7 @@ import type { FavoriteModelSelectionV1 } from '@/sync/domains/models/favoriteMod
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { SessionModelPickerExperimentalConfirmationController } from '@/components/sessions/modelPicker/SessionModelPicker';
 import type { FavoriteModelTogglePayload } from '@/components/sessions/new/hooks/screenModel/newSessionFavoriteModelsPickerOption';
-import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 
 /**
@@ -76,8 +76,9 @@ export function buildSessionAgentPickerDetailContent(params: SessionAgentPickerD
 
 /** Only an opened detail reads default-account authority; explicit draft bindings bypass default resolution. */
 function SessionAgentPickerDetailContent(params: SessionAgentPickerDetailContentParams): React.ReactElement {
-    const scope = useActiveServerAccountScope(params.capabilityServerId || undefined);
     const needsDefaults = !('connectedServices' in params) && params.agentCatalogEntry.connectedAccounts.length > 0;
+    const { binding } = useServerCredentialAccountScopeBinding(needsDefaults ? params.capabilityServerId : null);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const purposes = useConnectedAccountCatalog('purposes', needsDefaults ? scope : null,
         { sourceMachineId: params.selectedMachineId });
     const connectedAccountPurposeBindings = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;

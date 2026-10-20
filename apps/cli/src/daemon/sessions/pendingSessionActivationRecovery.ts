@@ -5,8 +5,11 @@ import { fetchSessionsPage as fetchSessionsPageDefault } from '@/session/transpo
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import type { AdmittedRequesterSessionBootstrap, RequesterSessionCredentialBinding, RequesterSessionRuntimeContext,
+  ResolveRequesterSessionRuntimeContext, ReleaseRequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected, type PendingSessionResumePort } from './activatePendingInactiveSession';
+import { logger } from '@/utils/logger';
 
 export type PendingSessionActivationInput = Readonly<{
   sessionId: string;
@@ -16,6 +19,45 @@ export type PendingSessionActivationInput = Readonly<{
   target?: SessionInputMachineTargetV1;
   requestedAt?: number;
 }>;
+
+/** Live hints and reconnect scans share exact requester recovery and failure settlement. */
+export async function activateRequesterPendingSession(params: Readonly<{
+  machineId: string;
+  binding: Pick<RequesterSessionCredentialBinding, 'sessionId' | 'attribution'>;
+  hint?: PendingSessionActivationInput;
+  resolveRequesterSessionRuntimeContext: ResolveRequesterSessionRuntimeContext;
+  releaseRequesterSessionRuntimeContext: ReleaseRequesterSessionRuntimeContext;
+  resolveCurrentMachineExecutionOriginContext(): Promise<CurrentMachineExecutionOriginContext | null>;
+  onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
+  spawnSessionForInternalResume: PendingSessionResumePort;
+}>): Promise<void> {
+  const { binding, hint } = params;
+  if (binding.attribution.machineId !== params.machineId) return;
+  const activate = async (bootstrap: AdmittedRequesterSessionBootstrap, context?: RequesterSessionRuntimeContext) => {
+    const isCurrent = () => context ? context.isCurrent() : bootstrap.isCurrent();
+    if (!await isCurrent()) return;
+    const current = await readRequesterPendingSessionActivation({ sessionId: binding.sessionId, bootstrap,
+      resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
+    if (!await isCurrent() || !current || hint && (hint.requestId !== current.requestId
+      || hint.requestedAt !== undefined && hint.requestedAt !== current.requestedAt)) return;
+    const result = await activatePendingInactiveSession({ credentials: bootstrap.credentials,
+      machineId: params.machineId, sessionId: current.sessionId, requestId: current.requestId,
+      pendingVersion: hint?.pendingVersion ?? current.pendingVersion, requester: bootstrap,
+      expectedTarget: current.target, preparationFailed: context === undefined,
+      resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
+      onActivationRejected: params.onActivationRejected,
+      spawnSessionForInternalResume: (options, pendingActivation) => params.spawnSessionForInternalResume({ ...options, requesterSessionBootstrap: bootstrap,
+        ...(context ? { requesterSessionRuntimeContext: context } : {}) }, pendingActivation) });
+    if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
+      sessionId: current.sessionId, requestId: current.requestId, reason: result.reason, failureDetails: result.failureDetails,
+    });
+  };
+  const context = await params.resolveRequesterSessionRuntimeContext(binding.sessionId, binding.attribution, undefined,
+    bootstrap => activate(bootstrap));
+  if (!context) return;
+  try { await activate(context.bootstrap, context); }
+  finally { await params.releaseRequesterSessionRuntimeContext(context); }
+}
 
 /** A protected local ref identifies the read; only fresh requester Home facts authorize recovery. */
 export async function readRequesterPendingSessionActivation(params: Readonly<{
@@ -67,32 +109,43 @@ export async function recoverPendingSessionActivations(params: Readonly<{
   const fetchSessionsPage = params.fetchSessionsPage ?? fetchSessionsPageDefault;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
-  while (true) {
-    const page = await fetchSessionsPage({
-      token: params.token,
-      limit: 200,
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const session of page.sessions) {
-      if (!isOwnedSessionForPendingActivation(session)) continue;
-      // Follow progress has its own source custody, so a dormant receiver need
-      // not already have an authored Pending row to be observed on reconnect.
-      await params.visitOwnedSession?.(session.id, session);
-      const authorization = session.pendingActivationAuthorization;
-      if (!authorization || authorization.status !== 'waiting') continue;
-      const input: PendingSessionActivationInput = {
-        sessionId: session.id,
-        requestId: authorization.requestId,
-        pendingVersion: typeof session.pendingVersion === 'number' ? session.pendingVersion : 0,
-        source: 'scan',
-      };
-      await params.activate(input).catch((error) => {
-        params.warn('Pending session activation reconnect item failed; waiting custody retained', input, error);
+  const recoveries: Promise<void>[] = [];
+  const visitFailures: unknown[] = [];
+  try {
+    while (true) {
+      const page = await fetchSessionsPage({
+        token: params.token,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
       });
+      for (const session of page.sessions) {
+        if (!isOwnedSessionForPendingActivation(session)) continue;
+        // Each Session retains its own Follow observation and activation order;
+        // its startup must not hold discovery or recovery of another Session.
+        recoveries.push((async () => {
+          // Follow progress has its own source custody, so a dormant receiver need
+          // not already have an authored Pending row to be observed on reconnect.
+          await params.visitOwnedSession?.(session.id, session);
+          const authorization = session.pendingActivationAuthorization;
+          if (!authorization || authorization.status !== 'waiting') return;
+          const input: PendingSessionActivationInput = {
+            sessionId: session.id,
+            requestId: authorization.requestId,
+            pendingVersion: typeof session.pendingVersion === 'number' ? session.pendingVersion : 0,
+            source: 'scan',
+          };
+          await params.activate(input).catch((error) => {
+            params.warn('Pending session activation reconnect item failed; waiting custody retained', input, error);
+          });
+        })().catch(error => { visitFailures.push(error); }));
+      }
+      if (!page.hasNext || !page.nextCursor || seenCursors.has(page.nextCursor)) break;
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
     }
-    if (!page.hasNext || !page.nextCursor || seenCursors.has(page.nextCursor)) return;
-    seenCursors.add(page.nextCursor);
-    cursor = page.nextCursor;
+  } finally {
+    await Promise.all(recoveries);
+    if (visitFailures.length > 0) throw visitFailures[0];
   }
 }
 
@@ -111,8 +164,10 @@ export function createPendingSessionActivationRecovery(params: Readonly<{
   return {
     activateHint: params.activate,
     recoverAfterConnect: async () => {
-      await recoverPendingSessionActivations(params);
-      await params.recoverRequesterSessions?.();
+      await Promise.all([
+        recoverPendingSessionActivations(params),
+        params.recoverRequesterSessions?.(),
+      ]);
     },
   };
 }

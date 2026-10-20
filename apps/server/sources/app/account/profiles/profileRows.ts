@@ -11,23 +11,28 @@ import { isLegacyProfileSourcePreservingCloneV1, readEffectiveProfileSecretBindi
 import { prepareBuiltinProfileAttachmentV1 } from '@happier-dev/protocol/profiles/profileOperations';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import type { ProfileTransferControlV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import { isDeepStrictEqual } from 'node:util';
 import type { Tx } from '@/storage/inTx';
-import { inTx } from '@/storage/inTx';
+import { inTx, transactionResult, type TransactionResult } from '@/storage/inTx';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
-import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { AccountSettingsPublicationConflict, writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { PROFILE_ACCOUNT_KV_PREFIX, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, buildProfilePhysicalKey, parseProfilePhysicalKey } from '@/app/kv/accountScopedKv';
 import {
     readReservedAccountScopedKvRowInTx, listReservedAccountScopedKvRowsInTx,
     mutateReservedAccountScopedKvRowInTx, mutateReservedAccountScopedKvRowsInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain, type ReservedAccountScopedKvRowFailure,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { readProfileTransferControlInTx, profileTransferControlReadResponseV1 } from './profileTransferControl';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
 import { mutateProviderConnectionsRowInTx } from '@/app/account/providers/connectionRows';
+import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 
 export const profileRecordDomain: ReservedAccountScopedKvRowDomain<ProfileRecordContentV1> = {
     label: 'Profile record',
@@ -52,7 +57,7 @@ export async function readProfileReferenceGuardInTx(tx: Tx, input: Readonly<{ ac
     return result.status === 'present' ? { status: 'invalid-stored-content' } : result;
 }
 
-async function markProfileReferenceGuardChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+async function markProfileReferenceGuardChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY,
         hint: { profiles: true, referenceGuardRevision: input.revision } });
 }
@@ -63,7 +68,7 @@ export async function advanceProfileReferenceGuardInTx(tx: Tx, input: Readonly<{
         markChanged: ({ tx, revision }) => markProfileReferenceGuardChangedInTx(tx, { accountId: input.accountId, revision }) });
 }
 
-export async function markProfileRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; id: string; revision: number }>): Promise<number> {
+export async function markProfileRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; id: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: buildProfilePhysicalKey(input.id),
         hint: { profiles: true, id: input.id, revision: input.revision } });
 }
@@ -136,12 +141,17 @@ export type ProfileRowsMutationResult = Readonly<{ status: 'updated'; rows: read
     | Readonly<{ status: 'conflict'; revision: number }> | Readonly<{ status: 'settings-conflict'; revision: number }>
     | Readonly<{ status: 'invalid-reference'; reason?: string }> | ReservedAccountScopedKvRowFailure;
 
+type ProfileRowsMutationSuccess = Extract<ProfileRowsMutationResult, { status: 'updated' }>;
+type ProfileRowsMutationInTxResult = Exclude<ProfileRowsMutationResult, { status: 'updated' }>
+    | (Omit<ProfileRowsMutationSuccess, 'cursor'> & TransactionResult<ProfileRowsMutationSuccess>);
+
 export class ProfileRowTransactionAbort extends Error {
     constructor(readonly result: Exclude<ProfileRowsMutationResult, { status: 'updated' }>) { super(result.status); this.name = 'ProfileRowTransactionAbort'; }
 }
 
-function plainProfileDestinationAuthority(accountId: string, settings: string | null, control: ProfileTransferControlV1 | null): boolean {
-    const opened = openPlainAccountSettingsDbValue({ accountId, dbValue: settings });
+function plainProfileDestinationAuthority(accountId: string, settings: string | null, control: ProfileTransferControlV1 | null,
+    admittedSettings?: AccountSettingsStoredContentEnvelope | null): boolean {
+    const opened = admittedSettings === undefined ? openPlainAccountSettingsDbValue({ accountId, dbValue: settings }) : admittedSettings;
     return resolveProfileCatalogAuthorityV1({ rawSettings: opened?.t === 'plain' ? opened.v : {}, control }) === 'destination';
 }
 
@@ -153,10 +163,11 @@ type ProfileRowsMutationInput = Readonly<{
 /** The named Provider owner reaches this same transaction only after its complete captured proof is admitted. */
 async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
     operationOwner: 'ordinary' | 'provider-conversion',
-): Promise<ProfileRowsMutationResult> {
+    admittedSettings?: AccountSettingsStoredContentEnvelope | null,
+): Promise<ProfileRowsMutationInTxResult> {
     const mutations = input.mutations.map(mutation => ProfileRowMutationV1Schema.parse(mutation));
     if (mutations.length === 0 || new Set(mutations.map(mutation => mutation.id)).size !== mutations.length) return { status: 'invalid-stored-content' };
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     if (mutations.some(mutation => mutation.operation !== 'import') && fence.account.currentness.encryptionMode === 'plain') {
@@ -164,7 +175,7 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
         if (control.status !== 'present' && control.status !== 'absent' && control.status !== 'deleted') return control;
         try {
             if (!plainProfileDestinationAuthority(input.accountId, fence.account.settings,
-                control.status === 'present' && control.envelope.t === 'plain' ? control.envelope.v : null)) return { status: 'invalid-stored-content' };
+                control.status === 'present' && control.envelope.t === 'plain' ? control.envelope.v : null, admittedSettings)) return { status: 'invalid-stored-content' };
         } catch (error) {
             if (error instanceof PlainAccountSettingsStorageUnavailableError) return { status: 'invalid-stored-content' };
             throw error;
@@ -176,7 +187,7 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
         return { status: 'conflict', revision: guard.revision === 'absent' ? -1 : guard.revision };
     }
     let nextPlainSettings = fence.account.currentness.encryptionMode === 'plain'
-        ? openPlainAccountSettingsDbValue({ accountId: input.accountId, dbValue: fence.account.settings }) : null;
+        ? admittedSettings === undefined ? openPlainAccountSettingsDbValue({ accountId: input.accountId, dbValue: fence.account.settings }) : admittedSettings : null;
     let settingsCleanup: ProfileRowMutationV1['settingsCleanup'];
     for (const mutation of mutations) {
         let previousDefinition: ProfileRecordV1['definition'] | undefined;
@@ -266,7 +277,7 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
         }
         const references = bindings === undefined ? mutation.referencedSavedSecretIds : [...new Set(Object.values(bindings))];
         if (mutation.content?.t === 'plain' && !isDeepStrictEqual([...references].sort(), [...new Set(mutation.referencedSavedSecretIds)].sort())) return { status: 'invalid-reference' };
-        if (!await (await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferencesInTx(tx, {
+        if (!await validateSavedSecretResourceReferencesInTx(tx, {
             accountId: input.accountId, authentication: input.authentication,
             references, savedSecretRevisions: mutation.savedSecretRevisions ?? [], allowPersonal: mutation.operation === 'import',
         })) return { status: 'invalid-reference' };
@@ -304,12 +315,14 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
         return refusal;
     }
     const guardRow = result.rows.find(row => row.physicalKey === guardKey)!;
-    return { status: 'updated', referenceGuardRevision: guardRow.revision, cursor: guardRow.cursor,
+    const updated = { status: 'updated' as const, referenceGuardRevision: guardRow.revision,
         rows: mutations.map(mutation => ({ id: mutation.id, revision: result.rows.find(row => row.physicalKey === buildProfilePhysicalKey(mutation.id))!.revision, content: mutation.content })) };
+    return Object.assign(transactionResult(() => ({ ...updated,
+        cursor: result.resolveResult().rows.find(row => row.physicalKey === guardKey)!.cursor })), updated);
 }
 
 /** Ordinary edits and S2 attachment changes preserve captured readonly definitions. */
-export async function mutateProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput): Promise<ProfileRowsMutationResult> {
+export async function mutateProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput): Promise<ProfileRowsMutationInTxResult> {
     return applyProfileRowsInTx(tx, input, 'ordinary');
 }
 
@@ -317,7 +330,14 @@ export async function mutateProfileRows(input: Parameters<typeof mutateProfileRo
     try { return await inTx(tx => mutateProfileRowsInTx(tx, input), {
         ...(profileMutationsCaptureSharedResources(input.mutations) ? { isolationLevel: "Serializable" as const } : {}),
     }); }
-    catch (error) { if (error instanceof ProfileRowTransactionAbort) return error.result; throw error; }
+    catch (error) {
+        if (error instanceof ProfileRowTransactionAbort) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
+        throw error;
+    }
 }
 
 /** The Account fence covers local rows; declared shared resources retain SSI. */
@@ -335,7 +355,7 @@ export async function convertProfileProvidersInTx(tx: Tx, input: Readonly<{
     accountId: string; mutation: ProfileProviderConversionMutationV1; authentication?: TeamOperationAuthenticationContext;
 }>): Promise<ProfileProviderConversionResponseV1> {
     const mutation = ProfileProviderConversionMutationV1Schema.parse(input.mutation);
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     if (fence.account.currentness.encryptionMode !== mutation.expectedAccountMode) return { status: 'account-mode-mismatch' };
@@ -369,7 +389,7 @@ export async function convertProfileProvidersInTx(tx: Tx, input: Readonly<{
     if (mutation.mutations.length === 0) return { status: 'updated', settingsVersion: settings.version, providerRevision: provider.revision,
         rows: [], referenceGuardRevision: mutation.expectedReferenceGuardRevision };
     const rows = await applyProfileRowsInTx(tx, { accountId: input.accountId, mutations: mutation.mutations,
-        expectedReferenceGuardRevision: mutation.expectedReferenceGuardRevision, authentication: input.authentication }, 'provider-conversion');
+        expectedReferenceGuardRevision: mutation.expectedReferenceGuardRevision, authentication: input.authentication }, 'provider-conversion', mutation.nextSettings);
     if (rows.status !== 'updated') throw new ProfileProviderConversionTransactionAbort(rows);
     return { status: 'updated', settingsVersion: settings.version, providerRevision: provider.revision,
         rows: [...rows.rows], referenceGuardRevision: rows.referenceGuardRevision };
@@ -382,5 +402,13 @@ export async function convertProfileProviders(input: Parameters<typeof convertPr
             || (input.mutation.providerMutation.savedSecretRevisions?.length ?? 0) > 0
             ? { isolationLevel: "Serializable" as const } : {}),
     }); }
-    catch (error) { if (error instanceof ProfileProviderConversionTransactionAbort) return error.result; throw error; }
+    catch (error) {
+        if (error instanceof ProfileProviderConversionTransactionAbort) return error.result;
+        const conflict = await readUserKvMutationConflict(error);
+        if (conflict) return { status: conflict.key === PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1 ? 'provider-conflict' : 'conflict', revision: conflict.version };
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion }
+            : error.result.status === 'profile_transfer_mismatch' ? { status: 'reference-conflict' } : { status: 'invalid-stored-content' };
+        throw error;
+    }
 }

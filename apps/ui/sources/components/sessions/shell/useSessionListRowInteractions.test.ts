@@ -13,6 +13,8 @@ import { useEntityDragDomBinding } from '@/components/ui/treeDragDrop/useEntityD
 import { buildSessionWorkspaceOrderItemKey, buildSessionWorkspaceOrderScopeKey } from '@/sync/domains/session/listing/sessionWorkspaceOrderStateV1';
 import type { UseSessionInlineDragResolvedDrop } from './useSessionInlineDrag';
 import { getStorage } from '@/sync/domains/state/storage';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -69,8 +71,17 @@ describe('useSessionListRowInteractions', () => {
         const homeId = await home.addHome({ name: 'Drag Home', serverUrl: MUTATION_SCOPE.serverUrl,
             serverIdentityId: ACTIVE_SCOPE.serverId, accountId: ACTIVE_SCOPE.accountId, active: false });
         home.answer(homeId, folderAssignmentPath, { body: { sessionId: 's1', folderId: 'folder-a' } });
+        for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization']) {
+            const response = createEmptyAccountBootstrapHttpResponse(path);
+            if (!response) throw new Error('Session bootstrap fixture unavailable');
+            home.answer(homeId, path, { body: await response.json() });
+        }
         connection = await restoreServerAccountForTest({ serverUrl: MUTATION_SCOPE.serverUrl,
             serverIdentityId: ACTIVE_SCOPE.serverId, accountId: ACTIVE_SCOPE.accountId, request: home.request });
+        await waitForHomeGovernance(() => {
+            expect(getStorage().getState().profileScope).toEqual(ACTIVE_SCOPE);
+            expect(getStorage().getState().isDataReady).toBe(true);
+        });
         ({ useSessionListRowInteractions } = await import('./useSessionListRowInteractions'));
         ({ invokeSessionListOrganizationAction } = await import('./drag/sessionListOrganizationAction'));
         home.requests.length = 0;
@@ -283,11 +294,46 @@ describe('useSessionListRowInteractions', () => {
                 hook.getCurrent().handleDragStart(sessionKey);
             });
             act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 105 } }); });
-            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'ordering-mode' } });
+            const runtime = hook.getCurrent().entityDragDrop.runtime;
+            expect(runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'ordering-mode' } });
+            let outcome: Awaited<ReturnType<typeof runtime.release>> = null;
+            await act(async () => { outcome = await runtime.release(); });
+            expect(outcome).toMatchObject({ status: 'refused', reason: { code: 'ordering-mode' } });
+            expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+            expect(folderAssignmentRequests()).toEqual([]);
+            act(() => hook.getCurrent().handleDragCancel());
             await hook.rerender({ ...initialInput, sessionListOrderingModeV1: 'custom' });
+            await act(async () => { hook.getCurrent().handleDragStart(sessionKey); });
             act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 120 } }); });
             expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'unavailable' }, preview: { target: 's1' } });
             expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+        } finally {
+            act(() => hook.getCurrent().handleDragCancel());
+            await hook.unmount();
+        }
+    });
+
+    it('releases over the dragged row own position without a refusal outcome or organization write', async () => {
+        const initialInput = buildInteractionsInput({ listItems: twoSessionListItems });
+        const hook = await renderHook((input: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(input), { initialProps: initialInput });
+        const sessionKey = sessionAddressKey({ serverId: ACTIVE_SCOPE.serverId, sessionId: 's2' });
+        try {
+            await act(async () => {
+                hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 0, 300, 300) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's1'), { measureInWindow: callback => callback(0, 100, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
+                hook.getCurrent().handleDragStart(sessionKey);
+            });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 165 } }); });
+            const runtime = hook.getCurrent().entityDragDrop.runtime;
+            expect(runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'no-target' } });
+            let outcome: Awaited<ReturnType<typeof runtime.release>> = null;
+            await act(async () => { outcome = await runtime.release(); });
+            expect(outcome).toBeNull();
+            expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+            expect(initialInput.setSessionWorkspaceOrderV1).not.toHaveBeenCalled();
+            expect(initialInput.setSessionFoldersV1).not.toHaveBeenCalled();
+            expect(folderAssignmentRequests()).toEqual([]);
         } finally {
             act(() => hook.getCurrent().handleDragCancel());
             await hook.unmount();

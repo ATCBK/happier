@@ -5,6 +5,7 @@ import { act } from 'react-test-renderer';
 import { renderScreen, renderHook, standardCleanup } from '@/dev/testkit';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability';
 
 const confirm = vi.hoisted(() => vi.fn<(...args: Parameters<typeof import('@/modal').Modal.confirm>) => Promise<boolean>>());
 vi.mock('@/modal', async () => {
@@ -29,8 +30,86 @@ const { useSetting } = await import('@/sync/store/hooks');
 const { getAgentCore } = await import('@/agents/catalog/catalog');
 const { ConnectedServicesProviderStateSharingDisclosure } = await import('./ConnectedServicesProviderStateSharingSettings');
 const { ProviderStateSharingRows } = await import('./ProviderStateSharingRow');
+const { resolveProviderStateSharingAgentIds } = await import('./providerStateSharingSettings');
+const { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection, retirePluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
 const originalState = storage.getState();
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>>;
+const externalPluginId = 'com.acme.sharing';
+const externalAgentId = `${externalPluginId}/assistant`;
+
+function admitSharingCatalog(options: Readonly<{
+    external?: boolean;
+    incomplete?: boolean;
+    pluginId?: string;
+    localId?: string;
+    additionalPrivacyRisk?: boolean;
+}> = {}) {
+    if (!options.external) {
+        replacePluginAccountAvailabilityProjection({ scope: account.scope, snapshot: {
+            availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [], inventoryComplete: !options.incomplete,
+        } });
+        return;
+    }
+    const pluginId = options.pluginId ?? externalPluginId;
+    const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+        availabilityCursor: 1,
+        hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
+        intent: { pluginId, desiredVersion: '1.0.0', enabled: true,
+            offlineUiHosting: 'disabled', writableCollections: [], revision: 'sharing-release' },
+        release: { ref: { pluginId, version: '1.0.0' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+            normalizedManifest: { schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Acme Agent',
+                engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: { agents: [{
+                    id: options.localId ?? 'assistant', title: 'Acme Agent', runtime: { kind: 'custom' }, primary: 'sessions', capabilities: {
+                        sessions: { open: ['create'], delivery: ['newTurn'], cancel: true },
+                        providerStateSharing: { config: { supported: false, modes: ['isolated'] }, state: {
+                            supported: true, modes: ['shared', 'isolated'], sharedStatePrivacyRiskAcknowledgementRequired: true,
+                        } },
+                    },
+                }] } }, collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] },
+        }, packageAssets: [], uiArtifacts: [],
+    });
+    const materialization = PluginMachineMaterializationV1Schema.parse({
+        serverIdentityId: 'srv_sharing', machineId: 'sharing-machine', materializationId: 'sharing-install',
+        pluginId, version: '1.0.0', sourceClass: 'registryPackage', portableRelease: true,
+        archiveDigestSha256: response.release!.archiveDigestSha256, declaredManifest: response.release!.normalizedManifest,
+        uiArtifacts: [], enabled: true,
+        trustState: 'trusted', observedAt: 1_700_000_000_000,
+    });
+    const releases = [response.release!];
+    const materializations = [materialization];
+    if (options.additionalPrivacyRisk !== undefined) {
+        const release = response.release!;
+        const definition = release.normalizedManifest.contributes.agents![0]!;
+        const capability = definition.capabilities.providerStateSharing!;
+        const alternate = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...response,
+            intent: { ...response.intent!, desiredVersion: '2.0.0' },
+            release: { ...release, ref: { pluginId, version: '2.0.0' }, archiveDigestSha256: `sha256:${'c'.repeat(64)}`,
+                normalizedManifest: { ...release.normalizedManifest, version: '2.0.0', contributes: { agents: [{
+                    ...definition, capabilities: { ...definition.capabilities, providerStateSharing: { ...capability,
+                        state: { ...capability.state, sharedStatePrivacyRiskAcknowledgementRequired: options.additionalPrivacyRisk },
+                    } },
+                }] } },
+            },
+        }).release!;
+        releases.push(alternate);
+        materializations.push(PluginMachineMaterializationV1Schema.parse({ ...materialization,
+            materializationId: 'sharing-install-2', machineId: 'sharing-machine-2', version: '2.0.0',
+            archiveDigestSha256: alternate.archiveDigestSha256, declaredManifest: alternate.normalizedManifest,
+        }));
+    }
+    replacePluginAccountAvailabilityProjection({ scope: account.scope, snapshot: { availabilityCursor: 1,
+        // With no Account-selected version, each Machine's exact portable
+        // release remains independently admitted by Availability.
+        intentReads: [{ pluginId, response: options.additionalPrivacyRisk === undefined ? response
+            : { ...response, intent: null, release: null } }],
+        releases,
+        materializations,
+        snapshots: materializations.map(installed => ({ serverIdentityId: installed.serverIdentityId,
+            machineId: installed.machineId, materializations: [installed] })),
+        inventoryComplete: !options.incomplete,
+    } });
+}
 
 function SharingControls({ perAgent }: Readonly<{ perAgent: boolean }>) {
     const settings = useSetting('connectedServicesProviderStateSharingSettingsV1');
@@ -64,8 +143,86 @@ describe('provider state sharing through configurable Account Action approval', 
         const { useSettingActionWriter } = await import('@/components/settings/catalog/useSettingActionWriter');
         const readiness = await renderHook(() => useSettingActionWriter());
         await vi.waitFor(() => expect(readiness.getCurrent().isCurrent()).toBe(true));
+        admitSharingCatalog();
     });
-    afterEach(async () => { standardCleanup(); await account?.dispose(); storage.setState(originalState, true); });
+    afterEach(async () => { standardCleanup(); clearPluginAccountAvailabilityProjection(); await account?.dispose(); storage.setState(originalState, true); });
+
+    it.each([false, true])('retains external privacy consent while changing sharing beside bundled Agents (perAgent=%s)', async perAgent => {
+        admitSharingCatalog({ external: true });
+        expect(resolveProviderStateSharingAgentIds()).toContain(externalAgentId);
+        const { pending } = await startSharing(perAgent);
+        await act(async () => { await pending; });
+        const actual = account.persistedSettings.connectedServicesProviderStateSharingSettingsV1;
+        expect(perAgent ? actual.byAgentId.codex?.stateMode : actual.defaults.stateMode).toBe('shared');
+        expect(actual.acknowledgedRisksByAgentId.codex?.sharedStatePrivacy).toBe(true);
+        if (!perAgent) expect(actual.acknowledgedRisksByAgentId[externalAgentId]?.sharedStatePrivacy).toBe(true);
+        expect(account.settingsWrites.length).toBeGreaterThan(0);
+    });
+
+    it('retains every current installation privacy risk for the same external Agent', async () => {
+        admitSharingCatalog({ external: true, additionalPrivacyRisk: false });
+        const { pending } = await startSharing(false);
+        await act(async () => { await pending; });
+        const actual = account.persistedSettings.connectedServicesProviderStateSharingSettingsV1;
+        expect(actual.defaults.stateMode).toBe('shared');
+        expect(actual.acknowledgedRisksByAgentId[externalAgentId]?.sharedStatePrivacy).toBe(true);
+    });
+
+    it('keeps external installations qualified beside a bundled Agent with the same contribution identity', async () => {
+        admitSharingCatalog({ external: true, pluginId: 'happier.agent.codex', localId: 'codex' });
+        const { pending } = await startSharing(false);
+        await act(async () => { await pending; });
+        const actual = account.persistedSettings.connectedServicesProviderStateSharingSettingsV1;
+        expect(actual.defaults.stateMode).toBe('shared');
+        expect(actual.acknowledgedRisksByAgentId.codex?.sharedStatePrivacy).toBe(true);
+        expect(actual.acknowledgedRisksByAgentId['happier.agent.codex/codex']?.sharedStatePrivacy).toBe(true);
+    });
+
+    it.each<{ stateMode: 'isolated' } | { configMode: 'copied' }>([{ stateMode: 'isolated' }, { configMode: 'copied' }])(
+        'keeps non-sharing changes available without a sharing catalog (%j)', async change => {
+            clearPluginAccountAvailabilityProjection();
+            const { useSettingActionWriter } = await import('@/components/settings/catalog/useSettingActionWriter');
+            const { CONNECTED_SERVICES_SETTINGS } = await import('./connectedServicesSettings');
+            const writer = await renderHook(() => useSettingActionWriter());
+            await act(async () => {
+                await writer.getCurrent()(CONNECTED_SERVICES_SETTINGS.settings.sharingPerAgent, { agentId: 'codex', ...change });
+            });
+            expect(account.persistedSettings.connectedServicesProviderStateSharingSettingsV1.byAgentId.codex).toEqual(change);
+            expect(account.settingsWrites.length).toBeGreaterThan(0);
+        },
+    );
+
+    it.each(['unavailable', 'incomplete', 'retired'] as const)('refuses a %s sharing catalog before writing Account settings', async state => {
+        admitSharingCatalog({ external: state !== 'unavailable', incomplete: state === 'incomplete' });
+        if (state === 'unavailable') clearPluginAccountAvailabilityProjection();
+        if (state === 'retired') retirePluginAccountAvailabilityProjection([externalPluginId]);
+        expect(resolveProviderStateSharingAgentIds()).toContain('codex');
+        const before = account.persistedSettings.connectedServicesProviderStateSharingSettingsV1;
+        const { pending } = await startSharing(false);
+        await act(async () => { await pending; });
+        expect(account.persistedSettings.connectedServicesProviderStateSharingSettingsV1).toEqual(before);
+        expect(account.settingsWrites).toEqual([]);
+    });
+
+    it('refuses retired external declaration authority during an Account CAS rebase', async () => {
+        admitSharingCatalog({ external: true });
+        const before = account.persistedSettings;
+        const request = account.request.getMockImplementation()!;
+        let raced = false;
+        account.request.mockImplementation(async (input, init) => {
+            if (!raced && new URL(String(input)).pathname === '/v2/account/settings' && init?.method === 'POST') {
+                raced = true;
+                retirePluginAccountAvailabilityProjection([externalPluginId]);
+                account.replaceSettings(before, { version: 2, publish: false });
+            }
+            return await request(input, init);
+        });
+        const { pending } = await startSharing(false);
+        await act(async () => { await pending; });
+        expect(raced).toBe(true);
+        expect(account.persistedSettings.connectedServicesProviderStateSharingSettingsV1).toEqual(before.connectedServicesProviderStateSharingSettingsV1);
+        expect(account.settingsWrites).toHaveLength(1);
+    });
 
     it('routes the Permissions page Agent default through the same configurable Action', async () => {
         const { PermissionsSettingsView } = await import('../session/PermissionsSettingsView');

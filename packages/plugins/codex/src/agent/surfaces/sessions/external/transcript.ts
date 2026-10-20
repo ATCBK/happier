@@ -1,4 +1,5 @@
 import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk/sessions/external';
+import { z } from 'zod/mini';
 
 import type { CodexExternalSessionCandidate } from './models.js';
 
@@ -20,6 +21,23 @@ type CodexAppServerForwardCursorV2 = Readonly<{
   previewText: string | null;
 }>;
 
+export const CodexTranscriptRowLocationSchema = z.strictObject({
+  startOffsetBytes: z.number().check(z.int(), z.nonnegative()),
+  endOffsetBytes: z.number().check(z.int(), z.nonnegative()),
+});
+export const CodexTranscriptSemanticLocationsSchema = z.strictObject({
+  assistant: z.nullable(CodexTranscriptRowLocationSchema),
+  pending: z.array(z.strictObject({ callId: z.string(), row: CodexTranscriptRowLocationSchema })),
+  startedThreadIds: z.array(z.string()),
+  completedThreadIds: z.array(z.string()),
+});
+export type CodexTranscriptSemanticLocations = z.infer<typeof CodexTranscriptSemanticLocationsSchema>;
+const CodexTranscriptSemanticCursorSchema = z.strictObject({
+  precedingTimestampMs: z.number().check(z.nonnegative()),
+  locations: CodexTranscriptSemanticLocationsSchema,
+});
+export type CodexTranscriptSemanticCursor = z.infer<typeof CodexTranscriptSemanticCursorSchema>;
+
 type CodexAnchoredGenerationStreamVectorForwardCursorV7 = Readonly<{
   v: 7;
   kind: 'codexForwardStreamVector';
@@ -31,6 +49,8 @@ type CodexAnchoredGenerationStreamVectorForwardCursorV7 = Readonly<{
     subIndex: number;
     fingerprintOffsetBytes: number;
     contentFingerprint: string;
+    /** Native semantic facts at nextOffsetBytes; transcript bodies stay in the rollout. */
+    semanticState?: CodexTranscriptSemanticCursor;
   }>[];
 }>;
 
@@ -101,6 +121,11 @@ export function decodeCodexExternalForwardCursor(raw: string): CodexExternalForw
             typeof streamRecord.contentFingerprint === 'string'
               ? streamRecord.contentFingerprint.trim()
               : '';
+          const semanticState = streamRecord.semanticState === undefined
+            ? undefined : CodexTranscriptSemanticCursorSchema.safeParse(streamRecord.semanticState);
+          if (semanticState && (!semanticState.success || [semanticState.data.locations.assistant,
+            ...semanticState.data.locations.pending.map(pending => pending.row)].some(row => row !== null
+              && (row.startOffsetBytes >= row.endOffsetBytes || row.endOffsetBytes > nextOffsetBytes)))) return null;
           if (
             !fileRelPath
             || !physicalGeneration
@@ -123,6 +148,7 @@ export function decodeCodexExternalForwardCursor(raw: string): CodexExternalForw
             subIndex,
             fingerprintOffsetBytes,
             contentFingerprint,
+            ...(semanticState?.success ? { semanticState: semanticState.data } : {}),
           };
         })
         .filter((entry): entry is {
@@ -132,6 +158,7 @@ export function decodeCodexExternalForwardCursor(raw: string): CodexExternalForw
           subIndex: number;
           fingerprintOffsetBytes: number;
           contentFingerprint: string;
+          semanticState?: CodexTranscriptSemanticCursor;
         } => entry !== null);
       if (
         streams.length === 0

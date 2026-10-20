@@ -7,6 +7,7 @@ import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/a
 
 import type {
   AgentExecutionRunRuntime,
+  AgentExecutionRunEvent,
   AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntimeContextV1,
   AgentRuntime,
@@ -44,6 +45,7 @@ import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerSessionClientRuntimeHandlers } from '@/api/session/client/executionRuns/registerSessionClientRuntimeHandlers';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
+import { decodeExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
@@ -418,12 +420,21 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
     const sessionOpen = vi.fn();
     let openedContext: AgentExecutionRunRuntimeContextV1 | null = null;
     const readOpenedContext = (): AgentExecutionRunRuntimeContextV1 | null => openedContext;
-    const executionRunOpen = vi.fn(async (_request: AgentExecutionRunOpenRequest, context: AgentExecutionRunRuntimeContextV1) => {
+    const executionRunOpen = vi.fn(async (request: AgentExecutionRunOpenRequest, context: AgentExecutionRunRuntimeContextV1) => {
       openedContext = context;
+      const events: AgentExecutionRunEvent[] = [
+        { kind: 'run-start', runId: request.runId, sequence: 1, emittedAtMs: 1 },
+        { kind: 'output-delta', runId: request.runId, sequence: 2, emittedAtMs: 2,
+          channel: 'assistant', text: '{"verdict":"done"}' },
+        { kind: 'run-complete', runId: request.runId, sequence: 3, emittedAtMs: 3 },
+      ];
       return {
         send: vi.fn(async () => ({ status: 'admitted' as const })),
         stop: vi.fn(async () => ({ status: 'notRunning' as const })),
-        watch: vi.fn(() => ({ dispose: vi.fn() })),
+        watch: vi.fn((listener: (event: AgentExecutionRunEvent) => void) => {
+          for (const event of events) listener(event);
+          return { dispose: vi.fn() };
+        }),
         dispose: vi.fn(async () => undefined),
       } satisfies AgentExecutionRunRuntime;
     });
@@ -512,11 +523,16 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       sidechainId: 'run-detached-sidechain',
       backendId: AGENT_ID,
       permissionMode: 'default',
-      start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', capabilitySelection: { mcp: {
+      start: { intent: 'agent', runClass: 'long_lived', retentionPolicy: 'resumable',
+        instructions: 'Check the supplied goal and most recent turn.', localInputId: 'judge-input',
+        resultContract: { kind: 'json', schema: { type: 'object', properties: { verdict: { enum: ['progress', 'no_progress', 'done'] } }, required: ['verdict'], additionalProperties: false } },
+        capabilitySelection: { mcp: {
         v: 1, managedServersEnabled: false, forceIncludeServerIds: ['wilson-brief'], forceExcludeServerIds: [],
       } } },
       machineId: 'machine-a', resolveAccountSettingsSnapshot: resolveOwnerSnapshot,
     } as never);
+    const messages: import('@/agent/core/AgentMessage').AgentMessage[] = [];
+    runtime?.subscribeMessages(message => messages.push(message));
     await expect(runtime?.provisionRuntime({ initialPrompt: 'Run independently' })).resolves.toEqual({
       runtimeId: 'run-detached',
     });
@@ -524,6 +540,11 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
     try {
       expect(sessionOpen).not.toHaveBeenCalled();
       expect(executionRunOpen).toHaveBeenCalledOnce();
+      await expect(runtime?.waitForTurnCompletion?.()).resolves.toBeUndefined();
+      const output = messages.filter(message => message.type === 'model-output').map(message => message.textDelta ?? message.fullText ?? '').join('');
+      expect(decodeExecutionRunProfileResult(output, executionRunOpen.mock.calls[0]?.[0].resultContract))
+        .toEqual({ ok: true, value: { verdict: 'done' } });
+      expect(executionRunOpen.mock.calls[0]?.[0]).toMatchObject({ localInputId: 'judge-input', resultContract: { kind: 'json' } });
       const mcpServers = executionRunOpen.mock.calls[0]?.[0].mcpServers;
       expect(Object.keys(mcpServers ?? {})).toEqual(['wilson-brief']);
       const server = mcpServers?.['wilson-brief'];

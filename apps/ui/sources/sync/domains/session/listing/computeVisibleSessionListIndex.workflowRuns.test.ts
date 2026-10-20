@@ -33,7 +33,7 @@ const resolveSessionRow = (_serverId: string | null | undefined, sessionId: stri
 });
 
 function summary(id: string, startedBy: 'user' | 'trigger' | 'agent', attentionRequired = false) {
-    return { ...createWorkflowRunSummaryFixture({ id, attentionRequired }), startedBy,
+    return { ...createWorkflowRunSummaryFixture({ id, attentionRequired, ownerAccountId: 'account-1' }), startedBy,
         where: { machineId: 'machine-1', directory: '/repo' },
         stepProgress: { completed: 1, total: 3 },
     };
@@ -74,7 +74,7 @@ describe('computeVisibleSessionListIndex workflow Runs', () => {
         expect(visible?.filter(item => item.type === 'workflow_run').map(item => item.runId)).toEqual(['own']);
     });
     it('keeps unavailable Run filter facts distinct from a complete empty Run result', () => {
-        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], underSessionId: 'manager' });
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'runs', underSessionId: 'manager' });
         const input = { selectedHomeServerIds: ['home'], mountedHomeServerIds: ['home'], servedHomeServerId: 'home',
             filter, viewerAccountId: 'account-1', runs: [summary('manual', 'user')] };
         expect(resolveWorkflowRunUnavailableHomes(input)).toEqual([{ serverId: 'home', reason: 'unsupported' }]);
@@ -83,6 +83,17 @@ describe('computeVisibleSessionListIndex workflow Runs', () => {
         expect(resolveWorkflowRunUnavailableHomes({ ...input, filter: { ...filter, underSessionId: undefined } })).toEqual([]);
         // A known nonmatching kind does not require unavailable subtree evidence.
         expect(resolveWorkflowRunUnavailableHomes({ ...input, filter: { ...filter, show: 'sessions' } })).toEqual([]);
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, runUnderSessionId: 'manager' })).toEqual([]);
+    });
+    it('uses an Under-filtered Run page as server-proved membership in the list projection', () => {
+        const run = summary('descendant-origin', 'user');
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'runs', underSessionId: 'manager' });
+        const base = { source: [], resolveSessionRow: () => null, hideInactiveSessions: false,
+            pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, presentation: { enabled: false, presentation: 'grouped' as const },
+            workFilter: filter, workflowRuns: [{ serverId: 'home', summary: run }] };
+        expect(computeVisibleSessionListIndex(base)?.filter(item => item.type === 'workflow_run')).toEqual([]);
+        expect(computeVisibleSessionListIndex({ ...base, workflowRunUnderSessionId: 'manager' })
+            ?.filter(item => item.type === 'workflow_run').map(item => item.runId)).toEqual([run.id]);
     });
     it('uses protected starter identity for current rows without treating legacy list admission as rule proof', () => {
         const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });

@@ -693,7 +693,7 @@ describe('SessionView (control switch timeout)', () => {
     await screen.unmount();
   });
 
-  it('keeps stale-runner restart disabled for view-only shared sessions', async () => {
+  it('withholds owner-only stale-runner controls for view-only shared sessions', async () => {
     resetSession({
       active: true,
       accessLevel: 'view',
@@ -708,18 +708,8 @@ describe('SessionView (control switch timeout)', () => {
     const recipient = shellStorage.getState().sessions.s1;
     expect(recipient?.agentState).toBeNull();
     expect(recipient && readSessionOwnerMetadataView(recipient)).toBeNull();
+    expect(screen.findByTestId('session-staleRunner-version')).toBeNull();
     expect(sessionRunnerRestartSpy).not.toHaveBeenCalled();
-    const staleRunnerBanner = getWarningActionBannerPropsByTestId('session-staleRunner-version');
-
-    expect(staleRunnerBanner.disabled).toBe(true);
-
-    await act(async () => {
-      await staleRunnerBanner.onActionPress();
-    });
-    await flushHookEffects({ cycles: 1, turns: 1 });
-
-    expect(sessionRunnerRestartSpy).not.toHaveBeenCalled();
-    expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'session.sharing.noEditPermission');
 
     await screen.unmount();
   });

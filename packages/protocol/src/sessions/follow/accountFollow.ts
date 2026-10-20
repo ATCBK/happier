@@ -8,6 +8,7 @@ import { SessionFollowFrontierV1Schema, type SessionFollowFrontierV1 } from './s
 import { FOLLOW_EVENT_KINDS_V1, FollowPolicyV1Schema, resolveFollowDeliveryV1, resolveLegacySessionFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
 import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
 import type { SessionFollowRuleDefinitionV1 } from './sessionFollowRuleV1.js';
+import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
 
 /** A convenience intent, independent of the persistent Follow and Voice choices. */
 export const PersonalFollowOnceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -145,6 +146,19 @@ export const AccountSessionFollowV1Schema = lazyZodSchema(() => z.strictObject({
     onceDelivery: z.optional(PersonalFollowOnceOccurrenceV1Schema),
   }));
 export type AccountSessionFollowV1 = z.infer<typeof AccountSessionFollowV1Schema>;
+
+/** Private policy for an admitted source whose original is not a Session. */
+export const OtherAccountFollowV1Schema = lazyZodSchema(() => z.strictObject({
+  source: FollowSourceRefV1Schema,
+  following: z.boolean(),
+  persistent: z.boolean(),
+  policy: FollowPolicyV1Schema,
+}).check(z.refine(row => row.source.kind !== 'session' && row.source.kind !== 'rule')));
+export type OtherAccountFollowV1 = z.infer<typeof OtherAccountFollowV1Schema>;
+export const AccountFollowRelationV1Schema = lazyZodSchema(() => z.union([
+  AccountSessionFollowV1Schema, OtherAccountFollowV1Schema,
+]));
+export type AccountFollowRelationV1 = z.infer<typeof AccountFollowRelationV1Schema>;
 
 /**
  * The server-resolved Follow capability. Reading a Session and reading the

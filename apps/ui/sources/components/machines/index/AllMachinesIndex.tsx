@@ -43,6 +43,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useReconciledStableRows } from '@/hooks/session/reconcileStableRows';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { useDeviceType } from '@/utils/platform/responsive';
@@ -126,7 +127,8 @@ function AllMachinesIndexBody() {
     const sections = React.useMemo(() => collection.sections.filter(section => !section.archived), [collection.sections]);
     // What each machine publishes (plan 20): the fleet sentence and Needs you first.
     const attention = React.useMemo(() => collectMachineAttention(viewModel.visibleMachineGroups, nowMs), [nowMs, viewModel.reachabilityRevision, viewModel.visibleMachineGroups]);
-    const needsYouKeys = React.useMemo(() => new Set(selectAttentionSubjects(attention.entries).map(entry => entry.key)), [attention.entries]);
+    const needsYouSubjectKeys = useReconciledStableRows(selectAttentionSubjects(attention.entries).map(entry => entry.key), String);
+    const needsYouKeys = React.useMemo(() => new Set(needsYouSubjectKeys), [needsYouSubjectKeys]);
     const fleetTitle = describeFleetTitle({ subjects: attention.entries, reportingCount: attention.reportingCount });
     const fleetDescription = describeFleetDescription({ subjects: attention.entries, reportingCount: attention.reportingCount, onlineCount: attention.onlineCount, nowMs });
     const openAttention = React.useCallback((entry: MachineAttentionEntry, tab: MachinePageTabParams | null) => {
@@ -146,13 +148,15 @@ function AllMachinesIndexBody() {
         }
         return facts;
     }, [language, viewModel.visibleMachineGroups]);
-    const answeredItems = React.useMemo((): MachineIndexItem[] => sections.flatMap(section => section.rows.map(row => ({
+    // Inventory revisions remain current at the store; only changed row facts
+    // replace the Collection's item, rather than every item on a heartbeat.
+    const answeredItems = useReconciledStableRows(React.useMemo((): MachineIndexItem[] => sections.flatMap(section => section.rows.map(row => ({
         ...row,
         key: machineCollectionRowKey(row),
         sectionKey: section.key,
         thisComputer: row.kind === 'machine' && row.machineId === thisComputerMachineId,
         facts: factsByMachine.get(JSON.stringify([row.serverId, row.kind === 'machine' ? row.machineId : row.enrolledMachineId ?? ''])) ?? null,
-    }))), [factsByMachine, sections, thisComputerMachineId]);
+    }))), [factsByMachine, sections, thisComputerMachineId]), readKey);
     // The first answer is held whole behind the Collection's loading contract: rows, headline and count land once,
     // together, and a later re-read keeps what is already shown (same first load as the list column).
     const answerPending = (viewModel.isLoadingMachines && answeredItems.length === 0) || collection.namesPending || viewModel.managedFirstAnswerPending;
@@ -181,20 +185,21 @@ function AllMachinesIndexBody() {
     }, [door, items, query, router]);
     // The Grid leads with the machines that need you as their own cards (lab `FC`); the List says them above the table.
     const needsYouGrouped = view === 'grid' && needsYouKeys.size > 0;
+    const groupAxis = useReconciledStableRows([
+        ...(needsYouGrouped ? [{ key: NEEDS_YOU_GROUP, title: t('machineAttention.groups.needsYou') }] : []),
+        ...sections.map(section => ({
+            key: section.key,
+            title: section.title ?? t('allMachines.allMachinesGroup'),
+            ...(viewModel.showMachinesGroupedByServer ? { description: describeSectionStatus(section) } : {}),
+        })),
+    ], group => group.key);
     const groups = React.useMemo(() => ({
-        axis: [
-            ...(needsYouGrouped ? [{ key: NEEDS_YOU_GROUP, title: t('machineAttention.groups.needsYou') }] : []),
-            ...sections.map(section => ({
-                key: section.key,
-                title: section.title ?? t('allMachines.allMachinesGroup'),
-                ...(viewModel.showMachinesGroupedByServer ? { description: describeSectionStatus(section) } : {}),
-            })),
-        ],
+        axis: groupAxis,
         groupOf: (item: MachineIndexItem) => needsYouGrouped && item.kind === 'machine' && needsYouKeys.has(JSON.stringify([item.serverId, item.machineId]))
             ? NEEDS_YOU_GROUP : item.sectionKey,
         // A Home without machines keeps its group, saying how it is (signed out, connecting).
         retainEmpty: viewModel.showMachinesGroupedByServer,
-    }), [language, needsYouGrouped, needsYouKeys, sections, viewModel.showMachinesGroupedByServer]);
+    }), [groupAxis, needsYouGrouped, needsYouKeys, viewModel.showMachinesGroupedByServer]);
     const model = useHappierCollection<MachineIndexItem>({
         items,
         keyOf: readKey,

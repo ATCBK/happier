@@ -9,6 +9,7 @@ import { readStoredCredentials } from '@/persistence';
 import { resolveConnectedServicesServerApiTimeoutMs } from './connectedServicesServerApiTimeout';
 import { createHttpStatusError } from './httpStatusError';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
+import { classifyServerEndpointError } from './classifyServerEndpointError';
 
 export class AccountEncryptionCurrentnessUnavailableError extends Error {
   readonly code = 'account_encryption_currentness_unavailable' as const;
@@ -24,6 +25,12 @@ export class AccountEncryptionCurrentnessUnavailableError extends Error {
     super(message, options);
     this.name = 'AccountEncryptionCurrentnessUnavailableError';
   }
+}
+
+/** A failed Home observation does not establish missing or mismatched Account material. */
+export function isRetryableAccountEncryptionCurrentnessError(error: unknown): boolean {
+  return error instanceof AccountEncryptionCurrentnessUnavailableError
+    && classifyServerEndpointError(error).retryable;
 }
 
 type AccountEncryptionCurrentnessRead = Readonly<{

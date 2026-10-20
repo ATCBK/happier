@@ -57,8 +57,8 @@ vi.mock('@/components/ui/lists/Item', () => ({
 }));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroupSelectionContext: React.createContext<{ selectableItemCount: number } | null>(null),
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
+    ItemGroup: (props: Record<string, unknown> & { action?: React.ReactNode; children?: React.ReactNode }) =>
+        React.createElement('ItemGroup', props, props.action ?? null, props.children),
 }));
 vi.mock('@/components/sessions/agentInput', () => ({
     AgentInput: (props: Record<string, unknown>) => {
@@ -682,10 +682,11 @@ describe('NewSessionWizard', () => {
             }}
         />);
 
-        const contentWrapper = screen.findAllByType('View' as any).find((node: any) => {
-            const style = flattenStyle(node.props?.style);
-            return style.width === '100%' && style.alignSelf === 'center' && style.paddingTop === 18;
-        });
+        // The wizard's page list carries the inset on its content (`ItemList` `containerStyle`).
+        const contentWrapper = screen.tree.root.findAll((node: any) => (
+            typeof node.type === 'string'
+            && flattenStyle(node.props?.contentContainerStyle).paddingTop === 18
+        ))[0];
 
         expect(contentWrapper).toBeDefined();
     });
@@ -1337,9 +1338,9 @@ describe('NewSessionWizard', () => {
             modelOptionsProbe: { phase: 'loading', onRefresh },
         });
 
-        const refreshButton = screen.findByTestId('new-session-model-refresh');
-        expect(refreshButton?.props.disabled).toBe(true);
-        expect(refreshButton?.props.onPress).toBeUndefined();
+        expect(screen.findByTestId('new-session-model-refresh')).toBeTruthy();
+        await screen.pressByTestIdAsync('new-session-model-refresh').catch(() => {});
+        expect(onRefresh).not.toHaveBeenCalled();
         expect(modelSelectionPropsRef.current?.modelOptions).toEqual([]);
         expect(screen.tree.root.findAllByProps({ accessibilityRole: 'progressbar' }).length).toBeGreaterThan(0);
     });

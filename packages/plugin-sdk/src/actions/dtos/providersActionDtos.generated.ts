@@ -441,6 +441,26 @@ export type ProvidersActionInputById = {
         agentTargetKey: string;
         modelId: string | null;
         compatibilityFingerprint: string;
+        connectedAccountTarget?: {
+            kind: 'account';
+            account: {
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                accountId: string;
+            };
+        } | {
+            kind: 'group';
+            service: {
+                pluginId: string;
+                localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
+            };
+            groupId: string;
+        } | undefined;
     }, true>;
     readonly "providers.models.load": {
         connectionId: string;
@@ -736,6 +756,36 @@ export type ProvidersActionInputById = {
                             materializationKinds?: ('httpHeaders' | 'environment' | 'files')[] | undefined;
                             credentialKinds?: ('oauth' | 'token')[] | undefined;
                             endpointTemplateIds?: string[] | undefined;
+                            staticModels?: {
+                                id: string;
+                                name: string;
+                                costTier?: 'low' | 'standard' | 'premium' | undefined;
+                                aliases?: string[] | undefined;
+                                description?: string | undefined;
+                                contextWindowTokens?: number | undefined;
+                                extendedContextModelId?: string | undefined;
+                                modelOptions?: {
+                                    id: string;
+                                    name: string;
+                                    type: string;
+                                    currentValue: string;
+                                    description?: string | undefined;
+                                    options?: {
+                                        value: string;
+                                        name: string;
+                                        description?: string | undefined;
+                                    }[] | undefined;
+                                    overridesWhenOn?: {
+                                        optionIds: string[];
+                                        forcedValue?: string | undefined;
+                                    } | undefined;
+                                }[] | undefined;
+                                capabilities?: {
+                                    toolRoundTrips?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                    reasoningControls?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                    structuredOutput?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                } | undefined;
+                            }[] | undefined;
                         }[] | undefined;
                         connectedAccountPurposeBindingPolicy?: {
                             minimumBound: 1;
@@ -3295,6 +3345,26 @@ export type ProvidersActionResultById = {
                     };
                 } | undefined;
             }[];
+            connectedAccountTarget?: {
+                kind: 'account';
+                account: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                kind: 'group';
+                service: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
+                };
+                groupId: string;
+            } | undefined;
             sourceAuthority?: {
                 provider: {
                     identity: {
@@ -3606,6 +3676,26 @@ export type ProvidersActionResultById = {
                     };
                 } | undefined;
             }[];
+            connectedAccountTarget?: {
+                kind: 'account';
+                account: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                kind: 'group';
+                service: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
+                };
+                groupId: string;
+            } | undefined;
             sourceAuthority?: {
                 provider: {
                     identity: {

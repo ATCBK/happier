@@ -218,6 +218,39 @@ describe('executionRunRegistry', () => {
     expect(await registry.readRetainedExecutionRunRecords()).toMatchObject([{ terminalEventId: 'terminal-limit', state: { error } }]);
   });
 
+  it('notifies Follow from the retained terminal original and from recovered host loss', async () => {
+    const registry = await import('./executionRunRegistry');
+    const { SessionFollowOccurrenceNotificationSchema } = await import('./sessions/sessionActivityChangedContract');
+    const transport = await import('./controlHttp');
+    const post = vi.spyOn(transport, 'daemonPost').mockResolvedValue({ ok: true });
+    const state = { runId: 'follow-source', callId: 'call', sidechainId: 'side', sessionId: 'c111111111111111111111111', depth: 0,
+      intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex', instructions: 'Review',
+      permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response',
+      status: 'succeeded', startedAtMs: 1, finishedAtMs: 2, terminalOccurrenceId: 'terminal-source',
+    } as const;
+    try {
+      await registry.retainExecutionRunState(state);
+      const terminal = post.mock.calls.find(([path]) => path === '/session-activity-changed')?.[1];
+      expect(terminal).toMatchObject({ sessionId: state.sessionId, followOccurrence: {
+        original: { source: { kind: 'execution_run', sessionId: state.sessionId, runId: state.runId }, terminalEventId: 'terminal-source' },
+        event: { kind: 'finished' },
+      } });
+      if (!terminal || typeof terminal !== 'object' || !('followOccurrence' in terminal)) throw new Error('Missing original notification');
+      expect(SessionFollowOccurrenceNotificationSchema.safeParse(terminal.followOccurrence).success).toBe(true);
+      post.mockClear();
+      await registry.retainExecutionRunState({ ...state, runId: 'lost-follow-source', status: 'running',
+        terminalOccurrenceId: undefined, finishedAtMs: undefined });
+      await registry.reconcileRetainedExecutionRunRecords({ nowMs: 3, isPidAlive: () => false });
+      const recovered = await registry.readRetainedExecutionRunRecord('lost-follow-source');
+      expect(post.mock.calls).toContainEqual(['/session-activity-changed', {
+        sessionId: state.sessionId, followOccurrence: {
+          original: { source: { kind: 'execution_run', sessionId: state.sessionId, runId: 'lost-follow-source' },
+            terminalEventId: recovered?.state.terminalOccurrenceId }, event: { kind: 'failed_or_stopped' },
+        },
+      }]);
+    } finally { post.mockRestore(); }
+  });
+
   it('projects running and settled execution markers while retaining material delivery custody', async () => {
     const { createExecutionRunLiveWorkProducer, writeExecutionRunMarker, removeExecutionRunMarker } = await import('./executionRunRegistry');
     mkdirSync(join(happyHomeDir, 'tmp', 'daemon-execution-runs'), { recursive: true });

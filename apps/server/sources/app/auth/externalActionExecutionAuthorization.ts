@@ -32,7 +32,7 @@ import { ManagedMachineError, requireCurrentManagedMachineInTx, sameManagedInput
     readMachineDevcontainerWorkspaceSyncRouteInTx, readMachineDevcontainerWorkspaceSyncEndpointInTx } from '@/app/machines/managed/managedRows';
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { db } from "@/storage/db";
-import type { Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import { enforceLoginEligibility } from "./enforceLoginEligibility";
 import { narrowCredentialAuthority } from './effectiveCredentialAuthority';
 import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx,
@@ -77,13 +77,15 @@ import { isSessionStateFieldActionId } from '@happier-dev/protocol/actions/sessi
 import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { isLedSubtreeSessionLifecycleActionId } from '@happier-dev/protocol/actions/executor/sessionListAccess';
-import { readSessionManagerInTx } from '@/app/session/follow/sessionManagerService';
+import { readSessionManagedSubtreeSessionIdsInTx } from '@/app/session/follow/sessionManagerSubtree';
 import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptTransportInputV1Schema,
     DocEditDeclineTransportInputV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewInputV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { ArtifactAccessGrantSetInputV1Schema, ArtifactRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { bindDiscussionCandidatePeopleReadV1, projectDiscussionCandidateSessionQueryV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { UsersSearchQueryV1Schema } from '@happier-dev/protocol/social/friends';
+import { SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { isMemoryWriteActionV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -685,6 +687,22 @@ function isDocDecisionPreparationEffect(rootActionId: string, effectActionId: st
     return rootActionId === 'doc.edit.accept' && (effectActionId === 'discussion.read' || effectActionId === 'artifact.get');
 }
 
+/** Run admission opens its committed C3 question through the installed requester codec. */
+function isWorkflowDiscussionPreparationEffect(rootActionId: string, effectActionId: string): boolean {
+    return rootActionId === 'workflow.run.start' && effectActionId === 'discussion.read';
+}
+
+/** Memory admission inspects existing exposure before proposing or performing a write. */
+function isMemoryExposureReadEffect(rootActionId: string, effectActionId: string): boolean {
+    return (rootActionId === 'approval.request.create' || isMemoryWriteActionV1(rootActionId))
+        && effectActionId === 'artifact.access.grants.list';
+}
+
+/** Archive's existing report cascade may stop an active report under its unchanged root. */
+function isSessionArchiveStopEffect(rootActionId: string, effectActionId: string): boolean {
+    return rootActionId === 'session.archive' && effectActionId === 'session.stop';
+}
+
 async function verifyCommon(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -708,6 +726,9 @@ async function verifyCommon(
                 && !isDocDiscussionEffect(binding.actionId, effectActionId.data)
                 && !isDocReadEffect(binding.actionId, effectActionId.data)
                 && !isSecondOpinionEffect(binding.actionId, effectActionId.data)
+                && !isWorkflowDiscussionPreparationEffect(binding.actionId, effectActionId.data)
+                && !isMemoryExposureReadEffect(binding.actionId, effectActionId.data)
+                && !isSessionArchiveStopEffect(binding.actionId, effectActionId.data)
                 && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
@@ -821,50 +842,63 @@ function isReadOnlyArtifactHttpPurpose(proof: ExternalActionExecutionRequestProo
     } catch { return false; }
 }
 
-/** Policy observes only the installed caller's subtree, under its unchanged root. */
-function isInstalledSessionSubtreeObservationHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
-    proof: ExternalActionExecutionRequestProof): boolean {
+/** One readable recursive membership owner serves lifecycle operands and selected-lead observation. */
+async function isInstalledSessionLifecycleSubtreeMember(verified: VerifiedExternalActionExecutionRequest,
+    sessionId: string): Promise<boolean> {
     const origin = verified.binding.sessionActionOrigin;
-    if (!origin || verified.effectActionId !== verified.binding.actionId
-        || proof.method.toUpperCase() !== 'POST' || proof.path !== '/v2/sessions/query') return false;
-    const query = SessionListQueryV1Schema.safeParse(proof.body);
-    return query.success && query.data.underSessionId === origin.caller.sessionId;
+    if (!origin || !isLedSubtreeSessionLifecycleActionId(verified.binding.actionId)) return false;
+    const members = await inReadSnapshot(tx => readSessionManagedSubtreeSessionIdsInTx(tx, {
+        accountId: verified.binding.accountId, rootSessionId: origin.caller.sessionId,
+        authentication: { env: process.env, authority: verified.effectiveAuthority,
+            authenticationEvidence: verified.principal.authenticationEvidence,
+            ...('authentication' in verified.binding ? { tokenEpoch: verified.binding.authentication.tokenEpoch }
+                : { apiTokenGrant: verified.binding.grant }) },
+    }));
+    return members.includes(sessionId);
 }
 
-/** Original lifecycle roots retain exact selected operands and canonical current manager admission. */
+/** Original roots retain policy reads; lifecycle cascade may select a still-led nested root. */
+async function isInstalledSessionSubtreeObservationHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): Promise<boolean> {
+    const origin = verified.binding.sessionActionOrigin;
+    if (!origin || verified.effectActionId !== verified.binding.actionId
+            && !isSessionArchiveStopEffect(verified.binding.actionId, verified.effectActionId)
+        || proof.method.toUpperCase() !== 'POST' || proof.path !== '/v2/sessions/query') return false;
+    const query = SessionListQueryV1Schema.safeParse(proof.body);
+    if (!query.success || !query.data.underSessionId) return false;
+    return query.data.underSessionId === origin.caller.sessionId
+        || isInstalledSessionLifecycleSubtreeMember(verified, query.data.underSessionId);
+}
+
+/** Original lifecycle roots consume the same readable recursive subtree as Session listing. */
 async function isInstalledSessionLifecycleHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): Promise<boolean> {
-    const actionId = verified.binding.actionId;
+    const actionId = verified.effectActionId;
+    if (!isLedSubtreeSessionLifecycleActionId(actionId) && actionId !== 'session.open'
+        || actionId !== verified.binding.actionId && !isSessionArchiveStopEffect(verified.binding.actionId, actionId)
+        || !proof.sessionRouteTarget
+        || verified.binding.target.kind !== 'machine' || verified.target.kind !== 'machine') return false;
+    const sessionId = proof.sessionRouteTarget.sessionId;
+    const path = `/v2/sessions/${encodeURIComponent(sessionId)}`;
+    const reads = proof.method.toUpperCase() === 'GET' && proof.body === undefined
+        && (proof.path === path || proof.path === `${path}?accessProjectionVersion=1`);
+    const origin = verified.binding.sessionActionOrigin;
     if (actionId === 'session.open' || actionId === 'session.stop') {
-        if (verified.effectActionId !== actionId || !proof.sessionRouteTarget
-            || verified.binding.target.kind !== 'machine' || verified.target.kind !== 'machine') return false;
-        const sessionId = proof.sessionRouteTarget.sessionId;
-        const path = `/v2/sessions/${encodeURIComponent(sessionId)}`;
-        const reads = proof.method.toUpperCase() === 'GET' && proof.body === undefined
-            && (proof.path === path || proof.path === `${path}?accessProjectionVersion=1`);
         const patch = proof.method.toUpperCase() === 'PATCH' && proof.path === path
             ? SessionMetadataTuplePatchV1Schema.safeParse(proof.body) : null;
         if (!reads && !(patch?.success && patch.data.mode === 'owner')) return false;
         const session = await db.session.findUnique({ where: { id: sessionId }, select: { accountId: true } });
         if (session?.accountId !== verified.binding.accountId) return false;
-        const origin = verified.binding.sessionActionOrigin;
         if (!origin) return verified.effectiveAuthority === 'present_user';
-        const manager = await readSessionManagerInTx(db, sessionId);
-        // The native owner opens Stop provenance; Resume signs its clear only
-        // after launch success. Home independently rejects a replaced manager.
-        return manager?.destinationSessionId === origin.caller.sessionId;
+        if (actionId === 'session.open') return sessionId === origin.caller.sessionId;
+    } else {
+        const op = actionId === 'session.archive' ? 'archive' : 'unarchive';
+        const mutation = proof.method.toUpperCase() === 'POST' && proof.path === `${path}/${op}`
+            && proof.body !== null && typeof proof.body === 'object' && !Array.isArray(proof.body)
+            && Object.keys(proof.body).length === 0;
+        if (!reads && !mutation) return false;
     }
-    if (!verified.binding.sessionActionOrigin || !isLedSubtreeSessionLifecycleActionId(actionId)
-        || verified.effectActionId !== actionId || !proof.sessionRouteTarget
-        || verified.binding.target.kind !== 'machine' || verified.target.kind !== 'machine') return false;
-    const path = `/v2/sessions/${encodeURIComponent(proof.sessionRouteTarget.sessionId)}`;
-    if (proof.method.toUpperCase() === 'GET' && proof.body === undefined) {
-        return proof.path === path || proof.path === `${path}?accessProjectionVersion=1`;
-    }
-    const op = actionId === 'session.archive' ? 'archive' : actionId === 'session.unarchive' ? 'unarchive' : null;
-    return op !== null && proof.method.toUpperCase() === 'POST' && proof.path === `${path}/${op}`
-        && proof.body !== null && typeof proof.body === 'object' && !Array.isArray(proof.body)
-        && Object.keys(proof.body).length === 0;
+    return isInstalledSessionLifecycleSubtreeMember(verified, sessionId);
 }
 
 /** Post-commit preparation signs its operand read; the Session route retains access admission. */
@@ -1060,7 +1094,8 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
     const docChild = isDocDiscussionEffect(verified.binding.actionId, actionId)
         || isDocDecisionPreparationEffect(verified.binding.actionId, actionId);
     if (!isDiscussionActionIdV1(actionId) || verified.binding.actionId !== actionId && !docChild
-        && !isSecondOpinionEffect(verified.binding.actionId, actionId)) return false;
+        && !isSecondOpinionEffect(verified.binding.actionId, actionId)
+        && !isWorkflowDiscussionPreparationEffect(verified.binding.actionId, actionId)) return false;
     if (actionId === 'discussion.create' && isAccountEncryptionCurrentnessHttpRead(proof)) {
         return proof.routeInput === undefined || sameManagedInput(proof.routeInput, {});
     }
@@ -1097,6 +1132,11 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
     const matchesInput = (body?: unknown) => proof.routeInput === undefined
         || sameManagedInput(proof.routeInput, { ...params.data,
             ...(body && typeof body === 'object' && !Array.isArray(body) ? body : {}) });
+    // Reply policy is an original-root companion read, not a separately
+    // authorized participants Action or permission to change the roster.
+    if (verified.binding.actionId === actionId && (actionId === 'discussion.post' || actionId === 'discussion.reply')
+        && method === 'GET' && proof.body === undefined
+        && url.pathname === atDiscussion(DISCUSSION_HTTP_PATHS_V1.participants)) return matchesInput();
     const preparesContent = actionId === 'discussion.read' || actionId === 'discussion.post'
         || actionId === 'discussion.reply' || actionId === 'discussion.rename'
         || actionId === 'discussion.invite' || actionId === 'discussion.access.grants.set';
@@ -1117,6 +1157,26 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
 function isAccountActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
     const root = verified.binding.actionId;
+    if (isMemoryExposureReadEffect(root, verified.effectActionId)) {
+        if (proof.method.toUpperCase() !== 'GET' || proof.body !== undefined) return false;
+        const url = new URL(proof.path, 'http://home.invalid');
+        if (url.pathname === '/v1/public-shares') {
+            const artifactId = url.searchParams.get('subjectId');
+            return url.hash === '' && url.searchParams.size === 2
+                && url.searchParams.get('subjectKind') === 'artifact'
+                && url.searchParams.getAll('subjectId').length === 1
+                && getActionSpec('artifact.access.grants.list').inputSchema.safeParse({ artifactId }).success
+                && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, { subjectKind: 'artifact', subjectId: artifactId }));
+        }
+        const match = /^\/v1\/artifacts\/([^/?#]+)\/access\/grants$/u.exec(proof.path);
+        if (!match) return false;
+        try {
+            const artifactId = decodeURIComponent(match[1]);
+            return getActionSpec('artifact.access.grants.list').inputSchema.safeParse({ artifactId }).success
+                && match[1] === encodeURIComponent(artifactId)
+                && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, { id: artifactId }));
+        } catch { return false; }
+    }
     if (root === 'doc.read') {
         if (!isDocReadEffect(root, verified.effectActionId)) return false;
         if (proof.method.toUpperCase() === 'GET' && proof.body === undefined && proof.path === '/v1/features/authenticated') return true;
@@ -1256,6 +1316,37 @@ function isDiscussionCandidateReadHttpPurpose(verified: VerifiedExternalActionEx
     } catch { return false; }
 }
 
+/** Selector preparation spends its declared root, never a Follow or Discussion child Action. */
+function isSessionTargetPreparationHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    const root = SignedRootActionIdSchema.safeParse(verified.binding.actionId);
+    if (!root.success || !getActionSpec(root.data).sessionTarget
+        || verified.effectActionId !== verified.binding.actionId) return false;
+    const method = proof.method.toUpperCase();
+    if (method === 'GET' && proof.body === undefined && proof.sessionRouteTarget?.actionId === 'follow.list'
+        && isSessionFollowActionHttpRequestV1('follow.list', { method, path: proof.path, routeInput: proof.routeInput,
+            sessionRouteSessionId: proof.sessionRouteTarget.sessionId })) return true;
+    // Native routes retain current actor/resource admission. Collection and
+    // private Account facts additionally require the root's Account-wide scope.
+    if (!('authentication' in verified.binding) && verified.binding.grant.targets !== null) return false;
+    if (method === 'POST' && proof.path === '/v2/sessions/query') {
+        const query = SessionListQueryV1Schema.safeParse(proof.body);
+        return query.success && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, query.data));
+    }
+    if (method === 'GET' && proof.body === undefined) {
+        if (proof.path === '/v1/account/encryption/currentness' || proof.path === '/v1/features/authenticated') {
+            return proof.routeInput === undefined || sameManagedInput(proof.routeInput, {});
+        }
+        if (isAccountActionHttpOperation('discussion.participants.list', proof)) return true;
+        if (proof.path === SESSION_FOLLOW_RULES_ROUTE_V1 && isSessionFollowActionHttpRequestV1('follow.list', {
+            method, path: proof.path, routeInput: proof.routeInput,
+        })) return true;
+    }
+    // Follow's existing transport owns the closed Project/assignment fact reads.
+    return isSessionFollowActionHttpRequestV1('follow.preview', { method, path: proof.path, body: proof.body,
+        routeInput: proof.routeInput, sessionRouteSessionId: proof.sessionRouteTarget?.sessionId });
+}
+
 /** Collection phases have no single Session operand and require captured Account-wide resource access. */
 function isSessionListHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
@@ -1357,6 +1448,14 @@ function isSessionStateFieldActionHttpPurpose(verified: VerifiedExternalActionEx
 /** The Run Action owner spends its storage phases without acquiring a worker claim. */
 function isWorkflowRunActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
+    if (isWorkflowDiscussionPreparationEffect(verified.binding.actionId, verified.effectActionId)) {
+        // Home retains the root envelope digest. Its installed host signs the
+        // exact derived read; C3 still owns grants, current keys and disclosure.
+        return proof.method.toUpperCase() === 'GET' && proof.body === undefined
+            && (isAccountActionHttpOperation('discussion.read', proof)
+                || isDiscussionActionHttpPreparation(verified, proof)
+                || proof.path === '/v1/features/authenticated');
+    }
     const reads = ['get', 'run-key.census', 'run-key.commit'];
     const invocationReads = [...reads, 'invocations.list', 'invocations.get', 'invocations.current'];
     const purposes: Readonly<Record<string, readonly string[]>> = {
@@ -1426,7 +1525,8 @@ export async function verifyExternalActionDomainExecutionRequest(
                 || verified.binding.sessionActionOrigin && isLedSubtreeSessionLifecycleActionId(root.data))
             && verified.binding.target.kind === 'machine' && verified.binding.target.machineId === verified.binding.machineId
             || getActionSpec(root.data).executionPlacement === 'session' && verified.target.kind === 'session')
-        && verified.effectActionId === verified.binding.actionId
+        && (verified.effectActionId === verified.binding.actionId
+            || isSessionArchiveStopEffect(verified.binding.actionId, verified.effectActionId))
         && proof.method.toUpperCase() === 'GET' && proof.body === undefined
         && proof.path === `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`;
     const managedRoot = ManagedMachineActionIdV1Schema.safeParse(verified.binding.actionId);
@@ -1456,14 +1556,15 @@ export async function verifyExternalActionDomainExecutionRequest(
     } else if (isSessionStateFieldActionHttpPurpose(verified, proof)) {
         // The existing Session routes retain actor access, tuple CAS and publisher policy.
     } else if (isSessionListHttpPurpose(verified, proof)
-        || isInstalledSessionSubtreeObservationHttpPurpose(verified, proof)
+        || await isInstalledSessionSubtreeObservationHttpPurpose(verified, proof)
         || isSessionSourceKeyTransportHttpPurpose(verified, proof)
         || await isInstalledSessionLifecycleHttpPurpose(verified, proof)) {
-        // Original-root observations and selected lifecycle operands retain
-        // signature, currentness and ordinary route access; no cross-Action grant.
+        // Original-root observations and lifecycle operands (including Archive's
+        // named Stop phase) retain signature, currentness and ordinary route access.
     } else if (!verified.binding.actionId.startsWith('follow.')
         && (rootSpec?.executionPlacement === 'session' || verified.binding.sessionActionOrigin)
-        && verified.effectActionId === verified.binding.actionId
+        && (verified.effectActionId === verified.binding.actionId
+            || isSessionArchiveStopEffect(verified.binding.actionId, verified.effectActionId))
         && isAccountEncryptionCurrentnessHttpRead(proof)) {
         // The Session transport must admit persisted requester Account mode
         // before opening owner metadata. verifyCommon has already rechecked
@@ -1601,6 +1702,9 @@ export async function verifyExternalActionDomainExecutionRequest(
         // admission or spend a sibling Follow subaction/private census.
         if (verified.effectActionId !== verified.binding.actionId
             || !isAccountActionHttpOperation(verified.effectActionId, proof)) return null;
+    } else if (isSessionTargetPreparationHttpPurpose(verified, proof)) {
+        // Specialized roots above retain their narrower native-purpose contract.
+        // General Session operands prepare only the signed selector read phases.
     } else if (isAccountActionHttpPurpose(verified, proof)) {
         // The signature binds these exact bytes; route schemas and the domain
         // still own resource admission, while the credential policy below
@@ -1636,6 +1740,7 @@ export async function verifyExternalActionDomainExecutionRequest(
     const effect = parseExternalActionEffectAction(verified.binding, verified.effectActionId);
     const credentialAction = isDocDecisionPreparationEffect(verified.binding.actionId, verified.effectActionId)
         || isSecondOpinionEffect(verified.binding.actionId, verified.effectActionId)
+        || isMemoryExposureReadEffect(verified.binding.actionId, verified.effectActionId)
         ? parseExternalActionEffectAction(verified.binding, verified.binding.actionId)
         : isTeamCredentialUsageExportReadEffect(verified.binding.actionId, verified.effectActionId)
         || isDocDiscussionEffect(verified.binding.actionId, verified.effectActionId)
@@ -2080,6 +2185,7 @@ export async function verifyExternalActionMachineRpcExecution(
             ? request.method === request.event ? 'session.message.send' : null
             : resolveMachineRpcExternalActionEffectV1(method, binding);
         if (!transitionPurpose && (binding.actionId !== execution.effectActionId
+                && !isSessionArchiveStopEffect(binding.actionId, execution.effectActionId)
             || effectActionId !== execution.effectActionId)) return null;
     }
     // Home proves the original Session or accepted handoff source. RPC effects

@@ -416,10 +416,10 @@ describe('projectUiSessionRuntimeAwareness', () => {
             presence: 'online',
             hasPendingPermissionRequests: true,
             pendingRequestObservedAt: nowMs - 1_000,
-        }, nowMs)).toEqual([nowMs - 1_000 + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS]);
+        }, nowMs)).toEqual([]);
     });
 
-    it('expires stale permission attention at the canonical freshness boundary', () => {
+    it('keeps permission attention while the runtime is live, however long the request has waited', () => {
         const nowMs = 1_000_000;
         const runtimeState = projectUiSessionRuntimeAwareness({
             nowMs,
@@ -430,8 +430,8 @@ describe('projectUiSessionRuntimeAwareness', () => {
             pendingRequestObservedAt: nowMs - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
         });
 
-        expect(runtimeState.freshPermissionRequired).toBe(false);
-        expect(runtimeState.operational.primary).toBe('none');
+        expect(runtimeState.freshPermissionRequired).toBe(true);
+        expect(runtimeState.operational.primary).toBe('permission_required');
         expect(readSessionRuntimePresentationFreshnessExpirations({
             nowMs,
             active: true,
@@ -442,7 +442,7 @@ describe('projectUiSessionRuntimeAwareness', () => {
         }, nowMs)).toEqual([]);
     });
 
-    it('still expires stale non-permission user-action attention without active work', () => {
+    it('keeps user-action attention while the runtime is live, however long the request has waited', () => {
         const nowMs = 1_000_000;
         const runtimeState = projectUiSessionRuntimeAwareness({
             nowMs,
@@ -453,7 +453,7 @@ describe('projectUiSessionRuntimeAwareness', () => {
             pendingRequestObservedAt: nowMs - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
         });
 
-        expect(runtimeState.freshActionRequired).toBe(false);
-        expect(runtimeState.operational.primary).toBe('none');
+        expect(runtimeState.freshActionRequired).toBe(true);
+        expect(runtimeState.operational.primary).toBe('action_required');
     });
 });

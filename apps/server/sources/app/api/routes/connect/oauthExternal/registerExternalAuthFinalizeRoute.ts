@@ -44,7 +44,7 @@ import {
     replaceAccountForProviderResetInTx,
     type ProviderResetAccountReplacementResult,
 } from "@/app/home/governance/accountReplacement";
-import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
+import { acquireAccountLifecycleAdmissionInTx, setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { provisionFreshAccountInTx } from "@/app/auth/provisionFreshAccountInTx";
 import { isCurrentAccountDirectoryOAuthTarget } from "./accountDirectoryOAuthTarget";
 import {
@@ -57,7 +57,7 @@ import {
     requireCurrentOAuthPendingRuntime,
     requireCurrentOAuthPendingRuntimeInTx,
 } from "./oauthSecurityBinding";
-import { requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
+import { acquireTeamOAuthAdmissionAccountsInTx, requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
 import { readOAuthAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
 import { upsertVerifiedMailboxEvidenceInTx } from "@/app/auth/verifiedMailboxEvidence";
 import {
@@ -481,6 +481,8 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     transferFromAccountId: oldAccountId,
                 });
                 replacementOutcome = await inTx(async (tx) => {
+                    await acquireAccountLifecycleAdmissionInTx(tx,
+                        { accountId: oldAccountId, additionalAccountIds: [replacementAccountId] });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                     if (!isTeamAdmission && !await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                         env: requestHomeEnv,
@@ -618,10 +620,14 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 | null = null;
             try {
                 freshAccountWrite = await inTx(async (tx) => {
+                    await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                        accountIds: [proposedAccountId], provider: parsedValue.securityBinding?.provider,
+                        connection: parsedValue.securityBinding?.connection,
+                        admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                    });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
-                    // The current policy decision and exact pending delete are
-                    // the first transaction operations. Every durable effect
-                    // below rolls back if either authority has gone stale.
+                    // Current policy and exact pending consumption precede
+                    // provisioning; stale authority rolls every effect back.
                     if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                         env: requestHomeEnv,
                         methodId: providerId,
@@ -776,6 +782,11 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 }>;
             try {
                 existingAccountWrite = await inTx(async (tx) => {
+                    await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                        accountIds: [existingAccount.id], provider: parsedValue.securityBinding?.provider,
+                        connection: parsedValue.securityBinding?.connection,
+                        admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                    });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                     if (
                         isAccountDirectory

@@ -211,7 +211,7 @@ describe('SessionViewerController', () => {
     const { render } = mountController({ phone: false });
     const hook = await render();
     await act(async () => {
-      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480 } });
+      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     });
     expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
     await act(async () => {
@@ -219,7 +219,7 @@ describe('SessionViewerController', () => {
         .getCurrent()
         .controller.port.apply({ kind: 'viewer.open', source: 'browser' });
     });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480 } });
+    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     await act(async () => {
       hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
     });

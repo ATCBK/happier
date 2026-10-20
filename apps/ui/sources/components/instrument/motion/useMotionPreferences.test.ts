@@ -6,6 +6,7 @@ import { resolveMotionPreferences, type MotionPreferencesInput } from './useMoti
 function input(overrides: Partial<MotionPreferencesInput> = {}): MotionPreferencesInput {
     return {
         visualEffectsLevel: 'full',
+        hapticsEnabled: true,
         animatedNumbers: true,
         contextGaugeStyle: 'gauge',
         osReduceMotion: false,
@@ -34,13 +35,13 @@ describe('resolveMotionPreferences', () => {
         expect(p.hapticsEnabled).toBe(true);
     });
 
-    it('minimal level: crossfade only, effects off, numbers off, haptics off', () => {
+    it('minimal level: crossfade only, effects off and numbers off, with independent haptics', () => {
         const p = resolveMotionPreferences(input({ visualEffectsLevel: 'minimal' }));
         expect(p.level).toBe('minimal');
         expect(p.effectsEnabled).toBe(false);
         expect(p.entrance).toEqual({ kind: 'crossfade', durationMs: INSTRUMENT_DURATIONS.crossfadeMinimal });
         expect(p.animatedNumbersEnabled).toBe(false);
-        expect(p.hapticsEnabled).toBe(false);
+        expect(p.hapticsEnabled).toBe(true);
     });
 
     it('OS reduce-motion FORCES minimal regardless of the chosen level', () => {
@@ -50,9 +51,16 @@ describe('resolveMotionPreferences', () => {
             expect(p.effectsEnabled).toBe(false);
             expect(p.entrance.kind).toBe('crossfade');
             expect(p.animatedNumbersEnabled).toBe(false);
-            expect(p.hapticsEnabled).toBe(false);
+            expect(p.hapticsEnabled).toBe(true);
             expect(p.reduceMotion).toBe(true);
         }
+    });
+
+    it('a device opt-out silences haptics without reducing visual effects', () => {
+        const p = resolveMotionPreferences(input({ hapticsEnabled: false }));
+        expect(p.hapticsEnabled).toBe(false);
+        expect(p.effectsEnabled).toBe(true);
+        expect(p.animatedNumbersEnabled).toBe(true);
     });
 
     it('web disables haptics even at full level', () => {

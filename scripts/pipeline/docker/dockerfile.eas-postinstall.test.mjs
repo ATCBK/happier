@@ -124,8 +124,17 @@ test("server images share the production dependency closure and retain their dec
       }
     }
     writePackage(path.join(fixtureRoot, "apps/server/node_modules/sharp"), {
-      name: "sharp", version: "0.35.5",
+      name: "sharp", version: "0.35.5", optionalDependencies: { "@img/sharp-linux-x64": "0.35.5" },
     });
+    writePackage(path.join(fixtureRoot, "apps/server/node_modules/@img/sharp-linux-x64"), {
+      name: "@img/sharp-linux-x64", version: "0.35.5",
+    });
+    const nativeAddon = path.join(fixtureRoot, "apps/server/node_modules/@img/sharp-linux-x64/runtime.node");
+    const generatedEngine = path.join(fixtureRoot, "node_modules/.prisma/client/query-engine.node");
+    for (const file of [nativeAddon, generatedEngine]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "runtime-output");
+    }
     writePackage(path.join(fixtureRoot, "node_modules/redis-memory-server"), {
       name: "redis-memory-server", version: "0.16.0", dependencies: { "extract-zip": "^2.0.1" },
     });
@@ -146,8 +155,9 @@ test("server images share the production dependency closure and retain their dec
     assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/@huggingface/transformers")), false);
     assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/@happier-dev/cli")), false);
     assert.equal(fs.existsSync(path.join(fixtureRoot, "apps/server/node_modules/sharp/package.json")), true);
-    assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/redis-memory-server/package.json")), true);
-    assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/extract-zip/package.json")), true);
+    for (const file of [nativeAddon, generatedEngine]) assert.equal(fs.readFileSync(file, "utf8"), "runtime-output");
+    assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/redis-memory-server/package.json")), false);
+    assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules/extract-zip/package.json")), false);
     for (const name of visited) {
       if (name !== "@happier-dev/server") {
         assert.equal(fs.existsSync(path.join(fixtureRoot, "node_modules", ...name.split("/"), "package.json")), true,

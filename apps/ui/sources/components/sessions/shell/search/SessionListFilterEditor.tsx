@@ -36,6 +36,7 @@ import {
     type SessionListFilterDrillSection,
     type SessionListFilterPanelCopy,
 } from './SessionListFilterPanel';
+import { useSessionListFilterProjectOptions } from './useSessionListFilterProjectOptions';
 /*
  * Audience identity belongs to the filter state owner. This component consumes its
  * qualified JSON key rather than maintaining a parallel Team-only syntax.
@@ -83,7 +84,10 @@ export type SessionListFilterEditorProps = Readonly<{
     onOpenArchived?: () => void;
     /** Sessions the list currently shows for these choices, from the list's own derivation. */
     resultCount?: number;
+    /** Worded result for a host whose result is a live preview rather than the list's count. */
+    resultSummary?: string;
     onDone?: () => void;
+    doneDisabled?: boolean;
     maxHeight?: number;
     disableTransitions?: boolean;
 }>;
@@ -311,6 +315,7 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
         props.removeAuthoritativelyDeletedSelections,
         props.teamAudienceContext,
     ]);
+    const projects = useSessionListFilterProjectOptions();
     const model = React.useMemo(() => buildSessionListFilterEditorModel({
         filters: props.filters,
         includeInactive: props.includeInactive,
@@ -322,6 +327,7 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
         audiences,
         audiencePresentation: props.teamAudienceContext?.kind === 'global' ? 'team_drilldown' : 'flat',
         tags: props.tags,
+        projects,
         sourceAvailable: props.sourceAvailable,
         fixedHomeServerIds: props.fixedHomeServerIds,
         fixedAudienceKeys: props.fixedAudienceKeys,
@@ -343,6 +349,7 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
         props.tags,
         props.teamAudienceContext,
         props.onOpenArchived,
+        projects,
     ]);
     const handleActiveStepChange = React.useCallback((step: SelectionListStep) => {
         if (props.teamAudienceContext?.kind !== 'global') return;
@@ -493,7 +500,7 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
                             ? syncedAudienceStep
                             : undefined}
                         onActiveStepChange={handleActiveStepChange}
-                        listAccessibilityLabel={drill === 'tags' ? props.labels.tags : props.labels.sharedWith}
+                        listAccessibilityLabel={drill === 'tags' ? props.labels.tags : drill === 'projects' ? props.labels.project : props.labels.sharedWith}
                         onSelect={handleSelect}
                         pagination={drill === 'audiences' ? pagination : undefined}
                         onRequestClose={closeDrill}
@@ -514,12 +521,14 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
                     selectedIds={model.selection.selectedIds}
                     labels={props.labels}
                     resultCount={props.resultCount}
+                    resultSummary={props.resultSummary}
                     maxHeight={props.maxHeight}
                     onSelect={handleSelect}
                     onOpenDrill={setDrill}
                     audiencesAvailable={teamAudienceEnabled}
                     onReset={props.resetFilters}
                     onDone={props.onDone}
+                    doneDisabled={props.doneDisabled}
                 />
             )}
         </View>

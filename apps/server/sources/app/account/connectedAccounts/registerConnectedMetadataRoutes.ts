@@ -12,6 +12,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { inReadSnapshot, inTx } from '@/storage/inTx';
+import { readReservedAccountScopedKvRowMutationConflict } from '@/app/kv/reservedAccountScopedKvRow';
 import {
     readConnectedPresentationRowInTx,
     readConnectedAcknowledgementsRowInTx,
@@ -41,13 +42,19 @@ export function registerConnectedMetadataRoutes(app: Fastify): void {
             response: { 200: asServerProtocolZod(ConnectedMetadataRowMutationResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
         try { return reply.send(await inTx(tx => mutateConnectedPresentationRowInTx(tx, { ...request.body, accountId: request.userId }))); }
-        catch { return reply.code(500).send({ error: 'internal' }); }
+        catch (error) {
+            const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+            return conflict ? reply.send(conflict) : reply.code(500).send({ error: 'internal' });
+        }
     });
     app.post(CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ConnectedAcknowledgementsRowMutationV1Schema),
             response: { 200: asServerProtocolZod(ConnectedMetadataRowMutationResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
         try { return reply.send(await inTx(tx => mutateConnectedAcknowledgementsRowInTx(tx, { ...request.body, accountId: request.userId }))); }
-        catch { return reply.code(500).send({ error: 'internal' }); }
+        catch (error) {
+            const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+            return conflict ? reply.send(conflict) : reply.code(500).send({ error: 'internal' });
+        }
     });
 }

@@ -13,7 +13,7 @@ import {
 import { collectProviderConnectionDnsEvidence } from '@/providers/registry/dnsEvidence';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { createCliProviderConnectionsStore } from '@/providers/settings/catalogStore';
-import { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import { refreshActiveProviderConnectionsCatalog, refreshProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -155,10 +155,16 @@ export function createRuntimeProviderConnectionServices(input: Readonly<{
       const capturedStore = createCliProviderConnectionsStore({ credentials: input.credentials });
       // An explicit operation reads current row authority even when the
       // daemon's asynchronous Account-change observer has not caught up yet.
-      await refreshActiveProviderConnectionsCatalog({ credentials: input.credentials }, { afterChange: true });
+      const catalog = await refreshProviderConnectionsCatalogForCli({
+        expectedScopeKey: resolveAccountSettingsScopeKey(input.credentials), credentials: input.credentials,
+      });
       capturedStore.assertCurrent();
+      if (catalog.status !== 'ready' && catalog.status !== 'partial') throw createProviderErrorV1('provider_catalog_unavailable');
       const refreshed = getActiveAccountSettingsSnapshot();
       if (!refreshed || refreshed.scopeKey !== active.scopeKey) throw createProviderErrorV1('provider_settings_invalid');
+      if (refreshed.providerConnectionsCatalog?.status !== 'ready' && refreshed.providerConnectionsCatalog?.status !== 'partial') {
+        throw createProviderErrorV1('provider_catalog_unavailable');
+      }
       active = refreshed;
       const providerRead = readProviderSettingsForCli(active, { purpose: 'display' });
       const projection = registryProjection ?? await loadRegistryProjection();

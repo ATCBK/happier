@@ -17,9 +17,11 @@ import { resolveTrackedSessionTerminalHostExitCandidate, shouldRetainTrackedTerm
 import { retireExactTerminalControlServiceability, retireStoppedPlainRunnerControlServiceability } from './retireTerminalControlServiceability';
 import { reattachTrackedSessionsFromMarkers, readOrphanedDeadPlainRunnerMarkers } from './reattachFromMarkers';
 import { publishOrphanedStartupSessionEnds } from './publishOrphanedStartupSessionEnds';
+import { recoverStrandedTerminalControlServiceability } from './recoverStrandedTerminalControlServiceability';
 
 describe.skipIf(process.platform !== 'linux')('offline Stop through physical exit, marker custody and Home recovery', () => {
-  it.each(['bound', 'missing-owned-host', 'mode-only', 'mode-only-offline', 'terminal-started-offline', 'missing-marker', 'live-child'] as const)('releases only durably recoverable dead custody: %s', async wiring => {
+  it.each(['bound', 'missing-owned-host', 'mode-only', 'mode-only-offline', 'terminal-started-offline', 'missing-marker', 'live-child',
+    'unreported-dead-runner', 'unreported-live-runner'] as const)('releases only durably recoverable dead custody: %s', async wiring => {
     await withConfiguredDaemonTestHome({ prefix: 'offline-stop-' }, async ({ homeDir }) => {
       const child = spawn(process.execPath, ['-e', "process.send('ready'); setInterval(() => {}, 1000)"],
         { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -28,6 +30,15 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       const pid = child.pid!;
       const identity = await readProcessIdentityByPid(pid);
       if (!identity) throw new Error('Owned fixture process identity unavailable');
+      // A native runner can publish hostPid before its webhook binds it to the
+      // tracked launcher. Stop must re-prove that metadata owner, not ignore it.
+      const unreported = wiring === 'unreported-dead-runner' || wiring === 'unreported-live-runner';
+      const nativeChild = unreported ? spawn(process.execPath, ['-e', "process.send('ready'); setInterval(() => {}, 1000)"],
+        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }) : null;
+      const nativeExited = nativeChild ? once(nativeChild, 'exit') : null;
+      if (nativeChild) await once(nativeChild, 'message');
+      const nativeIdentity = nativeChild?.pid ? await readProcessIdentityByPid(nativeChild.pid) : null;
+      if (nativeChild && !nativeIdentity) throw new Error('Owned native runner identity unavailable');
       const sessionId = `offline-stop-${wiring}`;
       const startedBy = wiring === 'terminal-started-offline' ? 'terminal' as const : 'daemon' as const;
       const tracked: TrackedSession = { pid, childProcess: child, startedBy, happySessionId: sessionId,
@@ -38,11 +49,12 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       if (wiring !== 'missing-marker') await writeSessionMarker({ pid, happySessionId: sessionId, startedBy,
         processStartTimeMs: identity.processStartTimeMs, processCommandHash: identity.processCommandHash });
       const modeOnly = wiring === 'mode-only' || wiring === 'mode-only-offline';
-      let online = wiring === 'mode-only';
+      let online = wiring === 'mode-only' || unreported;
       let retired = false;
       let retirementResult: Awaited<ReturnType<typeof retireExactTerminalControlServiceability>> | undefined;
       const raw = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 0,
-        metadataVersion: 1, metadata: JSON.stringify({ path: homeDir, hostPid: pid, hostProcessStartTimeMs: identity.processStartTimeMs,
+        metadataVersion: 1, metadata: JSON.stringify({ path: homeDir, machineId: 'fixture-machine',
+          hostPid: nativeChild?.pid ?? pid, hostProcessStartTimeMs: nativeIdentity?.processStartTimeMs ?? identity.processStartTimeMs,
           ...(modeOnly ? { terminal: { mode: 'tmux' } } : {}),
           ...(wiring === 'missing-owned-host' ? { terminal: { mode: 'tmux', controlServiceabilityV1: {
             v: 1, attachmentId: 'retired-owned-host', state: 'servable', observedAt: 1 } } } : {}) }) });
@@ -58,7 +70,10 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       const patch = vi.spyOn(axios, 'patch').mockImplementation(async (_url, body) => {
         if (!online) throw refusal();
         const parsed = SessionMetadataTuplePatchV1Schema.parse(body);
-        expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
+        if (modeOnly) expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
+          lifecycleState: 'stopped', lifecycleStateSince: expect.any(Number), terminal: { mode: 'tmux' },
+        } } } } });
+        else expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
           terminal: { mode: wiring === 'missing-owned-host' ? 'tmux' : 'plain', controlServiceabilityV1: {
             retired: true, ...(wiring === 'missing-owned-host' ? { attachmentId: 'retired-owned-host' } : {}) } } } } } } });
         retired = true;
@@ -79,12 +94,12 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
         onFinalTrackedSessionExitStaged: async () => {
           await resolveTrackedSessionTerminalHostExitCandidate({ tracked, pid, happyHomeDir: homeDir, attachmentInfo: null });
         } });
-      const retire = async () => {
+      const retire = async (stoppedAt?: number) => {
         const input = { credentials: { token: 'fixture', encryption: null }, sessionId, terminalMode: 'plain' as const,
-          expectedRunner: { pid, startTimeMs: identity.processStartTimeMs } };
+          expectedRunner: { pid, startTimeMs: identity.processStartTimeMs }, stoppedAt };
         const retirement = await retireExactTerminalControlServiceability(input);
         retirementResult = retirement;
-        expect(retirement).toBe('retired');
+        expect(retirement).toBe(unreported ? 'superseded' : 'retired');
         return retirement;
       };
       const observeExit = async ({ trackedPids }: { trackedPids: readonly number[] }) =>
@@ -92,13 +107,28 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
           onExitObserved: onExit });
       try {
         if (wiring !== 'live-child') { child.kill('SIGTERM'); await exited; }
+        if (wiring === 'unreported-dead-runner') { nativeChild!.kill('SIGTERM'); await nativeExited; }
         const stop = createStopSession({ pidToTrackedSession: sessions, areTrackedRunnersExited: observeExit,
-          waitForTrackedRunnersExit: observeExit, retireAbsentTerminalControlServiceability: () =>
-            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked, publishRetirement: retire }),
+          waitForTrackedRunnersExit: observeExit, retireAbsentTerminalControlServiceability: ({ stoppedAt }) =>
+            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked, publishRetirement: () => retire(stoppedAt) }),
+          recoverStrandedTerminalControlServiceability: input => recoverStrandedTerminalControlServiceability({
+            ...input, credentials: { token: 'fixture', encryption: null }, currentMachineId: 'fixture-machine',
+            loadTerminalHostAdapters: async () => ({}),
+            retireExactTerminalControlServiceability: target => retireExactTerminalControlServiceability({
+              ...target, credentials: { token: 'fixture', encryption: null },
+            }),
+          }),
           // Refuse OS effect authority for the live-child sensitivity vector.
           retireUpstreamAuthorityBeforeProcessStop: wiring === 'live-child' ? async () => false : undefined });
         const result = StopSessionResultSchema.parse(await stop(sessionId));
-        if (wiring === 'mode-only') {
+        if (unreported) {
+          expect(retirementResult).toBe('superseded');
+          expect(result).toEqual(wiring === 'unreported-dead-runner' ? { status: 'stopped' }
+            : { status: 'incomplete', reason: 'tracked_runner_absent' });
+          expect(retired).toBe(wiring === 'unreported-dead-runner');
+          expect(sessions.size).toBe(0);
+          if (wiring === 'unreported-live-runner') expect(nativeChild!.exitCode === null && nativeChild!.signalCode === null).toBe(true);
+        } else if (wiring === 'mode-only') {
           expect(result).toEqual({ status: 'stopped' });
           expect(retirementResult).toBe('retired');
           expect(sessions.size).toBe(0);
@@ -110,7 +140,7 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
             orphanedDeadDaemonSessions: recovery.orphanedDeadDaemonSessions,
             retireTerminalControlServiceability: async () => { await retire(); } })).toEqual([]);
           expect(await readSessionMarkerForPid(pid)).toBeNull();
-          expect(retired).toBe(false);
+          expect(retired).toBe(true);
         } else if (wiring === 'bound' || wiring === 'missing-owned-host' || wiring === 'mode-only-offline'
             || wiring === 'terminal-started-offline') {
           expect(result).toEqual({ status: 'stopped' });
@@ -139,7 +169,9 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       } finally {
         get.mockRestore(); patch.mockRestore();
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        if (nativeChild && nativeChild.exitCode === null && nativeChild.signalCode === null) nativeChild.kill('SIGKILL');
         await exited;
+        await nativeExited;
       }
     });
   });

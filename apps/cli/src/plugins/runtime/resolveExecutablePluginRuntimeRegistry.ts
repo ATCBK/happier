@@ -2181,18 +2181,21 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const retainedActivationPluginIds = new Set(
         retainedActivationRegistryLeases.flatMap((lease) => [...lease.pluginIds]),
     );
-    // A scoped runtime can still project every committed Resource declaration,
-    // but its activation work remains scoped to the caller's requested
-    // components. Dynamic Resource admission below joins only declarations
-    // backed by those requested or retained components.
+    // Startup activation stays scoped to requested components. Resource
+    // admission also retains serving peers, including dormant occurrences
+    // that will only register a producer when demanded.
     const scopedActivationPluginIds = params?.pluginIds === undefined
         ? undefined
         : Object.freeze([...new Set(params.pluginIds)].sort());
-    const scopedResourceActivationPluginIds = scopedActivationPluginIds === undefined
+    const scopedResourcePluginIds = scopedActivationPluginIds === undefined
         ? null
         : new Set([
             ...scopedActivationPluginIds,
             ...retainedActivationPluginIds,
+            // An unchanged dormant plugin has a serving occurrence but no
+            // activation component to retain. Keep its declared Resources
+            // available for demand without activating it during replacement.
+            ...(params?.servingPluginOccurrences?.keys() ?? []),
         ]);
     const immutableGenerationIdsByPluginId = new Map(
         committedImmutableGenerationIdsByPluginId,
@@ -2380,8 +2383,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
                     // Resource authority; declarations alone cannot bind it.
                     candidateOccurrenceIdsByPluginId.has(resource.pluginId)
                     && (
-                        scopedResourceActivationPluginIds === null
-                        || scopedResourceActivationPluginIds.has(resource.pluginId)
+                        scopedResourcePluginIds === null
+                        || scopedResourcePluginIds.has(resource.pluginId)
                     )
                 )
             )
@@ -2480,10 +2483,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 contribution: { family: 'resources', localId },
                 requestIds: resource.definition.hostAccess,
             }),
-            runtime: cold ? {
+            // Activation facts also include unavailable plugins. Resolve at
+            // the Resource callback boundary so admission can contain the
+            // failure and preserve activation's plugin-scoped diagnostic.
+            // Eager resolution here would reject the entire daemon registry.
+            runtime: {
                 async read(options) { return await readRegisteredRuntime().read(options); },
                 observe(invalidate, options) { return readRegisteredRuntime().observe(invalidate, options); },
-            } : readRegisteredRuntime(),
+            },
             ...(cold ? { async prepareRuntime() {
                 const previousFacts = activatedRegistry.targetActivationFacts;
                 await activatedRegistry.activateContributionsOnDemand([{ pluginId, family: 'resources', localId }]);

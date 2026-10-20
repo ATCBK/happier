@@ -1004,7 +1004,6 @@ const GroupDetail = React.memo(function GroupDetail(props: Readonly<{
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
             contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
-            backendPreference="auto"
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

@@ -35,6 +35,8 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { resetDynamicModelProbeCacheForTests } from '@/sync/domains/models/dynamicModelProbeCache';
+import { resetDynamicConfigOptionsProbeCacheForTests } from '@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import type { StorageState } from '@/sync/store/types';
@@ -149,8 +151,8 @@ const testSettingsDefaults = vi.hoisted(() => ({
     secrets: [],
     secretBindingsByProfileId: {},
     serverSelectionGroups: [],
-    serverSelectionActiveTargetKind: null,
-    serverSelectionActiveTargetId: null,
+    serverSelectionActiveTargetKind: null as 'server' | 'group' | null,
+    serverSelectionActiveTargetId: null as string | null,
     codexBackendMode: 'acp',
     installablesPolicyByMachineId: {},
     sessionWindowsRemoteSessionLaunchMode: 'hidden' as 'hidden' | 'windows_terminal' | 'console',
@@ -234,7 +236,7 @@ async function activateAuthoringScope(scope: Readonly<{ serverId: string; accoun
     authoringAccount = await activateStorageAccountScope(scope);
 }
 
-async function renderNewSessionScreenModel(options: Readonly<{ openAgentPicker?: boolean }> = {}) {
+async function renderNewSessionScreenModel(options: Readonly<{ openAgentPicker?: boolean; freshDraft?: boolean }> = {}) {
     const seedStore = () => {
         storageStore.getState().applySettingsLocal(settingsParse(settingsRuntimeState.current ?? {}));
         const machines = machineState.value.map(machine => createMachineFixture({
@@ -258,8 +260,20 @@ async function renderNewSessionScreenModel(options: Readonly<{ openAgentPicker?:
     if (!scope) throw new Error('Installables journey requires its authenticated authoring Account');
     const draftId = crypto.randomUUID();
     routeParamsState.value = { ...routeParamsState.value, draftId };
-    writeNewSessionDraftToRepository({ scope, draftId, draft: { ...persistedDraft, targetServerId: homeState.targetServerId } });
-    const hook = await renderHook<any>(() => useNewSessionScreenModel() as any, {
+    // These cases reopen retained authoring. A blank configuration-only user edit
+    // deliberately does not create a kept New Session draft.
+    if (!options.freshDraft) {
+        writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded',
+            draft: { ...persistedDraft, targetServerId: homeState.targetServerId } });
+        expect(readNewSessionDraftFromRepository({ scope, draftId }), 'the model must receive the seeded repository draft').toMatchObject({
+            selectedMachineId: persistedDraft.selectedMachineId,
+            selectedPath: persistedDraft.selectedPath,
+            selectedProfileId: persistedDraft.selectedProfileId,
+            acpSessionModeId: persistedDraft.acpSessionModeId,
+            targetServerId: homeState.targetServerId,
+        });
+    }
+    const hook = await renderHook<any>(() => useNewSessionScreenModel({ draftId }) as any, {
         flushOptions: initialHookFlushOptions,
     });
     if (options.openAgentPicker) {
@@ -525,21 +539,6 @@ vi.mock('@/components/sessions/new/newSessionScreenStyles', () => ({
     newSessionScreenStyles: {},
 }));
 
-vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
-    useNewSessionServerTargetState: () => ({
-        serverProfiles: [],
-        serverTargets: [],
-        resolvedSettingsTarget: { allowedServerIds: [] },
-        allowedTargetServerIds: [],
-        targetServerId: homeState.targetServerId,
-        targetServerProfile: null,
-        targetServerName: null,
-        showServerPickerChip: false,
-        serverSelectionProps: {},
-        resolveTargetServerId: () => homeState.targetServerId,
-    }),
-}));
-
 vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
     useMachineEnvPresence: () => ({ isPreviewEnvSupported: true, isLoading: false, meta: {}, refresh: vi.fn() }),
 }));
@@ -599,7 +598,7 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { applyAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
 const { applyProfileCatalogSnapshot } = await import('@/sync/store/settings/profileCatalogSnapshot');
 const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
-const { writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+const { writeNewSessionDraftToRepository, readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
 const { activateStorageAccountScope } = await import('@/dev/testkit/mocks/storage');
 const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
 afterEach(async () => {
@@ -623,6 +622,10 @@ afterAll(async () => {
 
 describe('useNewSessionScreenModel (installables)', () => {
     beforeEach(async () => {
+        // Cases reuse the same Home/machine/Agent with different probe responses.
+        // Clearing physical storage alone leaves these module-owned observations warm.
+        resetDynamicModelProbeCacheForTests();
+        resetDynamicConfigOptionsProbeCacheForTests();
         network.resetRequests();
         const targetHome = await network.addHome('https://installables-target.example.test', 'account-1');
         homeState.targetServerId = targetHome.id;
@@ -763,6 +766,8 @@ describe('useNewSessionScreenModel (installables)', () => {
         settingsState.experiments = false;
         settingsState.sessionDefaultPermissionModeByTargetKey = {};
         settingsState.backendEnabledByTargetKey = {};
+        settingsState.serverSelectionActiveTargetKind = 'server';
+        settingsState.serverSelectionActiveTargetId = homeState.targetServerId;
         const activeScope = { serverId: homeState.activeServerId, accountId: 'acct_active' };
         await activateAuthoringScope(activeScope);
         settingsState.acpCatalogSettingsV1 = {
@@ -856,7 +861,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             expect(nativeCalls()).toEqual([expect.objectContaining({
                 targetId: 'machine-1', serverUrl: 'https://installables-target.example.test',
                 payload: expect.objectContaining({ params: expect.objectContaining({
-                    cwd: '/repo', backendTarget: { kind: 'backend', backendId: 'codex' }, environmentVariables: {},
+                    cwd: '/repo', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, environmentVariables: {},
                 }) }),
             })]);
         } finally {
@@ -892,6 +897,8 @@ describe('useNewSessionScreenModel (installables)', () => {
 
     it('defers dependency preparation to explicit daemon creation on the selected target', async () => {
         routeParamsState.value = { machineId: 'machine-1' };
+        // This journey tests a managed helper dependency, not a missing Agent executable.
+        cliAvailabilityState.value = { available: { codex: true, claude: true, opencode: null } };
         settingsState.experiments = true;
         includeProjectedCodexAcpInstallableState.value = true;
         (persistedDraft as typeof persistedDraft & { resumeSessionId: string }).resumeSessionId = 'resume-session-1';
@@ -906,11 +913,14 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.variant).toBe('simple');
         expect(model?.simpleProps?.agentType).toBe('codex');
         expect(model?.simpleProps?.selectedMachineId).toBe('machine-1');
-        expect(model?.simpleProps?.machineName).toBe('Machine One');
+        expect(model?.simpleProps?.machineName).toBe('account-1 · Machine One');
+        expect(model?.simpleProps?.selectedPath).toBe('/repo');
+        expect(model?.simpleProps?.canCreate, JSON.stringify(model?.simpleProps?.connectionStatus)).toBe(true);
         expect(dependencyInstallRequests()).toEqual([]);
         expect(spawnRequests()).toEqual([]);
 
         await invokeHookAction(() => model?.simpleProps?.handleCreateSession?.());
+        expect(modalAlertMock).not.toHaveBeenCalled();
 
         await waitForHomeGovernance(() => expect(spawnRequests()).toHaveLength(1));
         expect(spawnRequests()[0]).toMatchObject({
@@ -978,6 +988,7 @@ describe('useNewSessionScreenModel (installables)', () => {
     });
 
     it('renders backend picker options with engine detail previews sourced from preflight models', async () => {
+        expect(homeState.targetServerId).not.toBe(homeState.activeServerId);
         settingsState.codexBackendMode = 'mcp';
         settingsState.lastUsedAgent = 'claude';
         persistedDraft.agentType = 'claude';
@@ -1007,13 +1018,27 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(opencodeDetailContent).toBeTruthy();
 
         const detailScreen = await renderScreen(<>{opencodeDetailContent}</>);
-
+        const { NewSessionEngineOptionDetail } = await import('../components/NewSessionEngineOptionDetail');
         const previewTestId = `model-picker-overlay-option:${sessionModelSelectionKey({
             agentTargetKey: buildBuiltInBackendTargetKey('opencode'),
             providerConnectionId: null,
             modelId: 'opencode-fast',
         })}`;
-        await waitForHomeGovernance(() => expect(detailScreen.findAllByTestId(previewTestId)).toHaveLength(1));
+        await waitForHomeGovernance(() => {
+            const detail = detailScreen.tree.root.findByType(NewSessionEngineOptionDetail);
+            expect(detail.props).toMatchObject({
+                selectedMachineId: 'machine-1', capabilityServerId: homeState.targetServerId, cwd: '/repo',
+            });
+            expect(detailScreen.findAllHostsByTestId(previewTestId)).toHaveLength(1);
+        });
+        expect(network.httpRequests.some(({ url }) => {
+            const request = new URL(url);
+            return request.origin === homeState.targetServerUrl
+                && request.pathname === '/v1/account/entity-rows/connected-accounts/purposes';
+        })).toBe(true);
+        expect(network.requests.some(({ serverUrl, method, payload }) => serverUrl === homeState.targetServerUrl
+            && method === RPC_METHODS.CAPABILITIES_INVOKE && payload !== null && typeof payload === 'object'
+            && 'id' in payload && payload.id === 'cli.opencode' && 'method' in payload && payload.method === 'probeModels')).toBe(true);
         const previewTexts = detailScreen.findAll((node) => typeof node.props?.children === 'string')
             .map((node) => node.props.children);
         expect(previewTexts).toContain('OpenCode Fast');
@@ -1267,8 +1292,13 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(customPresetDetailContent).toBeTruthy();
 
         const detailScreen = await renderScreen(<>{customPresetDetailContent}</>);
-        const configPreviewItems = detailScreen.findAllByTestId('agent-input-config-option:speed');
-        expect(configPreviewItems).toHaveLength(1);
+        const { NewSessionEngineOptionDetail } = await import('../components/NewSessionEngineOptionDetail');
+        await waitForHomeGovernance(() => {
+            expect(detailScreen.tree.root.findByType(NewSessionEngineOptionDetail).props).toMatchObject({
+                selectedMachineId: 'machine-1', capabilityServerId: homeState.targetServerId, cwd: '/repo',
+            });
+            expect(detailScreen.findAllHostsByTestId('agent-input-config-option:speed')).toHaveLength(1);
+        });
     });
 
     it('applies backend-specific ACP config selections from the engine picker detail pane', async () => {
@@ -1399,9 +1429,8 @@ describe('useNewSessionScreenModel (installables)', () => {
         settingsState.sessionDefaultPermissionModeByTargetKey = {
             [buildBuiltInBackendTargetKey('codex')]: 'read-only',
         };
-        delete (persistedDraft as { permissionMode?: string }).permissionMode;
-
-        const hook = await renderNewSessionScreenModel();
+        // Defaults apply to new authoring, not an explicit retained permission mode.
+        const hook = await renderNewSessionScreenModel({ freshDraft: true });
         let model = hook.getCurrent();
 
         expect(model?.simpleProps?.permissionMode).toBe('read-only');
@@ -1461,7 +1490,7 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.simpleProps?.permissionMode).toBe('safe-yolo');
     });
 
-    it('falls back to an enabled built-in backend when a persisted configured ACP backend is disabled by target key', async () => {
+    it('preserves an authored configured ACP target when it becomes disabled instead of silently launching another Agent', async () => {
         settingsState.lastUsedAgent = 'claude';
         settingsState.lastUsedBackendTarget = { kind: 'backend', backendId: 'claude' };
         settingsState.backendEnabledByTargetKey = {
@@ -1503,8 +1532,8 @@ describe('useNewSessionScreenModel (installables)', () => {
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
-        expect(model?.simpleProps?.agentLabel).toBe('agentInput.agent.claude');
+        expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset'));
+        expect(model?.simpleProps?.canCreate).toBe(false);
     });
 
     it('switches to a configured ACP backend when the selected profile is only compatible with that backend target', async () => {
@@ -1571,7 +1600,7 @@ describe('useNewSessionScreenModel (installables)', () => {
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset');
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset'));
         expect(model?.simpleProps?.selectedProfileId).toBe('profile-1');
@@ -1621,6 +1650,7 @@ describe('useNewSessionScreenModel (installables)', () => {
     });
 
     it('seeds execution-run action chips with canonical permission defaults', async () => {
+        cliAvailabilityState.value = { available: { codex: true, claude: true, opencode: null } };
         agentInputActionChipActionIdsState.value = ['review.start'];
         await setActiveServerId(homeState.targetServerId);
         const scope = { serverId: homeState.targetServerId, accountId: 'account-1' };
@@ -1632,6 +1662,8 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         const chips = model?.simpleProps?.agentInputExtraActionChips ?? [];
         const reviewChip = chips.find((chip: { key: string }) => chip.key === 'new-session-action:review.start');
+        expect(model?.simpleProps?.selectedPath).toBe('/repo');
+        expect(model?.simpleProps?.canCreate, JSON.stringify(model?.simpleProps?.connectionStatus)).toBe(true);
         expect(reviewChip).toBeTruthy();
         expect(reviewChip?.controlId).toBe('shortcuts');
         expect(typeof reviewChip?.collapsedAction).toBe('function');
@@ -1645,7 +1677,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             popoverAnchorRef: { current: null },
         }) as React.ReactElement<{ onPress?: () => void }>;
 
-        await invokeHookAction(() => rendered.props.onPress?.());
+        await invokeHookAction(() => { rendered.props.onPress?.(); });
 
         await waitForHomeGovernance(() => expect(spawnRequests()).toHaveLength(1));
         await waitForHomeGovernance(() => expect(storageStore.getState().sessionActionDraftsByAddressKey[sessionAddressKey({
@@ -1761,7 +1793,7 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(chipScreen.getTextContent()).toContain('sessionsList.storageDirectTab');
     });
 
-    it('recomputes transcript storage when switching configured ACP backend targets through the backend picker', async () => {
+    it('does not offer Direct storage for configured ACP targets whose Agent declares persisted-only storage', async () => {
         featureEnabledState.sessionsDirect = true;
         settingsState.lastUsedAgent = 'claude';
         settingsState.lastUsedBackendTarget = {
@@ -1825,20 +1857,13 @@ describe('useNewSessionScreenModel (installables)', () => {
         const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
-        const renderStorageChipText = async () => {
+        const expectPersistedOnlyStorage = () => {
             const chips = model?.simpleProps?.agentInputExtraActionChips ?? [];
             const storageChip = chips.find((chip: { key: string }) => chip.key === 'new-session-storage');
-            expect(storageChip).toBeTruthy();
-            const chipScreen = await renderScreen(storageChip.render({
-                chipStyle: () => null,
-                iconColor: '#000',
-                showLabel: true,
-                textStyle: {},
-            }));
-            return chipScreen.getTextContent();
+            expect(storageChip).toBeUndefined();
         };
 
-        expect(await renderStorageChipText()).toContain('sessionsList.storagePersistedTab');
+        expectPersistedOnlyStorage();
 
         await invokeHookAction(() => model?.simpleProps?.onAgentPickerSelect?.(buildConfiguredAcpBackendTargetKey('custom-preset-b')));
 
@@ -1847,11 +1872,11 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset B');
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset-b'));
-        expect(await renderStorageChipText()).toContain('sessionsList.storageDirectTab');
+        expectPersistedOnlyStorage();
         await hook.unmount();
     });
 
-    it('does not surface a Windows session-mode chip in the simple panel action chip row', async () => {
+    it('offers Windows session-mode choices and requests their facts on picker intent', async () => {
         routeParamsState.value = { machineId: 'machine-1' };
         machineState.value = [
             {
@@ -1883,7 +1908,12 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         let chips = model?.simpleProps?.agentInputExtraActionChips ?? [];
         const windowsChip = chips.find((chip: { key: string }) => chip.key === 'new-session-windows-remote-session-launch-mode');
-        expect(windowsChip).toBeUndefined();
+        expect(windowsChip).toBeTruthy();
+        const previousRequests = network.requests.length;
+        await invokeHookAction(() => windowsChip.onIntent?.());
+        await waitForHomeGovernance(() => expect(network.requests.slice(previousRequests)).toContainEqual(expect.objectContaining({
+            method: 'capabilities.detect', payload: { requests: [{ id: 'tool.windowsTerminal' }] },
+        })));
     });
 
     it('enables workspace, session, plugin-reference and slash autocomplete before a session exists', async () => {

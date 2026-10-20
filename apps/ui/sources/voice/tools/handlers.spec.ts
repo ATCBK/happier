@@ -17,7 +17,7 @@ import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { readSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -97,6 +97,16 @@ function messagesFixture(messages: readonly Message[]) {
 
 function seedMessages(sessionId: string, messages: readonly Message[]) {
   storage.setState({ sessionMessages: { ...storage.getState().sessionMessages, [sessionId]: messagesFixture(messages) } });
+}
+
+/** Committed HTTP rows, separate from the loaded transcript window. */
+function seedTranscriptPage(sessionId: string, records: readonly unknown[]) {
+  messagePages.set(sessionId, SessionMessagesPageV1Schema.parse({
+    messages: records.map((record, index) => ({
+      id: `committed-${index + 1}`, seq: index + 1, localId: null, createdAt: index + 1, updatedAt: index + 1,
+      content: { t: 'plain', v: RawRecordSchema.parse(record) },
+    })), hasMore: false,
+  }));
 }
 
 async function mountCurrentUiContext(wireResult: Readonly<Record<string, boolean>> = { opened: true }) {
@@ -1070,7 +1080,6 @@ describe('voice tool handlers', () => {
       errorCode: 'session_input_target_update_required',
       errorMessage: 'session_input_target_update_required',
       actionId: 'session.message.send',
-      sessionId: 's1',
     });
   });
 
@@ -1922,6 +1931,13 @@ describe('voice tool handlers', () => {
     }
   });
 
+  describe('question answers and person approval', () => {
+  beforeEach(() => {
+    // A prompt waiver must never turn spoken content into person authority.
+    // The default approval/replay path is composed in defaultActionExecutor.planMode.test.ts.
+    state.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'session.user_action.answer': ['voice'] } };
+  });
+
   it('does not answer a covered user-action request', async () => {
     const questionPayload = { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] };
     state.sessions.s1.agentState.requests = {
@@ -1975,7 +1991,7 @@ describe('voice tool handlers', () => {
     expect(daemonRpc).not.toHaveBeenCalled();
   });
 
-  it('does not turn an approval-required setting into present-user authority for a spoken answer', async () => {
+  it('requests person approval without executing an approval-required spoken answer', async () => {
     state.settings.actionsSettingsV1 = {
       v: 1,
       actions: {
@@ -1997,13 +2013,13 @@ describe('voice tool handlers', () => {
     ));
 
     expect(result, JSON.stringify(result)).toMatchObject({
-      ok: false,
-      errorCode: 'present_user_required',
+      ok: true,
+      kind: 'approval_request_created',
       actionId: 'session.user_action.answer',
     });
     expect(pendingEnqueue).not.toHaveBeenCalled();
     expect(daemonRpc).not.toHaveBeenCalled();
-    expect(artifactCreateRequests).not.toHaveBeenCalled();
+    expect(artifactCreateRequests).toHaveBeenCalled();
   });
 
   it('does not grant present-user authority to a spoken reject decision for a permission-labelled question', async () => {
@@ -2154,6 +2170,8 @@ describe('voice tool handlers', () => {
     expect(daemonRpc).not.toHaveBeenCalled();
   });
 
+  });
+
   it('routes sendSessionMessage to an explicit sessionId through canonical Voice admission', async () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -2252,7 +2270,7 @@ describe('voice tool handlers', () => {
 
   });
 
-  it('includes cached sessions from other servers in listSessions (with serverId)', async () => {
+  it('lists sessions only for the captured Home and reaches another Home through its explicit scope', async () => {
     retainFixtureSessionListCorpus();
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
@@ -2261,9 +2279,36 @@ describe('voice tool handlers', () => {
     const parsed = JSON.parse(res) as any;
     expect(parsed, res).toHaveProperty('sessions');
 
-    const other = parsed.sessions.find((s: any) => s.id === 's_other');
-    expect(other).toBeTruthy();
-    expect(other.serverId).toBe(homeB);
+    expect(parsed.sessions.some((session: { id: string }) => session.id === 's_other')).toBe(false);
+    expect(parsed.sessions.every((session: { serverId: string }) => session.serverId === homeA)).toBe(true);
+
+    const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+    const { isSessionListQueryHomeOnline } = await import('@/sync/domains/session/listing/sessionListQueryRuntime');
+    const { loadEffectiveHomeViewState, updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
+    const previousSelection = loadEffectiveHomeViewState();
+    const previousConcurrentFlag = process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
+    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
+    try {
+      startConcurrentSessionCacheSync();
+      await updateEffectiveHomeViewState(current => ({ ...current,
+        groups: [{ id: 'voice-tool-homes', name: 'Voice tool Homes', serverIds: [homeA, homeB] }],
+        activeTargetKind: 'group', activeTargetId: 'voice-tool-homes',
+      }), { scope: 'device' });
+      await vi.waitFor(() => expect(isSessionListQueryHomeOnline(homeB)).toBe(true));
+      const otherRaw = await tools.listSessions(
+        { view: 'summary', limit: 10, includeLastMessagePreview: false },
+        { serverId: homeB },
+      );
+      const otherHome = JSON.parse(otherRaw);
+      expect(otherHome, otherRaw).toMatchObject({ ok: true, sessions: [{ id: 's_other', serverId: homeB }] });
+      expect(otherHome.sessions.some((session: { id: string }) => session.id === 's1')).toBe(false);
+      expect(getActiveServerSnapshot().serverId).toBe(homeA);
+    } finally {
+      stopConcurrentSessionCacheSync();
+      if (previousSelection) await updateEffectiveHomeViewState(() => previousSelection, { scope: 'device' });
+      if (previousConcurrentFlag === undefined) delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
+      else process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = previousConcurrentFlag;
+    }
   });
 
   it('includes sessions that only exist in the current visible session list', async () => {
@@ -2418,6 +2463,10 @@ describe('voice tool handlers', () => {
   });
 
   it('returns transcript messages for a session when allowed', async () => {
+    seedTranscriptPage('s1', [
+      { role: 'user', content: { type: 'text', text: 'Committed user message' } },
+      { role: 'agent', content: { type: 'acp', agentId: 'codex', data: { type: 'message', message: 'Committed assistant message' } } },
+    ]);
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
@@ -2442,29 +2491,31 @@ describe('voice tool handlers', () => {
 
   it('treats Account Follow Include in Voice sessions as active for snippets gating', async () => {
     state.settings.voice.ui.updates.otherSessionsSnippetsMode = 'never';
-    state.sessions.s2.viewer = {
+    state.sessions.s2.viewer = createSessionViewerFixture({
       follow: { follows: true, notificationLevel: 'important', includeInVoice: true },
-    };
+    });
+    seedTranscriptPage('s2', [{ role: 'user', content: { type: 'text', text: 'Followed private text' } }]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
     const res = await tools.getSessionTranscript({ sessionId: 's2', limit: 1 });
     const parsed = JSON.parse(res) as any;
-    expect(parsed.error).toBeUndefined();
-    expect(parsed.sessionId).toBe('s2');
+    expect(parsed, res).toMatchObject({ ok: true, sessionId: 's2', items: [{ text: 'Followed private text' }] });
+    const beforeDenied = messageReads.length;
+    state.sessions.s2.viewer = createSessionViewerFixture({
+      follow: { follows: true, notificationLevel: 'important', includeInVoice: false },
+    });
+    const denied = await tools.getSessionTranscript({ sessionId: 's2', limit: 1 });
+    expect(JSON.parse(denied), denied).toMatchObject({ ok: false, errorCode: 'other_sessions_snippets_disabled' });
+    expect(denied).not.toContain('Followed private text');
+    expect(messageReads).toHaveLength(beforeDenied);
   });
 
   it('redacts file paths in message text when shareFilePaths is false', async () => {
     state.settings.voice.privacy.shareFilePaths = false;
-    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
-    seedMessages('s1', [...readStoredSessionMessages(storage.getState(), 's1'), {
-      kind: 'agent-text',
-      id: 'm_path',
-      localId: null,
-      createdAt: 10,
-      text: 'See /Users/alice/SecretRepo/README.md for details.',
-    }]);
+    seedTranscriptPage('s1', [{ role: 'agent', content: { type: 'acp', agentId: 'codex',
+      data: { type: 'message', message: 'See /Users/alice/SecretRepo/README.md for details.' } } }]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
@@ -2477,9 +2528,8 @@ describe('voice tool handlers', () => {
 
   it('does not clamp message text by default', async () => {
     const long = 'x'.repeat(9001);
-    seedMessages('s1', [
-      { kind: 'agent-text', id: 'm_long', localId: null, createdAt: 100, text: long },
-    ]);
+    seedTranscriptPage('s1', [{ role: 'agent', content: { type: 'acp', agentId: 'codex',
+      data: { type: 'message', message: long } } }]);
 
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });

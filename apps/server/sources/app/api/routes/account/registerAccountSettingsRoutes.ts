@@ -8,7 +8,7 @@ import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protoc
 import {
     enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest,
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
-import { writeAccountSettingsInTx } from "@/app/accountSettings/writeAccountSettingsInTx";
+import { AccountSettingsPublicationConflict, writeAccountSettingsInTx } from "@/app/accountSettings/writeAccountSettingsInTx";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -133,7 +133,10 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
                 accountId: userId,
                 expectedVersion,
                 next: { kind: "v1", settings },
-            }));
+            })).catch((error: unknown) => {
+                if (error instanceof AccountSettingsPublicationConflict) return error.result;
+                throw error;
+            });
 
             if (result.status === "account_not_found") {
                 return reply.code(500).send({
@@ -283,7 +286,10 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
                     content,
                     ...(admittedRemoteAlertPolicy === undefined ? {} : { remoteAlertPolicy: admittedRemoteAlertPolicy }),
                 },
-            }));
+            })).catch((error: unknown) => {
+                if (error instanceof AccountSettingsPublicationConflict) return error.result;
+                throw error;
+            });
 
             if (result.status === "account_not_found") return reply.code(500).send({ error: "internal" });
             if (result.status === "storage_unavailable") {

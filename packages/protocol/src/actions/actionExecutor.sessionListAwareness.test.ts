@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '../sessions/awareness/action.js';
-import type { SessionListQueryV1 } from '../sessions/listing/query.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT, type SessionListQueryV1 } from '../sessions/listing/query.js';
 import { getActionSpec } from './actionSpecs.js';
 import type { SessionAwarenessProjectionV1 } from '../sessions/awareness/projectionV1.js';
 import { encodeV2SessionListCursorV1 } from '../sessions/listing/cursor.js';
@@ -145,8 +145,9 @@ describe('session.list execution', () => {
     ] } });
     expect(requests).toHaveLength(2);
     expect(requests.map(request => ({ serverId: request.serverId, view: request.view, query: request.query }))).toEqual([
-      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false } },
-      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, cursor } },
+      // Pages are as large as the Home's list contract allows: the picker reads the whole inventory, and each page is a round trip.
+      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, limit: SESSION_LIST_PAGE_MAX_LIMIT } },
+      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, limit: SESSION_LIST_PAGE_MAX_LIMIT, cursor } },
     ]);
   });
 
@@ -164,6 +165,92 @@ describe('session.list execution', () => {
     })).resolves.toMatchObject({ ok: true, result: [
       { value: 'orchard', label: 'Orchard and meadow', description: 'Recent' },
     ] });
+  });
+
+  describe('one picked Session (point check)', () => {
+    const home = 'home-current';
+    const context = { surface: 'ui', authority: 'present_user', serverId: home } as const;
+    const address = (sessionId: string) => ({ serverId: home, sessionId });
+    const awareness = (overrides: Partial<SessionAwarenessProjectionV1> = {}): SessionAwarenessProjectionV1 => ({
+      v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle', freshness: 'live',
+      operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete', ...overrides,
+    });
+    const summary = (id: string) => ({ id, createdAt: 1, updatedAt: 1, active: true, activeAt: 1, encryptionMode: 'plain' as const, encryption: null });
+    const setup = (status: ActionExecutorDeps['sessionStatusGet']) => {
+      // Transport boundary only: how many Session pages and single reads the Home is asked for.
+      const pages: unknown[] = [];
+      const reads: string[] = [];
+      const executor = createExecutor({
+        sessionList: async request => { pages.push(request); return buildSessionAwarenessListResultV1({
+          sessions: [awareness({ sessionId: 'A', title: 'Listed A' }), awareness()],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }); },
+        sessionStatusGet: async request => { reads.push(request.sessionId); return await status!(request); },
+        widgetAccountScope: () => ({ serverId: home, accountId: 'viewer' }),
+      });
+      const consumer = (sessionId: string) => ({ kind: 'widget' as const,
+        surface: { serverId: home, accountId: 'viewer', owner: { kind: 'home' as const } },
+        definition: { kind: 'builtin' as const, id: 'session_summary' }, selectedSession: address(sessionId) });
+      const resolve = (sessionId: string) => executor.execute('action.options.resolve', {
+        consumer: consumer(sessionId), fieldPath: 'session', values: [address(sessionId)] }, context);
+      return { pages, reads, resolve };
+    };
+
+    it('checks the picked Session with one direct read and never pages the Session list', async () => {
+      const { pages, reads, resolve } = setup(async () => ({ ok: true, session: summary('B'), awareness: awareness() }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [
+        { value: address('B'), label: 'Bound B', description: 'Recent' },
+      ] } });
+      expect(reads).toEqual(['B']);
+      expect(pages).toHaveLength(0);
+    });
+
+    it('still marks a locked Session unavailable, as the inventory does', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: true, session: summary('B'),
+        awareness: awareness({ title: undefined, encryption: 'locked', availability: 'locked' }) }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [
+        { value: address('B'), label: 'B', disabled: true },
+      ] } });
+      expect(pages).toHaveLength(0);
+    });
+
+    it('offers nothing for a Session the Home reports gone', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: false, code: 'session_not_found' }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+      expect(pages).toHaveLength(0);
+    });
+
+    it('reports the direct read failure as it is, without paying the inventory scan', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: false, code: 'server_unreachable' }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: false, errorCode: 'server_unreachable' });
+      expect(pages).toHaveLength(0);
+    });
+
+    it('treats a Session that the host resolved only by prefix as gone', async () => {
+      const { resolve } = setup(async () => ({ ok: true, session: summary('Bravo'), awareness: awareness({ sessionId: 'Bravo' }) }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+    });
+
+    it('refuses an archived Session exactly as the inventory scan does', async () => {
+      const archived = awareness({ lifecycle: 'archived' });
+      const { pages, resolve } = setup(async () => ({ ok: true, session: summary('B'), awareness: archived }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+      expect(pages).toHaveLength(0);
+      // The scan applies the same rule even when a Home returns an archived row in the active listing.
+      const executor = createExecutor({ widgetAccountScope: () => ({ serverId: home, accountId: 'viewer' }),
+        sessionList: async () => buildSessionAwarenessListResultV1({ sessions: [archived, awareness({ sessionId: 'C', title: 'Listed C' })],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) });
+      await expect(executor.execute('action.options.resolve', { optionsSourceId: 'sessions' }, context))
+        .resolves.toMatchObject({ ok: true, result: { options: [{ value: address('C') }] } });
+    });
+  });
+
+  it('narrows any other options source to the requested values through the same inventory read', async () => {
+    const machinesList = vi.fn(async () => ({ items: [{ id: 'm1', label: 'One' }, { id: 'm2', label: 'Two' }] }));
+    const executor = createExecutor({ machinesList });
+    await expect(executor.execute('action.options.resolve', { optionsSourceId: 'sessions.spawn.machines.available',
+      values: ['m2'] }, { surface: 'ui', authority: 'present_user', serverId: 'home-current' }))
+      .resolves.toMatchObject({ ok: true, result: { options: [{ value: 'm2' }] } });
+    expect(machinesList).toHaveBeenCalledTimes(1);
   });
 
   it('does not return partial Session options when current read authority is refused on continuation', async () => {

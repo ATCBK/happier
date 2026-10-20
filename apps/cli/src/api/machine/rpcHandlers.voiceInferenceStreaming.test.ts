@@ -23,7 +23,13 @@ import {
   PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
   type PeerTcpTunnelRelayEnvelope,
   type PeerTcpTunnelRelayAuthorizationV2,
+  createDirectRouteGrantSigningInputV2,
+  createEphemeralPeerRouteProofHandleV2,
+  createPeerMachineRpcRequestHashV1,
+  resolveMachineRpcRoutePolicy,
+  type SignedDirectRouteGrantV2,
 } from '@happier-dev/protocol';
+import { PEER_MACHINE_RPC_DIRECT_PATH_V2, PeerMachineRpcDirectResponseV2Schema } from '@happier-dev/protocol/machines/peer/mediation/rpc/directV2';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -43,6 +49,7 @@ import { registerMachinePeerTcpTunnelRelayRuntime } from '@/daemon/machine/regis
 import { openPeerTcpTunnelRelayStream } from '../../../../ui/sources/sync/domains/machines/peer/mediation/tunnel/relayStream';
 import { createDaemonSpeechStreamTunnelTransport } from '../../../../ui/sources/voice/runtime/daemonInference/DaemonSpeechStreamTunnelTransport';
 import { createDaemonSpeechStreamCarrierAdapter } from '../../../../ui/sources/voice/runtime/daemonInference/DaemonSpeechStreamCarrier';
+import { createPeerMediationLoopbackApp } from '@/daemon/peer/mediation/loopback/server';
 const originalSttMaxUploadBytes = process.env.HAPPIER_VOICE_INFERENCE_STT_MAX_UPLOAD_BYTES;
 
 function speechApplicationAuthority(requestId: string) {
@@ -228,6 +235,48 @@ describe('registerMachineVoiceInferenceStreamingRpcHandlers', () => {
       },
       onHandlerError: error => { errors.push(error); },
     });
+    const direct = createPeerMediationLoopbackApp({
+      nowMs: () => 2000,
+      expected: { accountId: payload.accountId, machineId: payload.targetMachineId,
+        flowKind: 'machine_rpc', routeKind: 'loopback_direct', endpointFingerprint: 'speech-endpoint' },
+      trustRoots: [{ keyId: 'voice-key', publicKey: Buffer.from(keys.publicKey).toString('base64url') }],
+      rpc: { rpcHandlerManager: manager },
+    });
+    const invokeDirect = async (method: string, params: unknown) => {
+      const proofHandle = createEphemeralPeerRouteProofHandleV2({
+        randomBytes: length => new Uint8Array(length).fill(8),
+      });
+      try {
+        const grantPayload: SignedDirectRouteGrantV2['payload'] = {
+          v: 2, grantId: `speech:${method}`, accountId: payload.accountId, machineId: payload.targetMachineId,
+          flowKind: 'machine_rpc', routeKind: 'loopback_direct', endpointFingerprint: 'speech-endpoint',
+          scope: { kind: 'machine_rpc', rpcScopeId: method, allowedMethods: [method], maxCalls: 1, maxIdleMs: 30000 },
+          iat: 1000, exp: 301000, aud: 'happier-daemon-route-grant', proofKind: 'ephemeral_ed25519',
+          ephemeralPublicKeyBase64Url: proofHandle.publicKeyBase64Url,
+        };
+        const grant: SignedDirectRouteGrantV2 = { payload: grantPayload, signature: {
+          keyId: 'voice-key', alg: 'Ed25519', valueBase64Url: Buffer.from(tweetnacl.sign.detached(
+            new TextEncoder().encode(createDirectRouteGrantSigningInputV2(grantPayload)), keys.secretKey,
+          )).toString('base64url'),
+        } };
+        const requestHash = createPeerMachineRpcRequestHashV1({ method, params,
+          grantId: grantPayload.grantId, endpointFingerprint: 'speech-endpoint', replayKey: method });
+        const response = await direct.inject({ method: 'POST', url: PEER_MACHINE_RPC_DIRECT_PATH_V2, payload: {
+          v: 2, requestId: method, method, params, grant, proof: proofHandle.sign(grant),
+          routeKind: 'loopback_direct', flowKind: 'machine_rpc', endpointFingerprint: 'speech-endpoint',
+          ...(resolveMachineRpcRoutePolicy(method).commandReceiptRequired ? { commandReceipt: {
+            v: 1, issuer: 'ui', issuedAtMs: 2000, requestHash, replayKey: method,
+          } } : {}),
+        } });
+        expect(response.statusCode).toBe(200);
+        // This is the same strict consumer used before capture by productionRoute.
+        // Keep the real HTTP serialization, signed route, RPC and worker beneath it.
+        const parsed = PeerMachineRpcDirectResponseV2Schema.parse(response.json());
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) throw new Error(parsed.reasonCode);
+        return parsed.result;
+      } finally { proofHandle.dispose(); }
+    };
     try {
       expect(relay).not.toBeNull();
       const stream = await openPeerTcpTunnelRelayStream({
@@ -245,9 +294,9 @@ describe('registerMachineVoiceInferenceStreamingRpcHandlers', () => {
           machineId: payload.targetMachineId, tunnelId: payload.tunnelId, applicationKind: 'speech_transcription',
           applicationAttemptId: requestId, applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1(requestId) },
         controlTransport: {
-          start: async request => DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request)),
-          finish: async request => DaemonVoiceInferenceSttStreamFinishResponseSchema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_FINISH, request)),
-          cancel: async request => DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await manager.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL, request)),
+          start: async request => DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await invokeDirect(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request)),
+          finish: async request => DaemonVoiceInferenceSttStreamFinishResponseSchema.parse(await invokeDirect(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_FINISH, request)),
+          cancel: async request => DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await invokeDirect(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL, request)),
         },
       });
       const started = await transport.start(DaemonVoiceInferenceSttStreamStartRequestSchema.parse({ requestId, packId, language: 'en', streamingMode: 'runtime' }));
@@ -263,7 +312,7 @@ describe('registerMachineVoiceInferenceStreamingRpcHandlers', () => {
         .toMatchObject({ ok: true, finalText: 'heard', ackSeq: 0 });
       expect(errors).toEqual([]);
       await stream.close();
-    } finally { await relay?.dispose(); }
+    } finally { await direct.close(); await relay?.dispose(); }
   });
 
   it('cancels the exact authority-bound stream once when its peer transport is lost', async () => {

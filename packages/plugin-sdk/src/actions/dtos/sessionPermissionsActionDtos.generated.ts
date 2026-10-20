@@ -111,6 +111,10 @@ export type SessionPermissionsActionInputById = {
             answer?: string | undefined;
         }[] | undefined;
     };
+    readonly "session.control.switch": {
+        to: 'remote' | 'local';
+        sessionId?: string | undefined;
+    };
     readonly "session.mode.set": {
         [x: string]: unknown;
         modeId: string;
@@ -250,6 +254,9 @@ export type SessionPermissionsActionResultById = {
     };
     readonly "session.user_action.answer": {
         ok: true;
+    };
+    readonly "session.control.switch": {
+        switched: true;
     };
     readonly "session.mode.set": JsonValue;
 };

@@ -25,6 +25,8 @@ import { checkRegistryUpstreamV1, type RegistrySourceDescriptorV1 } from '@happi
 import { createUiRegistryHttpV1 } from './registryHttpV1';
 
 const transport = vi.hoisted(() => ({ calls: [] as ServerScopedMachineRpcParams<RegistryFetchRequestV1>[], platform: 'web' }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // Machine RPC leaves this process; source ownership, supplier selection and REACH stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: async (request: ServerScopedMachineRpcParams<RegistryFetchRequestV1>) => {

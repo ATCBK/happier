@@ -1,5 +1,6 @@
 import { DiscussionSelectionSourceV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
+import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
@@ -44,6 +45,76 @@ export function resolveDiscussionMessageAuthorLabel(
     return formatAccountDisplayName(actor.profile) ?? t('message.accountActorUnnamedMember');
 }
 
+/**
+ * A Bot reply's quiet byline (C7): who asked, from the cause the append owner stamped, and which Bot
+ * answered. The requester's name comes only from the sanitized projection for that exact Account; an
+ * unprojected or mismatched requester stays "another person", never the Bot's owner or poster. No
+ * person cause (autonomous or older replies) says nothing. "Using <account>" is not offered: the reply
+ * custody carries no exact outward-operation actor.
+ */
+export function resolveDiscussionReplyAttributionLine(
+    message: Pick<DiscussionOpenedMessageV1, 'producerV1'> & Partial<Pick<DiscussionOpenedMessageV1, 'requesterAccountActor'>>,
+    viewer: Readonly<{ serverId: string; accountId: string }>,
+    botLabel: string | null,
+): string | null {
+    const requester = message.producerV1?.actionRequestAttributionV1?.requester;
+    if (!requester) return null;
+    const actor = message.requesterAccountActor;
+    const name = requester.accountId === viewer.accountId && areServerProfileIdentifiersEquivalent(requester.serverId, viewer.serverId)
+        ? t('session.collaboration.discussion.attribution.you')
+        : actor && actor.accountId === requester.accountId && actor.profile
+            ? formatAccountDisplayName(actor.profile) ?? t('session.collaboration.discussion.attribution.anotherPerson')
+            : t('session.collaboration.discussion.attribution.anotherPerson');
+    return botLabel
+        ? t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: name, bot: botLabel })
+        : t('session.collaboration.discussion.attribution.askedBy', { requester: name });
+}
+
+/**
+ * How an addressed participant answered (C3 U2), read only from the return the append owner stamped on its
+ * reply. `failed` includes a turn that ended with no result: either way the person who asked got no answer.
+ * A message an agent posted on its own, or a person's message, has no outcome.
+ */
+export type DiscussionReplyOutcome = 'answer' | 'pass' | 'failed' | 'cancelled';
+export function resolveDiscussionReplyOutcome(message: Pick<DiscussionOpenedMessageV1, 'producerV1'>): DiscussionReplyOutcome | null {
+    switch (message.producerV1?.replyReturn?.outcome) {
+        case 'answer': return 'answer';
+        case 'pass': return 'pass';
+        case 'failed':
+        case 'terminal_no_result': return 'failed';
+        case 'cancelled': return 'cancelled';
+        default: return null;
+    }
+}
+
+/**
+ * Where a shared Bot's requester-bound request reads in the thread (C7 "External write needs
+ * confirmation"): under the Bot reply stamped with the same admitted cause, else under the message
+ * that asked. A one-line outcome (passed, failed, stopped) is not a place for a card, so the ask keeps
+ * it. A request whose anchor is not loaded here is not placed rather than guessed.
+ */
+export function placeDiscussionRequesterApprovals<T extends Readonly<{ requestRef: string; originMessageId: string }>>(
+    messages: ReadonlyArray<Pick<DiscussionOpenedMessageV1, 'id' | 'producerV1'>>,
+    approvals: ReadonlyArray<T>,
+): ReadonlyMap<string, ReadonlyArray<T>> {
+    const placed = new Map<string, T[]>();
+    if (approvals.length === 0) return placed;
+    const messageIds = new Set(messages.map((message) => message.id));
+    const replyByRequestRef = new Map<string, string>();
+    for (const message of messages) {
+        const requestRef = message.producerV1?.actionRequestAttributionV1?.requestRef;
+        const outcome = resolveDiscussionReplyOutcome(message);
+        if (requestRef && (outcome === null || outcome === 'answer')) replyByRequestRef.set(requestRef, message.id);
+    }
+    for (const approval of approvals) {
+        const anchor = replyByRequestRef.get(approval.requestRef)
+            ?? (messageIds.has(approval.originMessageId) ? approval.originMessageId : null);
+        if (!anchor) continue;
+        placed.set(anchor, [...(placed.get(anchor) ?? []), approval]);
+    }
+    return placed;
+}
+
 export type DiscussionTimelineMessage = Pick<DiscussionOpenedMessageV1, 'id' | 'seq'>;
 
 export type DiscussionTimelineItem<
@@ -58,6 +129,11 @@ export type DiscussionTimelineItem<
         anchorSeq: number;
         entry: AgentActivityEntry;
         subagent: SessionSubagent;
+    }>
+    | Readonly<{
+        /** A managed Pattern run, shown right under the message that started it. */
+        kind: 'workflow_run';
+        run: WorkflowRunSummaryV1;
     }>;
 
 type AgentActivityReference = Extract<DiscussionTimelineItem, { kind: 'agent_activity_reference' }>;
@@ -86,6 +162,8 @@ export function buildDiscussionTimelineItems<TMessage extends DiscussionTimeline
     messages: readonly TMessage[];
     subagents: readonly SessionSubagent[];
     readExecutionRunEntry: (runId: string) => AgentActivityEntry | null;
+    /** The authorized managed Run list for this Discussion; a Run whose starting message isn't loaded waits for it. */
+    workflowRuns?: readonly WorkflowRunSummaryV1[];
 }>): readonly DiscussionTimelineItem<TMessage>[] {
     const messageById = new Map(params.messages.map((message) => [message.id, message]));
     const referencesByAnchorSeq = new Map<number, AgentActivityReference[]>();
@@ -127,9 +205,20 @@ export function buildDiscussionTimelineItems<TMessage extends DiscussionTimeline
 
     for (const references of referencesByAnchorSeq.values()) references.sort(compareReferences);
 
+    const workflowRunsByMessageId = new Map<string, WorkflowRunSummaryV1[]>();
+    for (const run of params.workflowRuns ?? []) {
+        const origin = run.origin.kind === 'direct' ? run.origin.discussion : undefined;
+        if (!origin || origin.discussion.discussionId !== params.discussionId
+            || !areServerProfileIdentifiersEquivalent(origin.discussion.serverId, params.serverId)) continue;
+        const atMessage = workflowRunsByMessageId.get(origin.messageId);
+        if (atMessage) atMessage.push(run);
+        else workflowRunsByMessageId.set(origin.messageId, [run]);
+    }
+
     const items: DiscussionTimelineItem<TMessage>[] = [];
     for (const message of params.messages) {
         items.push({ kind: 'human_message', message });
+        for (const run of workflowRunsByMessageId.get(message.id) ?? []) items.push({ kind: 'workflow_run', run });
         items.push(...(referencesByAnchorSeq.get(message.seq) ?? []));
     }
     return items;

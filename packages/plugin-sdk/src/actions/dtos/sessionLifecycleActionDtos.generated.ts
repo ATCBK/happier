@@ -122,6 +122,12 @@ export type SessionLifecycleActionInputById = {
                             localId: string;
                         };
                         input?: JsonValue;
+                        messageActionReference?: {
+                            v: 1;
+                            sessionId: string;
+                            messageId: string;
+                            observedRevision: string;
+                        };
                     };
                 };
             };

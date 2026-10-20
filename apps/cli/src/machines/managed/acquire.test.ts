@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { createPublicKey, generateKeyPairSync } from 'node:crypto';
@@ -118,6 +120,136 @@ function driver() {
     return createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller, runtimeRegistry, ...accountInputs });
 }
 describe('creation environment stage', () => {
+    it.each(['recover', 'expire', 'late-confirmation'] as const)('keeps Create truthful when controller Home currentness is unavailable after guest enrollment (%s)', async scenario => {
+        const root = await filesystem.mkdtemp(join(tmpdir(), 'managed-controller-home-recovery-'));
+        const guestHome = join(root, 'guest');
+        const payload = join(root, 'payload');
+        const homeId = 'srv_controller_home_recovery';
+        let retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let unavailableReads = 0;
+        let nowMs = Date.now();
+        const startedAt = nowMs;
+        const server = createServer((request, response) => {
+            response.setHeader('Content-Type', 'application/json');
+            if (request.url?.endsWith('/controller/current') && retained.enrolledMachineId
+                && (scenario === 'expire' || scenario === 'recover' && unavailableReads === 0)) {
+                unavailableReads++;
+                if (scenario === 'expire' && unavailableReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
+                response.writeHead(503);
+                response.end(JSON.stringify({ error: 'database_connection_unavailable' }));
+                return;
+            }
+            if (request.url?.startsWith('/v1/features')) {
+                response.end(JSON.stringify({ features: {}, capabilities: { serverIdentity: { serverIdentityId: homeId } }, homeConnectionDescriptor: descriptor }));
+            } else if (request.url === '/v1/account/encryption/currentness') {
+                response.end(JSON.stringify({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }));
+            } else if (request.url === '/v1/auth/response') response.end('{}');
+            else response.end(JSON.stringify({ machine: retained, ...(request.url?.endsWith('/admit') ? { replayed: true } : {}) }));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Home HTTP fixture did not bind');
+        const serverUrl = `http://127.0.0.1:${address.port}`;
+        const descriptor = { v: 1 as const, homeServerIdentityId: homeId, canonicalServerUrl: serverUrl, revision: 1,
+            endpoints: [{ kind: 'https' as const, url: serverUrl }] };
+        const homeTarget = resolveHomeTargetFromDescriptor({ descriptor, authority: 'trusted_enrollment' });
+        const { reloadConfiguration } = await import('@/configuration');
+        const oldHome = process.env.HAPPIER_HOME_DIR;
+        const execFileAsync = promisify(execFile);
+        try {
+            await filesystem.mkdir(join(root, 'servers', homeId), { recursive: true });
+            await filesystem.mkdir(guestHome);
+            await filesystem.mkdir(payload);
+            await writeFile(join(root, 'settings.json'), JSON.stringify({ schemaVersion: 5, onboardingCompleted: true, activeServerId: homeId,
+                servers: { [homeId]: { id: homeId, name: 'Test Home', serverUrl, webappUrl: serverUrl,
+                    homeConnectionDescriptor: descriptor, createdAt: 1, updatedAt: 1, lastUsedAt: 1 } } }));
+            await writeFile(join(root, 'servers', homeId, 'access.key'), JSON.stringify({ token: 'token', encryption: null }));
+            vi.stubEnv('HAPPIER_HOME_DIR', root);
+            vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', payload);
+            reloadConfiguration();
+            const pairing = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+                publicKey: Buffer.alloc(32, 3).toString('base64'), homeServerIdentityId: homeId,
+                pairing: { secretB64Url: Buffer.alloc(32, 4).toString('base64url'), createdAtMs: nowMs, expiresAtMs: nowMs + 15 * 60_000 },
+                supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: homeId };
+            const completion = { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
+                homeServerIdentityId: homeId, machineId: 'enrolled-guest', encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: homeId };
+            // The guest executable/native transport and Home HTTP are the only
+            // substituted systems. Controller, installer, auth, task, Action,
+            // currentness parser and operation store run their real owners.
+            await writeFile(join(payload, 'happier'), `#!/bin/sh\ncase "$1 $2" in\n'auth request') cat >/dev/null; printf '%s\\n' '${JSON.stringify(pairing)}';;\n'auth wait') printf '%s\\n' '${JSON.stringify(completion)}';;\n'auth status') printf '%s\\n' '{"ok":true,"data":{"authenticated":true,"credentialState":"valid","machineRegistrationState":"server-confirmed","machineId":"enrolled-guest"}}';;\n*) printf '%s\\n' '{"ok":true,"data":{}}';;\nesac\n`);
+            const results: Partial<Record<'bootstrap' | 'exec', JsonValue>> = { bootstrap: { kind: 'native',
+                transport: { contributionRef: input.selection.launch.provider, schemaVersion: 1 },
+                guestHome: { homeDir: guestHome, happyHomeDir: join(guestHome, '.happier'), daemonStartup: 'native-process' } } };
+            const native = nativeFixture({ privateNative: true, credentialPurposes: [], nativeRoleResults: results,
+                onNativeRole: async (role, body) => {
+                    if (role === 'putFile' && body && typeof body === 'object' && !Array.isArray(body)
+                        && typeof body.guestPath === 'string' && typeof body.bytesBase64 === 'string') {
+                        await filesystem.mkdir(dirname(body.guestPath), { recursive: true });
+                        await writeFile(body.guestPath, Buffer.from(body.bytesBase64, 'base64'));
+                    }
+                    if (role !== 'exec') return;
+                    const parsed = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+                    if (parsed?.processConfig) { results.exec = { kind: 'process-configured' }; return; }
+                    const argv = parsed?.argv;
+                    if (!Array.isArray(argv) || typeof argv[2] !== 'string') throw new Error('Native command missing');
+                    const command = argv[2];
+                    const child = execFileAsync('/bin/sh', ['-c', command], { env: { ...process.env, HOME: guestHome } });
+                    child.child.stdin?.on('error', () => {});
+                    child.child.stdin?.end(typeof parsed?.inputBase64 === 'string' ? Buffer.from(parsed.inputBase64, 'base64') : '');
+                    const result = await child;
+                    if (/auth.*wait/u.test(command)) {
+                        retained = ManagedMachineV1Schema.parse({ ...retained, enrolledMachineId: 'enrolled-guest' });
+                        if (scenario === 'late-confirmation') nowMs = startedAt + 10 * 60_000 + 1;
+                    }
+                    results.exec = { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+                        stdoutBase64: Buffer.from(result.stdout).toString('base64'), stderrBase64: '', stdoutTruncated: false, stderrTruncated: false };
+                } });
+            vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+            const acquisition = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl, homeId, controller,
+                ...accountInputs, runtimeRegistry: native.runtimeRegistry, homeTarget });
+            const operations = createHostActionOperationRuntime({ machineId: controller.machineId, resolveAccountId: async () => 'owner',
+                generateOperationId: () => `controller-home-${scenario}` });
+            const actionInput = { ...input, selection: { ...input.selection, homeId } };
+            let work: Promise<unknown> | undefined;
+            const executor = createActionExecutor({ managedMachineAction: async ({ actionId, input, context }) =>
+                await acquisition.execute(actionId, input, { requestId: 'creation', context, signal: context.signal }) } as ActionExecutorDeps);
+            await operations.observeExecution({ actionId: 'machines.managed.acquire', input: actionInput, actionRequestId: 'creation',
+                execute: async context => {
+                    const execution = executor.execute('machines.managed.acquire', actionInput, { ...context, surface: 'cli', authority: 'present_user',
+                        presentUserConfirmation: { actionId: 'machines.managed.acquire' } });
+                    work = execution;
+                    return await execution;
+                } });
+            let taskId = '';
+            await expect.poll(async () => {
+                const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}` });
+                if (found.kind === 'found' && found.operation.state === 'failed') throw new Error(JSON.stringify(found.operation.error));
+                const domain = found.kind === 'found' ? found.operation.domainRef : undefined;
+                if (domain?.kind === 'managedMachine' && domain.bootstrapTask?.prompt) taskId = domain.bootstrapTask.id;
+                return taskId;
+            }, { timeout: 20_000 }).not.toBe('');
+            const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
+            await getLiveSystemTasksRunnerAdapter().respond({ taskId, answer: { approved: true } });
+            await work;
+            const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}`, waitForTerminal: true });
+            expect(found, JSON.stringify(found.kind === 'found' ? found.operation.error : found)).toMatchObject({ kind: 'found', operation: scenario === 'expire'
+                ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' } } : { state: 'succeeded' } });
+            expect(unavailableReads).toBe(scenario === 'expire' ? 2 : scenario === 'recover' ? 1 : 0);
+            if (scenario === 'expire' && found.kind === 'found') expect(found.operation.settledAt).toBeUndefined();
+            expect(retained.enrolledMachineId).toBe('enrolled-guest');
+        } finally {
+            vi.restoreAllMocks();
+            vi.unstubAllEnvs();
+            if (oldHome === undefined) delete process.env.HAPPIER_HOME_DIR;
+            else process.env.HAPPIER_HOME_DIR = oldHome;
+            reloadConfiguration();
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+            await filesystem.rm(root, { recursive: true, force: true });
+        }
+    });
     it.each(['succeeded', 'skipped'] as const)('retains the original first message across failed setup until exact paid row becomes %s', async state => {
         let retained = ManagedMachineV1Schema.parse({ ...machine, allocation: 'bound', enrolledMachineId: 'guest',
             preset: { id: 'preset', revision: 4 }, environmentSetup: { environment: { setupScript: 'echo admitted' }, state: 'pending' },
@@ -624,6 +756,58 @@ describe('managed acquisition durable custody', () => {
             await expect(invocation.invoke('destroy', { resource: {} })).resolves.toEqual({ kind: 'confirmed' });
             expect(native.effects()).toBe(2);
         }
+    });
+    it('records the actual credential used by a managed native provider HTTP effect', async () => {
+        const homeId = 'srv_managed_credential_receipt';
+        const service = { pluginId: 'acme.accounts', localId: 'cloud' };
+        const credential = { purpose: { consumer: input.selection.launch.provider, purpose: 'cloud' },
+            account: { service, accountId: 'selected-cloud' }, configurationRevision: 'cloud-configuration' };
+        const credentialOwner = createConnectedAccountPurposeBindingOwner({
+            credentialOwnerAccountId: 'credential-owner',
+            store: { read: async () => ({ v: 1, bindings: [] }), update: unavailableTransport, subscribe: () => ({ dispose() {} }) },
+            selectTarget: unavailableTransport,
+            resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: 'Cloud deployment account' } : null,
+            materializeAccount: async () => ({ kind: 'environment', env: { TOKEN: 'private-cloud-token' } }),
+            resolveCredentialConfigurationRevision: async () => 'cloud-configuration',
+            projectTargetAccounts: unavailableTransport, assertTargetAccountMaterializable: unavailableTransport,
+        });
+        const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(), purposeBindingOwner: credentialOwner,
+            requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
+            createRedactionLease: () => ({ add() {}, close() {} }) });
+        // The remote provider API is the effect boundary. Custody, target
+        // dispatch, SDK materialization and the binding owner remain real.
+        const providerHttp = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+        vi.stubGlobal('fetch', providerHttp);
+        const native = nativeFixture({ privateNative: true, credentialOwner,
+            credentialPurposes: [{ purpose: 'cloud', service }], referenceManifests: [nativeAccountReferenceManifest(['cloud'])],
+            nativeRoleResults: { destroy: { kind: 'confirmed' } },
+            onNativeRole: async (role, _body, context) => {
+                if (role !== 'destroy') return;
+                const material = await context.services.connectedAccounts.materialize('cloud', { kind: 'environment', keys: ['TOKEN'] });
+                if (material.kind !== 'environment') throw new Error('Expected native credential');
+                await fetch('https://provider.example/resources/managed', { method: 'DELETE', headers: { authorization: `Bearer ${material.env.TOKEN}` } });
+            },
+        });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound',
+            launch: { ...machine.launch, credentials: [credential] }, resource: { contributionRef: machine.launch.provider, schemaVersion: 1, value: {} } });
+        const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller, runtimeRegistry: native.runtimeRegistry,
+            ...accountInputs, managedProviderOperationAuthority: authority,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId, canonicalServerUrl: 'https://home.example', revision: 1,
+                endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' }) };
+        const recordOperationCredentialUse = vi.fn();
+        const options = { requestId: 'native-credential-receipt', context: { operationOwnerUpdate: { update() {} }, recordOperationCredentialUse } };
+        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: retained } });
+        const client = createManagedMachineControllerClient(driverInput, options, 'machines.managed.delete');
+        const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action: 'machines.managed.delete' }, () => retained);
+        await expect(invocation.invoke('destroy', { resource: {} })).resolves.toEqual({ kind: 'confirmed' });
+        expect(providerHttp).toHaveBeenCalledWith('https://provider.example/resources/managed', {
+            method: 'DELETE', headers: { authorization: 'Bearer private-cloud-token' },
+        });
+        expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+            v: 1, kind: 'connected_account', label: 'Cloud deployment account', owner: { kind: 'account', accountId: 'credential-owner' }, service,
+            why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.compute', localId: 'destroy' }, purpose: 'cloud' }, target: 'account' },
+            currentness: { kind: 'current_at_materialization' },
+        }]]);
     });
     it('materializes both captured native purposes after default changes and refuses a changed secondary connection', async () => {
         const homeId = 'srv_managed_plural_credentials';

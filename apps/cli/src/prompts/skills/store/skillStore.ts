@@ -7,7 +7,7 @@ import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
-import { createAbsolutePathSymlink } from '@happier-dev/plugin-sdk/fs';
+import { linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
 
 const segment = z.string().check(z.minLength(1), z.refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)));
 const digestSchema = z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u));
@@ -167,9 +167,12 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     const temporary = join(skillsRoot, `.staging-${randomUUID()}`);
                     try {
                         const source = materialized.get(item.name)!;
-                        if (platform === 'win32') { await cp(source, temporary, { recursive: true }); await makeReadOnly(temporary); }
-                        else await createAbsolutePathSymlink({ sourcePath: source, destinationPath: temporary, sourceKind: 'directory' });
-                        if (platform === 'win32') await removeOwnedTree(destination);
+                        // A real folder under the skill's own name, so `../<sibling>/SKILL.md` resolves from it even where the
+                        // platform follows links before `..`; on POSIX its children link to the immutable cache entry.
+                        if (platform === 'win32') await cp(source, temporary, { recursive: true });
+                        else await linkDirectoryChildren({ source, destination: temporary });
+                        await makeReadOnly(temporary);
+                        await removeOwnedTree(destination);
                         await rename(temporary, destination);
                     } catch (error) {
                         await removeOwnedTree(temporary);

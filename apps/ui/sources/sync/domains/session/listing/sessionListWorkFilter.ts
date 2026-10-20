@@ -95,13 +95,16 @@ export function resolveWorkflowRunUnavailableHomes(input: Readonly<{
     filter?: SessionListFilterV1;
     runs?: readonly (WorkflowRunSummaryV1 | null)[];
     viewerAccountId?: string;
+    /** This page came from workflow.run.list with the exact Under filter. */
+    runUnderSessionId?: string;
 }>): readonly Readonly<{ serverId: string; reason: 'not_selected' | 'unsupported' }>[] {
     return input.selectedHomeServerIds.flatMap((serverId) => {
         if (input.servedHomeServerId
             && areServerProfileIdentifiersEquivalent(serverId, input.servedHomeServerId)) {
             const filter = input.filter;
             const unavailable = filter && input.runs?.some(run => (run
-                ? matchWorkflowRunSessionListFilter(run, serverId, filter, input.viewerAccountId)
+                ? matchWorkflowRunSessionListFilter(run, serverId, filter, input.viewerAccountId,
+                    input.runUnderSessionId === filter.underSessionId && filter.underSessionId !== undefined ? true : undefined)
                 : matchSessionListFilterV1(filter, { serverId, kind: 'run' })) === 'unavailable');
             if (!unavailable) return [];
         }
@@ -116,6 +119,7 @@ export function buildWorkflowRunFilterFacts(
     run: WorkflowRunSummaryV1,
     serverId: string,
     viewerAccountId?: string,
+    underSessionMatches?: boolean,
 ): SessionListFilterFactsV1 {
     const ownedByViewer = viewerAccountId ? run.ownerAccountId === viewerAccountId : undefined;
     const starter = run.startedBy === 'user' ? ownedByViewer === undefined ? undefined : ownedByViewer ? 'you' : 'other_account'
@@ -128,6 +132,7 @@ export function buildWorkflowRunFilterFacts(
         audiences: run.visibleTeamId === null ? [{ kind: 'outside_teams' }]
             : [{ kind: 'team', teamId: run.visibleTeamId }],
         tagIds: [], source: 'persisted',
+        underSessionMatches,
         // A Run's destination is not owner Session Project/status evidence.
         workspaceContext: workspaceRefResolutionContextV1,
     };
@@ -139,9 +144,10 @@ export function matchWorkflowRunSessionListFilter(
     serverId: string,
     filter: SessionListFilterV1,
     viewerAccountId?: string,
+    underSessionMatches?: boolean,
 ): SessionListFilterMatchV1 {
     return matchSessionListFilterV1(run.attentionRequired ? { ...filter, startedBy: ALL_STARTERS } : filter,
-        buildWorkflowRunFilterFacts(run, serverId, viewerAccountId));
+        buildWorkflowRunFilterFacts(run, serverId, viewerAccountId, underSessionMatches));
 }
 
 /** The same authorized lean Run membership predicate for Sessions and Boards. */
@@ -150,6 +156,7 @@ export function workflowRunMatchesSessionListFilter(
     serverId: string,
     filter: SessionListFilterV1,
     viewerAccountId?: string,
+    underSessionMatches?: boolean,
 ): boolean {
-    return matchWorkflowRunSessionListFilter(run, serverId, filter, viewerAccountId) === 'match';
+    return matchWorkflowRunSessionListFilter(run, serverId, filter, viewerAccountId, underSessionMatches) === 'match';
 }

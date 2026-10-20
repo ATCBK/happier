@@ -9,6 +9,8 @@ export const AgentExternalSessionAccountingChangedNativeSessionIdsSchema = lazyZ
 /** Accounting observes a whole source; Session-specific watcher cardinality limits do not apply. */
 export const AgentExternalSessionAccountingSourceSchema = lazyZodSchema(() => z.strictObject({
     accountingSources: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+    /** Files witnessed by metadata discovery, not watcher targets or an inferred Session count. */
+    discoveredFileCount: z.optional(z.number().check(z.int(), z.nonnegative())),
     rootPath: z.optional(z.string().check(z.refine(isCanonicalAbsoluteObservationTopologyDirectoryPath))),
     rootField: z.optional(z.string().check(z.minLength(1))),
     resourceKey: ExternalAgentObservationResourceKeyV1Schema,

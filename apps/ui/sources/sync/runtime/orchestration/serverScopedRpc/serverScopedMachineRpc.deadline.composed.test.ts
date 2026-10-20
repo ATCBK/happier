@@ -193,7 +193,7 @@ it('releases a late socket after Machine admission fails without sending an RPC'
     }
 });
 
-async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0) {
+async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0, grantReply?: Promise<void>) {
     const features = FeaturesResponseSchema.parse({ features: { machines: {
         enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },
     } }, capabilities: {} });
@@ -207,6 +207,7 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         else if (request.url === '/v1/machines/machine-1') {
             response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
         } else if (request.url === '/v1/machines/peer/mediation/route-grants') {
+            await grantReply;
             const chunks: Buffer[] = [];
             for await (const chunk of request) chunks.push(Buffer.from(chunk));
             const grantRequest = DirectRouteGrantRequestV2Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
@@ -354,10 +355,11 @@ it('relays an unreachable direct endpoint, skips it after relay success, and ret
     }
 });
 
-it('relays the browser SOCKS preflight failure through real route selection and Home RPC', async () => {
+it('relays the browser SOCKS preflight failure without waiting for an unusable direct-route grant', async () => {
     const direct = createServer();
     const port = await listen(direct);
-    const home = await createDirectRelayHome(port);
+    const grantReply = createDeferred<void>();
+    const home = await createDirectRelayHome(port, undefined, 0, grantReply.promise);
     const realFetch = globalThis.fetch;
     const attempts: string[] = [];
     // Chromium exposes net::ERR_SOCKS_CONNECTION_FAILED to fetch as this
@@ -376,6 +378,7 @@ it('relays the browser SOCKS preflight failure through real route selection and 
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')?.outcome).toBe('failed');
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1')?.outcome).toBe('succeeded');
     } finally {
+        grantReply.resolve();
         await closeHttp(direct);
         await home.close();
     }

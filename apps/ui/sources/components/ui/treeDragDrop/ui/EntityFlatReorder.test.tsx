@@ -10,6 +10,7 @@ import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
+import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
 import { EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, type StagedMoveDockSlot } from './EntityReleasePreview';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
@@ -135,6 +136,20 @@ afterEach(async () => {
 });
 
 describe('shared flat reorder UI binding', () => {
+    it('gives neighboring descriptions of one effective gap the same identity', async () => {
+        const f = fixture();
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        const afterB = runtime.getSnapshot().destinationKey;
+        expect(afterB).toBeTypeOf('string');
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 110 }); });
+        expect(runtime.getSnapshot().destinationKey).toBe(afterB);
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 140 }); });
+        expect(runtime.getSnapshot().destinationKey).not.toBe(afterB);
+    });
+
     it('keeps a release press from opening the grip chooser while its pointer move waits for acknowledgement', async () => {
         const acknowledgement = createDeferred<void>();
         const f = fixture(undefined, acknowledgement.promise);
@@ -345,6 +360,26 @@ describe('shared flat reorder UI binding', () => {
             .toMatchObject({ status: 'unknown' });
     });
 
+    it('autoscrolls the scroller of the overlay it sits in when no scrollRef is passed (Home Sections popover, L77)', async () => {
+        const scrollNode = document.createElement('div');
+        Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
+        scrollNode.getBoundingClientRect = () => new DOMRect(0, 0, 300, 100);
+        scrollNode.scrollTop = 100;
+        const overlayScroller = { current: {
+            getScrollableNode: () => scrollNode,
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+        } };
+        const base = fixture();
+        const f = { model: base.model, render: () => <PopoverScrollSourceProvider scrollSourceRef={overlayScroller}>{base.render()}</PopoverScrollSourceProvider> };
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        expect(runtime.getSnapshot().admission?.status).toBe('allowed');
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBeGreaterThan(100);
+    });
+
     it('autoscrolls the RN Web viewport only for this list\'s admitted target and stops on exit, refusal, cancel and unmount', async () => {
         const scrollNode = document.createElement('div');
         Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
@@ -426,6 +461,41 @@ describe('shared flat reorder UI binding', () => {
         expect(scrollNode.scrollTop).toBe(beforeUnmount);
         expect(runtime.getSnapshot().phase).toBe('idle');
         expect(f.model.writes).toEqual([]);
+    });
+
+    it('keeps autoscrolling an engaged carry while the pointer is over the scroller\'s trailing space past the last row, and stops once it leaves the viewport', async () => {
+        const scrollNode = document.createElement('div');
+        Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
+        // The viewport is taller than the three 50 px rows: its bottom edge band lies partly past the last row.
+        scrollNode.getBoundingClientRect = () => new DOMRect(0, 0, 300, 200);
+        scrollNode.scrollTop = 100;
+        const scrollRef = { current: {
+            getScrollableNode: () => scrollNode,
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 200),
+        } } as unknown as React.RefObject<ScrollView | null>;
+        const f = fixture(scrollRef);
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 145 }); });
+        expect(runtime.getSnapshot()).toMatchObject({ targetId: expect.stringContaining('"c"'), admission: { status: 'allowed' } });
+        await screen.update(f.render());
+        const engaged = scrollNode.scrollTop;
+        expect(engaged).toBeGreaterThan(100);
+
+        // Trailing padding or an item after the list is no drop place, yet the edge zone still belongs to this carry.
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 190 }); });
+        expect(runtime.getSnapshot().targetId).toBeNull();
+        await screen.update(f.render());
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBeGreaterThan(engaged);
+
+        const beforeExit = scrollNode.scrollTop;
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 310, absoluteY: 190 }); });
+        await screen.update(f.render());
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(beforeExit);
+        await act(async () => { runtime.cancel('pointer-cancel'); });
     });
 
     it('captures real DOM pointer targets before body gestures without swallowing main-row activation', async () => {

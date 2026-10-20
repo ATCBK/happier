@@ -18,6 +18,7 @@ import {
 } from '@/sync/runtime/orchestration/connectionManager';
 
 import { buildOrdinarySessionListHomeState, type OrdinarySessionListLifecycle } from './ordinarySessionListHomeState';
+import { readSessionListQueryReadEpoch } from './sessionListQueryInvalidation';
 import type {
     SessionListQueryHomeState,
     SessionListQueryPageRequest,
@@ -135,11 +136,70 @@ export async function refreshOrdinarySessionList(serverIdRaw: string): Promise<v
     await refreshConcurrentOrdinarySessionList(serverIdRaw);
 }
 
-export async function fetchSessionListQueryPageForHome(
+type SharedPageRead = {
+    readonly result: ReturnType<typeof readSessionListQueryPageForHome>;
+    readonly abort: AbortController;
+    waiters: number;
+};
+
+/**
+ * Page reads on the wire. Every surface that shows a corpus owns its own controller, so one commit
+ * that mounts several of them, or one Account change that refreshes them, asks for the same page
+ * together. Those callers share one request. A read that began before the Home's latest invalidation
+ * is never shared with a caller that asks after it.
+ */
+const pageReadsInFlight = new Map<string, SharedPageRead>();
+
+/**
+ * A strict-query page and a row-only page of one corpus are the same read: the store tells them apart
+ * only by whether the page may bootstrap an ordinary list index, which the ordinary owner establishes itself.
+ */
+function readSharedMembership(membership: SessionListQueryPageRequest['membership']): string {
+    return membership === 'query' || membership === 'rowOnly' ? 'corpus' : membership;
+}
+
+/** One request per concurrent corpus read; it is aborted only when every caller that wanted it has left. */
+export function fetchSessionListQueryPageForHome(
     serverIdRaw: string,
     page: SessionListQueryPageRequest,
 ) {
     const serverId = String(serverIdRaw ?? '').trim();
+    const key = JSON.stringify([
+        serverId, readSessionListQueryReadEpoch(serverId),
+        page.source, readSharedMembership(page.membership), page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
+    ]);
+    let shared = pageReadsInFlight.get(key);
+    if (!shared) {
+        const abort = new AbortController();
+        const created: SharedPageRead = {
+            result: readSessionListQueryPageForHome(serverId, { ...page, signal: abort.signal }),
+            abort,
+            waiters: 0,
+        };
+        shared = created;
+        pageReadsInFlight.set(key, created);
+        const forget = () => {
+            if (pageReadsInFlight.get(key) === created) pageReadsInFlight.delete(key);
+        };
+        created.result.then(forget, forget);
+    }
+    const read = shared;
+    read.waiters += 1;
+    const leave = () => {
+        read.waiters -= 1;
+        if (read.waiters > 0) return;
+        if (pageReadsInFlight.get(key) === read) pageReadsInFlight.delete(key);
+        read.abort.abort(page.signal.reason);
+    };
+    if (page.signal.aborted) leave();
+    else page.signal.addEventListener('abort', leave, { once: true });
+    return read.result;
+}
+
+async function readSessionListQueryPageForHome(
+    serverId: string,
+    page: SessionListQueryPageRequest,
+) {
     if (isSyncOwnedOrdinarySessionListHome(serverId)) {
         return sync.fetchSessionListQueryPage(serverId, page);
     }

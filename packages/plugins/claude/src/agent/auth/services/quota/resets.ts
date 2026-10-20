@@ -1,5 +1,5 @@
 import type { ConnectedServiceQuotaRecoveryCreditV1, ConnectedServiceQuotaRecoveryCreditsV1,
-  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '@happier-dev/plugin-sdk/connected-accounts';
 import { createHash } from 'node:crypto';
 
 function isRecord(value: unknown): value is Record<string, unknown> {

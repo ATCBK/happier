@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '../../account/settings/accountSettings.js';
-import { readPortableAccountSettingBindingV1, scmBackendDefaultDiffStorage } from './accountSettingBindings.js';
+import { readPortableAccountSettingBindingV1, scmBackendDefaultDiffStorage, scmGitRoutingStorage } from './accountSettingBindings.js';
 import { prepareDefaultProviderStateSharingChangeV1, readProviderStateSharingRiskAgentIdsV1 } from './providerStateSharingMutations.js';
 import { resolveUiFeatureToggleEnabled } from './featurePreferenceMutations.js';
 
@@ -11,6 +11,38 @@ function binding(owner: string, ...options: string[]) {
 }
 
 describe('portable coupled Account setting mutations', () => {
+    it.each(['collapsed', 'expanded'] as const)('rebases one %s tool detail choice and clears only its named override', kind => {
+        const owner = binding('toolDetailOverrideStorage', kind);
+        const key = kind === 'collapsed' ? 'toolViewDetailLevelByToolName' : 'toolViewExpandedDetailLevelByToolName';
+        const before = accountSettingsParse({ toolViewDetailLevelByToolName: { Bash: 'summary', Read: 'summary' },
+            toolViewExpandedDetailLevelByToolName: { Bash: 'summary', Read: 'summary' } });
+        expect(owner.read(before)).toEqual({ Bash: 'summary', Read: 'summary' });
+        const bash = { toolName: 'Bash', detailLevel: 'full' };
+        expect(owner.parse(bash)).toEqual({ success: true, value: bash });
+        const first = accountSettingsParse({ ...before, ...owner.mutate(before, bash) });
+        const second = accountSettingsParse({ ...first, ...owner.mutate(first, { toolName: 'Read', detailLevel: 'full' }) });
+        expect(second[key]).toEqual({ Bash: 'full', Read: 'full' });
+        expect(owner.mutate(second, { toolName: 'Bash', detailLevel: 'default' })).toEqual({ [key]: { Read: 'full' } });
+        const external = { toolName: 'mcp__acme__inspect', detailLevel: 'full' };
+        expect(owner.parse(external)).toEqual({ success: true, value: external });
+        for (const invalid of [{ Bash: 'full' }, { toolName: 1, detailLevel: 'full' },
+            { toolName: 'Bash', detailLevel: 'unknown' }, { toolName: 'Bash', detailLevel: true },
+            { toolName: 'Bash', detailLevel: 'full', extra: true }, { toolName: 'x'.repeat(1025), detailLevel: 'default' }]) {
+            expect(owner.parse(invalid)).toEqual({ success: false });
+        }
+        if (kind === 'expanded') expect(owner.parse({ toolName: 'Bash', detailLevel: 'title' })).toEqual({ success: false });
+    });
+    it('admits external SCM routing and clears its qualified selection when choosing built-in Git', () => {
+        const settings = accountSettingsParse({ scmGitRepoPreferredBackend: 'sapling', scmPushRejectPolicy: 'manual' });
+        const external = scmGitRoutingStorage.parse('acme.scm/stacked');
+        expect(external.success).toBe(true);
+        if (!external.success) throw new Error('External SCM routing must be admitted');
+        const selected = accountSettingsParse({ ...settings, ...scmGitRoutingStorage.mutate(settings, external.value) });
+        expect(selected.scmGitRepoPreferredBackendQualifiedId).toBe('acme.scm/stacked');
+        expect(scmGitRoutingStorage.read(selected)).toBe('acme.scm/stacked');
+        const builtin = accountSettingsParse({ ...selected, ...scmGitRoutingStorage.mutate(selected, 'happier.scm.backend.git/git') });
+        expect(builtin).toMatchObject({ scmGitRepoPreferredBackend: 'git', scmGitRepoPreferredBackendQualifiedId: null, scmPushRejectPolicy: 'manual' });
+    });
     it('preserves an open backend id that matches an Object prototype property', () => {
         const settings = accountSettingsParse({ scmDefaultDiffModeByBackend: { neighbor: 'included' } });
         expect(scmBackendDefaultDiffStorage.mutate(settings, { backendId: 'constructor', mode: 'both' }))
@@ -129,6 +161,26 @@ describe('portable coupled Account setting mutations', () => {
         expect(delta?.keyboardShortcutOverridesV1).toEqual({ 'composer.focus': [{ binding: 'Alt+J' }], 'commandPalette.open': [{ binding: 'Mod+P' }] });
         expect(command.parse({ enabled: true, binding: 'Mod+', unknown: true }).success).toBe(false);
         expect(command.parse({ enabled: true, binding: 'Mod+' }).success).toBe(false);
+    });
+    it('toggles a command without rewriting its multiple platform-qualified bindings', () => {
+        const settings = accountSettingsParse({ keyboardShortcutOverridesV1: {
+            'commandPalette.open': [{ binding: 'Mod+K', platforms: ['macos'], allowInEditable: true },
+                { binding: 'Ctrl+P', platforms: ['windows'], blockedSurfaces: ['native'] }],
+            'composer.focus': [{ binding: 'Alt+J' }],
+        } });
+        const command = binding('commandStorage', 'commandPalette.open');
+        const intent = command.parse({ enabled: false });
+        expect(intent.success).toBe(true);
+        if (!intent.success) throw new Error('Command toggles must not require a binding change');
+        const delta = command.mutate(settings, intent.value);
+        expect(accountSettingsParse({ ...settings, ...delta })).toMatchObject({ commandPaletteEnabled: false,
+            keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open'],
+            keyboardShortcutOverridesV1: settings.keyboardShortcutOverridesV1,
+        });
+        expect(delta?.keyboardShortcutOverridesV1).toBeUndefined();
+        const reset = command.mutate(settings, { enabled: true, binding: null });
+        expect(reset?.keyboardShortcutOverridesV1).toEqual({ 'composer.focus': [{ binding: 'Alt+J' }] });
+        expect(command.parse({ enabled: true, unsupported: true }).success).toBe(false);
     });
     it('resets one retention category without accepting an absolute allocation deadline', () => {
         const settings = accountSettingsParse({ machineRetentionDefaultsV1: { v: 1,

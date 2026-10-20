@@ -226,7 +226,7 @@ describe('standalone MCP client Action admission', () => {
     }
   });
 
-  it('returns typed noClient when the captured Home has no daemon', async () => {
+  it('preserves daemon_unavailable when the captured Home has no daemon', async () => {
     const { mcp } = createExternalMcpServer({ credentials, daemonControlTarget: null });
     const client = new Client({ name: 'absent-daemon-test', version: '1' });
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
@@ -235,7 +235,7 @@ describe('standalone MCP client Action admission', () => {
       const response = CallToolResultSchema.parse(await client.callTool({ name: 'ui_find', arguments: { op: 'read' } }));
       const text = response.content.find(entry => entry.type === 'text');
       if (!text || text.type !== 'text') throw new Error('Missing MCP text result');
-      expect(JSON.parse(text.text)).toEqual({ status: 'unavailable', reason: 'noClient' });
+      expect(JSON.parse(text.text)).toEqual({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' });
     } finally { await client.close(); await mcp.close(); }
   });
 });

@@ -269,14 +269,8 @@ export function createSpawnRequestCoalescer(params: Readonly<{
     if (key.kind === 'existing' && !key.authorizationKey) return;
     if (ttlMs <= 0) return;
     if (result.type !== 'success') return;
-    if (key.kind === 'existing') {
-      recentSuccessByKey.set(key.key, { result, atMs: nowMs() });
-      pendingTimeoutByKey.delete(key.key);
-      return;
-    }
-    const sessionId = normalizeNonEmptyString(result.sessionId);
-    if (!sessionId) return;
-    recentSuccessByKey.set(key.key, { result: { type: 'success', sessionId }, atMs: nowMs() });
+    if (key.kind === 'new' && !normalizeNonEmptyString(result.sessionId)) return;
+    recentSuccessByKey.set(key.key, { result, atMs: nowMs() });
     pendingTimeoutByKey.delete(key.key);
   };
 

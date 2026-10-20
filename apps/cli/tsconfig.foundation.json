@@ -190,6 +190,7 @@
     "src/agent/tools/normalization/families/search.ts",
     "src/agent/tools/normalization/families/task.ts",
     "src/agent/tools/normalization/families/todo.ts",
+    "src/agent/tools/normalization/families/toolEnvelope.ts",
     "src/agent/tools/normalization/families/web.ts",
     "src/agent/tools/normalization/families/write.ts",
     "src/agent/tools/normalization/happierToolsShellBridgeCanonicalization.ts",

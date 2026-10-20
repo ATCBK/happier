@@ -114,7 +114,7 @@ describe('connected-service configuration Action owner', () => {
         const host = { assertCurrent() {}, async request() { throw new Error('unexpected_http'); },
             mutatePurposeBindings: catalog.mutatePurposeBindings, async resolveAgent() { return null; }, async resetQuota() {},
             // The daemon's installed Resource declaration is a genuine machine authority boundary.
-            async admitResourcePurposeTarget(input: unknown) {
+            async admitPurposeTarget(input: unknown) {
                 if (JSON.stringify(input) !== JSON.stringify({ machineId: 'machine', purpose, target: { kind: 'account', account } })) return null;
                 return () => { if (!current) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' }); };
             },

@@ -5,9 +5,10 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
 
-import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
+import { createSessionListQuerySourceHarness, waitForSessionListQueryState, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { storage } from '@/sync/domains/state/storageStore';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { useSessionListQuerySourceState, type SessionListQueryHomeInput, type SessionListQuerySourceState } from './useSessionListQuerySourceState';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -56,9 +57,9 @@ async function mount(initialHomes: SessionListQueryHomeInput[], options: Readonl
         state,
         suspendedRenderAttempts: () => suspendedRenderAttempts,
         async ready(...serverIds: string[]) {
-            await act(async () => waitForHomeGovernance(() => {
+            await waitForSessionListQueryState(() => {
                 for (const serverId of serverIds) expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready');
-            }));
+            });
         },
         async render(selectedHomes: SessionListQueryHomeInput[]) {
             await act(async () => render(selectedHomes, false));
@@ -69,6 +70,38 @@ async function mount(initialHomes: SessionListQueryHomeInput[], options: Readonl
                 await Promise.resolve();
             });
         },
+        async unmount() {
+            if (unmounted) return;
+            unmounted = true;
+            await act(async () => root.unmount());
+            container.remove();
+            environment.IS_REACT_ACT_ENVIRONMENT = previous;
+        },
+    };
+}
+
+/** Several surfaces of one app asking for the same corpus: each is its own consumer of the hook. */
+async function mountConsumers(selectedHomes: SessionListQueryHomeInput[], initialCount: number, memberships: ReadonlyArray<'query' | 'rowOnly'> = []) {
+    const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previous = environment.IS_REACT_ACT_ENVIRONMENT;
+    environment.IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const states: Array<{ current: SessionListQuerySourceState | null }> = [];
+    function Consumer(props: Readonly<{ index: number }>) {
+        states[props.index] ??= { current: null };
+        const consumerHomes = React.useMemo(
+            () => selectedHomes.map(home => ({ ...home, queryMembership: memberships[props.index] ?? 'query' })), [props.index]);
+        states[props.index]!.current = useSessionListQuerySourceState({ enabled: true, homes: consumerHomes });
+        return null;
+    }
+    const render = (count: number) => root.render(<>{Array.from({ length: count }, (_, index) => <Consumer key={index} index={index} />)}</>);
+    await act(async () => render(initialCount));
+    let unmounted = false;
+    return {
+        states,
+        async show(count: number) { await act(async () => render(count)); },
         async unmount() {
             if (unmounted) return;
             unmounted = true;
@@ -93,8 +126,8 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
                 await waitForHomeGovernance(() => expect(boundary.queryRequests.some(request => request.serverId === homeB && request.cursor !== null)).toBe(true));
             });
             const pendingHomeB = boundary.queryRequests.find(request => request.serverId === homeB && request.cursor !== null)!;
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeA]?.addresses.map(address => address.sessionId))
-                .toEqual([boundary.accountId(homeA) + '-row', boundary.accountId(homeA) + '-page-2'])));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeA]?.addresses.map(address => address.sessionId))
+                .toEqual([boundary.accountId(homeA) + '-row', boundary.accountId(homeA) + '-page-2']));
             await screen.suspend(homes(homeA, homeC));
             expect(screen.suspendedRenderAttempts()).toBeGreaterThan(0);
             expect(pendingHomeB.signal?.aborted).toBe(false);
@@ -122,11 +155,11 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
         boundary.holdQueries(homeB);
         const screen = await mount(homes(homeA, homeB), { strict: true });
         try {
-            await act(async () => waitForHomeGovernance(() => {
+            await waitForSessionListQueryState(() => {
                 for (const serverId of [homeA, homeB]) {
                     expect(boundary.queryRequests.some(request => request.serverId === serverId && request.signal?.aborted === false)).toBe(true);
                 }
-            }));
+            });
             await screen.unmount();
             expect(boundary.queryRequests.length).toBeGreaterThan(0);
             for (const request of boundary.queryRequests) {
@@ -163,7 +196,7 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
             await screen.ready(homeA, homeB);
             boundary.setReachable(homeB, false);
             await act(async () => { boundary.loseTransport(homeB); });
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeB]?.phase).toBe('offline')));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeB]?.phase).toBe('offline'));
             // A later user retry is distinct from the coalesced transport-loss revalidation.
             vi.useFakeTimers({ toFake: ['Date'] });
             vi.setSystemTime(Date.now() + 1_000);
@@ -195,8 +228,8 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
         const screen = await mount(selectedHomes);
         try {
             await screen.ready(homeB);
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeA])
-                .toMatchObject({ phase: 'error', failureReason: 'unsupported' })));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeA])
+                .toMatchObject({ phase: 'error', failureReason: 'unsupported' }));
             expect(boundary.queryRequests.some(request => request.serverId === homeA)).toBe(false);
             expect(screen.state.current?.statesByServerId[homeB]?.addresses)
                 .toEqual([{ serverId: homeB, sessionId: boundary.accountId(homeB) + '-row' }]);
@@ -224,7 +257,7 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
             });
             const oldRequest = boundary.queryRequests.slice(before).find(request => request.serverId === replacedHome)!;
             await act(async () => { await boundary.switchAccount(replacedHome, 'replacement-account'); });
-            await act(async () => waitForHomeGovernance(() => expect(oldRequest.signal?.aborted).toBe(true)));
+            await waitForSessionListQueryState(() => expect(oldRequest.signal?.aborted).toBe(true));
             expect(oldRequest.aborts.count).toBe(1);
             expect(Object.values(storage.getState().sessionListQueryMembershipByKey)
                 .some(membership => membership?.serverId === replacedHome && membership.accountId === oldAccountId)).toBe(false);
@@ -241,5 +274,85 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
             await pending;
             await screen.unmount();
         }
+    });
+});
+
+describe('useSessionListQuerySourceState concurrent consumers of one corpus', () => {
+    it('asks each Home for one first page when several surfaces mount the same corpus together', async () => {
+        const [homeA, homeB] = boundary.serverIds as [string, string, string];
+        const requestsBefore = boundary.queryRequests.length;
+        // The Homes answer slowly, as a loaded Home does: every surface asks while the first page is still on the wire.
+        boundary.holdQueries(homeA);
+        boundary.holdQueries(homeB);
+        // A mounted filter and a row-only consumer (activity, bots) ask for the same corpus.
+        const screen = await mountConsumers(homes(homeA, homeB), 3, ['query', 'rowOnly', 'query']);
+        try {
+            await waitForSessionListQueryState(() => {
+                for (const serverId of [homeA, homeB]) {
+                    expect(boundary.queryRequests.slice(requestsBefore).some(request => request.serverId === serverId)).toBe(true);
+                }
+            });
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+            boundary.releaseQueries(homeA);
+            boundary.releaseQueries(homeB);
+            await waitForSessionListQueryState(() => {
+                for (const state of screen.states) {
+                    for (const serverId of [homeA, homeB]) expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready');
+                }
+            });
+            // The applied Home is served by Sync and the other by the concurrent cache; both read one page.
+            for (const serverId of [homeA, homeB]) {
+                expect(boundary.queryRequests.slice(requestsBefore).filter(request => request.serverId === serverId && request.cursor === null)).toHaveLength(1);
+            }
+        } finally {
+            boundary.releaseQueries(homeA);
+            boundary.releaseQueries(homeB);
+            await screen.unmount();
+        }
+    });
+
+    it('keeps the shared page alive for the surfaces still showing it, and retires it with the last one', async () => {
+        const homeA = boundary.serverIds[0]!;
+        boundary.holdQueries(homeA);
+        const requestsBefore = boundary.queryRequests.length;
+        const homeRequests = () => boundary.queryRequests.slice(requestsBefore).filter(request => request.serverId === homeA);
+        const screen = await mountConsumers(homes(homeA), 2);
+        try {
+            await waitForSessionListQueryState(() => expect(homeRequests()).toHaveLength(1));
+            const shared = homeRequests()[0]!;
+            await screen.show(1);
+            expect(shared.signal?.aborted).toBe(false);
+            // A surface that starts asking while that page is still on the wire waits for it too.
+            await screen.show(2);
+            expect(homeRequests()).toHaveLength(1);
+            await screen.unmount();
+            expect(shared.signal?.aborted).toBe(true);
+            expect(shared.aborts.count).toBe(1);
+        } finally {
+            boundary.releaseQueries(homeA);
+            await screen.unmount();
+        }
+    });
+
+    it('does not answer a surface from a page that began before its Home changed', async () => {
+        const homeA = boundary.serverIds[0]!;
+        const requestsBefore = boundary.queryRequests.length;
+        const homeRequests = () => boundary.queryRequests.slice(requestsBefore).filter(request => request.serverId === homeA);
+        const first = await mountConsumers(homes(homeA), 1);
+        try {
+            await waitForSessionListQueryState(() => expect(first.states[0]?.current?.statesByServerId[homeA]?.phase).toBe('ready'));
+            boundary.holdQueries(homeA);
+            const second = await mountConsumers(homes(homeA), 1);
+            try {
+                await waitForSessionListQueryState(() => expect(homeRequests()).toHaveLength(2));
+                const requestsBeforeChange = homeRequests().length;
+                // The first surface is idle, so only the change can make it read again; the second still waits on its own page.
+                await act(async () => publishHomeAccountChange(homeA));
+                await waitForSessionListQueryState(() => expect(homeRequests().length).toBe(requestsBeforeChange + 1));
+            } finally {
+                boundary.releaseQueries(homeA);
+                await second.unmount();
+            }
+        } finally { await first.unmount(); }
     });
 });

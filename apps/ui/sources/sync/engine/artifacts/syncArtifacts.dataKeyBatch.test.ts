@@ -76,6 +76,28 @@ describe('fetchAndApplyArtifactsList artifact data-key unwrapping', () => {
         expect(decryptEncryptionKeys).toHaveBeenCalledTimes(1);
     });
 
+    it('opens an unchanged list header once across refreshes and reopens a revised one', async () => {
+        const key = new Uint8Array(32).fill(1);
+        const artifact = await buildArtifact('a', 'env-a', key);
+        const { encryption } = createEncryptionHarness(new Map([['env-a', key]]));
+        const artifactDataKeys: ArtifactDataKeyCache = new Map();
+        const openHeader = vi.spyOn(ArtifactEncryption.prototype, 'decryptHeaderRaw');
+        try {
+            await decryptArtifactListItems({ artifacts: [artifact], encryption, artifactDataKeys });
+            const refreshed = await decryptArtifactListItems({ artifacts: [artifact], encryption, artifactDataKeys });
+            expect(refreshed[0]).toMatchObject({ isDecrypted: true, title: 'title-a' });
+            expect(openHeader).toHaveBeenCalledTimes(1);
+
+            const revised = { ...artifact, headerVersion: 2,
+                header: await new ArtifactEncryption(key).encryptHeader({ v: 1, kind: 'artifact.legacy', title: 'renamed' } as never) };
+            const reopened = await decryptArtifactListItems({ artifacts: [revised], encryption, artifactDataKeys });
+            expect(reopened[0]).toMatchObject({ isDecrypted: true, title: 'renamed' });
+            expect(openHeader).toHaveBeenCalledTimes(2);
+        } finally {
+            openHeader.mockRestore();
+        }
+    });
+
     it('opens every artifact envelope in one batch instead of one call per artifact', async () => {
         const keyA = new Uint8Array(32).fill(1);
         const keyB = new Uint8Array(32).fill(2);

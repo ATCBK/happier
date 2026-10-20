@@ -17,6 +17,7 @@ import { readActiveTeamInvitationAdmissionReferenceInTx } from "@/app/teams/invi
 import { claimTeamInvitationPostAuthContinuationInTx } from "@/app/teams/invitations/postAuthContinuation";
 import { isTeamMembershipAdmissionEnabled } from "@/app/teams/memberships/membershipService";
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -94,6 +95,7 @@ export async function finalizeMtlsAuthenticationInTx(
     const existingAccount = existingIdentity !== null;
     let accountId: string;
     if (existingIdentity) {
+        await acquireAccountSessionOwnerMetadataFencesInTx(tx, [existingIdentity.accountId], "content");
         if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
             env,
             methodId: "mtls",

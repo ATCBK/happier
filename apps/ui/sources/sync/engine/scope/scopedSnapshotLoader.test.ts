@@ -309,6 +309,43 @@ describe('createScopedSnapshotLoader', () => {
             loader.resetForTests();
         }
     });
+    it('does not replay a wake after a finite foreground pass already served it during retained maintenance', async () => {
+        let releaseCleanup!: () => void;
+        const cleanup = new Promise<void>(resolve => { releaseCleanup = resolve; });
+        let reads = 0;
+        let publication = 0;
+        let cleanupDone = false;
+        const target = { key: 'finite-foreground', serverId: 'home' };
+        const loader = createScopedSnapshotLoader({
+            load: async (_target, context) => {
+                reads += 1;
+                if (reads > 1) { publication = 2; return; }
+                return context.readWithMaintenance<number>({
+                    read: async ({ onReady }) => {
+                        onReady(1, () => true);
+                        await cleanup;
+                        cleanupDone = true;
+                        return 1;
+                    },
+                    publish: value => { publication = value; },
+                    getPublication: () => publication,
+                });
+            },
+            shouldLoadOnObserve: () => true,
+            invalidateServer: () => {}, invalidateTarget: () => {},
+        });
+        const release = loader.observe(target);
+        try {
+            await loader.refresh(target);
+            publishHomeAccountChange('home');
+            await loader.refresh(target);
+            expect(publication).toBe(2);
+            releaseCleanup();
+            await vi.waitFor(() => expect(cleanupDone).toBe(true));
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(reads).toBe(2);
+        } finally { releaseCleanup(); release(); loader.resetForTests(); }
+    });
     it('does not suppress a published MCP read own retained-source maintenance', async () => {
         const { loadMcpServerCatalogV1 } = await import('@happier-dev/protocol/mcp/servers/serverCatalogV1');
         let publication: McpServerCatalogSnapshotV1 = { status: 'loading' };

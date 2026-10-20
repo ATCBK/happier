@@ -1,4 +1,4 @@
-import * as Haptics from 'expo-haptics';
+import { hapticsLight } from '@/components/ui/theme/haptics';
 import * as React from 'react';
 import { Pressable, View, useWindowDimensions, type GestureResponderEvent, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -9,7 +9,6 @@ import { type PetAnimationStateV1 } from '@happier-dev/protocol';
 
 import {
     PET_TAP_REACTION_DURATION_MS,
-    PET_TAP_REACTION_HAPTIC,
 } from '@/components/pets/animation/petAnimationPlaybackConfig';
 import {
     usePetCompanionActivityModel,
@@ -50,15 +49,12 @@ import {
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { useReportSessionCockpitPetRect } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 const PET_TAP_REACTION_STATE = 'jumping' satisfies PetAnimationStateV1;
-const PET_TAP_REACTION_HAPTIC_STYLE: Record<typeof PET_TAP_REACTION_HAPTIC, Haptics.ImpactFeedbackStyle> = {
-    light: Haptics.ImpactFeedbackStyle.Light,
-};
 const NATIVE_PET_TRAY_GAP_PX = 18;
 
 function useTapReactionState(): Readonly<{
@@ -88,7 +84,7 @@ function useTapReactionState(): Readonly<{
             reactionTimeoutRef.current = null;
             setReactionState(null);
         }, PET_TAP_REACTION_DURATION_MS);
-        void Haptics.impactAsync(PET_TAP_REACTION_HAPTIC_STYLE[PET_TAP_REACTION_HAPTIC]).catch(() => {});
+        void hapticsLight();
     }, []);
 
     return { reactionState, triggerTapReaction };
@@ -125,7 +121,6 @@ function NativePetCompanionLayer({
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const petsCompanionPosition = useLocalSetting('petsCompanionPosition');
     const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
-    const applyLocalSettings = useApplyLocalSettings();
     const dimensions = useWindowDimensions();
     const safeAreaInsets = useSafeAreaInsets();
     const keyboardHeight = useKeyboardHeight();
@@ -186,14 +181,14 @@ function NativePetCompanionLayer({
         onDragRelease: ({ target }) => reportPetRect({ ...target, width: measuredWidth, height: measuredHeight }),
         resolveDragState: resolvePetNativeDragAnimationState,
         onPositionChange: ({ point }) => {
-            applyLocalSettings({
+            getStorage().getState().applyLocalSettings({
                 petsCompanionPosition: createStoredPetCompanionPosition({
                     surface: 'mobile-app-shell',
                     point,
                     bounds,
                     viewport,
                 }),
-            });
+            }, { source: 'ui' });
         },
     });
     const effectiveState = reactionState ?? pan.dragState ?? activity.state;

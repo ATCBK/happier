@@ -195,16 +195,19 @@ export function createStopSession(params: Readonly<{
     sessionId: string;
     attachmentInfo: ExactTerminalHostAttachmentInfo;
     terminalMode: TerminalMode;
+    stoppedAt: number;
   }>) => Promise<ExactTerminalControlServiceabilityRetirement | void>;
   retireAbsentTerminalControlServiceability?: (input: Readonly<{
     metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     trackedSession: TrackedSession;
+    stoppedAt: number;
   }>) => Promise<RetainedPlainRunnerRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
     metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     expectedAttachmentId?: string;
+    stoppedAt: number;
   }>) => Promise<StopSessionResult | null>;
   expectedTerminalAttachmentId?: string;
   requireTerminalTopologyProof?: boolean;
@@ -419,6 +422,41 @@ export function createStopSession(params: Readonly<{
       }) ?? Promise.resolve(null);
       return await terminalHostAdaptersPromise;
     };
+    const retireAbsentRunnerServiceability = async (): Promise<StopSessionResult> => {
+      if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
+        try {
+          let retired = false;
+          for (const trackedSession of expectedTrackedSessionsByPid.values()) {
+            const retirement = await observeStopPhase('plain_control_serviceability_retirement', () =>
+              params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession,
+                stoppedAt: Date.now(),
+                ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}) }));
+            if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
+              return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+            }
+            if (retirement === 'retired' || retirement === 'deferred') {
+              retired = true;
+              break;
+            }
+          }
+          if (!retired) {
+            // A native runner may publish hostPid before its webhook binds it
+            // to the tracked launcher. Reuse recovery's current-Machine and
+            // dead-host proof before retiring that different metadata owner.
+            const recovered = await params.recoverStrandedTerminalControlServiceability?.({
+              sessionId: normalizedSessionId,
+              stoppedAt: Date.now(),
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
+            });
+            return recovered ?? incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          }
+        } catch (error) {
+          logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
+          return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+        }
+      }
+      return { status: 'stopped' };
+    };
     const retireLegacyAttachmentAfterPositiveDeath = async (
       evidence: NonNullable<typeof legacyRecoveryEvidence>,
       options: Readonly<{ runnerExitProven: boolean; trackedPids: readonly number[] }>,
@@ -464,7 +502,7 @@ export function createStopSession(params: Readonly<{
           removeAttachmentInfo: params.removeHostAttachmentInfo ?? removeTerminalHostAttachmentInfo,
         });
         return disposition.status === 'retired'
-          ? { status: 'stopped' }
+          ? options.trackedPids.length > 0 ? await retireAbsentRunnerServiceability() : { status: 'stopped' }
           : disposition.status === 'parked'
             ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
             : incompleteStopSession('terminal_attachment_descriptor_retirement_failed');
@@ -478,7 +516,7 @@ export function createStopSession(params: Readonly<{
         expected: evidence.attachmentInfo,
       }).catch(() => false);
       return removed
-        ? { status: 'stopped' }
+        ? options.trackedPids.length > 0 ? await retireAbsentRunnerServiceability() : { status: 'stopped' }
         : incompleteStopSession('attachment_mismatch');
     };
 
@@ -493,6 +531,7 @@ export function createStopSession(params: Readonly<{
         try {
           const recovered = await params.recoverStrandedTerminalControlServiceability({
             sessionId: normalizedSessionId,
+            stoppedAt: Date.now(),
             ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
             ...(attachmentInfo?.version === 2
               ? { expectedAttachmentId: attachmentInfo.attachmentId }
@@ -759,6 +798,7 @@ export function createStopSession(params: Readonly<{
                 sessionId: normalizedSessionId,
                 attachmentInfo: currentAttachmentInfo,
                 terminalMode: retiredTerminalMode,
+                stoppedAt: Date.now(),
               });
               logger.infoFile('[DAEMON STOP] Borrowed control serviceability retirement completed', {
                 sessionId: normalizedSessionId,
@@ -813,6 +853,7 @@ export function createStopSession(params: Readonly<{
               sessionId: normalizedSessionId,
               attachmentInfo: currentAttachmentInfo,
               terminalMode: retiredTerminalMode,
+              stoppedAt: Date.now(),
             });
           }
           logger.infoFile('[DAEMON STOP] Control serviceability retirement completed', {
@@ -854,27 +895,6 @@ export function createStopSession(params: Readonly<{
         ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
         : incompleteStopSession('destroy_failed');
     }
-    if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
-      try {
-        let retired = false;
-        for (const trackedSession of expectedTrackedSessionsByPid.values()) {
-          const retirement = await observeStopPhase('plain_control_serviceability_retirement', () =>
-            params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession,
-              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}) }));
-          if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
-            return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-          }
-          if (retirement === 'retired' || retirement === 'deferred') {
-            retired = true;
-            break;
-          }
-        }
-        if (!retired) return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-      } catch (error) {
-        logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
-        return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-      }
-    }
-    return { status: 'stopped' };
+    return await retireAbsentRunnerServiceability();
   };
 }

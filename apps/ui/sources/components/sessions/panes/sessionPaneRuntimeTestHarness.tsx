@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { beforeEach, afterEach, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -146,6 +147,17 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                 const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
                 if (bootstrapResponse) return bootstrapResponse;
                 if ((init?.method ?? 'GET') === 'GET' && path === AUTHORING_MEMORY_ROUTE_V1) return json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
+                const sessionTurnsRead = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
+                if ((init?.method ?? 'GET') === 'GET' && sessionTurnsRead) {
+                    const requestedSessionId = decodeURIComponent(sessionTurnsRead[1]!);
+                    // The Home's registered fixture exists before a cold client has hydrated it.
+                    if (requestedSessionId === sessionId) {
+                        const session = createSessionFixture({ id: sessionId, serverId: account.serverId });
+                        return json(buildSessionTurnsProjectionV1({
+                            sessionId: session.id, updatedAt: session.updatedAt, turns: [],
+                        }));
+                    }
+                }
                 const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
                 if ((init?.method ?? 'GET') === 'GET' && sessionRead) {
                     const requestedSessionId = decodeURIComponent(sessionRead[1]!);

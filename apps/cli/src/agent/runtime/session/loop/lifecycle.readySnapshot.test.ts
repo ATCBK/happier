@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import type { AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
-import { AgentSessionRuntimeEventV1Schema } from '@happier-dev/protocol';
+import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import { createSessionProviderInputOutcomeBinding } from '@/agent/runtime/session/input/providerInputOutcome';
 
 import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
 import { subscribeSessionRuntimePublicationToMetadata } from '@/agent/runtime/identity/metadata/subscription';
@@ -61,6 +62,10 @@ describe('host ready after a provider successor starts', () => {
     let providerDispatchCount = 0;
     const secondHostAnswer = hostAnswer === null ? 'SECOND_HOST_ANSWER' : null;
     const committedMessages: unknown[] = [];
+    const terminalMutations: unknown[] = [];
+    const committedAssistantSeqs = new Map<string, number>();
+    const acceptedUserSeqs = new Map<string, number>();
+    const pendingReceipts = new Map<string, () => void>();
     const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
     let sequence = 0;
     const emit = (input: Readonly<Record<string, unknown>>) => {
@@ -87,7 +92,8 @@ describe('host ready after a provider successor starts', () => {
         emit({ kind: 'turn-complete', turnId: request.delivery.turnId });
         const successorTurnId = `provider-successor-${providerDispatchCount}`;
         emit({ kind: 'turn-start', turnId: successorTurnId, startedBy: 'provider' });
-        emit({ kind: 'message-delta', turnId: successorTurnId, channel: 'assistant', text: 'SUCCESSOR_ANSWER' });
+        emit({ kind: 'transcript-message-committed', turnId: successorTurnId, messageId: `successor-answer-${providerDispatchCount}`,
+          role: 'assistant', text: 'SUCCESSOR_ANSWER' });
         return { status: 'admitted' };
       },
       watch(listener) {
@@ -124,8 +130,11 @@ describe('host ready after a provider successor starts', () => {
         observedSeq += 1;
         return { persisted: true as const, delivered: true as const };
       },
-      getCommittedUserMessageSeq: (localId: string) => localId === 'host-input' ? 1 : localId === 'host-input-2' ? secondHostSeq : null,
-      enqueueSessionTurnMutation: async () => undefined,
+      getCommittedUserMessageSeq: (localId: string) => acceptedUserSeqs.get(localId) ?? null,
+      enqueueSessionTurnMutation: async (mutation: unknown) => {
+        const parsed = SessionTurnMutationV1Schema.parse(mutation);
+        if (parsed.action === 'complete') terminalMutations.push(parsed);
+      },
       enqueueAgentMessageCommitted: async (
         providerId: Parameters<NonNullable<typeof fixture.enqueueAgentMessageCommitted>>[0],
         body: Parameters<NonNullable<typeof fixture.enqueueAgentMessageCommitted>>[1],
@@ -133,12 +142,32 @@ describe('host ready after a provider successor starts', () => {
       ) => {
         committedMessages.push(body);
         const extracted = extractAssistantTextSnapshotFromAcpMessage(providerId, body);
-        if (extracted) snapshots.observe({ ...extracted, localId: options.localId, seq: ++observedSeq, source: 'committed' });
+        if (extracted) {
+          const seq = ++observedSeq;
+          snapshots.observe({ ...extracted, localId: options.localId, seq, source: 'committed' });
+          committedAssistantSeqs.set(extracted.text, seq);
+          // The external Pending receipt can arrive after a successor's first
+          // assistant row. Native acceptance itself is not this Home ACK.
+          if (extracted.text === 'SUCCESSOR_ANSWER') {
+            for (const settle of pendingReceipts.values()) settle();
+            pendingReceipts.clear();
+          }
+        }
         return { persisted: true as const, delivered: true as const };
       },
     });
+    const inputBinding = createSessionProviderInputOutcomeBinding({ getTarget: () => ({ sessionId,
+      hasPendingProviderInput: () => true,
+      observeProviderInputSettlement: outcome => new Promise<void>(resolve => {
+        pendingReceipts.set(outcome.localId, () => {
+          const seq = outcome.localId === 'host-input' ? 1 : secondHostSeq;
+          if (seq !== null) acceptedUserSeqs.set(outcome.localId, seq);
+          resolve();
+        });
+      }),
+    }) });
     // These are the real host launch owners, installed before the Session loop.
-    if (eagerStartup) runtime.setOnPromptDeliveryOutcome(() => undefined);
+    runtime.setOnPromptDeliveryOutcome(inputBinding.observeProviderInputOutcome);
     let metadataPublication: ReturnType<typeof subscribeSessionRuntimePublicationToMetadata> | null = null;
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
       mode => mode.permissionMode, { batcher: combinePermissionModeQueuedPrompts });
@@ -168,7 +197,7 @@ describe('host ready after a provider successor starts', () => {
       }) },
       // The canonical Session fixture substitutes the server/persistence boundary.
       session: session as unknown as SessionLoopLifecycleParams['session'],
-      runtime, hookRuntime: runtime, registerProviderAcceptedEffect() {}, messageBuffer: new MessageBuffer(),
+      runtime, hookRuntime: runtime, registerProviderAcceptedEffect: inputBinding.registerProviderAcceptedEffect, messageBuffer: new MessageBuffer(),
       permissionHandler: { reset() {}, setPermissionMode() {} },
       permissionModeState: {
         rebindSession() {}, releaseRejectedBeforeProviderPromptIdentity() {}, getCurrentPermissionMode: () => 'default',
@@ -218,6 +247,12 @@ describe('host ready after a provider successor starts', () => {
     try {
       await runSessionLoopLifecycle({ ...params, runtime: runtimeForLoop });
       expect(providerDispatchCount, JSON.stringify({ committedMessages, accountRequests })).toBe(2);
+      for (const [index, answer] of [hostAnswer, secondHostAnswer].entries()) {
+        expect(terminalMutations).toContainEqual(expect.objectContaining({ turnId: hostTurnIds[index],
+          transcriptAnchors: expect.objectContaining({ startUserMessageSeq: index === 0 ? 1 : secondHostSeq,
+            userMessageSeqs: [index === 0 ? 1 : secondHostSeq],
+            finalAssistantMessageSeq: answer ? committedAssistantSeqs.get(answer) : null }) }));
+      }
       expect.soft(readyPreviews).toEqual([hostAnswer, secondHostAnswer]);
       await vi.waitFor(() => expect(sentNotifications).toHaveLength(2));
       expect(readyEvents).toEqual(hostTurnIds.map(completedTurnId => ({ type: 'ready', ownerActivityDelivery: 'rich_sender', completedTurnId })));

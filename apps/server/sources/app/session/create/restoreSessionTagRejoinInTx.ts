@@ -4,7 +4,8 @@ import {
 } from "@/app/session/archive/publishSessionArchiveTransition";
 import { transitionSessionArchiveStateInTx } from "@/app/session/archive/transitionSessionArchiveStateInTx";
 import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
-import type { Tx } from "@/storage/inTx";
+import { transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 
 import type { CreatedSessionRow } from "./layout1SessionRowWrite";
 
@@ -20,9 +21,9 @@ export type RestoredSessionTagRejoin = Readonly<{
 export async function restoreSessionTagRejoinInTx(
     tx: Tx,
     existing: CreatedSessionRow,
-): Promise<RestoredSessionTagRejoin> {
+): Promise<TransactionResult<RestoredSessionTagRejoin> & Pick<RestoredSessionTagRejoin, "session">> {
     if (existing.active && existing.archivedAt === null) {
-        return { session: existing, publication: null };
+        return { ...transactionResult(() => ({ session: existing, publication: null })), session: existing };
     }
 
     const meaningfulActivityAtDate = new Date();
@@ -46,12 +47,15 @@ export async function restoreSessionTagRejoinInTx(
         hint: projection,
     });
     return {
+        ...transactionResult(() => ({
+            session,
+            publication: {
+                sessionId: existing.id,
+                projection,
+                recipientCursors: resolveSessionAccountChangePublications(recipientCursors),
+                badgeAttentionChanged: didSessionActivityBadgeSignalChange(existing, session),
+            },
+        })),
         session,
-        publication: {
-            sessionId: existing.id,
-            projection,
-            recipientCursors,
-            badgeAttentionChanged: didSessionActivityBadgeSignalChange(existing, session),
-        },
     };
 }

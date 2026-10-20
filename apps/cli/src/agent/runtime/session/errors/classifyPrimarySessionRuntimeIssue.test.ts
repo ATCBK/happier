@@ -3,8 +3,69 @@ import { describe, expect, it } from 'vitest';
 import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from './classifyPrimarySessionRuntimeIssue';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
+import { AxiosError, AxiosHeaders } from 'axios';
+import { createHttpStatusError } from '@/api/client/httpStatusError';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { AccountEncryptionCurrentnessUnavailableError } from '@/api/client/accountEncryptionCurrentness';
+import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it('lets required unreachable MCP preparation recover while real missing material remains closed', () => {
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new McpServerCatalogUnavailableError('unreachable') }))
+      .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new McpServerCatalogUnavailableError('encryption-material-unavailable') }).code)
+      .not.toBe('preparation_pending');
+  });
+  it.each(['ECONNRESET', 'ECONNABORTED'])('retains transient Account currentness %s as a Home preparation dependency', code => {
+    const error = new AccountEncryptionCurrentnessUnavailableError(undefined, undefined, {
+      cause: new AxiosError('private transport detail', code),
+    });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error }))
+      .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(JSON.stringify(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error }))).not.toContain('private');
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new AccountEncryptionCurrentnessUnavailableError(
+      undefined, undefined, { cause: createHttpStatusError(403, 'refused') },
+    ) }).code).not.toBe('preparation_pending');
+  });
+  it.each(['ECONNABORTED', 'ECONNRESET'])('classifies a Home %s as preparation while a foreign binding remains an Agent failure', code => {
+    runWithServerHttpBaseUrl('https://home.example.test/happier', () => {
+      const failure = new AxiosError('private transport detail', code, {
+        url: 'https://home.example.test/happier/v1/access-keys/session/machine', headers: new AxiosHeaders(),
+      });
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
+        .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+      failure.config!.url = 'https://home.example.test/happier-other/v1/access-keys/session/machine';
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
+        .toMatchObject({ code: 'agent_session_error', source: 'agent_session_error' });
+    });
+  });
+  it('classifies responding Home bootstrap failures without treating native provider failures as Home preparation', () => {
+    runWithServerHttpBaseUrl('https://home.example.test/happier', () => {
+      const homeFailure = new AxiosError('private upstream detail', undefined,
+        { url: 'https://home.example.test/happier/v1/machines', headers: new AxiosHeaders() }, undefined,
+        { status: 503, data: { private: 'private body' }, statusText: '', headers: {}, config: { headers: new AxiosHeaders() } });
+      for (const error of [homeFailure, createHttpStatusError(500, 'private Home detail'),
+        new Error('private currentness wrapper', { cause: createHttpStatusError(503, 'private currentness detail') })]) {
+        const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error });
+        expect(issue).toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+        expect(JSON.stringify(issue)).not.toContain('private');
+      }
+      const providerFailure = new AxiosError('provider unavailable', undefined,
+        { url: 'https://provider.example.test/v1/messages', headers: new AxiosHeaders() }, undefined,
+        { status: 503, data: {}, statusText: '', headers: {}, config: { headers: new AxiosHeaders() } });
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: providerFailure }))
+        .toMatchObject({ code: 'agent_session_error', source: 'agent_session_error' });
+      providerFailure.config!.url = 'https://home.example.test/happier-other/v1/messages';
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: providerFailure }).code)
+        .toBe('agent_session_error');
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'status_error', error: homeFailure }).code)
+        .not.toBe('preparation_pending');
+      for (const status of [401, 403, 404]) {
+        expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: createHttpStatusError(status, 'refused') }).code)
+          .not.toBe('preparation_pending');
+      }
+    });
+  });
   it.each(['loading', 'source-unavailable', 'scope-retired', 'credentials-unavailable', 'account-mismatch', 'not-current'])('retains closed Role mutation diagnostics for %s', reason => {
     expect(readSessionPreparationFailureDiagnostic(Object.assign(new Error('private detail'), {
       code: 'account_role_overrides_unavailable', reason, contextSource: 'account_lifetime',

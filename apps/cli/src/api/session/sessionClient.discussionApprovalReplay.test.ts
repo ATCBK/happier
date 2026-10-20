@@ -4,7 +4,7 @@ import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema,
-  DiscussionAgentPostPublicationV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
+  DiscussionAgentPostPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSummaryV1Schema, DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
@@ -41,6 +41,8 @@ afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMo
 it.each([
   { mode: 'plain', scope: 'draft creation' }, { mode: 'e2ee', scope: 'draft creation' },
   { mode: 'plain', scope: 'publication replay' }, { mode: 'e2ee', scope: 'publication replay' },
+  { mode: 'plain', scope: 'satisfied return' }, { mode: 'e2ee', scope: 'satisfied return' },
+  { mode: 'plain', scope: 'pending explicit' }, { mode: 'e2ee', scope: 'pending explicit' },
 ] as const)('Discussion $scope ($mode)', async ({ mode, scope }) => {
   let phase = 'initialization';
   let failedPhase: string | undefined;
@@ -75,6 +77,7 @@ it.each([
   let humanWrites = 0;
   let accountCurrent = true;
   let terminalReturned = false;
+  let explicitReturned = false;
   let corruptNextAck = false;
   let participantPolicy = 'when_addressed';
   let publicationAuthority: 'present_user' | 'account_automation' = 'account_automation';
@@ -104,6 +107,16 @@ it.each([
     if (path.endsWith('/messages/by-local-id/terminal-original/reply')
       || path.endsWith('/messages/by-local-id/forged-terminal-original/reply')) return reply({ v: 1, status: 'available',
       progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'retired-turn',
+        discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
+        outcome: { kind: 'failed' } } });
+    if (path.endsWith('/messages/by-local-id/satisfied-original/reply')) return reply({ v: 1, status: 'available',
+      progress: { v: 1, mode: 'return', disposition: explicitReturned ? 'returned' : 'return_pending', acceptedTurnId: 'retired-turn',
+        discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
+        outcome: explicitReturned ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion: { serverId, discussionId: summary.id },
+          messageId: 'committed-answer' } } : { kind: 'failed' } } });
+    if (path.includes('/messages/by-local-id/') && path.endsWith('/reply')) return reply({ v: 1, status: 'available',
+      progress: { v: 1, mode: 'return', disposition: 'return_pending',
+        acceptedTurnId: path.includes('/pending-original/') ? 'retired-turn' : 'native-draft-turn',
         discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
         outcome: { kind: 'failed' } } });
     if (path.startsWith('/v2/sessions/')) return reply({ session: createSessionRecordFixture({ id: sessionId, share: null }) });
@@ -157,11 +170,12 @@ it.each([
   const address = home.address();
   if (!address || typeof address === 'string') throw new Error('Missing test Home address');
   const serverUrl = `http://127.0.0.1:${address.port}`;
+  let advertisedHomeId = 'srv_fixture_home';
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     httpCalls.push({ method: init?.method ?? 'GET', path: `fetch:${new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, serverUrl).pathname}` });
     return new Response(JSON.stringify({ features: { sessions: { enabled: true,
     conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {
-    serverIdentity: { serverIdentityId: 'srv_fixture_home' }, session: { pendingInput: { protocolVersion: 1 },
+    serverIdentity: { serverIdentityId: advertisedHomeId }, session: { pendingInput: { protocolVersion: 1 },
       runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 } } } }), { status: 200 });
   }));
   const publications: DiscussionAgentPublisherPublicationV1[] = [];
@@ -187,6 +201,7 @@ it.each([
     }
     const parsed = DiscussionAgentPostPublicationV1Schema.parse(payload);
     publications.push(parsed);
+    if (parsed.replyReturn?.requestLocalId === 'satisfied-original') explicitReturned = true;
     // Home committed the write, but the response is not usable by the caller.
     if (corruptNextAck) { corruptNextAck = false; return { committedButAcknowledgementUnavailable: true }; }
     return { v: 1, ok: true, value: { messageSeq: 2, message: { id: 'committed-answer', discussionId: summary.id,
@@ -260,11 +275,15 @@ it.each([
         for (const alternate of alternateRequests) secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
           request: alternate, ...replay,
         }, options));
-        return client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
+        return DiscussionAgentPublisherResponseV1Schema.parse(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
           { request, ...replay },
-          { ...options, rpcContext: { callerAuthority: 'operation' in request ? 'present_user' : publicationAuthority } });
+          { ...options, rpcContext: { callerAuthority: 'operation' in request ? 'present_user' : publicationAuthority } }));
       } });
-    const fresh = () => createActionExecutor({ ...store, ...deps, isApprovalExecutionOriginCurrent: currentness });
+    // The live Session is plain in both Account/Discussion encryption modes;
+    // its Action ports must not reuse the independent Discussion resource key.
+    const fresh = () => createActionExecutor({ ...createCliActionDeps({ credentials, token, sessionId,
+      serverId, serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null }),
+      ...store, ...deps, isApprovalExecutionOriginCurrent: currentness });
     const actionArgs = { discussionId: summary.id, content }; // Omitted generated localId is a valid approved input.
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent', sessionId }, actionId: 'discussion.post', actionArgs,
@@ -292,6 +311,67 @@ it.each([
       return created.artifactId;
     };
     await runWithServerHttpBaseUrl(serverUrl, async () => {
+      if (scope === 'pending explicit') {
+        phase = 'pending explicit approval and final fallback share original custody';
+        const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
+        const policy = createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}),
+          allowEnvironmentOverride: false });
+        const explicit = createCliActionExecutor({ credentials, token, sessionId, mode: 'plain', ctx: null,
+          serverId, serverIdentityId: 'srv_fixture_home', serverHttpBaseUrl: serverUrl, actionsSettingsProvider: policy });
+        const original = { serverId, requestSessionId: sessionId, requestLocalId: 'pending-original',
+          acceptedTurnId: 'retired-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+            throughSeq: 1, participantSessionId: sessionId }, message: 'A later final answer cannot replace the explicit draft',
+          outcome: { kind: 'failed' as const } };
+        await explicit.execute('discussion.reply', { discussionId: summary.id, localId: 'explicit-tool-local',
+          replyTarget: { kind: 'message', messageId: 'question-1' }, content,
+        }, { serverId, serverIdentityId: 'srv_fixture_home', surface: 'agent', authority: 'account_automation',
+          defaultSessionId: sessionId, defaultSessionMachineId: machineId, actionRequestId: 'explicit-tool',
+          actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+          sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: 'retired-turn', sourceInputId: 'pending-original',
+            via: 'action', discussionAddressing: original.discussion } });
+        expect(artifacts.size).toBe(1);
+        const captured = structuredClone([...artifacts.entries()]);
+        await createDiscussionReplyReturnPublisher({ credentials, machineId, serverId, serverHttpBaseUrl: serverUrl,
+          signal: lifetime.signal, isCurrent: async () => true, actionsSettingsProvider: policy })(original);
+        expect(artifacts.size).toBe(1);
+        expect([...artifacts.entries()]).toEqual(captured);
+        expect(publications).toEqual([]);
+        expect(humanWrites).toBe(0);
+        return;
+      }
+      if (scope === 'satisfied return') {
+        phase = 'explicit publication wins before final Action admission';
+        corruptNextAck = true;
+        await expect(client.postAgentDiscussionMessage({ discussionId: summary.id,
+          request: { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId: 'satisfied-original', acceptedTurnId: 'retired-turn' }),
+            content: sealSessionStoredContent({ ...crypto, payload: content }), mentionedAccountIds: [],
+            replyTarget: { kind: 'message', messageId: 'question-1' },
+            ...(key.mode === 'e2ee' ? { requestEqualityEvidenceV1: { kind: 'e2eeTag' as const,
+              tag: deriveDiscussionMutationEqualityTagV1({ dataKey: key.dataKey,
+                canonicalIntent: serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content,
+                  mentionedAccountIds: [], mentionedSessionIds: [], replyTarget: { kind: 'message', messageId: 'question-1' } }) }) } } : {}) },
+          replyReturn: { serverId, requestLocalId: 'satisfied-original', acceptedTurnId: 'retired-turn' },
+        })).rejects.toThrow();
+        expect(explicitReturned).toBe(true);
+        const publish = createDiscussionReplyReturnPublisher({ credentials, machineId, serverId,
+          serverHttpBaseUrl: serverUrl, signal: lifetime.signal, isCurrent: async () => true,
+          actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}),
+            allowEnvironmentOverride: false }),
+        });
+        // Recovery captured this terminal result before the explicit append
+        // committed. The actual Home read now reports that same original as
+        // satisfied; final Action admission must not create another approval.
+        await publish({ serverId, requestSessionId: sessionId, requestLocalId: 'satisfied-original',
+          acceptedTurnId: 'retired-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+            throughSeq: 1, participantSessionId: sessionId }, message: 'The later final answer must not replace the explicit one',
+          outcome: { kind: 'failed' } });
+        expect(artifacts.size).toBe(0);
+        expect(publications).toHaveLength(1);
+        expect(humanWrites).toBe(0);
+        expect(httpCalls).toContainEqual({ method: 'GET',
+          path: `/v2/sessions/${sessionId}/messages/by-local-id/satisfied-original/reply` });
+        return;
+      }
       if (scope === 'draft creation') {
         phase = 'native result private draft creation';
         participantPolicy = 'drafts_for_approval';
@@ -309,6 +389,11 @@ it.each([
           acceptedTurnId: 'native-draft-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
             throughSeq: 1, participantSessionId: sessionId }, message: 'Actual private native answer',
           outcome: { kind: 'answer' as const, result: { sessionId, messageId: 'native-final-message' } } };
+        advertisedHomeId = '';
+        await publish(original);
+        expect(artifacts.size).toBe(0);
+        expect(publications).toEqual([]);
+        advertisedHomeId = 'srv_fixture_home';
         await publish(original);
         const reopened = createCliApprovalsArtifactStore({ credentials, serverId, serverHttpBaseUrl: serverUrl });
         const listed = await reopened.approvalsList({ status: 'open', limit: 10, serverId });
@@ -320,8 +405,24 @@ it.each([
           actionId: 'discussion.reply', actionArgs: { discussionId: summary.id,
             replyTarget: { kind: 'message', messageId: 'question-1' },
             content: { v: 1, parts: [{ t: 'text', text: original.message }] } },
-          executionOriginV1: { sessionId, machineId, accountId: 'owner', discussionReplyReturn: {
+          executionOriginV1: { serverId, serverIdentityId: 'srv_fixture_home', sessionId, machineId, accountId: 'owner', discussionReplyReturn: {
             serverId, requestLocalId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId } } });
+        if (privateDraft?.v !== 2) throw new Error('Missing captured native return approval');
+        if (mode === 'plain') {
+          // Consume the actual persisted producer output through the incumbent
+          // replay composition. A different local profile still reaches the
+          // same portable Home; a genuinely different Home remains stale.
+          const current = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials, machineId,
+            serverId: 'reviewing-browser-profile', serverApiUrl: serverUrl });
+          if (!current) throw new Error('Missing canonical approval currentness owner');
+          expect(await current({ origin: privateDraft.executionOriginV1, request: privateDraft })).toBe(true);
+          advertisedHomeId = 'srv_other_home';
+          const staleReasons: string[] = [];
+          expect(await current({ origin: privateDraft.executionOriginV1, request: privateDraft,
+            reportStale: reason => staleReasons.push(reason) })).toBe(false);
+          expect(staleReasons).toEqual(['home_changed']);
+          advertisedHomeId = 'srv_fixture_home';
+        }
         await publish({ ...original, message: 'A later retry cannot replace the captured draft' });
         expect((await reopened.approvalsList({ status: 'open', limit: 10, serverId })).items)
           .toEqual(listed.items);
@@ -436,7 +537,7 @@ it.each([
         }, { rpcContext: { callerAuthority: 'present_user' } })).toMatchObject({ ok: true });
       }
       await client.postAgentDiscussionMessage({ operation: 'create', request: wireCreate.request,
-        sourceSession: request.executionOriginV1.sessionInputSource });
+        sourceSession: request.executionOriginV1.sessionInputSource ?? undefined });
       const expectedQuestion = prepareSecondOpinionQuestionV1({ discussionId: 'created-discussion',
         sessionId: reviewer.selection.session.sessionId, question: secondOpinion.question,
         questionLocalId: secondOpinion.retry.questionLocalId, quoteMessageId: 'created-first' });

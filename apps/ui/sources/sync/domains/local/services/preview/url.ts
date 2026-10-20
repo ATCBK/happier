@@ -53,3 +53,18 @@ export function resolveLocalServicePreviewLoadUrl(
     }
     return { ok: true, url: parsed.toString() };
 }
+
+/**
+ * The query parameter that carries a relay preview's one-use server admission. Only the frame's own
+ * first request presents it (the server exchanges it for the frame's cookie); it is never part of the
+ * page's address, its display, its copy, or any request the host makes on the frame's behalf.
+ */
+export const PREVIEW_ADMISSION_QUERY = 'previewToken';
+
+/** The address without its admission. Unparseable input is returned unchanged. */
+export function withoutPreviewAdmission(rawUrl: string): string {
+    const parsed = parsePreviewUrl(rawUrl);
+    if (!parsed || !parsed.searchParams.has(PREVIEW_ADMISSION_QUERY)) return rawUrl;
+    parsed.searchParams.delete(PREVIEW_ADMISSION_QUERY);
+    return parsed.toString();
+}

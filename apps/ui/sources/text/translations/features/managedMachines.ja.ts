@@ -314,6 +314,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             readRefused: "このマシンの読み取り権限を持つアカウントでこのHomeにサインインしてください。",
             missing: "この管理対象マシンはこのHomeで見つかりませんでした。",
             loadFailed: "このマシンを読み取れませんでした。再試行して状態を確認してください。",
+            controllerRequestFailed: "管理元のコンピュータがこのリクエストを確認できませんでした。再試行する前にマシンの現在の状態を確認してください。",
             cancelDescription: "リソースが既に存在する場合、クリーンアップが必要なことがあります。",
             recipeTitle: "サイズ、イメージ、場所",
             recipeDescription: "作成時に設定されました。新しいマシン用にはプリセットを編集してください。このマシンは作成時の設定のままです。",

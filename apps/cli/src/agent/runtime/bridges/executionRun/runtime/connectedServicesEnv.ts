@@ -16,7 +16,7 @@ import {
 } from '@/session/services/spawnConnectedServicesDefaults';
 import { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
 import { logger } from '@/ui/logger';
-import type { ExecutionRunConnectedServicesRegistrationV1 } from '@/daemon/connectedServices/runs/materializeContract';
+import { CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES, type ExecutionRunConnectedServicesRegistrationV1 } from '@/daemon/connectedServices/runs/materializeContract';
 import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 import { createExecutionRunCodedError } from '../errors';
@@ -50,7 +50,7 @@ import type { CreateCliExecutionRunBackendParams } from '@/agent/runtime/registr
  */
 
 export class ExecutionRunConnectedServicesError extends Error {
-    readonly code = 'execution_run_connected_services_failed';
+    readonly code: 'execution_run_connected_services_failed' | 'AGENT_RESUME_PROVIDER_STATE_MISSING';
     readonly errorCode: string;
     readonly executionRunErrorCode: string;
 
@@ -58,6 +58,8 @@ export class ExecutionRunConnectedServicesError extends Error {
         super(message);
         this.name = 'ExecutionRunConnectedServicesError';
         this.errorCode = errorCode ?? 'connected_service_run_materialization_failed';
+        this.code = this.errorCode === CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable
+            ? 'AGENT_RESUME_PROVIDER_STATE_MISSING' : 'execution_run_connected_services_failed';
         this.executionRunErrorCode = this.errorCode;
     }
 }

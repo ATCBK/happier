@@ -232,6 +232,103 @@ function createProviderServerFeatures(enabled: boolean): FeaturesResponse {
 }
 
 describe('bootstrapMachineSyncRuntime', () => {
+    it('recovers independent Sessions, requester bindings, Follow and Workflow while an earlier startup waits', async () => {
+        await withConfiguredDaemonTestHome({ prefix: 'bootstrap-independent-recovery-' }, async ({ homeDir }) => {
+            const machineId = 'recovery-machine';
+            const accountId = 'recovery-account';
+            const installationId = readOrCreateInstallationIdentitySync().installationId;
+            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+            const sessionIds = ['c111111111111111111111111', 'c222222222222222222222222'];
+            const requesterIds = ['c333333333333333333333333', 'c444444444444444444444444'];
+            const firstStartup = createDeferred();
+            const firstReplyRecovery = createDeferred();
+            const effects: string[] = [];
+            const sessions = sessionIds.map(id => createSessionRecordFixture({ id, encryptionMode: 'plain',
+                metadataLayoutVersion: 0, active: false, pendingCount: 1, pendingVersion: 1,
+                pendingActivationAuthorization: { requestId: `resume-${id}`, requestedAt: 1, status: 'waiting' },
+                metadata: JSON.stringify({ machineId, path: homeDir, flavor: 'claude', claudeSessionId: `native-${id}`,
+                    runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }) }));
+            const app = fastify();
+            app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+            // The later Session is deliberately on the next page: discovery must
+            // continue while the first Session's physical startup is unresolved.
+            app.get('/v2/sessions', async request => new URL(request.url, 'http://fixture').searchParams.has('cursor')
+                ? { sessions: [sessions[1]], nextCursor: null, hasNext: false }
+                : { sessions: [sessions[0]], nextCursor: 'next', hasNext: true });
+            app.get('/v2/sessions/:sessionId', async request => ({ session: sessions.find(session => session.id === (request.params as { sessionId: string }).sessionId) }));
+            app.get('/v2/sessions/:sessionId/pending', async request => ({ pending: [{
+                localId: `resume-${(request.params as { sessionId: string }).sessionId}`, messageRole: 'user',
+                requestedAction: { v: 1, kind: 'send_now' }, deliveryStatus: { status: 'queued' },
+            }] }));
+            app.post('/v2/sessions/:sessionId/follows/inactive-observations', async () => ({ ok: false, v: 1, error: 'forbidden' }));
+            const restoreHttp = installAxiosFastifyAdapter({ app, origin: new URL(resolveServerHttpBaseUrl()).origin });
+            let connectOptions: { onConnect?: () => Promise<void> | void } | undefined;
+            const transport = { ...createApiMachineTransportFixture(),
+                setRPCHandlers: vi.fn(emptyMachineRpcLifecycleRegistration), registerLiveStreamRelayRoutes: vi.fn(),
+                connect: (options: typeof connectOptions) => { connectOptions = options; },
+                updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
+                emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(),
+                sendTransferRelayV2Envelope: vi.fn(), sendMachineLiveStreamRelayEnvelope: vi.fn(),
+                getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
+                requestSessionMessageReplyRecoveryForSession: async (sessionId: string) => {
+                    effects.push(`requester:${sessionId}`);
+                    if (sessionId === requesterIds[0]) await firstReplyRecovery.promise;
+                },
+            };
+            let runtime: BootstrapMachineSyncRuntimeResult | undefined;
+            let connecting: Promise<void> | undefined;
+            try {
+                runtime = await bootstrapMachineSyncRuntime({ cliVersion: 'test', machineId, credentials,
+                    machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+                    preferredHost: 'host', happyHomeDir: homeDir, happyLibDir: homeDir,
+                    filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
+                    createConnectedApiMachine: () => transport as unknown as ConnectedApiMachineForBootstrap,
+                    attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+                    startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+                    // Only physical startup and socket/HTTP transport are held;
+                    // Pending eligibility, snapshots and activation run for real.
+                    spawnSessionForInternalResume: async options => {
+                        effects.push(`spawn:${options.existingSessionId}`);
+                        if (options.existingSessionId === sessionIds[0]) await firstStartup.promise;
+                        return { type: 'success', sessionId: options.existingSessionId! };
+                    },
+                    spawnSession: async () => { throw new Error('Recovery must use internal resume'); },
+                    stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => false,
+                    resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'recovery-home', machineId }),
+                    readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterIds.map(sessionId => ({
+                        sessionId, attribution: { serverId: 'recovery-home', accountId: 'requester-account', machineId, installationId },
+                    })) }),
+                    resolveRequesterSessionRuntimeContext: async () => null,
+                    releaseRequesterSessionRuntimeContext: async () => {},
+                    dispatchSessionFollowOccurrence: async request => { if ('accountFollowSourcesChanged' in request) effects.push('follow'); },
+                    recoverWorkflowRuns: async trigger => { effects.push(`workflow:${trigger}`); },
+                    loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+                    directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+                    connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
+                });
+                if (!connectOptions?.onConnect) throw new Error('Machine connect callback missing');
+                let connected = false;
+                connecting = Promise.resolve(connectOptions.onConnect()).then(() => { connected = true; });
+                await vi.waitFor(() => expect(effects).toEqual(expect.arrayContaining([
+                    `spawn:${sessionIds[0]}`, `spawn:${sessionIds[1]}`,
+                    `requester:${requesterIds[0]}`, `requester:${requesterIds[1]}`, 'follow', 'workflow:startup',
+                ])));
+                expect(connected).toBe(false);
+                firstStartup.resolve();
+                firstReplyRecovery.resolve();
+                await connecting;
+                expect(connected).toBe(true);
+                await connectOptions.onConnect();
+                expect(effects).toContain('workflow:reconnect');
+            } finally {
+                firstStartup.resolve(); firstReplyRecovery.resolve();
+                await connecting;
+                if (runtime) await retireMachineSyncRuntimeAttempt(runtime);
+                restoreHttp(); await app.close();
+            }
+        });
+    });
     it.each(['accepted', 'stopped', 'denied', 'busy', 'idle_host', 'storage_retry', 'unknown_retry'] as const)('admits a Discussion receiver original before local resume (%s)', async state => {
         await withConfiguredDaemonTestHome({ prefix: 'bootstrap-discussion-' }, async ({ homeDir }) => {
             const accountId = 'discussion-account';
@@ -301,8 +398,9 @@ describe('bootstrapMachineSyncRuntime', () => {
                 createConnectedApiMachine: () => transport as unknown as ConnectedApiMachineForBootstrap,
                 attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
                 startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-                spawnSession: async options => { expect(options.existingSessionId).toBe(sessionId); expect(options.executionAuthorization).toBeUndefined();
+                spawnSessionForInternalResume: async options => { expect(options.existingSessionId).toBe(sessionId); expect(options.executionAuthorization).toBeUndefined();
                     effects.push('spawn'); return { type: 'success', sessionId }; },
+                spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
                 stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => state === 'busy' || state === 'idle_host',
                 resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
                 getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
@@ -406,13 +504,14 @@ describe('bootstrapMachineSyncRuntime', () => {
                         createConnectedApiMachine: () => machineClient,
                         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
                         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-                        spawnSession: async options => {
+                        spawnSessionForInternalResume: async options => {
                             expect(options.existingSessionId).toBe(destinationSessionId);
                             expect(options.executionAuthorization).toBeUndefined();
                             launches.push(destinationSessionId);
                             running = true;
                             return { type: 'success', sessionId: destinationSessionId };
                         },
+                        spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
                         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
                         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
                         readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterUnavailable ? [{
@@ -578,6 +677,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -874,6 +974,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher,
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -963,6 +1064,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 throw memoryFailure;
             }),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1012,6 +1114,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1089,6 +1192,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1217,6 +1321,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => automationWorker),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1388,6 +1493,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1664,6 +1770,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: spawnSession,
             spawnSession,
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             awaitAgentSessionOpen,
@@ -1865,6 +1972,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2047,6 +2155,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2294,6 +2403,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2582,6 +2692,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2700,6 +2811,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2792,6 +2904,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2935,6 +3048,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: stopSessionForRemoval,
             isSessionAlreadyRunning: vi.fn(async () => false),

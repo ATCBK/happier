@@ -4,7 +4,7 @@ import {
     sessionScmChangeInclude,
     sessionScmChangeExclude,
 } from '@/sync/ops';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { Modal } from '@/modal';
 import { t } from '@/text';

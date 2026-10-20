@@ -10,7 +10,7 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { deriveManagedDevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { readSessionCreationInitialTriggerError } from './session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { postSessionCreationRequest } from '@/session/transport/http/sessionsHttp';
 import { PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_READINESS_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1, ProviderBrokerModelCatalogAuthorizationV1Schema, ProviderBrokerModelCatalogAuthorizationResponseV1Schema, ProviderBrokerRequestAdmissionV1Schema, ProviderBrokerRequestAdmissionResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { ProviderBrokerOpenRequestV1, ProviderBrokerOpenResponseV1, ProviderBrokerModelCatalogAuthorizationV1, ProviderBrokerModelCatalogAuthorizationResponseV1, ProviderBrokerRequestAdmissionV1, ProviderBrokerRequestAdmissionResponseV1 } from '@happier-dev/protocol';
 import { RunnerBrokerReadinessResponseV1Schema } from '@happier-dev/protocol/teams/credentials/readinessV1';
@@ -92,6 +92,7 @@ import {
 } from './client/encryptionKey';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { logServerEndpointFailure } from './client/serverEndpointFailureLog';
+import { classifyServerEndpointError } from './client/classifyServerEndpointError';
 import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './client/accountEncryptionMode';
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
@@ -560,6 +561,7 @@ export class ApiClient {
     const encryptionModeResolution = await resolveSessionCreateEncryptionMode({
       token: this.credential.token,
       serverBaseUrl,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     if (encryptionModeResolution.status === 'currentness_unavailable') {
       // The read failed before any Session request; classify the transport
@@ -630,9 +632,13 @@ export class ApiClient {
       await sleep(e2eCreateSessionDelayMs);
     }
 
-    // Create session (retry transient 5xx, but do not enter offline mode for 5xx).
+    // The same creation tag reconciles a lost receipt as well as transient 5xx.
+    // A later failed attempt cannot prove that an earlier ambiguous birth rolled back.
+    let unresolvedCreationError: Error | null = null;
     for (let attempt = 1; attempt <= retryMaxAttempts; attempt += 1) {
+      if (opts.signal?.aborted && unresolvedCreationError) throw unresolvedCreationError;
       opts.signal?.throwIfAborted();
+      let preparingMachineAccess = false;
       try {
         const metadataEnvelopeFields = desiredSessionEncryptionMode === 'plain'
           ? buildSessionMetadataEnvelopeCreateFields({
@@ -657,9 +663,10 @@ export class ApiClient {
               });
             })();
 
-        const response = await axios.post<CreateSessionResponse>(
-          sessionsUrl,
-          {
+        const response = await postSessionCreationRequest<CreateSessionResponse>({
+          serverUrl: serverBaseUrl,
+          token: this.credential.token,
+          body: {
             tag: opts.tag,
             ...pickSessionCreateOriginFields(opts),
             ...(opts.manager !== undefined ? { manager: opts.manager } : {}),
@@ -676,17 +683,9 @@ export class ApiClient {
             ...(opts.organizationPlacement ? { organizationPlacement: opts.organizationPlacement } : {}),
             ...(opts.teamCredentialBindings !== undefined ? { teamCredentialBindings: opts.teamCredentialBindings } : {}),
           },
-          {
-            headers: {
-              ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-              ...(opts.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: opts.creationAuthorizationToken } : {}),
-              'Authorization': `Bearer ${this.credential.token}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 60000, // 1 minute timeout for very bad network connections
-            ...(opts.signal ? { signal: opts.signal } : {}),
-          }
-        )
+          ...(opts.creationAuthorizationToken ? { creationAuthorizationToken: opts.creationAuthorizationToken } : {}),
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        });
 
         logger.debug(`Session created/loaded: ${response.data.session.id} (tag: ${opts.tag})`)
         let raw = response.data.session;
@@ -706,12 +705,14 @@ export class ApiClient {
           if (!this.localMachineId) return;
           // Machine admission may begin as soon as creation settles. The
           // Session socket also ensures this binding, but can connect later.
+          preparingMachineAccess = true;
           await ensureSessionMachineAccessKeyBinding({
             serverUrl: serverBaseUrl,
             token: this.credential.token,
             sessionId: raw.id,
             machineId: this.localMachineId,
           });
+          preparingMachineAccess = false;
         };
 
         const sessionEncryptionMode: 'e2ee' | 'plain' =
@@ -770,6 +771,7 @@ export class ApiClient {
             ownerMetadata,
           );
           await ensureLocalMachineAccess();
+          opts.signal?.throwIfAborted();
           return {
             id: raw.id,
             seq: raw.seq,
@@ -830,6 +832,7 @@ export class ApiClient {
           ...(opts.signal ? { signal: opts.signal } : {}),
         });
         await ensureLocalMachineAccess();
+        opts.signal?.throwIfAborted();
         const agentState = raw.agentState
           ? decrypt(
               sessionEncryptionKey,
@@ -863,8 +866,10 @@ export class ApiClient {
           ...(sessionCreationOutcome ? { sessionCreationOutcome } : {}),
         };
       } catch (error) {
+        const outcomeUnknown = error instanceof Error && 'code' in error && error.code === 'outcome_unknown';
+        if (outcomeUnknown) unresolvedCreationError ??= error;
         if (opts.signal?.aborted) {
-          throw opts.signal.reason ?? error;
+          throw unresolvedCreationError ?? opts.signal.reason ?? error;
         }
         if (error instanceof SessionCreationCorrespondenceConflictError) {
           throw error;
@@ -876,6 +881,7 @@ export class ApiClient {
           && upgradeRequired.requirement.kind
             === 'account-stored-content'
         ) {
+          if (unresolvedCreationError) throw unresolvedCreationError;
           throw Object.assign(
             new Error(
               'Session creation requires a stored-content-compatible server',
@@ -891,20 +897,26 @@ export class ApiClient {
         const initialTriggerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionCreationInitialTriggerError(error.response?.data, status)
           : null;
-        if (initialTriggerError) throw initialTriggerError;
+        if (initialTriggerError) throw unresolvedCreationError ?? initialTriggerError;
         const initialAccessServerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionInitialAccessServerError(error.response?.data, status)
           : null;
-        if (initialAccessServerError) throw initialAccessServerError;
+        if (initialAccessServerError) throw unresolvedCreationError ?? initialAccessServerError;
         const isRetryable5xx = typeof status === 'number' && status >= 500 && status < 600;
-        if (isRetryable5xx && attempt < retryMaxAttempts) {
+        // A Session already exists here. An access-key receipt can be lost
+        // after commit; the same Session/Machine tuple is reconciled by the
+        // incumbent creation retry owner, never the generic offline/null path.
+        const retryableMachineAccessFailure = preparingMachineAccess && classifyServerEndpointError(error).retryable;
+        if ((outcomeUnknown || isRetryable5xx || retryableMachineAccessFailure) && attempt < retryMaxAttempts) {
           // Do not log raw Axios errors: they can contain bearer tokens or vendor keys.
-          logger.debug('[API] [WARN] getOrCreateSession transient server error, retrying:', serializeAxiosErrorForLog(error));
+          logger.debug('[API] [WARN] getOrCreateSession creation receipt unavailable, retrying the same tag:', serializeAxiosErrorForLog(error));
           const delayMs = Math.min(retryMaxDelayMs, retryBaseDelayMs * Math.pow(2, attempt - 1));
-          await sleep(delayMs);
+          await sleep(delayMs).catch((cause: unknown) => { throw unresolvedCreationError ?? cause; });
           continue;
         }
 
+        if (unresolvedCreationError) throw unresolvedCreationError;
+        if (retryableMachineAccessFailure) throw error;
         return settleGetOrCreateSessionFailure(error);
       }
     }

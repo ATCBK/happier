@@ -1,8 +1,11 @@
 import { normalizeSessionMessageContentForStorage } from "@/app/session/normalizeSessionMessageContentForStorage";
 import { DiscussionMessageAddressingV1Schema, type DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
 import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer, readCurrentSessionInputMachineTargetInTx, readCurrentCommittedSessionInputMachineTargetInTx, readStoredSessionInputAdmissionReceipt, isSessionInputTargetCurrentForPublisherInTx, isCurrentSessionInputMachineTargetInTx, areCurrentSessionInputMachineTargetsInTx } from "@/app/session/messages/sessionInputAdmission";
-import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor, type SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
 import { markPendingStateChangedRecipients } from "@/app/session/pending/markPendingStateChangedRecipients";
+import { pendingPublicationResult, type PendingPublicationFields } from "./pendingPublicationResult";
+import { isRetainedPendingContextForPublisherInTx } from './retainedPendingContext';
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { reconcileSessionPendingQueueStateInTx } from "@/app/session/pending/reconcileSessionPendingQueueState";
 import { applyPendingSessionStateChange } from "@/app/session/pending/applyPendingSessionStateChange";
 import { mapPendingMessageRow } from "@/app/session/pending/mapPendingMessageRow";
@@ -34,13 +37,15 @@ import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/se
 import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { isPendingLocalId, readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
-import { SessionInputAdmissionReceiptV1Schema, SessionInputRequestEqualityEvidenceV1Schema, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputAuthority, readSessionInputRequest, readSessionMessageProvenance, requiresAuthenticatedMachineAdmissionForSessionInput, settleSessionInputRequestV1, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority, type SessionInputAdmissionReceiptV1, type SessionInputAdmissionResultV1, type SessionInputRequestEqualityEvidenceV1, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, SessionInputRequestEqualityEvidenceV1Schema, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputAuthority, readSessionInputRequest, readSessionMessageProvenance, requiresAuthenticatedMachineAdmissionForSessionInput, settleSessionInputRequestV1, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority, deriveWorkflowSessionInputLocalIdV2, type SessionInputAdmissionReceiptV1, type SessionInputAdmissionResultV1, type SessionInputRequestEqualityEvidenceV1, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { deriveSessionMessageAuthorAccountIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 import { SessionInputAdmissionRejectionCodeV1Schema, type SessionInputAdmissionRejectionCodeV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { isDeliveryMutedInTx } from '@/app/session/follow/sessionDeliveryMuteService';
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from '@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx';
 import { backgroundDeliveryAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import type { Fastify } from '@/app/api/types';
+import { readCurrentExecutionRunFollowSource, type ExecutionRunFollowFrontierWitness } from '@/app/session/follow/executionRunFollowSource';
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx,
     isAutonomousExchangeRootReceiptForAccount } from '@/app/session/messages/readAutonomousExchangeSourceRoot';
 import { AutonomousExchangeStateV1Schema, createAutonomousExchangeStateV1,
@@ -103,8 +108,8 @@ import { createSessionInputReplyProgressInTx, bindSessionInputReplyAcceptedTurnI
 import { admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx, admitSessionFollowRelationsForInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
-import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowWaitingTurnInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
-import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowInputInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, deriveSessionFollowInputLocalIdV1, isRunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
 import { markDiscussionReadersChangedInTx } from '@/app/discussions/changes';
 import { resolveDiscussionAudienceInTx } from '@/app/discussions/access';
@@ -658,6 +663,7 @@ export type EnqueuePendingMessageResult =
     | { ok: false; error: "transaction-unavailable"; retryAfterMs: number; correlationId?: string };
 
 type EnqueuePendingMessageInput = {
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
     followSources?: SessionInputAdmissionReceiptV1['followSources'];
     followRelations?: SessionInputAdmissionReceiptV1['followRelations'];
     followDeliveryV1?: SessionInputAdmissionReceiptV1['followDeliveryV1'];
@@ -719,7 +725,8 @@ function isAuthenticatedAccountRetryOfHostVerifiedEncryptedBytes(params: Readonl
 }
 
 export async function enqueuePendingMessage(
-    params: EnqueuePendingMessageInput & Readonly<{ authentication: SessionAccessAuthentication }>,
+    params: EnqueuePendingMessageInput & Readonly<{ authentication: SessionAccessAuthentication;
+        followSourceApp?: Pick<Fastify, 'forwardRpcForUser'> }>,
 ): Promise<EnqueuePendingMessageResult> {
     // Equality evidence is host-derived E2EE correspondence carried only over
     // the authenticated machine admission route. An Account request cannot
@@ -738,7 +745,16 @@ export async function enqueuePendingMessage(
     });
     if (decision.status !== "allowed") return { ok: false, error: projectPendingSessionAccessError(decision.status) };
     if (!decision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
-    return await enqueuePendingMessageWithAdmission(params, {
+    let executionRunFrontier: ExecutionRunFollowFrontierWitness | undefined;
+    const original = params.followDeliveryV1?.original;
+    if (original && isRunFollowOriginalV1(original) && 'terminalEventId' in original) {
+        if (!params.followSourceApp) return { ok: false, error: 'forbidden' };
+        const read = await readCurrentExecutionRunFollowSource({ app: params.followSourceApp, accountId: actorUserId,
+            sessionId: original.source.sessionId, runId: original.source.runId, authentication: params.authentication });
+        if (!read.ok || read.value.terminalEventId !== original.terminalEventId) return { ok: false, error: 'forbidden' };
+        executionRunFrontier = read.value;
+    }
+    return await enqueuePendingMessageWithAdmission({ ...params, ...(executionRunFrontier ? { executionRunFrontier } : {}) }, {
         kind: "account",
         authentication: params.authentication,
     });
@@ -820,7 +836,7 @@ async function enqueuePendingMessageWithAdmission(
     const replyDiscussionId = params.reply?.discussion?.discussionId;
 
     try {
-        return await inPendingQueuePositionTx(sessionId, async (tx) => {
+        return await inPendingQueuePositionTx(sessionId, async (tx) => pendingPublicationResult<EnqueuePendingMessageResult>(async () => {
             const session = await tx.session.findUnique({
                 where: { id: sessionId },
                 select: {
@@ -990,8 +1006,12 @@ async function enqueuePendingMessageWithAdmission(
                     || (!inputAdmissionReceipt.followSources?.length && !inputAdmissionReceipt.followRelations?.length)) {
                     return { ok: false, error: 'invalid-params' } as const;
                 }
+                if (isRunFollowOriginalV1(delivery.original) && localId !== deriveSessionFollowInputLocalIdV1({
+                    destinationSessionId: sessionId, original: delivery.original,
+                })) return { ok: false, error: 'invalid-params' } as const;
                 const progresses: SessionFollowRuleProgressAdmission[] = [];
                 for (const witness of inputAdmissionReceipt.followSources ?? []) {
+                    if (!('sourceSessionId' in delivery.original)) return { ok: false, error: 'invalid-params' } as const;
                     if (witness.destinationSessionId !== sessionId || witness.sourceSessionId !== delivery.original.sourceSessionId
                         || !isDeepStrictEqual(witness.sourceMessage ?? witness.sourceRequests,
                             'sourceMessage' in delivery.original ? delivery.original.sourceMessage : delivery.original.sourceRequests)) {
@@ -1008,6 +1028,7 @@ async function enqueuePendingMessageWithAdmission(
                     ...(admission.kind === 'machine' ? { sourceMachineId: admission.sourceMachineId }
                         : { authentication: admission.authentication }),
                     delivery, relations: inputAdmissionReceipt.followRelations,
+                    ...(params.executionRunFrontier ? { executionRunFrontier: params.executionRunFrontier } : {}),
                 }) : [];
                 if (!relations) return { ok: false, error: 'forbidden' } as const;
                 const originalKey = deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original);
@@ -1420,7 +1441,7 @@ async function enqueuePendingMessageWithAdmission(
             const reply = params.reply === undefined ? undefined : SessionMessageReplyAdmissionV1Schema.safeParse(params.reply);
             if (reply !== undefined && (!reply.success || admission.kind === 'machine' && reply.data.humanOrigin !== undefined
                 || admission.kind === 'account' && (reply.data.mode !== 'wait' && reply.data.humanOrigin === undefined
-                    || reply.data.sourceSession !== undefined || reply.data.discussion !== undefined || reply.data.actionRequestAttributionV1 !== undefined
+                    || reply.data.sourceSession !== undefined || reply.data.discussion !== undefined || reply.data.workflow !== undefined || reply.data.actionRequestAttributionV1 !== undefined
                     || reply.data.humanOrigin !== undefined && admission.authentication.authority !== 'present_user'))) return { ok: false, error: 'invalid-params' } as const;
             if (reply?.success && reply.data.discussion?.participantSessionId !== undefined
                 && reply.data.discussion.participantSessionId !== sessionId) return { ok: false, error: 'invalid-params' } as const;
@@ -1430,10 +1451,11 @@ async function enqueuePendingMessageWithAdmission(
                 const protectedRequest = readSessionInputRequest(readPlainMessageMeta(content));
                 if (reply?.success && reply.data.humanOrigin && (!protectedRequest
                     || requiresAuthenticatedMachineAdmissionForSessionInput(protectedRequest))) return { ok: false, error: 'invalid-params' } as const;
-                const protectedReply = protectedRequest?.v === 1 && protectedRequest.replyIntent
+                const protectedReply = protectedRequest?.replyIntent
                     ? { mode: protectedRequest.replyIntent.mode, ...(protectedRequest.sourceSession ? { sourceSession: protectedRequest.sourceSession } : {}),
                         ...(protectedRequest.replyIntent.humanOrigin ? { humanOrigin: protectedRequest.replyIntent.humanOrigin } : {}),
                         ...(protectedRequest.discussionAddressing ? { discussion: protectedRequest.discussionAddressing } : {}),
+                        ...(protectedRequest.v === 2 && protectedRequest.discussionAddressing ? { workflow: protectedRequest.workflow } : {}),
                         ...(protectedRequest.actionRequestAttributionV1 ? { actionRequestAttributionV1: protectedRequest.actionRequestAttributionV1 } : {}) } : undefined;
                 // A proven foreign original may enter blocked custody before
                 // private source hydration. It carries no executable authority.
@@ -1443,7 +1465,8 @@ async function enqueuePendingMessageWithAdmission(
             const replyProgress = reply?.success ? await createSessionInputReplyProgressInTx(tx, { accountId: actorUserId, reply: reply.data, requestSessionId: sessionId,
                 ...(admission.kind === 'account' ? { authentication: admission.authentication } : {}) }) : null;
             if (reply?.success && !replyProgress) return { ok: false, error: 'invalid-params' } as const;
-            if (replyProgress?.discussion && (localId !== deriveDiscussionFollowInputLocalIdV1(replyProgress.discussion)
+            if (replyProgress?.workflow && localId !== deriveWorkflowSessionInputLocalIdV2(replyProgress.workflow)) return { ok: false, error: 'invalid-params' } as const;
+            if (replyProgress?.discussion && !replyProgress.workflow && (localId !== deriveDiscussionFollowInputLocalIdV1(replyProgress.discussion)
                 || !await admitDiscussionFollowAddressingInTx(tx, { accountId: actorUserId, discussion: replyProgress.discussion }))) {
                 return { ok: false, error: 'invalid-params' } as const;
             }
@@ -1502,7 +1525,7 @@ async function enqueuePendingMessageWithAdmission(
                 },
             });
 
-            if (replyProgress?.discussion) await acknowledgeDiscussionFollowInputInTx(tx, {
+            if (replyProgress?.discussion && !replyProgress.workflow) await acknowledgeDiscussionFollowInputInTx(tx, {
                 addressing: replyProgress.discussion, localInputId: localId,
             });
             if (foreignDiscussionHold && replyProgress?.discussion) await markDiscussionReadersChangedInTx({ tx, discussionId: replyProgress.discussion.discussionId });
@@ -1534,7 +1557,7 @@ async function enqueuePendingMessageWithAdmission(
                 meaningfulActivityAt,
                 ...(activationTarget ? { activationTarget } : {}),
             };
-        }, admission.kind === "machine"
+        }), admission.kind === "machine"
             ? admission.targetMachineId
             : params.targetMachineId,
         replyDiscussionId ? async tx => [...await resolveDiscussionAudienceInTx(tx, replyDiscussionId)].sort() : undefined);
@@ -1576,6 +1599,8 @@ async function enqueuePendingMessageWithAdmission(
  * are revalidated transactionally; only the admitted exact target is retained in the receipt.
  */
 export async function enqueuePendingMessageByAuthenticatedMachine(params: Readonly<{
+    followSourceApp?: Pick<Fastify, 'forwardRpcForUser'>;
+    sourceAuthentication?: SessionAccessAuthentication;
     reply?: SessionMessageReplyAdmissionV1;
     accountId: string;
     sourceMachineId: string;
@@ -1592,6 +1617,17 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
     followRelations?: SessionPendingEnqueueByMachineRequestV1['followRelations'];
     followDeliveryV1?: SessionPendingEnqueueByMachineRequestV1['followDeliveryV1'];
 }>): Promise<SessionInputAdmissionResultV1> {
+    let executionRunFrontier: ExecutionRunFollowFrontierWitness | undefined;
+    const original = params.followDeliveryV1?.original;
+    if (original && isRunFollowOriginalV1(original) && 'terminalEventId' in original) {
+        if (!params.followSourceApp) return { status: 'rejected', code: 'session_input_target_unavailable' };
+        const read = await readCurrentExecutionRunFollowSource({ app: params.followSourceApp, accountId: params.accountId,
+            sessionId: original.source.sessionId, runId: original.source.runId,
+            authentication: params.sourceAuthentication ?? backgroundDeliveryAuthentication() });
+        if (!read.ok || read.value.terminalEventId !== original.terminalEventId)
+            return { status: 'rejected', code: 'session_input_target_unavailable' };
+        executionRunFrontier = read.value;
+    }
     const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({
         ...buildSessionInputAdmissionReceipt({ issuer: "authenticatedMachine", callerInputConstraints: params.callerInputConstraints }),
         ...(params.followSources ? { followSources: params.followSources } : {}),
@@ -1602,6 +1638,7 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
         throw new Error("Machine admission receipt parsed to the wrong issuer arm");
     }
     const result = await enqueuePendingMessageWithAdmission({
+        ...(executionRunFrontier ? { executionRunFrontier } : {}),
         ...(params.reply ? { reply: params.reply } : {}),
         actorUserId: params.accountId,
         sessionId: params.sessionId,
@@ -1752,6 +1789,7 @@ function matchesOriginalReplyAdmission(progress: SessionMessageReplyProgressV1, 
     return progress.mode === reply?.mode && isDeepStrictEqual(progress.sourceSession, reply?.sourceSession)
         && isDeepStrictEqual(progress.humanOrigin, reply?.humanOrigin)
         && isDeepStrictEqual(progress.discussion, reply?.discussion)
+        && isDeepStrictEqual(progress.workflow, reply?.workflow)
         && isDeepStrictEqual(progress.actionRequestAttributionV1, reply?.actionRequestAttributionV1);
 }
 
@@ -1772,11 +1810,13 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
 > {
     // Every provider effect rechecks the retained original, including materialized
     // inputs. Current membership after reinvitation cannot revive a withdrawn ask.
+    const originalProjection = { replyProgress: true, inputAdmissionReceipt: true, turnStartWitnessId: true,
+        autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true } as const;
     const original = await params.tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
         sessionId: params.targetSessionId, localId: params.localId,
-    } }, select: { replyProgress: true, inputAdmissionReceipt: true } }) ?? await params.tx.sessionMessage.findUnique({ where: { sessionId_localId: {
+    } }, select: originalProjection }) ?? await params.tx.sessionMessage.findUnique({ where: { sessionId_localId: {
         sessionId: params.targetSessionId, localId: params.localId,
-    } }, select: { replyProgress: true, inputAdmissionReceipt: true } });
+    } }, select: originalProjection });
     const originalProgress = SessionMessageReplyProgressV1Schema.safeParse(original?.replyProgress);
     const originalReceipt = SessionInputAdmissionReceiptV1Schema.safeParse(original?.inputAdmissionReceipt);
     if (originalProgress.success && originalProgress.data.humanOrigin) {
@@ -1800,7 +1840,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
     if (addressing) {
         if (!originalProgress.success || !isDeepStrictEqual(originalProgress.data.discussion, addressing)
             || originalProgress.data.disposition === 'released') return { ok: false, rejectionCode: 'session_input_cancelled' };
-        if (!await isDiscussionReplyDestinationCurrentInTx(params.tx, { accountId: params.accountId, discussion: addressing })) {
+        if (!await isDiscussionReplyDestinationCurrentInTx(params.tx, { accountId: params.accountId, discussion: addressing, workflow: originalProgress.data.workflow })) {
             return { ok: false, rejectionCode: 'session_input_cancelled' };
         }
         if (await isForeignDiscussionCauseHeldInTx(params.tx, { accountId: params.accountId, reply: originalProgress.data })) {
@@ -1817,8 +1857,18 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
         if (muted !== false) return muted ? { ok: false, rejectionCode: 'session_input_muted' }
             : { ok: false, holdReason: 'session_input_target_unavailable' };
     }
-    const sourceSession = params.validation?.sourceSession;
+    const runDelivery = originalReceipt.success && originalReceipt.data.followDeliveryV1
+        && isRunFollowOriginalV1(originalReceipt.data.followDeliveryV1.original) ? originalReceipt.data.followDeliveryV1 : undefined;
+    const sourceSession = runDelivery ? undefined : params.validation?.sourceSession;
     let exchangeRoot: { sessionId: string; localId: string } | undefined;
+    const runWake = runDelivery?.delivery === 'wake';
+    if (runWake && params.targetExecutionRunId === null) {
+        exchangeRoot = original?.turnStartWitnessId && original.autonomousExchangeRootSessionId && original.autonomousExchangeRootLocalId
+            ? { sessionId: original.autonomousExchangeRootSessionId, localId: original.autonomousExchangeRootLocalId }
+            : await readReceiverAutonomousExchangeRootInTx(params.tx, {
+                accountId: params.accountId, sessionId: params.targetSessionId, selection: 'latest_person',
+            }) ?? { sessionId: params.targetSessionId, localId: params.localId };
+    }
     if (ambientDiscussionWatch && !sourceSession && params.targetExecutionRunId === null) {
         // Opt-in consideration is an agent-started turn even when the original
         // was human conversation. Reuse the receiver's existing check-in root.
@@ -1888,7 +1938,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
             exchangeRoot = resolved.root;
         }
     }
-    const returnedAnswer = params.validation?.returnedAnswer;
+    const returnedAnswer = runDelivery ? undefined : params.validation?.returnedAnswer;
     if (returnedAnswer && !sourceSession) {
         // The original reply owner already holds the protected request and
         // destination. A caller's return annotation alone cannot create a root.
@@ -1941,7 +1991,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
             }
         }
     }
-    const automation = params.validation?.automation;
+    const automation = runDelivery ? undefined : params.validation?.automation;
     if (automation) {
         const run = await params.tx.automationRun.findUnique({
             where: { id: automation.runId },
@@ -1957,7 +2007,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
         }
     }
     let exchangeRootState: ReturnType<typeof createAutonomousExchangeStateV1> | undefined;
-    if (exchangeRoot && !params.validation?.returnedAnswer) {
+    if (exchangeRoot && !returnedAnswer) {
         const choice = params.validation?.autonomousCheckIn;
         if (!choice) return { ok: false, holdReason: 'session_input_target_unavailable', exchangeRoot };
         const root = await params.tx.sessionMessage.findUnique({
@@ -2003,8 +2053,30 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
     }
     return { ok: true, ...(exchangeRoot ? { exchangeRoot } : {}),
         ...(exchangeRootState ? { exchangeRootState } : {}),
-        ...(params.validation?.returnedAnswer ? { exchangeCause: 'returned_answer' as const }
+        ...(returnedAnswer ? { exchangeCause: 'returned_answer' as const }
             : exchangeRoot ? { exchangeCause: 'agent_session' as const } : {}) };
+}
+
+/** Bind prepared input custody; only an unstarted Run wake may follow a newer receiver person root. */
+async function bindAutonomousExchangeInputRootInTx(tx: Tx, input: Readonly<{
+    sessionId: string; localId: string; receipt: SessionInputAdmissionReceiptV1;
+    root: { sessionId: string; localId: string };
+    state?: ReturnType<typeof createAutonomousExchangeStateV1>;
+}>): Promise<boolean> {
+    const materialized = await tx.sessionMessage.findUnique({
+        where: { sessionId_localId: { sessionId: input.sessionId, localId: input.localId } },
+        select: { autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true, turnStartWitnessId: true },
+    });
+    const canReanchor = input.receipt.followDeliveryV1?.delivery === 'wake'
+        && isRunFollowOriginalV1(input.receipt.followDeliveryV1.original) && materialized?.turnStartWitnessId === null;
+    if (!materialized || materialized.autonomousExchangeRootSessionId !== null
+        && (materialized.autonomousExchangeRootSessionId !== input.root.sessionId
+            || materialized.autonomousExchangeRootLocalId !== input.root.localId) && !canReanchor) return false;
+    const data = { autonomousExchangeRootSessionId: input.root.sessionId, autonomousExchangeRootLocalId: input.root.localId,
+        ...(input.state ? { autonomousExchangeState: input.state } : {}) };
+    await tx.sessionMessage.update({ where: { sessionId_localId: { sessionId: input.sessionId, localId: input.localId } }, data });
+    await tx.sessionPendingMessage.updateMany({ where: { sessionId: input.sessionId, localId: input.localId }, data });
+    return true;
 }
 
 type QueuedPendingInputForRejection = Readonly<{
@@ -2109,7 +2181,7 @@ export async function retireAutomationPendingInputInTx(params: Readonly<{
             pendingCount: state.pendingCount,
             pendingBlockedCount: state.pendingBlockedCount,
             pendingVersion: state.pendingVersion,
-            recipientCursors: state.recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(state.recipientCursors),
         }).catch((error) => {
             warn(
                 {
@@ -2151,7 +2223,7 @@ export async function settlePendingInputAdmission(params: Readonly<{
     if (!actorUserId || !sessionId || !localId) return { ok: false, error: "invalid-params" };
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<SettlePendingInputAdmissionResult>(async () => {
             // Custody-only recovery has no caller-authored request/validation.
             // Fence the actual retained original's publication audience before
             // any Account/Session write, just as ordinary admission does.
@@ -2207,7 +2279,7 @@ export async function settlePendingInputAdmission(params: Readonly<{
             if (!existing) {
                 const committed = await tx.sessionMessage.findUnique({
                     where: { sessionId_localId: { sessionId, localId } },
-                    select: { id: true, seq: true, localId: true, sidechainId: true, targetExecutionRunId: true, messageRole: true, content: true, inputAdmissionReceipt: true, authorAccountId: true, deliveryResolution: true, replyProgress: true, createdAt: true, updatedAt: true },
+                    select: { id: true, seq: true, localId: true, sidechainId: true, targetExecutionRunId: true, messageRole: true, content: true, inputAdmissionReceipt: true, authorAccountId: true, deliveryResolution: true, replyProgress: true, turnStartWitnessId: true, createdAt: true, updatedAt: true },
                 });
                 const state = await readCurrentPendingMutationState(tx, sessionId);
                 if (!committed) return { ok: false, error: "not-found" } as const;
@@ -2217,8 +2289,11 @@ export async function settlePendingInputAdmission(params: Readonly<{
                     || !progress && params.decision.validation?.reply !== undefined) return { ok: false, error: 'conflict' } as const;
                 // Materialization is custody, not permission for a later provider
                 // effect. Reuse the original destination admission decision here.
+                const unstartedRunWake = receipt.success && receipt.data.followDeliveryV1?.delivery === 'wake'
+                    && isRunFollowOriginalV1(receipt.data.followDeliveryV1.original) && committed.turnStartWitnessId === null
+                    && readStoredSessionMessageDeliveryResolutionV1(committed.deliveryResolution)?.kind !== 'provider_accepted';
                 if (receipt.success && (receipt.data.issuer === 'authenticatedMachine' && receipt.data.discussionAddressing
-                    || progress?.success && progress.data.humanOrigin)) {
+                    || progress?.success && progress.data.humanOrigin || unstartedRunWake)) {
                     if (!await isSessionInputTargetCurrentForPublisherInTx(tx, receipt.data, params.publisherAuthority)) {
                         return { ok: false, error: 'forbidden' } as const;
                     }
@@ -2239,8 +2314,13 @@ export async function settlePendingInputAdmission(params: Readonly<{
                             recipientCursorsMessage: [],
                         } as const;
                     }
+                    if (unstartedRunWake && validation.exchangeRoot && !await bindAutonomousExchangeInputRootInTx(tx, {
+                        sessionId, localId, receipt: receipt.data, root: validation.exchangeRoot,
+                        ...(validation.exchangeRootState ? { state: validation.exchangeRootState } : {}),
+                    })) return { ok: false, error: 'conflict' } as const;
                 }
-                const { targetExecutionRunId: _targetExecutionRunId, replyProgress: _replyProgress, ...committedMessage } = committed;
+                const { targetExecutionRunId: _targetExecutionRunId, replyProgress: _replyProgress,
+                    turnStartWitnessId: _turnStartWitnessId, ...committedMessage } = committed;
                 return {
                     ok: true,
                     result: { status: "alreadyAccepted", localId },
@@ -2381,6 +2461,11 @@ export async function settlePendingInputAdmission(params: Readonly<{
                 if (committed && isDeepStrictEqual(committed.content, finalContent)
                     && isDeepStrictEqual(createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
                         .safeParse(committed.inputAdmissionReceipt).data, receipt.data)) {
+                    if (receipt.data.followDeliveryV1?.delivery === 'wake' && isRunFollowOriginalV1(receipt.data.followDeliveryV1.original)
+                        && domainValidation.ok && domainValidation.exchangeRoot && !await bindAutonomousExchangeInputRootInTx(tx, {
+                            sessionId, localId, receipt: receipt.data, root: domainValidation.exchangeRoot,
+                            ...(domainValidation.exchangeRootState ? { state: domainValidation.exchangeRootState } : {}),
+                        })) return { ok: false, error: 'conflict' } as const;
                     const state = await readCurrentPendingMutationState(tx, sessionId);
                     return { ok: true, result: { status: "alreadyAccepted", localId }, ...state, recipientCursorsPending: [], recipientCursorsMessage: [] } as const;
                 }
@@ -2460,26 +2545,10 @@ export async function settlePendingInputAdmission(params: Readonly<{
                     data: { autonomousExchangeState: state } });
             }
             if (domainValidation.ok && domainValidation.exchangeRoot) {
-                const root = domainValidation.exchangeRoot;
-                const materialized = await tx.sessionMessage.findUnique({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    select: { autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true },
-                });
-                if (!materialized || materialized.autonomousExchangeRootSessionId !== null
-                    && (materialized.autonomousExchangeRootSessionId !== root.sessionId
-                        || materialized.autonomousExchangeRootLocalId !== root.localId)) {
-                    return { ok: false, error: 'conflict' } as const;
-                }
-                await tx.sessionMessage.update({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    data: { autonomousExchangeRootSessionId: root.sessionId, autonomousExchangeRootLocalId: root.localId,
-                        ...(domainValidation.exchangeRootState ? { autonomousExchangeState: domainValidation.exchangeRootState } : {}) },
-                });
-                await tx.sessionPendingMessage.update({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    data: { autonomousExchangeRootSessionId: root.sessionId, autonomousExchangeRootLocalId: root.localId,
-                        ...(domainValidation.exchangeRootState ? { autonomousExchangeState: domainValidation.exchangeRootState } : {}) },
-                });
+                if (!await bindAutonomousExchangeInputRootInTx(tx, { sessionId, localId, receipt: receipt.data,
+                    root: domainValidation.exchangeRoot,
+                    ...(domainValidation.exchangeRootState ? { state: domainValidation.exchangeRootState } : {}),
+                })) return { ok: false, error: 'conflict' } as const;
             }
             const readyProjection = committed.didWrite
                 ? await updateSessionMessageActivityProjection(tx, {
@@ -2525,7 +2594,7 @@ export async function settlePendingInputAdmission(params: Readonly<{
                 message: committed.message,
                 ...(readyProjection ? { readyProjection } : {}),
             } as const;
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -2546,7 +2615,7 @@ export type UpdatePendingRequestedActionResult =
         recipientCursors: RecipientCursor[];
         activationTarget?: PendingActivationTarget;
       }
-    | { ok: false; error: PendingSessionAccessError | "forbidden" | "invalid-params" | "not-found" | "action-conflict" | "reset-start-unsupported" | "internal" };
+    | { ok: false; error: PendingSessionAccessError | "forbidden" | "invalid-params" | "not-found" | "already-sent" | "action-conflict" | "reset-start-unsupported" | "internal" };
 
 export async function updatePendingRequestedAction(params: Readonly<{
     actorUserId: string;
@@ -2613,7 +2682,19 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 authorAccountId: true,
             },
         });
-        if (!existing) return { ok: false, error: "not-found" } as const;
+        if (!existing) {
+            // Provider settlement retires Pending but retains the exact accepted
+            // input in the transcript. A stale confirmation must not infer
+            // delivery from absence, manual handling, or another recipient.
+            const committed = !params.automaticResetReleaseTarget
+                ? await db.sessionMessage.findFirst({
+                    where: { sessionId, localId, targetExecutionRunId, messageRole: "user" },
+                    select: { deliveryResolution: true },
+                })
+                : null;
+            return { ok: false, error: readStoredSessionMessageDeliveryResolutionV1(committed?.deliveryResolution)?.kind === "provider_accepted"
+                ? "already-sent" : "not-found" } as const;
+        }
         const currentActionResult = PendingRequestedActionV1StoredSchema.safeParse(
             existing.requestedAction ?? { v: 1, kind: "enqueue" },
         );
@@ -2650,7 +2731,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
         };
         const nextUpdatedAt = new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1));
 
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<UpdatePendingRequestedActionResult>(async () => {
             const controllerAccountIds = await readPendingActivationControllerAccountIdsInTx(
                 tx, readStoredSessionInputAdmissionReceipt(existing.inputAdmissionReceipt)?.admittedTarget?.machineId,
             );
@@ -2779,7 +2860,7 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 recipientCursors,
                 ...(activationTarget ? { activationTarget } : {}),
             } as const;
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -2866,7 +2947,7 @@ export async function updatePendingMessage(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<UpdatePendingMessageResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -3013,7 +3094,7 @@ export async function updatePendingMessage(params: {
                 recipientCursors,
                 badgeAttentionChanged,
             };
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -3050,7 +3131,7 @@ export async function deletePendingMessage(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<DeletePendingMessageResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -3135,7 +3216,7 @@ export async function deletePendingMessage(params: {
             });
             return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged,
                 ...(params.withdraw === true ? { outcome: 'removed' as const } : {}) };
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -3176,7 +3257,7 @@ export async function markPendingActivationFailed(params: Readonly<{
         if (access.level !== "owner") return { ok: false, error: "forbidden" };
     }
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<MarkPendingActivationFailedResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
             if (params.managedController) {
                 const { target, custodianAccountId } = params.managedController;
@@ -3223,7 +3304,7 @@ export async function markPendingActivationFailed(params: Readonly<{
                 })
                 : [];
             return { ok: true, didFail, ...session, recipientCursors } as const;
-        });
+        }));
     } catch (error) {
         if (params.managedController && error instanceof ManagedMachineError) throw error;
         return { ok: false, error: "internal" };
@@ -3234,7 +3315,7 @@ type PendingMutationState = {
     pendingVersion: number;
     pendingCount: number;
     pendingBlockedCount: number;
-    recipientCursors: RecipientCursor[];
+    recipientCursors: SessionRecipientPublication[];
     badgeAttentionChanged: boolean;
 };
 
@@ -3392,7 +3473,7 @@ async function commitResolvedPendingDelivery(
         acceptedDelivery?: SessionMessageAcceptedDeliveryContentV1;
         acceptedTurn?: SessionMessageAcceptedTurnV1;
     }>,
-): Promise<
+): Promise<PendingPublicationFields<
     | {
         ok: true;
         pendingVersion: number;
@@ -3418,7 +3499,7 @@ async function commitResolvedPendingDelivery(
         recipientCursors: RecipientCursor[];
         badgeAttentionChanged: boolean;
       }
-> {
+>> {
     if (!canTransitionPendingDeliveryStatus(params.existing, params.target)) {
         return { ok: false, error: "invalid-params" };
     }
@@ -3531,7 +3612,7 @@ async function commitResolvedPendingDelivery(
             ? deriveSessionFollowOriginalOccurrenceKeyV1(receipt.followDeliveryV1.original) : null;
         if (originalKey && receipt && (params.acceptedDelivery || params.acceptedTurn)) {
             await tx.sessionMessage.update({ where: { id: committed.message.id }, data: { acceptedFollowOriginalKey: originalKey } });
-            await settleAcceptedSessionFollowWaitingTurnInTx(tx, { destinationSessionId: params.sessionId, receipt });
+            await settleAcceptedSessionFollowInputInTx(tx, { destinationSessionId: params.sessionId, receipt });
         }
         const acceptedTurn = params.acceptedTurn
             ?? (params.acceptedDelivery?.t === 'plain' ? params.acceptedDelivery.v.delivery : undefined);
@@ -3644,9 +3725,9 @@ export async function resolveAcceptedPendingDelivery(params: {
     if (access.level !== "owner") return { ok: false, error: "forbidden" };
 
     try {
-        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => {
+        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => pendingPublicationResult<ResolveAcceptedPendingDeliveryResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
-            const result: ResolveAcceptedPendingDeliveryResult = await (async () => {
+            const result: PendingPublicationFields<ResolveAcceptedPendingDeliveryResult> = await (async () => {
                 const access = await assertSessionOwnerInTx({ tx, accountId: actorUserId, sessionId });
                 if (!access.ok) return { ok: false, error: "session-not-found" } as const;
                 if (!await hasExactCurrentPublisherAuthorityInTx(
@@ -3745,17 +3826,20 @@ export async function resolveAcceptedPendingDelivery(params: {
 
                 const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                 const isExactAction = requestedAction.success && requestedAction.data.kind !== "enqueue";
-                const earlierUnresolved = isExactAction ? null : await tx.sessionPendingMessage.findFirst({
+                const earlierUnresolved = isExactAction ? [] : await tx.sessionPendingMessage.findMany({
                     where: {
                         sessionId,
                         targetExecutionRunId,
                         status: "queued",
                         position: { lt: existing.position },
                     },
-                    select: { localId: true },
+                    select: { status: true, targetExecutionRunId: true, deliveryState: true, deliveryBlockedReason: true,
+                        inputAdmissionReceipt: true, autonomousExchangeCause: true },
                 });
-                if (earlierUnresolved) {
-                    return { ok: false, error: "blocked-by-earlier-pending" } as const;
+                for (const row of earlierUnresolved) {
+                    if (!await isRetainedPendingContextForPublisherInTx(tx, row, params.publisherAuthority)) {
+                        return { ok: false, error: "blocked-by-earlier-pending" } as const;
+                    }
                 }
 
                 const resolved = await commitResolvedPendingDelivery(tx, {
@@ -3772,7 +3856,7 @@ export async function resolveAcceptedPendingDelivery(params: {
                 return { ...resolved, didResolve: true };
             })();
             return await withTargetPendingStateInTx(tx, sessionId, targetExecutionRunId, result);
-        }, { transactionClass: "pending-provider-acceptance" }));
+        }), { transactionClass: "pending-provider-acceptance" }));
     } catch (error) {
         const acquisitionUnavailable = isTransactionAcquisitionUnavailableError(error);
         if (acquisitionUnavailable || isTransactionConflictExhaustedError(error)) {
@@ -3835,9 +3919,9 @@ export async function blockPendingDelivery(params: {
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<BlockPendingDeliveryResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
-            const result: BlockPendingDeliveryResult = await (async () => {
+            const result: PendingPublicationFields<BlockPendingDeliveryResult> = await (async () => {
                 const access = params.authentication
                     ? await assertSessionCapabilityInTx({
                         tx,
@@ -3869,6 +3953,13 @@ export async function blockPendingDelivery(params: {
                     },
                 });
                 if (!existing) return { ok: false, error: "not-found" } as const;
+                if (reason === "host_retired_before_dispatch" && (existing.status !== "queued"
+                    || existing.deliveryState !== "delivering" && !(existing.deliveryState === "blocked"
+                        && existing.deliveryBlockedReason === "host_retired_before_dispatch"))) {
+                    // A delayed retiring host cannot turn a successor's
+                    // uncertainty (or a terminal disposition) into replay proof.
+                    return { ok: false, error: "delivery-settlement-conflict" } as const;
+                }
                 if (reason === "conditional_steer_unavailable") {
                     const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                     if (
@@ -3947,7 +4038,7 @@ export async function blockPendingDelivery(params: {
                 return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged, didUpdate: true };
             })();
             return await withTargetPendingStateInTx(tx, sessionId, targetExecutionRunId, result);
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -4002,7 +4093,7 @@ export async function sendPendingDeliveryAsNew(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await inPendingQueuePositionTx(sessionId, async (tx) => {
+        return await inPendingQueuePositionTx(sessionId, async (tx) => pendingPublicationResult<SendPendingDeliveryAsNewResult>(async () => {
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             const existing = await tx.sessionPendingMessage.findUnique({
@@ -4090,7 +4181,7 @@ export async function sendPendingDeliveryAsNew(params: {
                 pendingBlockedCountDelta: targetExecutionRunId === null ? -1 : 0,
             });
             return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged, didWrite: true, newLocalId };
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -4145,7 +4236,7 @@ export async function markPendingDeliveryHandled(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => {
+        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => pendingPublicationResult<MarkPendingDeliveryHandledResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -4177,7 +4268,7 @@ export async function markPendingDeliveryHandled(params: {
             });
             if (!resolved.ok) return resolved;
             return { ...resolved, didResolve: true };
-        }));
+        })));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -4214,7 +4305,7 @@ export async function dismissPendingDelivery(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => {
+        return await rejoinPendingDeliveryResolutionRace(() => inTx(async (tx) => pendingPublicationResult<DismissPendingDeliveryResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -4250,7 +4341,7 @@ export async function dismissPendingDelivery(params: {
                 pendingBlockedCountDelta: targetExecutionRunId === null && status.status === "blocked" ? -1 : 0,
             });
             return { ok: true, didDismiss: true, ...state } as const;
-        }));
+        })));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -4293,7 +4384,7 @@ export async function discardPendingMessage(params: {
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<DiscardPendingMessageResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -4343,7 +4434,7 @@ export async function discardPendingMessage(params: {
                 pendingBlockedCountDelta: targetExecutionRunId === null && readPendingDeliveryStatus(existing).status === "blocked" ? -1 : 0,
             });
             return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged };
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -4380,7 +4471,7 @@ export async function restorePendingMessage(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await inPendingQueuePositionTx(sessionId, async (tx) => {
+        return await inPendingQueuePositionTx(sessionId, async (tx) => pendingPublicationResult<RestorePendingMessageResult>(async () => {
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
             const existing = await tx.sessionPendingMessage.findUnique({
@@ -4420,7 +4511,7 @@ export async function restorePendingMessage(params: {
                 pendingCountDelta: targetExecutionRunId === null && existing.status === "discarded" ? 1 : 0,
             });
             return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged };
-        });
+        }));
     } catch (error) {
         if (isTransactionAcquisitionUnavailableError(error) || isTransactionConflictExhaustedError(error)) {
             return { ok: false, error: "transaction-unavailable", retryAfterMs: 1_000 };
@@ -4460,7 +4551,7 @@ export async function reorderPendingMessages(params: {
     if (!accessDecision.access.capabilities.submitAgentInput) return { ok: false, error: "forbidden" };
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx) => pendingPublicationResult<ReorderPendingMessagesResult>(async () => {
             await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
             const access = await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: params.authentication });
             if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
@@ -4511,7 +4602,7 @@ export async function reorderPendingMessages(params: {
                 sessionId,
             });
             return { ok: true, pendingVersion, pendingCount, pendingBlockedCount, recipientCursors, badgeAttentionChanged };
-        });
+        }));
     } catch {
         return { ok: false, error: "internal" };
     }

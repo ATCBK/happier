@@ -3,7 +3,7 @@ import type {
     SessionDraftAddressV2,
     StrictJsonValue,
 } from '@happier-dev/protocol';
-import { DiscussionDraftDocumentV2Schema, type DiscussionDraftSubmittedContentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { canonicalSessionDraftAddressV2, DiscussionDraftDocumentV2Schema, type DiscussionDraftSubmittedContentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 
@@ -112,18 +112,41 @@ function mentionValues(mentions: readonly DiscussionMentionSpan[]): readonly Str
     return mentions.map((mention) => ({
         start: mention.start,
         end: mention.end,
-        ...(typeof mention.accountId === 'string' ? { accountId: mention.accountId } : { sessionId: mention.sessionId }),
+        ...(typeof mention.accountId === 'string' ? { accountId: mention.accountId }
+            : typeof mention.sessionId === 'string' ? { sessionId: mention.sessionId } : { participantSlotId: mention.participantSlotId }),
     }));
 }
 
 function sameAddress(left: DiscussionDraftAddress, right: DiscussionDraftAddress): boolean {
-    if (left.kind !== right.kind) return false;
-    return left.kind === 'newDiscussion'
-        || (right.kind === 'discussion' && left.discussionId === right.discussionId);
+    return canonicalSessionDraftAddressV2(left) === canonicalSessionDraftAddressV2(right);
 }
 
 function sameScope(left: ServerAccountScope, right: ServerAccountScope): boolean {
     return left.serverId === right.serverId && left.accountId === right.accountId;
+}
+
+/**
+ * An explicit "Ask <someone>" from elsewhere in the app: fills an empty draft with an addressed request
+ * the person still reads and sends — a new Discussion (with its title), or a reply in an existing one.
+ * Words already in that draft are never replaced.
+ */
+export function seedDiscussionDraft(input: Readonly<{
+    scope: ServerAccountScope;
+    address?: DiscussionDraftAddress;
+    title?: string;
+    text: string;
+    mentions: readonly DiscussionMentionSpan[];
+}>): boolean {
+    const address: DiscussionDraftAddress = input.address ?? { kind: 'newDiscussion' };
+    const current = readDiscussionDraftFields(input.scope, address);
+    if (current.text.trim() || current.title.trim()) return false;
+    writeDiscussionSessionDraft({
+        scope: input.scope,
+        address,
+        patch: { ...(address.kind === 'newDiscussion' && input.title !== undefined ? { title: input.title } : {}),
+            text: input.text, mentions: mentionValues(parseDiscussionMentionSpans(input.mentions, input.text)) },
+    });
+    return true;
 }
 
 /**
@@ -139,10 +162,8 @@ export function useDiscussionDraft(params: Readonly<{
         serverId: params.scope.serverId,
         accountId: params.scope.accountId,
     }), [params.scope.accountId, params.scope.serverId]);
-    const address = React.useMemo<DiscussionDraftAddress>(() => params.address, [
-        params.address.kind,
-        params.address.kind === 'discussion' ? params.address.discussionId : null,
-    ]);
+    const addressKey = canonicalSessionDraftAddressV2(params.address);
+    const address = React.useMemo<DiscussionDraftAddress>(() => params.address, [addressKey]);
     const subscribe = React.useCallback(
         (listener: () => void) => subscribeSessionDraft(scope, address, listener),
         [address, scope],

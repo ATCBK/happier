@@ -28,7 +28,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { projectWork, resolveWorkReadPresentation } from '@/components/sessions/work/workProjection';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createAccountNoticeArtifactFixture, createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
@@ -48,6 +48,8 @@ import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { InboxSummaryProvider, useSharedInboxSummary, type InboxSummary } from './useInboxSummary';
+import { countInbox, countInboxNeedsYou } from '@/components/inbox/inboxCounts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -229,12 +231,17 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(hook.getCurrent().coverage).toBe('partial');
     });
 
-    it('reads cold qualified Discussion/Doc occurrences in one batch and settles only their owning cursor', async () => {
+    it.each(['mention', 'decision'] as const)('keeps the unopened badge and opened %s row in agreement until its owner settles it', async type => {
         listRuns.mockResolvedValue(page([]));
         let lastReadSeq = 0;
+        let proposalOpen = true;
         const message = DiscussionMessageV1Schema.parse({ id: 'mention-1', discussionId: 'doc-comments', localId: null,
             seq: 1, authorAccountId: null, accountActor: null, producerV1: { v: 1, kind: 'agent', sessionId: 'inbox-bot' },
-            content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Review this passage' }] } },
+            content: { t: 'plain', v: type === 'decision' ? { kind: 'doc_edit_proposal', proposal: {
+                target: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
+                    revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 6 }, quote: 'Before' },
+                baseRevision: { headerVersion: 1, bodyVersion: 1 }, before: 'Before', after: 'After', reason: 'Clarify',
+            } } : { v: 1, parts: [{ t: 'text', text: 'Review this passage' }] } },
             mentionedAccountIds: ['account-a'], createdAt: 1 });
         const summary = () => DiscussionSummaryV1Schema.parse({ id: 'doc-comments', ownerAccountId: 'account-a', encryptionMode: 'plain',
             anchor: { kind: 'doc', doc: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
@@ -245,8 +252,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             recentAuthorAccountIds: [], archivedAt: null, capabilities: { postMessages: true, rename: true, archive: true,
                 restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false } });
         discussionBoundary.request.mockImplementation(async (path: string, init?: RequestInit) => {
-            if (path === '/v1/discussions/attention') return Response.json({ discussions: lastReadSeq === 0
-                ? [{ discussion: summary(), occurrences: [{ message, type: 'mention' }] }] : [], nextCursor: null, incomplete: false });
+            if (path === '/v1/discussions/attention') return Response.json({ discussions: (type === 'decision' ? proposalOpen : lastReadSeq === 0)
+                ? [{ discussion: summary(), occurrences: [{ message, type }] }] : [], nextCursor: null, incomplete: false });
             if (path === '/v1/discussions') return Response.json({ discussions: [summary()], nextCursor: null });
             if (path === '/v1/discussions/doc-comments') return Response.json({ discussion: summary() });
             if (path === '/v1/discussions/doc-comments/messages') return Response.json({ messages: [message], hasMoreOlder: false, messageSeq: 1 });
@@ -261,6 +268,13 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const bot = createSessionFixture({ id: 'inbox-bot', serverId: appliedSnapshot().serverId,
             metadata: { name: 'Payments coordinator', path: '/work/payments', host: 'machine' } });
         storage.setState({ sessions: { [bot.id]: bot } });
+        let badge: InboxSummary | null = null;
+        function Badge() { badge = useSharedInboxSummary(); return null; }
+        const chrome = await renderScreen(<InboxSummaryProvider><Badge /></InboxSummaryProvider>);
+        await vi.waitFor(() => expect(badge).toEqual({ count: 1, hasContent: true }));
+        const stableBadge = badge;
+        await act(async () => { storage.setState({ friends: {} }); });
+        expect(badge).toBe(stableBadge);
         const screen = await renderModel();
         const scope = storage.getState().profileScope!;
         await vi.waitFor(() => expect(model!.discussionAttention.source?.entries).toHaveLength(1));
@@ -270,20 +284,36 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(repository!.getSnapshot().threads).toEqual({});
         expect(discussionBoundary.request.mock.calls.filter(([path]) => path.includes('/messages'))).toEqual([]);
         const row = model!.items.find(item => item.source.kind === 'discussion');
-        expect(row).toMatchObject({ type: 'mention', view: 'mentions', read: false,
+        expect(row).toMatchObject({ type, view: type === 'decision' ? 'needs_you' : 'mentions', read: false,
             pageRoute: `/discussions/doc-comments?serverId=${encodeURIComponent(scope.serverId)}&messageId=mention-1`,
             focus: { kind: 'discussion', serverId: scope.serverId,
             id: 'doc-comments', messageId: 'mention-1' }, discussion: { anchor: summary().anchor },
-            source: { displayName: 'Plan comments' }, author: { name: 'Payments coordinator' }, excerpt: 'Review this passage' });
+            source: { displayName: 'Plan comments' }, author: { name: 'Payments coordinator' } });
+        expect(countInbox(model!)).toBe(1);
+        expect(countInboxNeedsYou(model!)).toBe(type === 'decision' ? 1 : 0);
         expect(model!.discussionAttention.coverage).toBe('complete');
         await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, encryptionMode: 'e2ee',
             encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
         expect(model!.items.find(item => item.source.kind === 'discussion')?.author).toBeNull();
         await act(async () => { await model!.markItemOpened(row!); });
-        expect(lastReadSeq).toBe(1);
+        if (type === 'decision') {
+            // Opening Needs you never marks it read. The Discussion's own visible-read
+            // owner may advance its cursor, but that is still not proposal disposition.
+            expect(lastReadSeq).toBe(0);
+            await act(async () => { await model!.discussionAttention.markOpened(row!); });
+            expect(lastReadSeq).toBe(1);
+            expect(model!.items.find(item => item.source.kind === 'discussion')).toMatchObject({ read: true, view: 'needs_you' });
+            expect(countInboxNeedsYou(model!)).toBe(1);
+            expect(badge).toEqual({ count: 1, hasContent: true });
+            proposalOpen = false;
+            await act(async () => { await repository!.refreshAttention(); });
+        } else expect(lastReadSeq).toBe(1);
         expect(model!.items.filter(item => item.source.kind === 'discussion')).toEqual([]);
+        expect(countInbox(model!)).toBe(0);
+        expect(badge).toEqual({ count: 0, hasContent: false });
         expect(executed.filter(item => item.actionId === 'session.read_state.set')).toEqual([]);
         await screen.unmount();
+        await chrome.unmount();
     });
 
     it('names the loaded exact-Home approval requester and keeps wrong-Home or locked names unavailable', async () => {

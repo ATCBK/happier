@@ -16,7 +16,7 @@ beforeAll(loadSyncSingletonForTests);
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-const { buildWorkflowRunListFilter, listWorkflowRuns, getWorkflowRunSummary } = await import('./workflowRunListActions');
+const { buildWorkflowRunListFilter, listWorkflowRuns } = await import('./workflowRunListActions');
 const { WorkflowActionError } = await import('./workflowActionError');
 const route = '/v3/automations/runs/workflow-storage';
 const accountId = 'run-list-owner';
@@ -129,11 +129,6 @@ describe('workflow Run list Action client through the Account storage transport'
         expect(active.states).not.toContain('succeeded');
         expect(active.states).not.toContain('cancelled');
         expect(buildWorkflowRunListFilter('all')).toEqual({});
-    });
-
-    it('reports a deleted exact Run as run_not_found so the row can be removed', async () => {
-        const failure = await getWorkflowRunSummary(run.id).then(() => null, (error: unknown) => error);
-        expect(failure).toBeInstanceOf(WorkflowActionError);
-        expect((failure as InstanceType<typeof WorkflowActionError>).code).toBe('run_not_found');
+        expect(buildWorkflowRunListFilter('under:lead')).toEqual({ underSessionId: 'lead' });
     });
 });

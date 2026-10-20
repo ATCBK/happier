@@ -18,6 +18,12 @@ export function resolveClaudeConfigDirOverride(env: ClaudeConfigEnvironment): st
         ?? readNonEmptyEnvironmentValue(env[HAPPIER_CLAUDE_CONFIG_DIR_ENV]);
 }
 
+/** Preserve the native override's presence instead of synthesizing the filesystem default. */
+export function resolveClaudeConfigDirEnvOverlay(env: ClaudeConfigEnvironment): Record<string, string> {
+    const override = resolveClaudeConfigDirOverride(env);
+    return override ? { CLAUDE_CONFIG_DIR: override } : {};
+}
+
 /** Resolve the effective Claude config root, including the platform home fallback. */
 export function resolveClaudeConfigDir(env: ClaudeConfigEnvironment): string {
     const override = resolveClaudeConfigDirOverride(env);

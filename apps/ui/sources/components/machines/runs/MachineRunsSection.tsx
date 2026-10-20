@@ -8,7 +8,7 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ExecutionRunRow } from '@/components/sessions/runs/ExecutionRunRow';
 import { readExecutionRunSessionAssociation } from '@/components/sessions/runs/readExecutionRunSessionAssociation';
-import { isAcceptedPendingSessionStop } from '@/components/sessions/sessionStopArchiveFlow';
+import { isAcceptedPendingSessionStop, readSessionStopActionResponse } from '@/components/sessions/sessionStopArchiveFlow';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -175,22 +175,11 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                 const stopSessionProcess = async () => {
                                     if (!stopExecution.isCurrent()) return;
                                     const stopResult = await stopExecution.execute('session.stop', { sessionId });
-                                    if (!stopExecution.isCurrent()) return;
-                                    let errorCode = stopResult.ok ? null : stopResult.errorCode;
-                                    let error = stopResult.ok ? t('runs.stop.failedToStopSession') : stopResult.error;
-                                    let retryWhenRuntimeAvailable = false;
-                                    const response = stopResult.ok ? stopResult.result : null;
-                                    if (response && typeof response === 'object' && !Array.isArray(response)
-                                        && 'success' in response && typeof response.success === 'boolean') {
-                                        const code = 'code' in response && typeof response.code === 'string' ? response.code : undefined;
-                                        const recovery = 'recovery' in response && response.recovery === 'wait_for_inactive'
-                                            ? 'wait_for_inactive' : undefined;
-                                        if (response.success || isAcceptedPendingSessionStop({ success: response.success, code, recovery })) return;
-                                        errorCode = code ?? null;
-                                        error = 'message' in response && typeof response.message === 'string'
-                                            ? response.message : t('runs.stop.failedToStopSession');
-                                        retryWhenRuntimeAvailable = 'recovery' in response && response.recovery === 'retry_when_runtime_available';
-                                    }
+                                    if (!stopExecution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
+                                    const response = stopResult.ok ? readSessionStopActionResponse(stopResult.result) : null;
+                                    if (response && (response.success || isAcceptedPendingSessionStop(response))) return;
+                                    const errorCode = stopResult.ok ? response?.code ?? null : stopResult.errorCode;
+                                    const error = stopResult.ok ? response?.message : stopResult.error;
 
                                     const retryPresentation = {
                                         machine,
@@ -199,7 +188,7 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                         },
                                         shouldContinue,
                                     };
-                                    if (retryWhenRuntimeAvailable) {
+                                    if (response?.recovery === 'retry_when_runtime_available') {
                                         showDaemonUnavailableAlert({ ...retryPresentation,
                                             titleKey: 'errors.daemonUnavailableTitle', bodyKey: 'errors.daemonUnavailableBody' });
                                         return;
@@ -217,14 +206,17 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                         Modal.alert(t('common.error'), error);
                                         return;
                                     }
-                                    const confirmed = await Modal.confirm(
+                                    let stopSessionRequested = false;
+                                    await Modal.alertAsync(
                                         t('runs.stop.stopRunFailedTitle'),
                                         t('runs.stop.stopRunFailedBody'),
-                                        { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
+                                        [
+                                            { text: t('common.cancel'), style: 'cancel' },
+                                            { text: t('runs.stop.stopSession'), onPress: () => { stopSessionRequested = true; } },
+                                        ],
                                     );
                                     if (!stopExecution.isCurrent()) return;
-                                    if (confirmed) await stopSessionProcess();
-                                    else Modal.alert(t('common.error'), error);
+                                    if (stopSessionRequested) await stopSessionProcess();
                                 };
                                 try {
                                     const res = await stopExecution.execute('execution.run.stop',

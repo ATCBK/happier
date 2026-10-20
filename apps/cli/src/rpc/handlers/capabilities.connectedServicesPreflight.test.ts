@@ -192,6 +192,7 @@ describe('capabilities.invoke connected-service preflight', () => {
     // The real declared-tool launch clears PATH; the simulated OS executable
     // must name this test runtime directly, as native catalog fixtures do.
     writeFileSync(fixture, fixtureSource.replace(/^#![^\n]*/, `#!${process.execPath}`)
+      .replace("id: 'gpt-5.4'", "id: existsSync(join(process.env.CODEX_HOME || '', 'auth.json')) ? 'gpt-6-luna' : 'unselected-model'")
       .replace("existsSync, writeFileSync", "existsSync, mkdirSync, writeFileSync")
       .replace("    captureMaterializedEnvironment();", `    captureMaterializedEnvironment();
     mkdirSync(join(process.env.CODEX_HOME, 'sessions'), { recursive: true });
@@ -373,7 +374,7 @@ describe('capabilities.invoke connected-service preflight', () => {
         secrets: { admit: async () => undefined, has: async () => false, read: async () => null },
       },
     });
-    const purposeRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+    const createPurposeRuntime = () => createDaemonConnectedAccountPurposeBindingRuntime({
       reloadController: pluginReloadController, establishedRuntimeOwner: established,
       resolveQualifiedConnectedAccountV4Support: () => 'advertised',
       qualifiedApi: {
@@ -391,16 +392,22 @@ describe('capabilities.invoke connected-service preflight', () => {
         subscribe: () => ({ dispose() {} }),
       },
     });
+    const purposeRuntime = createPurposeRuntime();
     phase = 'admit plugin runtime';
+    const selectedPluginIds = ['happier.agent.codex', 'happier.agent.opencode', ...(targetId === 'external' ? [SAMPLE_PLUGIN_ID] : [])];
     const lease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: async () => {
         const base = await resolveMergedContributionRegistry({ happyHomeDir: tempDir! });
         return resolveExecutablePluginRuntimeRegistry({
-        contributes: createResolvedContributionRegistry({ ...base, activationTargets:
-          base.activationTargets.map(target => preparedDevelopmentActivationGraphsByPluginId.has(target.pluginId)
+        contributes: createResolvedContributionRegistry({ ...base,
+          // This native-account fixture admits only its real Agent sources;
+          // unrelated UI release declarations are outside the exercised runtime.
+          pluginDeclarations: base.pluginDeclarations?.filter(target => selectedPluginIds.includes(target.pluginId)),
+          activationTargets: base.activationTargets.filter(target => selectedPluginIds.includes(target.pluginId))
+            .map(target => preparedDevelopmentActivationGraphsByPluginId.has(target.pluginId)
             ? { ...target, daemonEntryPath: preparedDevelopmentActivationGraphsByPluginId.get(target.pluginId)!.entryPath,
               devDaemonEntryPath: preparedDevelopmentActivationGraphsByPluginId.get(target.pluginId)!.entryPath }
-            : target) }), pluginIds: ['happier.agent.codex', 'happier.agent.opencode', ...(targetId === 'external' ? [SAMPLE_PLUGIN_ID] : [])],
+            : target) }), pluginIds: selectedPluginIds,
         preparedDevelopmentActivationGraphsByPluginId,
         // Account plugin settings are persistent storage. An absent record uses
         // the real declaration defaults without attempting a real Account read.
@@ -488,7 +495,11 @@ describe('capabilities.invoke connected-service preflight', () => {
         { value: 'native/selected-account', label: 'selected-account', description: 'native' },
       ]) } });
       if (!options.ok) throw new Error('Native options unavailable');
-      const nativeOptions = getActionSpec('action.options.resolve').outputSchema.parse(options.result).options;
+      const optionsSpec = getActionSpec('action.options.resolve');
+      if (!optionsSpec) throw new Error('Native options Action unavailable');
+      const nativeResult = optionsSpec.outputSchema.parse(options.result);
+      if (!nativeResult || typeof nativeResult !== 'object' || !('options' in nativeResult)) throw new Error('Native options unavailable');
+      const nativeOptions = nativeResult.options;
       const agentTarget = { kind: 'agent', identity: {
         pluginId: targetId === 'external' ? SAMPLE_PLUGIN_ID : 'happier.agent.opencode',
         localId: targetId === 'external' ? 'sample-provider' : 'opencode',
@@ -531,8 +542,55 @@ describe('capabilities.invoke connected-service preflight', () => {
     }
     expect(response).toMatchObject({
       ok: true,
-      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-5.4' })]) },
+      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-6-luna' })]) },
     });
+    phase = 'selected-account structured Run admission';
+    const { assertExecutionRunStructuredOutputModelAllowed } = await import('@/agent/runtime/bridges/executionRun/structuredOutputAdmission');
+    const { createRunnerExecutionRunSnapshots } = await import('@/daemon/agentRuntime/runnerExecutionRunSnapshots');
+    const { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema } = await import('@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol');
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'leeroy' },
+    } } as const;
+    const retainedAgent = lease.registry.agentRuntimesByAgentId.get('codex')?.sessionRunnerFactoryBinding;
+    if (!retainedAgent) throw new Error('Missing selected Codex runtime');
+    const context = { sessionId: 'selected-codex-review', runner: { pid: 123, processStartTimeMs: 1,
+      processCommandHash: 'a'.repeat(64), snapshotIdentity: 'selected-codex-review' }, retainedAgent,
+      invocationContext: { cwd: tempDir, environment: {}, providerBindingActive: false },
+      trackedSession: { pid: 123, startedBy: 'daemon' as const, happySessionId: 'selected-codex-review' },
+      isCurrent: async () => true };
+    const requesterPurposeRuntime = createPurposeRuntime();
+    const snapshots = createRunnerExecutionRunSnapshots({ machineId: 'selected-machine', controller: pluginReloadController,
+      // A Session requester has its own Account runtime, even on the same Home.
+      // Activation and credential materialization must use that same owner.
+      withNativeModelAccount: async (_context, read) => read({ accountSettings: {}, promptCredentials: credentials,
+        preflightDependencies: { createApiClient: async () => api,
+          activatePurposeBindings: requesterPurposeRuntime.activatePurposeBindings,
+          connectedAccountsOwner: requesterPurposeRuntime.owner } }),
+    });
+    const dispatch = async (operation: unknown, snapshotId?: string) => AgentRuntimeDaemonServiceResponseV1Schema.parse(
+      await snapshots.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+        context: { token: 'A'.repeat(43), sessionId: context.sessionId,
+          ...(snapshotId ? { executionRunSnapshotId: snapshotId } : {}) }, operation }), context));
+    const backendTarget = { kind: 'backend', backendId: 'codex' };
+    const acquired = await dispatch({ kind: 'execution_run.snapshot.acquire_v1', backendTarget });
+    if (!acquired.ok || acquired.result.kind !== 'execution_run.snapshot') throw new Error('Missing selected Codex snapshot');
+    const snapshotId = acquired.result.snapshotId;
+    const nativeRequest = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
+      modelId: 'gpt-6-luna', cwd: tempDir, connectedServices,
+      modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6-luna' } };
+    // The retained Session requester must remain authoritative even when the
+    // daemon's foreground credential store has no usable Account.
+    const persistence = await import('@/persistence');
+    const foregroundCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
+    try {
+      await expect(assertExecutionRunStructuredOutputModelAllowed({ ...nativeRequest,
+        readNativeOfferedModel: async request => {
+          const result = await dispatch({ ...request, kind: 'execution_run.native_offered_model.read_v1', backendTarget }, snapshotId);
+          if (!result.ok || result.result.kind !== 'execution_run.native_offered_model') throw new Error('Missing selected native model');
+          return result.result.model ?? undefined;
+        },
+      })).resolves.toBeUndefined();
+    } finally { foregroundCredentials.mockRestore(); await snapshots.dispose(); }
     expect(credentialReads).not.toHaveLength(0);
     const captured = JSON.parse(readFileSync(captureFile, 'utf8')) as Record<string, unknown>;
     expect(captured.CODEX_HOME).toEqual(expect.any(String));

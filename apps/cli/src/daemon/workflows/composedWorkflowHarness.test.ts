@@ -806,6 +806,11 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
     return await readSessionReadiness(url);
   });
   vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+    if (url.endsWith('/discard') && url.includes('/v2/sessions/late-child/pending/')) {
+      // This startup has not admitted an input. The real Pending owner returns
+      // exact absence; physical Stop still has to confirm the child is stopped.
+      throw Object.assign(new Error('not-found'), { isAxiosError: true, response: { status: 404, data: { error: 'not-found' } } });
+    }
     if (url.endsWith('/v3/automations/runs/workflow-storage') && body && typeof body === 'object' && 'operation' in body) {
       if (body.operation === 'recovery.list' && staleRecoveryRead) {
         staleRecoveryRead = false;
@@ -888,7 +893,7 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
   }
 });
 
-it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
+it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'terminal-write-lost', 'terminal-expired', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414143';
   const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
@@ -902,9 +907,9 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('s
   const refuse = () => { throw Object.assign(new Error(refusalMessage), {
     code: 'ERR_BAD_REQUEST', response: { status: 409, data: { error: 'currentness_conflict' } },
   }); };
-  if (mode === 'retained') await operations.observeExecution({ actionId: 'session.spawn_new', input: {}, execute: async () => refuse() }).catch(() => undefined);
   const creationKey = `workflow:${runId}:`;
   let rejoined = false;
+  let expired = false;
   let launches = 0;
   // Native launch is the substituted boundary; the operation producer, strict
   // operation reader, Session adapter and parent coordinator remain real.
@@ -912,7 +917,13 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('s
     launches++;
     return refuse();
   } }, awaitAgentSessionOpen: async () => { throw new Error('No child was created'); } });
-  const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup({ ...input,
+  const sessionStartup: WorkflowSessionStartup = async input => {
+    if (mode === 'retained' && !rejoined) {
+      rejoined = true;
+      await operations.observeExecution({ actionId: 'session.spawn_new', actionRequestId: input.creationKey,
+        input: {}, execute: async () => refuse() }).catch(() => undefined);
+    }
+    return runObservedWorkflowSessionStartup({ ...input,
     ...(mode === 'retained' ? { retainedOperation: { key: 'startup', serverId: 'server-1', machineId, operationId: 'failed-start' } } : {}),
   }, {
     serverId: 'server-1', machineId, observeExecution: async request => {
@@ -925,29 +936,46 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('s
     }, rpcContext: {},
     transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
       resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_startup'); } }),
-    observeOperation: async (target, options) => operations.handlers.getV2({
+    observeOperation: async (target, options) => expired ? { kind: 'not_found' } : operations.handlers.getV2({
       operationId: mode === 'miswired' ? 'foreign-operation' : target.operationId,
       ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
     }, options.signal ? { signal: options.signal } : undefined),
     cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
-  });
+    });
+  };
   const sessionInput = sessionInputBoundary();
   const interrupted = new AbortController();
-  let rejectCorrespondence = mode === 'lost-claim';
+  let rejectCorrespondence = mode === 'lost-claim' || mode === 'lost-claim-root';
+  let rejectTerminalWrite = mode === 'terminal-write-lost' || mode === 'terminal-expired';
   const coordinate = workflowDaemonProcess({ storage: { ...kit, execute: async (operation, options) => {
-    if (rejectCorrespondence && operation.operation === 'invocations.fact' && operation.lifecycle === 'running'
+    if (rejectTerminalWrite && operation.operation === 'invocations.fact' && operation.lifecycle === 'failed'
       && operation.invocationId === rowFor(kit, 'launch')?.id) {
+      rejectTerminalWrite = false;
+      throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
+    }
+    if (rejectCorrespondence && operation.operation === 'invocations.fact' && operation.lifecycle === 'running'
+      && (mode === 'lost-claim'
+        ? operation.invocationId === rowFor(kit, 'launch')?.id
+        : operation.invocationId !== rowFor(kit, 'launch')?.id && rowFor(kit, 'launch')?.lifecycle === 'running')) {
       rejectCorrespondence = false;
       interrupted.abort(new WorkflowRuntimeInterruption());
       return refuse();
     }
     return kit.execute(operation, options);
   } }, sessionInput, directory, sessionStartup });
-  if (mode === 'lost-claim') {
+  if (mode === 'terminal-write-lost' || mode === 'terminal-expired') {
+    await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+      acceptedEnvelope })).rejects.toThrow('storage_unavailable');
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe('running');
+    expired = mode === 'terminal-expired';
+  }
+  if (mode === 'lost-claim' || mode === 'lost-claim-root') {
     await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
       acceptedEnvelope, signal: interrupted.signal })).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
-    expect(rowFor(kit, 'launch')?.lifecycle).toBe('pending');
-    expect(openRowProgress(kit, rowFor(kit, 'launch')!).execution).toBeUndefined();
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe(mode === 'lost-claim' ? 'pending' : 'running');
+    const execution = openRowProgress(kit, rowFor(kit, 'launch')!).execution;
+    if (mode === 'lost-claim') expect(execution).toBeUndefined();
+    else expect(execution).toMatchObject({ kind: 'action', actionId: 'session.spawn_new', output: { operation: { state: 'running' } } });
     expect(await operations.handlers.getV2({ operationId: 'failed-start' })).toMatchObject({ kind: 'found', operation: {
       state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST', error: refusalMessage },
     } });
@@ -966,7 +994,7 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('s
   }
   expect(sessionInput.enqueue).not.toHaveBeenCalled();
   expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
-  expect(launches).toBe(mode === 'fresh' ? 1 : 0);
+  expect(launches).toBe(mode === 'fresh' || mode === 'terminal-write-lost' || mode === 'terminal-expired' ? 1 : 0);
 });
 
 it('retains the original cold Session setup operation in durable Workflow progress until native open', async () => {

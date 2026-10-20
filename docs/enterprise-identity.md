@@ -392,6 +392,11 @@ deployment lets a Home administrator permit exact private hostnames, CIDRs, and 
 administrator selects from Home policy and cannot widen it. Changing the effective policy
 changes the runtime fingerprint, so an older in-flight attempt cannot complete against it.
 
+Home authentication, Team-provider-kind, and identity-network policy changes publish an
+Account change to every active Account in the same transaction, including ordinary Team
+members. Session delivery-mute writes take that existing Account audience fence before
+resolving effective access, so a queued write rechecks the committed policy and credential.
+
 Home Administration · Policies edits that Home-owned allowlist through the same
 revision-guarded `home.policy.set` document as the rest of Home governance. The section is
 present only where the deployment could ever permit private endpoints: on a cloud or shared

@@ -49,7 +49,7 @@ export const issue = {
 };
 
 export function host(respond: (url: URL, body: unknown) => { status?: number; body: unknown; headers?: Record<string, string> }) {
-    const request = vi.fn(async (input: { url: string; body?: Uint8Array }, options: { signal: AbortSignal }) => {
+    const request = vi.fn(async (input: { url: string; method: string; body?: Uint8Array }, options: { signal: AbortSignal }) => {
         options.signal.throwIfAborted();
         const response = respond(new URL(input.url), input.body === undefined ? undefined : JSON.parse(new TextDecoder().decode(input.body)));
         return { status: response.status ?? 200, finalUrl: input.url, headers: response.headers ?? {}, body: new TextEncoder().encode(JSON.stringify(response.body)) };
@@ -66,6 +66,22 @@ export function host(respond: (url: URL, body: unknown) => { status?: number; bo
 }
 
 describe('Jira source through provider HTTP', () => {
+    it('loads complete editable values and never invents a value for an omitted provider field', async () => {
+        const h = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
+            : url.pathname.endsWith('/editmeta') ? { fields: {} }
+                : url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' } : issue }));
+        const result = TriageGetResultV1Schema.parse(await getJiraEntry({ v: 1, instance, localRef: ref }, h.context));
+        expect(result).toMatchObject({ kind: 'present', taskFields: { title: issue.fields.summary, body: 'Keep queued work.\n',
+            labelIds: ['reliability'], assigneeIds: ['person-1'], priority: '2', parent: { entryId: '10002' } } });
+        expect(result).not.toHaveProperty('taskFields.dueDate');
+        const unavailableBody = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
+            : url.pathname.endsWith('/editmeta') ? { fields: {} }
+                : url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' }
+                    : { ...issue, fields: { ...issue.fields, description: { inaccessible: true } } } }));
+        const unavailable = await getJiraEntry({ v: 1, instance, localRef: ref }, unavailableBody.context);
+        expect(unavailable).toMatchObject({ kind: 'present', taskFields: { title: issue.fields.summary } });
+        expect(unavailable).not.toHaveProperty('taskFields.body');
+    });
     it('discovers every project on the exact configured site without persisting source instances', async () => {
         const h = host((url) => ({ body: url.pathname === '/rest/api/3/project/search'
             ? { isLast: Number(url.searchParams.get('startAt')) > 0, startAt: Number(url.searchParams.get('startAt')), maxResults: 1, total: 2,
@@ -220,17 +236,69 @@ describe('Jira source through provider HTTP', () => {
         expect(await transitionJiraIssue({ v: 1, instance, localRef: ref, transitionId: '99' }, refused.context)).toMatchObject({ kind: 'refused', reason: 'jira/transitionUnavailable' });
     });
 
-    it('publishes a comment once as ADF and verifies that exact provider comment', async () => {
-        const adf = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Checked recovery.' }] }] };
+    it.each(['\n', '\r\n'])('publishes a multiline comment once as ADF and confirms the exact stored body (%j)', async (newline) => {
+        const adf = { type: 'doc', version: 1, content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Checked recovery.' }] },
+            { type: 'paragraph', content: [] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Queued work survived.' }] },
+        ] };
+        let storedBody: unknown;
         const h = host((url, body) => {
             if (url.pathname.includes('/comment')) {
-                if (body) expect(body).toEqual({ body: adf });
-                return { status: body ? 201 : 200, body: { id: '12000', body: adf } };
+                if (body) {
+                    expect(body).toEqual({ body: adf });
+                    storedBody = (body as { body: unknown }).body;
+                }
+                return { status: body ? 201 : 200, body: { id: '12000', body: storedBody } };
             }
             return { body: url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' } : issue };
         });
-        expect(await commentJiraIssue({ entry: { v: 1, instance, localRef: ref }, body: 'Checked recovery.' }, h.context)).toMatchObject({ kind: 'applied' });
+        expect(await commentJiraIssue({ entry: { v: 1, instance, localRef: ref }, body: ['Checked recovery.', '', 'Queued work survived.'].join(newline) }, h.context)).toMatchObject({ kind: 'applied' });
+        expect(storedBody).toEqual(adf);
         expect(h.request.mock.calls.filter(([r]) => r.body)).toHaveLength(1);
+        expect(h.request.mock.calls.filter(([r]) => r.method === 'POST' && new URL(r.url).pathname.endsWith('/comment'))).toHaveLength(1);
+    });
+
+    it('keeps a genuinely different confirmed comment uncertain without a second POST', async () => {
+        const h = host((url, body) => {
+            if (url.pathname.includes('/comment')) return { status: body ? 201 : 200, body: { id: '12000', body: {
+                type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Changed by another editor.' }] }],
+            } } };
+            return { body: url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' } : issue };
+        });
+        expect(await commentJiraIssue({ entry: { v: 1, instance, localRef: ref }, body: 'Checked\r\nrecovery.' }, h.context)).toMatchObject({ kind: 'uncertain' });
+        expect(h.request.mock.calls.filter(([r]) => r.body)).toHaveLength(1);
+        expect(h.request.mock.calls.filter(([r]) => r.method === 'POST' && new URL(r.url).pathname.endsWith('/comment'))).toHaveLength(1);
+    });
+
+    // REST v3 Get issue returns a field projection, not evidence of an empty
+    // value for an omitted key. Explicit null and [] are JSON field values.
+    // https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-get
+    it.each([
+        { nativeKey: 'description', fields: { body: '' }, empty: null },
+        { nativeKey: 'labels', fields: { labelIds: [] }, empty: [] },
+        { nativeKey: 'assignee', fields: { assigneeIds: [] }, empty: null },
+        { nativeKey: 'priority', fields: { priority: null }, empty: null },
+        { nativeKey: 'duedate', fields: { dueDate: null }, empty: null },
+        { nativeKey: 'parent', fields: { parent: null }, empty: null },
+    ])('requires $nativeKey evidence before treating a clear as applied', async ({ nativeKey, fields, empty }) => {
+        for (const evidence of ['missing', 'missing-after-write', 'already-empty', 'cleared'] as const) {
+            let writes = 0;
+            const h = host((url, body) => {
+                if (url.pathname.endsWith('/editmeta')) return { body: { fields: { [nativeKey]: { operations: ['set'] } } } };
+                if (body) { writes += 1; return { status: 204, body: null }; }
+                if (url.pathname === '/rest/api/3/myself') return { body: { accountId: 'person-1' } };
+                expect(url.searchParams.get('fields')).toBe('*all');
+                const native: Record<string, unknown> = { ...issue.fields };
+                delete native[nativeKey];
+                if (evidence === 'missing-after-write' && writes === 0) native[nativeKey] = nativeKey === 'duedate' ? '2026-10-20' : issue.fields[nativeKey as keyof typeof issue.fields];
+                if (evidence === 'already-empty' || (evidence === 'cleared' && writes > 0)) native[nativeKey] = empty;
+                return { body: { ...issue, fields: native } };
+            });
+            const result = TriageTaskWriteResultV1Schema.parse(await editJiraIssue({ v: 1, instance, localRef: ref, fields }, h.context));
+            expect(result.kind, evidence).toBe(evidence === 'missing' || evidence === 'missing-after-write' ? 'uncertain' : 'applied');
+            expect(writes, evidence).toBe(evidence === 'already-empty' ? 0 : 1);
+        }
     });
 
     it('exposes only executable native transitions and offered edit fields on an exact read', async () => {

@@ -87,6 +87,18 @@ function admitted(admission: 'created' | 'existing') {
 }
 
 describe('useWorkflowRunNowController', () => {
+    it('preserves the committed Discussion origin at the shared start boundary', async () => {
+        executeMock.mockResolvedValueOnce(admitted('created'));
+        const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+        const hook = await renderHook(() => useWorkflowRunNowController());
+        const origin = { kind: 'discussion' as const,
+            discussion: { serverId: homeA, discussionId: 'discussion-1' },
+            addressingMessageId: 'question-1' };
+        await act(async () => {
+            await hook.getCurrent().runNow({ runId: RUN_ID, source, origin });
+        });
+        expect(executeMock.mock.calls[0]?.[0].input).toMatchObject({ origin });
+    });
     it('admits the reviewed role overrides rather than silently using the Account roles', async () => {
         executeMock.mockResolvedValueOnce(admitted('created'));
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
@@ -307,6 +319,25 @@ describe('useWorkflowRunNowController', () => {
             request.resolve(admitted('created'));
             await first;
         });
+    });
+
+    it('owns asynchronous preparation once and refuses to dispatch after its captured Account retires', async () => {
+        const prepared = createDeferred<{ source: WorkflowRunNowRequest['source'] }>();
+        const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+        const hook = await renderHook(() => useWorkflowRunNowController());
+        let pending!: Promise<unknown>;
+        let preparations = 0;
+        const request = { prepareRequest: async () => { preparations++; return prepared.promise; } };
+        await act(async () => { pending = hook.getCurrent().runNow(request); });
+        const id = hook.getCurrent().pendingRunId;
+        expect(id).not.toBeNull();
+        expect(hook.getCurrent().stateFor(id!)).toBe('submitting');
+        await act(async () => { expect(await hook.getCurrent().runNow(request)).toBeNull(); });
+        expect(preparations).toBe(1);
+        expect(executeMock).not.toHaveBeenCalled();
+        await act(async () => { setAccountScope({ serverId: 'server-b', accountId: 'account-b' }); });
+        await act(async () => { prepared.resolve({ source }); expect(await pending).toBeNull(); });
+        expect(executeMock).not.toHaveBeenCalled();
     });
 
     it('retires a result whose Account scope changed between dispatch and response', async () => {

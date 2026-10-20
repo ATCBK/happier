@@ -1,9 +1,30 @@
 import { describe, expect, it } from 'vitest';
-
+import { AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { RunFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { buildActivityOverviewSnapshot } from '@/activity/attention/buildActivityOverviewSnapshot';
+import { buildInboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
+import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 import { createInboxItemRoute, isFocusedInboxWorkItem, readInboxItemFocus, resolveInboxItemPageRoute } from './inboxItemFocus';
 
 describe('Home-qualified Inbox focus', () => {
+    it.each([
+        { original: { source: { kind: 'execution_run', sessionId: 'source-session', runId: 'run/7' }, terminalEventId: 'terminal-1' },
+            route: '/session/source-session/runs/run%2F7?serverId=home-b' },
+        { original: { source: { kind: 'workflow_run', runId: 'run/7' }, revision: 2 },
+            route: '/workflows/runs/run%2F7?serverId=home-b' },
+    ])('opens a Follow notice at its exact $original.source.kind result on the notice Home', ({ original, route }) => {
+        const notice = RunFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: {
+            original, event: { kind: 'finished' },
+        } });
+        const header = AccountNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: 'account_notice.v1',
+            source: { kind: 'host', topic: 'follow_update' }, type: 'update', resolved: false,
+            title: 'Run finished', status: 'open', notice,
+        });
+        expect(resolveInboxItemPageRoute({ kind: 'notice', serverId: 'home-b', id: 'notice-1' }, { notice: header })).toBe(route);
+    });
+
     it('opens an Automation occurrence through the canonical Run route on the row Home', () => {
         const focus = { kind: 'automation_run', serverId: 'home-b', id: 'same-run', automationId: 'same-automation' } as const;
         expect(resolveInboxItemPageRoute(focus))
@@ -26,11 +47,7 @@ describe('Home-qualified Inbox focus', () => {
         }
     });
 
-    it('selects only the qualified Session when two Homes have the same id', async () => {
-        const { buildActivityOverviewSnapshot } = await import('@/activity/attention/buildActivityOverviewSnapshot');
-        const { buildInboxSessionPresentation } = await import('@/activity/presentation/buildInboxSessionPresentation');
-        const { buildInboxWorkGroups } = await import('@/activity/presentation/buildInboxWorkGroups');
-        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    it('selects only the qualified Session when two Homes have the same id', () => {
         const sessions = ['home-a', 'home-b'].map((serverId) => createSessionFixture({
             id: 'same-session', serverId, active: true, pendingPermissionRequestCount: 1, pendingRequestObservedAt: 1_000,
         }));

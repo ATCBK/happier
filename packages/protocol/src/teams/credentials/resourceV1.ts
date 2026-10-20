@@ -8,6 +8,8 @@ import {
 } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 import {
   TeamResourceConnectedServiceSelectionV2Schema,
+  areTeamResourceConnectedServiceSelectionsEqual,
+  type TeamResourceConnectedServiceSelectionV2,
 } from '../../connect/connectedServiceBindings.js';
 import {
   ProviderAgentTargetKeySchema,
@@ -680,6 +682,31 @@ export type TeamCredentialProviderModelCatalogEntryV1 = z.infer<
   typeof TeamCredentialProviderModelCatalogEntryV1Schema
 >;
 export type TeamCredentialResourceCatalogEntryV1 = z.infer<typeof TeamCredentialResourceCatalogEntryV1Schema>;
+
+/** Exact resource/service identity, retaining unavailable owner facts when no choice can be offered. */
+export function resolveTeamResourceConnectedServiceSelectionV1(input: Readonly<{
+  resource: TeamCredentialResourceCatalogEntryV1;
+  teamId: string;
+  selection: TeamResourceConnectedServiceSelectionV2;
+  services: readonly Readonly<{ pluginId: string; localId: string }>[];
+}>): TeamResourceConnectedServiceSelectionV2 | null {
+  const source = input.resource.sourcePresentation;
+  if (input.resource.teamId !== input.teamId || input.resource.id !== input.selection.resourceId
+    || source && (source.kind !== 'connected_service'
+      || !input.services.some(service => service.pluginId === source.service.pluginId && service.localId === source.service.localId))) return null;
+  if (input.selection.deliveryMode === 'direct') {
+    const member = input.selection.disclosedMember.service;
+    if (!input.services.some(service => service.pluginId === member.pluginId && service.localId === member.localId)
+      || source?.kind === 'connected_service' && (source.service.pluginId !== member.pluginId || source.service.localId !== member.localId)) return null;
+  }
+  if (input.resource.readiness.kind === 'available' && !source) return null;
+  const offered = input.resource.connectedServiceSelections.find(selection =>
+    areTeamResourceConnectedServiceSelectionsEqual(selection, input.selection));
+  // The entitled catalog deliberately omits choices for unavailable sources/corrupt resources.
+  // Absence preserves their diagnosis; an explicit changed choice never matches the old binding.
+  return offered ?? (input.resource.readiness.kind !== 'available' && input.resource.connectedServiceSelections.length === 0
+    ? input.selection : null);
+}
 export type TeamCredentialResourcePageV1 = z.infer<typeof TeamCredentialResourcePageV1Schema>;
 export type TeamCredentialResourceListFilterV1 = z.infer<typeof TeamCredentialResourceListFilterV1Schema>;
 export type TeamCredentialResourceEntitledPageV1 = z.infer<typeof TeamCredentialResourceEntitledPageV1Schema>;

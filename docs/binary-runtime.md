@@ -30,6 +30,16 @@ Do not introduce direct product-runtime calls to:
 
 These are allowed only behind centralized managed runtime/tooling abstractions.
 
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
+
 In 0.3 development, remote SSH machine setup installs the selected CLI through
 the canonical first-party payload installer after host trust and before relay
 installation, service inventory, or Home enrollment. SSH command execution and
@@ -54,9 +64,31 @@ with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
 setup; late consent cannot authorize the expired request. Finite `auth wait`
 failures project a credential-free code through the buffered enrollment error,
 including local expiry and argument/state validation. These are development
-source changes. A wait process without a usable diagnostic code reports
-`AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE`, retaining its exit without exposing native
-output or inferring an authentication cause. Controller and guest CLI reloads
+source changes. Transient Home HTTP, network and timeout failures are classified
+as `AUTH_WAIT_HOME_UNAVAILABLE`; the wait does not replay the one-shot claim.
+After a successful claim, buffered and streaming enrollment retain that response
+and retry transient authenticated Home observations and Machine registration
+within their existing lifetime, using the existing polling cadence. Admission
+refusals remain terminal, and managed enrollment saves its bearer only after
+registration succeeds. Retry after an unsuccessful attempt requests fresh
+approval while retaining the guest's Machine identity. Feature-read diagnostics
+preserve the HTTP status or transport failure for the shared recovery policy.
+During managed enrollment, the controller's repeatable `controller/current`
+observations use that same Home retry policy and the remote recipe's existing
+deadline and polling cadence. Native effects, submission and report mutations
+are not replayed. If Home remains unavailable after that lifetime, Create or
+bootstrap Retry retains `action_outcome_unknown` as an `outcome_uncertain`
+operation rather than claiming the guest failed; enrollment may already have
+committed. This controller-side recovery requires a controller refresh.
+Shared offline warnings use stderr, keeping finite command stdout valid JSON
+when post-claim machine registration fails.
+A failed wait process without a usable diagnostic code reports
+`AUTH_WAIT_PROCESS_FAILED`, distinguishing absent output from an invalid
+diagnostic envelope. An invalid envelope identifies the first failed check
+(`parse`, `v`, `ok`, `kind`, or `code`) without copying rejected values. Safe
+unrecognised error codes remain reportable data; they do not need a controller
+allowlist. The recipe retains the exit without exposing native output or
+inferring an authentication cause. Controller and guest CLI reloads
 are required; the server's
 terminal-request TTL policy is unchanged.
 
@@ -150,6 +182,14 @@ Agent plugins, which also supply the copyable installation guidance.
 
 ## Installer state home
 
+In current 0.3 development source, managed runtime custody accepts filesystem
+aliases of the same install parent, including symlinked homes, Windows junctions
+and macOS `/var` → `/private/var` aliases. The shared version-root identity owner
+resolves parent aliases before layout membership checks. `current` and `previous`
+still require their canonical `.version` markers, and the selected physical root
+must remain an exact immutable child of the physical `versions` directory. A
+version symlink that escapes that directory is rejected.
+
 Both shell installers resolve the data home from an explicit `HAPPIER_HOME_DIR`,
 otherwise following `HAPPIER_INSTALL_DIR` or the default `.happier` directory.
 In current development source, the POSIX installer uses that same resolved home
@@ -180,6 +220,30 @@ with the current executable and `--menu-bar`, or removes it when login start is
 off. An unknown setting leaves the item untouched; failures remain visible in
 the tray and retry on the next setting observation. This reuses the existing
 login-item migration rather than adding another startup preference or writer.
+
+## Linux desktop rendering runtime
+
+In development source, the desktop release pipeline prepares WebKitGTK 2.54.1
+for AppImage bundling. The trusted Linux finalizer opts into
+`.github/actions/install-tauri-linux-dependencies`; its checksum-pinned source
+recipe builds on Ubuntu 22.04 with Clang 18 and GCC 12's standard library.
+An exact Actions cache reuses the staged SDK. Missing helpers, unresolved native
+dependencies, the wrong engine version or a newer libc ABI fail validation rather
+than falling back to the distribution engine. The AppImage artifact audit repeats
+the runtime validation after bundling.
+
+Candidate compilation keeps Ubuntu's native WebKit headers. DEB and RPM packages
+continue to use the installed distribution runtime; the SDK and additional GPU
+helper are bundled only into AppImage. Direct Tauri development commands retain
+their system-runtime behavior; the pinned runtime contract belongs to the release
+pipeline. This source change does not establish availability in a published release.
+
+WebKit can migrate IndexedDB when opening an existing desktop profile. An older
+engine may then be unable to open that database; replacing the executable does
+not reverse the migration. Follow the downgrade warning on the
+[downloads page](../apps/docs/content/docs/getting-started/get-the-apps.mdx),
+preserve pending drafts and messages, and do not delete the profile to diagnose
+rendering performance. No second storage writer or profile migration is added.
 
 ## Native computer driver (0.3 development source)
 

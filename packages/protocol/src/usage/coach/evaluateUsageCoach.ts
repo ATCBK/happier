@@ -5,6 +5,7 @@ import { bundledUsageModelPriceCatalog, LITELLM_MODEL_PRICE_URL } from '../usage
 import { COACH_VENDOR_FACTS as facts, COACH_RESEARCH_SOURCES as research } from './coachVendorFacts.js';
 import { UsageRequestAttributionSchema } from '../usageAnalyticsContracts.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
+import { selectUsageWorkPermissions } from '../usageWorkIntervals.js';
 import { UsageCoachPreferencesV1Schema, type UsageCoachPreferencesV1 } from '../../account/settings/usageCoachPreferencesV1.js';
 import { USAGE_COACH_DETECTOR_IDS, USAGE_COACH_REQUIRED_EVIDENCE, type UsageCoachCapability, type UsageCoachEvaluation,
     type UsageCoachEvaluationInput, type UsageCoachConceptEvaluation, type UsageCoachDetectorId, type UsageCoachFinding,
@@ -359,10 +360,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
             }
             case 'approval_friction': {
                 if (!detail?.permissions) return insufficient(id, capability);
-                const rows = [...new Map(detail.permissions.filter(row => row.requestedAtMs !== null && inPeriod(row.requestedAtMs)
-                    || row.decidedAtMs !== null && inPeriod(row.decidedAtMs)).map(row => [JSON.stringify([row.workId, row.requestId]), row])).values()];
-                const paired = rows.filter(row => row.requestedAtMs !== null && row.decidedAtMs !== null
-                    && inPeriod(row.requestedAtMs) && inPeriod(row.decidedAtMs) && row.decidedAtMs > row.requestedAtMs);
+                const { requests: rows, paired } = selectUsageWorkPermissions(detail.permissions, input.period, input.asOfMs);
                 if (paired.length) return finding(id, capability, 'approval_wait_observed',
                     paired.map(row => ({ kind: 'permission', id: JSON.stringify([row.workId, row.requestId]), observedAtMs: row.decidedAtMs! })),
                     [{ metric: 'permission_wait', value: paired.reduce((sum, row) => sum + row.decidedAtMs! - row.requestedAtMs!, 0), unit: 'milliseconds' },

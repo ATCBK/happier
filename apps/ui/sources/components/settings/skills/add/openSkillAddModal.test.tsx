@@ -68,4 +68,25 @@ describe('Skills Add modal through the real Account and registry owners', () => 
         ] });
         expect(screen.findByTestId(`skills.add:detail:${sourceId}|review`)).not.toBeNull();
     });
+
+    it('opens, rather than adds again, a registry skill the library holds from a link to the same folder', async () => {
+        const { home, sourceId } = await createRegistrySourcesUiHome('modal-held-link');
+        const onAdded = vi.fn();
+        const link = await renderScreen(<SkillAddModal onClose={() => {}} params={{ modeKey: 'link', onWrite() {}, onAdded }} />);
+        await React.act(async () => { link.changeTextByTestId('skills.add.link.url', 'https://github.com/fixture/skills/tree/main/review'); });
+        await link.pressByTestIdAsync('skills.add.link.find');
+        await waitForHomeGovernance(() => expect(link.findByTestId('skills.add.link.add')).not.toBeNull());
+        await link.pressByTestIdAsync('skills.add.link.add');
+        await waitForHomeGovernance(() => expect(onAdded).toHaveBeenCalled());
+        const skillId = home.boundary.list()[0]!.id;
+        const screen = await renderScreen(<SkillAddModal onClose={() => {}} params={{ sourceId, onWrite() {}, onAdded: vi.fn() }} />);
+        const collection = () => screen.find(node => node.props.testID === 'skills.add:collection' && typeof node.props.model?.actions?.open === 'function');
+        await waitForHomeGovernance(() => expect(collection().props.model.keys).toContain(`${sourceId}|review`));
+        await React.act(async () => { collection().props.model.actions.open(`${sourceId}|review`); });
+        // The list's own match is by registry identity and does not know the link; the preview after the read does.
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('capabilities.skillAdd.open'));
+        expect(screen.getTextContent()).not.toContain('capabilities.skillAdd.addToLibrary');
+        await screen.pressByTestIdAsync('skills.add:primary');
+        expect(home.boundary.list().map(row => row.id)).toEqual([skillId]);
+    });
 });

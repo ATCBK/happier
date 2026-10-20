@@ -48,6 +48,8 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     return mock.module;
 });
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
 
 function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['ChainTranscriptList']) {
     return function ChainTestRoot(props: React.ComponentProps<typeof Content>) {
@@ -66,7 +68,6 @@ describe('ChainTranscriptList explicit jump takeover', () => {
 
     it('acquires renderer takeover before older loading and aborts the request on unmount', async () => {
         const { Platform } = await import('react-native');
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });

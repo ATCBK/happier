@@ -108,11 +108,8 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
             serviceId,
             profileId,
             resolveAccountMode,
-            assertOperationAllowed: (operation, signal) =>
-                assertLegacyOperationAllowed(serviceId, operation, signal),
         };
     }, [
-        assertLegacyOperationAllowed,
         activeServer.generation,
         activeServer.serverId,
         credentialHealthUsable,
@@ -161,8 +158,10 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
     const refresh = React.useCallback(async () => {
         if (!key || !loadContext) return;
         setActionError(null);
-        await refreshQuotaSnapshot(key, loadContext);
-    }, [key, loadContext]);
+        await refreshQuotaSnapshot(key, { ...loadContext,
+            assertOperationAllowed: (operation, signal) => assertLegacyOperationAllowed(serviceId, operation, signal),
+        });
+    }, [assertLegacyOperationAllowed, key, loadContext, serviceId]);
 
     const consumeRecoveryCredit = React.useCallback(async (providerCreditId?: string | null) => {
         if (!recoveryCreditSummary) return;
@@ -180,6 +179,7 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
         try {
             const result = await consumeQuotaRecoveryCredit(key, {
                 ...loadContext,
+                assertOperationAllowed: (operation, admissionSignal) => assertLegacyOperationAllowed(serviceId, operation, admissionSignal),
                 machineId: recoveryCreditMachineId,
                 providerCreditId: targetCreditId,
                 signal,
@@ -194,7 +194,7 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
         } finally {
             if (!signal.aborted) setConsumeRecoveryCreditPendingTarget(null);
         }
-    }, [consumeLifetime, key, loadContext, recoveryCreditMachineId, recoveryCreditSummary]);
+    }, [assertLegacyOperationAllowed, consumeLifetime, key, loadContext, recoveryCreditMachineId, recoveryCreditSummary, serviceId]);
 
     return {
         snapshot,

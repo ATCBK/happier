@@ -14,15 +14,33 @@ import { createArtifactActionsClient } from './artifactActionsClient';
 import { readArtifactCodeLanguage } from './artifactBrowserModel';
 import type { ArtifactPassageMargin } from './ArtifactPassageSelection';
 import { ArtifactPassageThreadCard } from './ArtifactPassageThreadCard';
-import { buildDocPassageMargin } from './docPassageMargin';
+import type { AdmittedDocRead } from './ArtifactEditProposal';
+import type { DiscussionOpenedSummaryV1 } from '@happier-dev/protocol/discussions/actions';
+import { buildDocPassageMargin, readDocPassageThreadQuote } from './docPassageMargin';
 import { showArtifactHistorySheet } from './ArtifactHistorySheet';
 import { useDocPassageThreads } from './useDocPassageThreads';
+import { readDocAudience, type DocAudience } from './docAudience';
+import { rememberDocReturn } from './docThreadReturn';
+
+/** One thread in the Doc's comment list: the passage it is about and who started it. */
+export type DocThreadListItem = Readonly<{
+  id: string;
+  quote: string;
+  author: string;
+  replies: number;
+  changed: boolean;
+}>;
 
 export type DocCollaboration = Readonly<{
   /** `doc.read`'s authorized count; `null` while unknown or unavailable, never a guessed zero. */
   openCommentCount: number | null;
-  firstThreadId: string | null;
-  openFirstThread: () => void;
+  /** The version being read, from `doc.read`; `null` until it answers. */
+  version: number | null;
+  /** Who the Doc reaches; `null` while unknown (the header then says nothing about it). */
+  audience: DocAudience | null;
+  threads: readonly DocThreadListItem[];
+  /** Beside the passages: focus the thread there. Without a margin: open it. */
+  selectThread: (id: string) => void;
   /** The suggestion accepted into the version being read, named for the header. */
   accepted: Readonly<{ label: string; atMs: number }> | null;
   margin: ArtifactPassageMargin;
@@ -61,28 +79,66 @@ export function useDocCollaboration(
   const router = useRouter();
   const [count, setCount] = React.useState<Readonly<{
     key: string;
-    value: number | null;
+    membership: readonly DiscussionOpenedSummaryV1[];
+    read: AdmittedDocRead;
   }> | null>(null);
+  const [audience, setAudience] = React.useState<Readonly<{
+    key: string;
+    value: DocAudience | null;
+  }> | null>(null);
+  const marginShown = React.useRef(false);
+  const reportShown = React.useCallback((shown: boolean) => {
+    marginShown.current = shown;
+  }, []);
   const [focusedId, setFocusedId] = React.useState<string | null>(null);
   const artifactId = prose?.id ?? null;
 
   React.useEffect(() => {
-    if (!client || !artifactId) return;
+    if (!client || !artifactId || read.status !== 'ready' || !read.membership) return;
     let current = true;
-    const key = `${artifactId}:${revisionKey}`;
+    const key = JSON.stringify([scope?.serverId, scope?.accountId, artifactId, revisionKey]);
+    const membership = read.membership;
     void client
       .readDoc({ ref: { kind: 'doc', artifactId } })
       .then((outcome) => {
         if (current)
           setCount({
             key,
-            value: outcome.ok ? outcome.value.openCommentCount : null,
+            membership,
+            read: outcome.ok ? { status: 'ready', value: outcome.value } : { status: 'unavailable' },
           });
       });
     return () => {
       current = false;
     };
-  }, [artifactId, client, revisionKey]);
+  }, [artifactId, client, revisionKey, read.status, read.membership, scope]);
+
+  const docRead: AdmittedDocRead = React.useMemo(() => {
+    if (read.status !== 'ready') return { status: read.status === 'loading' ? 'loading' : 'unavailable' };
+    const key = JSON.stringify([scope?.serverId, scope?.accountId, artifactId, revisionKey]);
+    return count?.key === key && count.membership === read.membership ? count.read : { status: 'loading' };
+  }, [artifactId, count, read.membership, read.status, revisionKey, scope]);
+
+  const ownerAccountId = prose?.ownerAccountId;
+  const access = prose?.access;
+  const publicAudience = prose?.publicAudience;
+  React.useEffect(() => {
+    if (!client || !artifactId) return;
+    let current = true;
+    void readDocAudience({
+      current: { artifactId, header: {}, ownerAccountId, access, publicAudience },
+      readGrants: async () => {
+        const outcome = await client.listAccessGrants(artifactId);
+        if (!outcome.ok) throw new Error(outcome.failure.code);
+        return outcome.value;
+      },
+    }).then((value) => {
+      if (current) setAudience({ key: artifactId, value });
+    });
+    return () => {
+      current = false;
+    };
+  }, [access, artifactId, client, ownerAccountId, publicAudience, revisionKey]);
 
   const model = React.useMemo(
     () =>
@@ -105,13 +161,17 @@ export function useDocCollaboration(
       prose.access === 'edit' ||
       prose.access === 'admin');
   const proseName = prose?.title || t('artifacts.untitled');
-  const openHistory = React.useCallback(() => {
-    if (artifactId)
-      showArtifactHistorySheet({ artifactId, name: proseName, canRestore });
-  }, [artifactId, canRestore, proseName]);
+  // A changed passage opens History on the version its comment was written against, compared with now.
+  const openHistory = React.useCallback((compareFromBodyVersion: number) => {
+    if (artifactId && client)
+      showArtifactHistorySheet({ artifactId, client, currentDoc: docRead.status === 'ready' ? docRead.value.artifact : undefined,
+        name: proseName, canRestore, compareFromBodyVersion });
+  }, [artifactId, canRestore, client, docRead, proseName]);
   const open = React.useCallback(
     (discussionId: string) => {
       if (!scope) return;
+      // Back from the thread returns to this passage in this Doc.
+      if (artifactId) rememberDocReturn(artifactId);
       router.push(
         buildDiscussionRouteHref({
           target: {
@@ -119,10 +179,11 @@ export function useDocCollaboration(
             address: { serverId: scope.serverId },
             discussionId,
           },
+          ...(artifactId ? { returnArtifactId: artifactId } : {}),
         }) as Href,
       );
     },
-    [router, scope],
+    [artifactId, router, scope],
   );
 
   const threads = model?.threads;
@@ -145,6 +206,8 @@ export function useDocCollaboration(
           thread={thread}
           focused={focusedId === id}
           client={client}
+          docRead={docRead}
+          mountThread={read.mountThread}
           viewerAccountId={scope.accountId}
           onFocus={() => setFocusedId(id)}
           onOpen={() => open(id)}
@@ -152,7 +215,7 @@ export function useDocCollaboration(
         />
       );
     },
-    [client, focusedId, open, openHistory, scope, threads],
+    [client, docRead, focusedId, open, openHistory, read.mountThread, scope, threads],
   );
 
   const accepted = React.useMemo(() => {
@@ -161,10 +224,10 @@ export function useDocCollaboration(
     const proposal =
       model.threads.find(
         (thread) =>
-          thread.proposal?.docEditProposalDispositionV1?.state === 'accepted' &&
-          thread.proposal.docEditProposalDispositionV1.decidedBy.atMs ===
+          thread.acceptedProposal?.docEditProposalDispositionV1?.state === 'accepted' &&
+          thread.acceptedProposal.docEditProposalDispositionV1.decidedBy.atMs ===
             value.atMs,
-      )?.proposal ?? null;
+      )?.acceptedProposal ?? null;
     const proposer = proposal
       ? resolveDiscussionMessageAuthorLabel(proposal)
       : t('session.collaboration.discussion.collaborator');
@@ -175,7 +238,29 @@ export function useDocCollaboration(
     return { label, atMs: value.atMs };
   }, [model, scope]);
 
-  const firstThreadId = threads?.[0]?.discussionId ?? null;
+  const viewerAccountId = scope?.accountId ?? null;
+  const list = React.useMemo<readonly DocThreadListItem[]>(
+    () =>
+      (threads ?? []).map((thread) => ({
+        id: thread.discussionId,
+        quote: readDocPassageThreadQuote(thread),
+        author:
+          thread.root.authorAccountId === viewerAccountId
+            ? t('artifacts.browser.passage.you')
+            : resolveDiscussionMessageAuthorLabel(thread.root),
+        // The suggested edit has its own line on the card; replies are what people wrote back.
+        replies: thread.replies.filter((reply) => reply !== thread.proposal).length,
+        changed: thread.location.state === 'detached',
+      })),
+    [threads, viewerAccountId],
+  );
+  const selectThread = React.useCallback(
+    (id: string) => {
+      if (marginShown.current) setFocusedId(id);
+      else open(id);
+    },
+    [open],
+  );
   const margin = React.useMemo<ArtifactPassageMargin>(
     () => ({
       passages,
@@ -183,17 +268,17 @@ export function useDocCollaboration(
       onFocus: setFocusedId,
       onOpen: open,
       renderCard,
+      reportShown,
     }),
-    [focusedId, open, passages, renderCard],
+    [focusedId, open, passages, renderCard, reportShown],
   );
   if (!prose || !scope) return null;
   return {
-    openCommentCount:
-      count && count.key === `${prose.id}:${revisionKey}` ? count.value : null,
-    firstThreadId,
-    openFirstThread: () => {
-      if (firstThreadId) open(firstThreadId);
-    },
+    openCommentCount: docRead.status === 'ready' ? docRead.value.openCommentCount : null,
+    version: docRead.status === 'ready' ? docRead.value.artifact.revision.bodyVersion : null,
+    audience: audience && audience.key === prose.id ? audience.value : null,
+    threads: list,
+    selectThread,
     accepted,
     margin,
   };

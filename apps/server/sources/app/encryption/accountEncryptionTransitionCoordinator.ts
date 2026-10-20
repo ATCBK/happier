@@ -7,7 +7,12 @@ import { parseAccountPasswordCredentialV1, type AccountPasswordCredentialV1 } fr
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { type PluginCollectionContentEnvelopeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { resolveArtifactAudienceInTx } from "@/app/artifacts/artifactAccessService";
+import { resolveDiscussionAudienceInTx } from "@/app/discussions/access";
+import { resolveCurrentMachineRecipientAccountIdsInTx } from "@/app/machines/machineAccess";
+import { readSessionAccountCursorAudienceInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { getWorkflowPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
 import { assertAccountActive } from "@/app/auth/accountStatus";
 import { isE2eePasswordCredentialBoundToAccount } from "@/app/auth/password/e2eePasswordCredentialAccountBinding";
 import {
@@ -57,7 +62,8 @@ import {
     deriveAccountEncryptionTransitionMeasuredCapacity,
     type AccountEncryptionTransitionMeasuredCapacity,
 } from "./accountEncryptionTransitionMeasuredCapacity";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, transactionResult, TransactionReplayRequiredError, type TransactionResult, type Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "./accountSessionOwnerMetadataFence";
 
 /**
  * V4 has no Collection transition directive. A zero-sized, assert-empty
@@ -323,16 +329,73 @@ export type AccountEncryptionTransitionCoordinatorResult =
     | Readonly<{ status: "collections_invalid_content" }>
     | Readonly<{ status: "collections_identity_relocation_unsupported" }>;
 
+type AppliedAccountEncryptionTransitionResult = Extract<AccountEncryptionTransitionCoordinatorResult, { status: "applied" }>;
+export type AccountEncryptionTransitionCoordinatorInTxResult =
+    | Exclude<AccountEncryptionTransitionCoordinatorResult, AppliedAccountEncryptionTransitionResult>
+    | (Omit<AppliedAccountEncryptionTransitionResult, "cursor" | "version"> & TransactionResult<AppliedAccountEncryptionTransitionResult>);
+
+type ActivatedAccountEncryptionTransitionResult = Extract<AccountEncryptionTransitionActivateCoordinatorResult, { status: "activated" }>;
+export type AccountEncryptionTransitionActivateCoordinatorInTxResult =
+    | AccountEncryptionTransitionActivateCoordinatorResult
+    | (Omit<ActivatedAccountEncryptionTransitionResult, "cursor" | "version"> & TransactionResult<ActivatedAccountEncryptionTransitionResult>);
+
+/** Reuse each domain's current publication projection without taking resource locks. */
+async function readAccountEncryptionTransitionAudienceInTx(tx: Tx, accountId: string): Promise<readonly string[]> {
+    const sessions = await tx.session.findMany({ where: { accountId }, select: { id: true } });
+    const workflow = await getWorkflowPublicationAudienceInTx(tx, {
+        accountId, runWhere: { accountId }, automationWhere: { accountId },
+    });
+    const sessionAudience = await readSessionAccountCursorAudienceInTx(
+        tx, [...sessions.map(session => session.id), ...workflow.sessionIds], workflow.accountIds,
+        { includeLifecyclePublications: true },
+    );
+    const accountIds = new Set([accountId, ...sessionAudience.accountIds]);
+    const machines = await tx.machine.findMany({ where: { accountId }, select: { id: true } });
+    for (const machine of machines) {
+        for (const recipient of await resolveCurrentMachineRecipientAccountIdsInTx(tx, machine.id)) accountIds.add(recipient);
+    }
+    const artifacts = await tx.artifact.findMany({ where: { accountId }, select: { id: true } });
+    for (const artifact of artifacts) {
+        for (const recipient of await resolveArtifactAudienceInTx(tx, artifact.id)) accountIds.add(recipient);
+    }
+    const discussions = await tx.discussion.findMany({ where: { ownerAccountId: accountId }, select: { id: true } });
+    for (const discussion of discussions) {
+        for (const recipient of await resolveDiscussionAudienceInTx(tx, discussion.id)) accountIds.add(recipient);
+    }
+    return [...accountIds].sort();
+}
+
 /**
- * Both retained Account transition ingresses enter through this fence. The
- * lower-level primitive remains the Account-row implementation detail; route
- * code must not independently acquire or finalize an Account transition.
+ * Both retained Account transition ingresses admit their complete publication
+ * audience exclusively before domain work. Taking only the target first can
+ * deadlock reciprocal shared resources against another Account's transition.
+ * Nested calls retain that target fence; conversion preserves identities and
+ * grant writers must admit their owner, so they cannot extend the audience.
  */
 export async function acquireAccountEncryptionTransitionCoordinatorFenceInTx(
     tx: Tx,
     accountId: string,
+    capturedAccountIds?: readonly string[],
 ): Promise<AccountEncryptionTransitionFenceResult> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const accountIds = capturedAccountIds ?? await readAccountEncryptionTransitionAudienceInTx(tx, accountId);
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, accountIds, "exclusive");
+    const admitted = new Set(accountIds);
+    const validateAudience = async (client: Tx) => {
+        const current = await readAccountEncryptionTransitionAudienceInTx(client, accountId);
+        if (current.some(id => !admitted.has(id))) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    };
+    // A grant committed while the ordered admission was waiting may have
+    // enlarged the audience. Replay instead of extending it out of order.
+    await validateAudience(tx);
+    beforeAccountChangePublication(tx, accountIds, async client => {
+        // A nested fence can observe converted Discussion rows before the
+        // Account mode flip. Their temporary locked projection must not erase
+        // the complete audience admitted by the outer coordinator fence.
+        assertAccountChangePublicationAudienceInTx(client, await readAccountEncryptionTransitionAudienceInTx(client, accountId));
+    });
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "exclusive");
     if (fence.status !== "account_not_found") {
         const account = await tx.account.findUniqueOrThrow({ where: { id: accountId }, select: { status: true } });
         assertAccountActive(account.status);
@@ -365,7 +428,7 @@ export async function finalizeAccountEncryptionTransitionCoordinatorInTx(
         }>;
         accountChangeHint: unknown;
     }>,
-): Promise<AccountEncryptionTransitionCoordinatorResult> {
+): Promise<AccountEncryptionTransitionCoordinatorInTxResult> {
     const fence = await acquireAccountEncryptionTransitionCoordinatorFenceInTx(
         params.tx,
         params.accountId,
@@ -397,7 +460,7 @@ export async function finalizeAccountEncryptionTransitionCoordinatorInTx(
         return { status: "collections_identity_relocation_unsupported" };
     }
 
-    const cursor = await markAccountChanged(params.tx, {
+    const publication = await markAccountChanged(params.tx, {
         accountId: params.accountId,
         kind: "account",
         entityId: "self",
@@ -405,7 +468,7 @@ export async function finalizeAccountEncryptionTransitionCoordinatorInTx(
     });
     const updated = await applyAccountEncryptionTransitionInTx(params.tx, {
         accountId: params.accountId,
-        expectedVersion: cursor,
+        expectedVersion: fence.account.version,
         toMode: params.toMode,
         ...(params.accountPublicKeyHex
             ? { accountPublicKeyHex: params.accountPublicKeyHex }
@@ -415,7 +478,12 @@ export async function finalizeAccountEncryptionTransitionCoordinatorInTx(
             ? { passwordCredential: params.passwordCredential }
             : {}),
     });
-    return { status: "applied", cursor, ...updated };
+    const result = { status: "applied" as const, mode: updated.mode, updatedAt: updated.updatedAt };
+    return Object.assign(transactionResult(() => ({
+        ...result,
+        cursor: publication.resolveCursor(),
+        version: publication.resolveCursor(),
+    })), result);
 }
 
 function isTransitionMode(value: unknown): value is AccountEncryptionTransitionMode {
@@ -1084,6 +1152,7 @@ async function closeAccountEncryptionTransitionInTx(params: Readonly<{
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
         params.accountId,
+        "exclusive",
     );
     if (fence.status === "account_not_found") {
         return { closed: false, removedStageCount: 0 };
@@ -1229,7 +1298,7 @@ async function abandonAccountEncryptionTransitionInTx(
  * as audit facts; only unactivated target-stage data is removed.
  */
 export async function cleanupExpiredAccountEncryptionTransitionsInTx(
-    params: Readonly<{ tx: Tx; now?: Date; accountId?: string }>,
+    params: Readonly<{ tx: Tx; now?: Date; accountId?: string; additionalAccountIds?: readonly string[] }>,
 ): Promise<Readonly<{ expiredTransitionCount: number; removedStageCount: number }>> {
     const now = resolveTransitionNow(params.now);
     // Process the earliest eligible transition only. Repeated cleanup calls
@@ -1241,8 +1310,12 @@ export async function cleanupExpiredAccountEncryptionTransitionsInTx(
             ...(params.accountId ? { accountId: params.accountId } : {}),
         },
         orderBy: { expiresAt: "asc" },
-        select: { id: true },
+        select: { id: true, accountId: true },
     });
+    await acquireAccountSessionOwnerMetadataFencesInTx(params.tx, [
+        ...(params.additionalAccountIds ?? []),
+        ...(expired ? [expired.accountId] : []),
+    ], "exclusive");
     if (!expired) {
         return { expiredTransitionCount: 0, removedStageCount: 0 };
     }
@@ -1285,13 +1358,16 @@ export async function prepareAccountEncryptionTransitionCoordinatorInTx(
     }>,
 ): Promise<AccountEncryptionTransitionPrepareCoordinatorResult> {
     const now = resolveTransitionNow(params.now);
+    const capturedAccountIds = await readAccountEncryptionTransitionAudienceInTx(params.tx, params.accountId);
     await cleanupExpiredAccountEncryptionTransitionsInTx({
         tx: params.tx,
         now,
+        additionalAccountIds: capturedAccountIds,
     });
     const fence = await acquireAccountEncryptionTransitionCoordinatorFenceInTx(
         params.tx,
         params.accountId,
+        capturedAccountIds,
     );
     if (fence.status === "account_not_found") return { status: "account_not_found" };
     if (fence.status === "account_inconsistent") return { status: "account_inconsistent" };
@@ -2924,7 +3000,7 @@ export async function activateAccountEncryptionTransitionCoordinatorInTx(
         transitionId: string;
         now?: Date;
     }>,
-): Promise<AccountEncryptionTransitionActivateCoordinatorResult> {
+): Promise<AccountEncryptionTransitionActivateCoordinatorInTxResult> {
     const now = resolveTransitionNow(params.now);
     const transition = await readAccountEncryptionTransitionInTx(
         params.tx,
@@ -3080,12 +3156,6 @@ export async function activateAccountEncryptionTransitionCoordinatorInTx(
     if (appliedAutomations.status !== "applied") {
         throw new Error("Automation transition changed after activation validation");
     }
-    const cursor = await markAccountChanged(params.tx, {
-        accountId: params.accountId,
-        kind: "account",
-        entityId: "self",
-        hint: { accountEncryptionTransitionId: transition.id },
-    });
     // Candidate preparation is scoped to the pre-flip Account content mode.
     // It is not an Account-transition participant, so remove every stage in
     // this same activation transaction immediately before the canonical mode
@@ -3100,7 +3170,7 @@ export async function activateAccountEncryptionTransitionCoordinatorInTx(
     const stagedPassword = stagedTransitionPasswordCredential(transition);
     const updated = await applyAccountEncryptionTransitionInTx(params.tx, {
         accountId: params.accountId,
-        expectedVersion: cursor,
+        expectedVersion: source.expectedAccountVersion,
         toMode: source.toMode,
         ...(targetKeyMaterial
             ? { accountPublicKeyHex: targetKeyMaterial.accountPublicKeyHex }
@@ -3110,15 +3180,25 @@ export async function activateAccountEncryptionTransitionCoordinatorInTx(
             ? { kind: "migration_replace", binding: targetKeyMaterial.binding }
             : { kind: "preserve" },
     });
-    await params.tx.accountEncryptionTransition.update({
-        where: { id: transition.id },
-        data: {
-            status: "activated",
-            activeAccountId: null,
+    // Keep the authorized receipt internally valid while claiming its row lock.
+    // Terminal publication atomically fills the complete activation result;
+    // the persisted check constraint forbids a partial activated receipt.
+    const activationClaim = await params.tx.accountEncryptionTransition.updateMany({
+        where: { id: transition.id, accountId: params.accountId, status: "authorized" },
+        data: { status: "authorized" },
+    });
+    if (activationClaim.count !== 1) {
+        throw new Error("Account encryption transition lost its activation receipt fence");
+    }
+    const publication = await markAccountChanged(params.tx, {
+        accountId: params.accountId,
+        kind: "account",
+        entityId: "self",
+        hint: { accountEncryptionTransitionId: transition.id },
+        accountEncryptionTransitionActivation: {
+            transitionId: transition.id,
             activatedAt: now,
-            activatedAccountVersion: updated.version,
             activatedAccountUpdatedAt: new Date(updated.updatedAt),
-            activatedAccountCursor: cursor,
         },
     });
     await params.tx.accountEncryptionTransitionCollectionStage.deleteMany({
@@ -3132,7 +3212,12 @@ export async function activateAccountEncryptionTransitionCoordinatorInTx(
         params.tx,
         transition.id,
     );
-    return { status: "activated", cursor, ...updated };
+    const result = { status: "activated" as const, mode: updated.mode, updatedAt: updated.updatedAt };
+    return Object.assign(transactionResult(() => ({
+        ...result,
+        cursor: publication.resolveCursor(),
+        version: publication.resolveCursor(),
+    })), result);
 }
 
 export type AccountEncryptionTransitionCancelCoordinatorResult =
@@ -3202,6 +3287,7 @@ export async function admitAccountDataEraseThroughEncryptionTransitionInTx(
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
         params.accountId,
+        "exclusive",
     );
     if (fence.status === "account_not_found") return fence;
     if (fence.status === "account_inconsistent") return fence;

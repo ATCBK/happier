@@ -55,8 +55,8 @@ func testAuthenticationFailureRequest(credentialContext RequestAuthCredentialCon
 // recovery with a slightly larger 310-second transport ceiling, and the
 // wrapper's authentication-failure report is one of those clients: truncating
 // the report at the ordinary 30-second operation bound would drop the recovery
-// outcome mid-recovery. Ordinary lookup and quota reports keep the 30-second
-// bound, and caller cancellation must win over the longer recovery deadline.
+// outcome mid-recovery. Quota reports keep their existing operation bound;
+// lookup follows its native request, and caller cancellation wins throughout.
 func TestHTTPBrokerBoundsAuthFailureReportsByTheCanonicalRecoveryTransportDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -112,13 +112,41 @@ func TestHTTPBrokerBoundsAuthFailureReportsByTheCanonicalRecoveryTransportDeadli
 	if got := deadlineDeltaByPath[ConnectedAccountRequestAuthFailurePath]; got <= 305*time.Second || got > 312*time.Second {
 		t.Fatalf("auth-failure report transport deadline = %s, want the canonical ~310s recovery ceiling", got)
 	}
-	for _, path := range []string{
-		ConnectedAccountRequestAuthLookupPath,
-		ConnectedAccountRequestAuthQuotaFailurePath,
-	} {
-		if got := deadlineDeltaByPath[path]; got <= 25*time.Second || got > 32*time.Second {
-			t.Fatalf("%s transport deadline = %s, want the ordinary 30s bound", path, got)
+	if got := deadlineDeltaByPath[ConnectedAccountRequestAuthLookupPath]; got != -1 {
+		t.Fatalf("lookup installed a phase-local deadline: %s", got)
+	}
+	if got := deadlineDeltaByPath[ConnectedAccountRequestAuthQuotaFailurePath]; got <= 25*time.Second || got > 32*time.Second {
+		t.Fatalf("quota report transport deadline = %s, want the existing 30s bound", got)
+	}
+}
+
+func TestHTTPBrokerLookupUsesContainingRequestLifetime(t *testing.T) {
+	t.Parallel()
+	capabilityPath := filepath.Join(t.TempDir(), "capability.json")
+	writeCapabilityV2(t, capabilityPath, testCapability(27), 32123)
+	broker, err := NewHTTPBroker(HTTPBrokerConfig{CapabilityPath: capabilityPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	callerDeadline, _ := ctx.Deadline()
+	broker.client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		deadline, ok := request.Context().Deadline()
+		if !ok || !deadline.Equal(callerDeadline) {
+			t.Errorf("lookup deadline = %v, want containing request deadline %v", deadline, callerDeadline)
+			return nil, context.DeadlineExceeded
 		}
+		// Prove valid lookup work survives the removed thirty-second phase cap.
+		select {
+		case <-time.After(35 * time.Second):
+			return brokerSuccessEnvelope(validLease("slow-home-lookup", nil))
+		case <-request.Context().Done():
+			return nil, request.Context().Err()
+		}
+	})
+	if _, err := broker.LookupRequestAuth(ctx, testPurpose("openai-upstream")); err != nil {
+		t.Fatalf("valid lookup within its containing request failed: %v", err)
 	}
 }
 

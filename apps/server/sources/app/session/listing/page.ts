@@ -1,4 +1,5 @@
 import { conjoinSessionListWhereInputs } from "./query";
+import { createAccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import type { Prisma } from "@prisma/client";
 
 import { decodeV2SessionListCursorV1, decodeV2SessionListCursorV2, encodeV2SessionListCursorV2, type V2SessionListCursorV2 } from '@happier-dev/protocol/sessions/control/contract';
@@ -6,7 +7,7 @@ import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { readCurrentSessionIdsInTx, readmitSessionRowsInTx } from "@/app/session/access/sessionReadAdmission";
-import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { buildSessionAccessWhere, resolveEffectiveSessionAccessWhere, type SessionCollectiveAccessSnapshot } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
 import {
@@ -43,6 +44,15 @@ type V2SessionListMeaningfulActivityCursor = Readonly<{
 type SessionListRowSelect = ReturnType<typeof createV2SessionListRowSelect>
     | ReturnType<typeof createV2SessionListLegacyRowSelect>;
 
+const SESSION_LIST_ACTIVITY_SELECT = {
+    id: true,
+    createdAt: true,
+    meaningfulActivityAt: true,
+    ...SESSION_TRANSCRIPT_PUBLICATION_SELECT,
+} as const satisfies Prisma.SessionSelect;
+
+type SessionListActivityRow = Prisma.SessionGetPayload<{ select: typeof SESSION_LIST_ACTIVITY_SELECT }>;
+
 export type SessionListReadSource = Readonly<{
     kind: "effective";
     reader: Pick<Tx, "session" | "sessionPin" | "account">;
@@ -55,6 +65,7 @@ export type SessionListReadSource = Readonly<{
      */
     allowProjectionFallback: boolean;
     qualifiedTeamIds?: ReadonlySet<string>;
+    collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot;
     discussionReader?: Tx;
 }>;
 
@@ -76,7 +87,7 @@ type FindV2SessionListRowsParams = Readonly<{
 
 export async function findV2SessionListRows(params: FindV2SessionListRowsParams): Promise<V2SessionListRowCompat[]> {
     const { userId, orderBy, take, cursor } = params;
-    const readFrom = async (reader: Pick<Tx, "session">, visibilityWhere: Prisma.SessionWhereInput) => {
+    const readFrom = async (reader: Pick<Tx, "session">, visibilityWhere: Prisma.SessionWhereInput, collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot) => {
         const read = (
             select: SessionListRowSelect,
             page: Readonly<{ cursor?: V2SessionListMeaningfulActivityCursor; take?: number }> = {},
@@ -117,20 +128,21 @@ export async function findV2SessionListRows(params: FindV2SessionListRowsParams)
             }
             return admitted.slice(0, take);
         };
-        const readCurrent = () => readWithAdmission(createV2SessionListRowSelect({ userId }));
+        const projectionContext = { userId, mode: params.source?.accessMode, collectiveAccessSnapshot };
+        const readCurrent = () => readWithAdmission(createV2SessionListRowSelect(projectionContext));
         return params.source && !params.source.allowProjectionFallback
             ? await readCurrent()
             : await runWithSessionListProjectionFallback(
                 readCurrent,
-                () => readWithAdmission(createV2SessionListLegacyRowSelect({ userId })),
+                () => readWithAdmission(createV2SessionListLegacyRowSelect(projectionContext)),
             );
     };
 
-    if (params.source) return await readFrom(params.source.reader, params.source.baseWhere);
-    return await readSnapshotWithCurrentAdmission(async (tx) => await readFrom(
-        tx,
-        await buildSessionAccessWhere({ tx, accountId: userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication }),
-    ), async (tx, captured) => await readmitSessionRowsInTx(tx, {
+    if (params.source) return await readFrom(params.source.reader, params.source.baseWhere, params.source.collectiveAccessSnapshot);
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
+        const access = await resolveEffectiveSessionAccessWhere({ tx, accountId: userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication });
+        return await readFrom(tx, access.where, access.collectiveAccessSnapshot);
+    }, async (tx, captured) => await readmitSessionRowsInTx(tx, {
         accountId: userId, authentication: params.authentication,
     }, captured));
 }
@@ -183,11 +195,13 @@ export function mapV2SessionListRows(params: Readonly<{
     now?: number;
 }>) {
     const sessions: ReturnType<typeof mapV2SessionListRow>[] = [];
+    const recipientReadiness = createAccountRecipientEnvelopeReadinessReadScope();
     let metadataUpgradeRequiredCount = 0;
     for (const row of params.rows) {
         try {
             sessions.push(mapV2SessionListRow({
                 row,
+                recipientReadiness,
                 userId: params.userId,
                 ownerAccountMode: params.ownerAccountMode,
                 ownerAccountModes: params.ownerAccountModes,
@@ -423,7 +437,7 @@ async function findV2SessionListRowsByEffectiveActivity(params: Readonly<{
                 orderBy: [...branch.orderBy],
                 ...(page.skip === undefined ? {} : { skip: page.skip }),
                 ...(page.take === undefined ? {} : { take: page.take }),
-                select,
+                select: SESSION_LIST_ACTIVITY_SELECT,
             }),
             isOwner: (row) => row.accountId === userId,
             readPublication: (row) => row,
@@ -431,7 +445,21 @@ async function findV2SessionListRowsByEffectiveActivity(params: Readonly<{
     );
 
     const merged = mergeV2SessionListRowsByEffectiveActivity(branchRows.flat());
-    return typeof take === "number" ? merged.slice(0, take) : merged;
+    const candidates = typeof take === "number" ? merged.slice(0, take) : merged;
+    if (candidates.length === 0) return [];
+    // The four publication/recency branches decide membership from this same
+    // snapshot. Load private relations, envelopes and turns only for their
+    // merged page, instead of repeating the full projection in every branch.
+    const rows = await reader.session.findMany({
+        where: { id: { in: candidates.map(row => row.id) } },
+        select,
+    });
+    const byId = new Map(rows.map(row => [row.id, row]));
+    return candidates.map(candidate => {
+        const row = byId.get(candidate.id);
+        if (!row) throw new Error("Session listing snapshot lost a selected row");
+        return row;
+    });
 }
 
 function usesEffectiveActivityOrdering(
@@ -444,14 +472,14 @@ function usesEffectiveActivityOrdering(
 }
 
 function mergeV2SessionListRowsByEffectiveActivity(
-    rows: ReadonlyArray<V2SessionListRowCompat>,
-): V2SessionListRowCompat[] {
+    rows: ReadonlyArray<SessionListActivityRow>,
+): SessionListActivityRow[] {
     const merged = [...rows];
     merged.sort(compareV2SessionListRowsByEffectiveActivity);
     return merged;
 }
 
-function compareV2SessionListRowsByEffectiveActivity(a: V2SessionListRowCompat, b: V2SessionListRowCompat): number {
+function compareV2SessionListRowsByEffectiveActivity(a: SessionListActivityRow, b: SessionListActivityRow): number {
     const activityDiff = getV2SessionListEffectiveActivityAt(b).getTime() - getV2SessionListEffectiveActivityAt(a).getTime();
     if (activityDiff !== 0) {
         return activityDiff;

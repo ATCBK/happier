@@ -41,7 +41,6 @@ import { memoryDocumentSearchHitHref } from './memoryDocumentRoutes';
 const CORPORA: readonly MemorySearchCorpusV1[] = ['documents', 'sessions'];
 /** Typing settles before a machine is asked; a superseded query is cancelled, not raced. */
 const SEARCH_SETTLE_MS = 250;
-const MIN_QUERY_LENGTH = 2;
 const GLOBAL_SCOPE: MemorySearchScope = { type: 'global' };
 
 type Results = Readonly<{
@@ -98,7 +97,7 @@ export function useMemorySearchPanelModel(props: Readonly<{
         && (machineId === null || storedResults.machineId === machineId) ? storedResults : null;
 
     React.useEffect(() => {
-        if (normalized.length < MIN_QUERY_LENGTH || !accountId) {
+        if (normalized.length === 0 || !accountId) {
             setResults(null);
             return;
         }
@@ -164,6 +163,16 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
     testID: string;
     serverId: string;
     scope?: MemorySearchScope;
+    /** Opened on demand the field takes focus; a field that always heads a list waits to be chosen. */
+    autoFocus?: boolean;
+    placeholder?: string;
+    /**
+     * What the panel shows until a query is typed (a memory page's own facts). Without it the panel is
+     * search only; with it the field heads that content and results take its place while searching.
+     */
+    idle?: React.ReactNode;
+    /** `page`: the field heads a page's list, on the page column's edge. */
+    placement?: 'pane' | 'page';
 }>) {
     const styles = stylesheet;
     const { serverId, testID } = props;
@@ -184,25 +193,31 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
     }, [navigateToSession, serverId]);
 
     const count = (results?.documents.length ?? 0) + (results?.sessions.length ?? 0);
+    const searching = normalized.length > 0;
     return (
         <View testID={testID}>
-            <View style={styles.field}>
+            <View style={props.placement === 'page' ? undefined : styles.field}>
                 <CompactSearchField
+                    placement={props.placement === 'page' ? 'page' : undefined}
                     testID={`${testID}.input`}
                     value={query}
                     onChangeText={setQuery}
-                    placeholder={t('memoryContext.memory.searchPlaceholder')}
+                    placeholder={props.placeholder ?? t('memoryContext.memory.searchPlaceholder')}
                     accessibilityLabel={t('memoryContext.memory.search')}
                     editable={target !== null}
-                    autoFocus
-                    trailing={results && results.status !== 'failed' && normalized.length >= MIN_QUERY_LENGTH ? (
-                        <Text style={styles.count}>{t('memoryContext.memory.resultCount', { count })}</Text>
+                    autoFocus={props.autoFocus ?? true}
+                    trailing={results && results.status !== 'failed' && searching ? (
+                        <Text style={styles.count}>{results.status === 'searching'
+                            ? t('universalSearch.searchingGroup')
+                            : t('memoryContext.memory.resultCount', { count })}</Text>
                     ) : undefined}
                 />
             </View>
             {target === null ? (
                 <SearchNotice testID={`${testID}.unavailable`} kind="warning" title={t('memoryContext.memory.searchUnavailable')} />
-            ) : results?.status === 'failed' ? (
+            ) : null}
+            {props.idle !== undefined && !searching ? props.idle : <>
+            {target === null ? null : results?.status === 'failed' ? (
                 <SearchNotice testID={`${testID}.failed`} kind="error" title={t('memoryContext.memory.offline')} onRetry={retry} />
             ) : unsupported ? (
                 <ProjectScopeUnsupportedNotice testID={`${testID}.projectUnsupported`} machineId={unsupported.machineId}
@@ -261,6 +276,7 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
             {results?.status === 'ready' && results.documentsCoverage?.state === 'ready' && count === 0 ? (
                 <Text testID={`${testID}.empty`} style={styles.hint}>{t('memoryContext.memory.noResults', { query: results.query })}</Text>
             ) : null}
+            </>}
         </View>
     );
 });

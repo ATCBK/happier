@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -42,7 +43,9 @@ describe('failed approval dismissal', () => {
         expect([...composerIds, ...transcriptIds].sort()).toEqual(['failed-1', 'open-1']);
     });
 
-    it('hides only the dismissed settled card from the composer and remembers it on this device', async () => {
+    it('remembers only the dismissed settled card on this device with Settings writes Off', async () => {
+        storage.setState(state => ({ settings: settingsParse({ ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) }));
         const requests = [request('open-1', 'open'), request('failed-1', 'failed'), request('failed-2', 'failed')];
         const hook = await renderHook(() => ({ shown: useComposerApprovalRequests(requests), dismissal: useFailedApprovalDismissal() }));
         expect(hook.getCurrent().shown.map(item => item.artifact.id)).toEqual(['open-1', 'failed-1', 'failed-2']);

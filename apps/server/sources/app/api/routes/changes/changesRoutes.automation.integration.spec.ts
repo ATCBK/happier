@@ -106,7 +106,7 @@ describe("changesRoutes automation changes (integration)", () => {
             })
         ));
 
-        expect(exactCursor).toBeGreaterThan(fullCursor);
+        expect(exactCursor.resolveCursor()).toBeGreaterThan(fullCursor.resolveCursor());
         await withAuthenticatedTestApp(
             (app) => changesRoutes(app as any),
             async (app) => {
@@ -122,7 +122,7 @@ describe("changesRoutes automation changes (integration)", () => {
                 expect(response.statusCode).toBe(200);
                 expect(response.json()).toEqual({
                     changes: [{
-                        cursor: exactCursor,
+                        cursor: exactCursor.resolveCursor(),
                         kind: "pluginDomain",
                         entityId,
                         changedAt: expect.any(Number),
@@ -135,7 +135,7 @@ describe("changesRoutes automation changes (integration)", () => {
                             full: true,
                         },
                     }],
-                    nextCursor: exactCursor,
+                    nextCursor: exactCursor.resolveCursor(),
                 });
             },
         );

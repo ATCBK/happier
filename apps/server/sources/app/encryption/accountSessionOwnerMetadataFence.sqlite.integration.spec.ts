@@ -53,14 +53,14 @@ describe("Account Session owner-metadata fence (SQLite integration)", () => {
         let secondAcquired = false;
 
         const first = inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
             firstAcquired.resolve();
             await releaseFirst.promise;
         });
         await firstAcquired.promise;
 
         const second = inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
             secondAcquired = true;
         });
 
@@ -96,7 +96,7 @@ describe("Account Session owner-metadata fence (SQLite integration)", () => {
         }))).rejects.toThrow();
         // Erasure and retained-state cleanup use the key-currentness fence and
         // must still inspect an inactive Account without granting activation.
-        await expect(inTx((tx) => acquireAccountEncryptionTransitionFenceInTx(tx, account.id)))
+        await expect(inTx((tx) => acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive")))
             .resolves.toMatchObject({ status: "ready" });
         expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).encryptionModeUpdatedAt)
             .toEqual(account.encryptionModeUpdatedAt);
@@ -104,7 +104,7 @@ describe("Account Session owner-metadata fence (SQLite integration)", () => {
 
     it("reports a missing Account through the transition fence without leaking the raw lock failure", async () => {
         await expect(inTx((tx) => (
-            acquireAccountEncryptionTransitionFenceInTx(tx, "missing-account")
+            acquireAccountEncryptionTransitionFenceInTx(tx, "missing-account", "exclusive")
         ))).resolves.toEqual({
             status: "account_not_found",
         });

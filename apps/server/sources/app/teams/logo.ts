@@ -5,6 +5,7 @@ import { deletePublicFile, writePublicFile } from "@/storage/blob/files";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { tryProcessImage } from "@/storage/blob/processImage";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "./memberships/sessionAccessEffects";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 import { randomKey } from "@/utils/keys/randomKey";
 
@@ -181,6 +182,7 @@ async function authorizeLogoMutationInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamLogoError | null> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return "teams_unavailable";
     const context = await resolveTeamActorContextInTx(tx, input);
     const viewer = toTeamViewer(context);

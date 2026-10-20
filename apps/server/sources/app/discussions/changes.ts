@@ -1,5 +1,5 @@
 import { DISCUSSION_CHANGE_HINT_V1 } from '@happier-dev/protocol/discussions';
-import { markAccountsChanged, type AccountChangeCursor } from '@/app/changes/markAccountChanged';
+import { assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { scheduleAccountActivityBadgeRefresh } from '@/app/activity/refreshAccountActivityBadgePushes';
 import { afterTx, type Tx } from '@/storage/inTx';
 import { resolveDiscussionAudienceInTx } from './access';
@@ -8,9 +8,13 @@ import { notifyDiscussionHumanPresenceAccessChanged } from '@/app/session/humanP
 /** First-class invalidation reaches the current resource audience after commit. */
 export async function markDiscussionReadersChangedInTx(input: Readonly<{
     tx: Tx; discussionId: string; additionalAccountIds?: readonly string[]; accessChanged?: boolean;
-}>): Promise<AccountChangeCursor[]> {
+}>): Promise<AccountChangePublication[]> {
+    const accountIds = [...await resolveDiscussionAudienceInTx(input.tx, input.discussionId), ...(input.additionalAccountIds ?? [])];
+    beforeAccountChangePublication(input.tx, accountIds, async tx => {
+        assertAccountChangePublicationAudienceInTx(tx, await resolveDiscussionAudienceInTx(tx, input.discussionId));
+    });
     const cursors = await markAccountsChanged(input.tx, {
-        accountIds: [...await resolveDiscussionAudienceInTx(input.tx, input.discussionId), ...(input.additionalAccountIds ?? [])],
+        accountIds,
         kind: 'discussion', entityId: input.discussionId, hint: DISCUSSION_CHANGE_HINT_V1,
     });
     if (input.accessChanged) afterTx(input.tx, () => { notifyDiscussionHumanPresenceAccessChanged({ discussionId: input.discussionId }); });

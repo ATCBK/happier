@@ -2,8 +2,8 @@ import {
   MEMORY_ARCHIVE_TOPIC_TITLE_V1,
   type MemoryFactV1,
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 import {
-  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
   HappierListDetailLayout,
   useHappierCollectionLayout,
 } from '@happier-dev/plugin-ui/presentation';
@@ -25,10 +25,28 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
+
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
 
 import { MemoryDocumentBody, memoryTopicLabel } from './MemoryDocumentBody';
 import { MemoryFactDetail } from './MemoryFactDetail';
 import { memoryDocumentHref } from './memoryDocumentRoutes';
+import { MemorySearchPanel } from './MemorySearchPanel';
+
+/**
+ * The Project this memory belongs to, when the page is that Project's Memory page (lab K2 `A`): the
+ * header names it, search covers its memory and sessions, and facts open on its route.
+ */
+export type MemoryDocumentProjectPage = Readonly<{
+  name: string;
+  searchScope: MemorySearchScope;
+  href: (options: Readonly<{ factId?: string; editFactId?: string }>) => string;
+}>;
 import { useMemoryDocument } from './useMemoryDocument';
 
 /** The narrowest fact detail that keeps its labels beside their values. */
@@ -46,8 +64,12 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
     serverId?: string;
     topic?: string;
     factId?: string;
+    /** A fact page's Edit returns here with the fact's form open. */
+    editFactId?: string;
+    project?: MemoryDocumentProjectPage;
   }>,
 ) {
+  const project = props.project;
   const scope = useActiveServerAccountScope();
   const serverId = props.serverId?.trim() || scope?.serverId || null;
   const ref = React.useMemo(
@@ -67,14 +89,21 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
   const { theme } = useUnistyles();
   const { fontScale } = useWindowDimensions();
   const openSession = React.useCallback(
-    (target: Readonly<{ serverId: string; sessionId: string }>) => {
+    (target: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
       fireAndForget(
-        navigateToSession(target.sessionId, { serverId: target.serverId }),
+        navigateToSession(target.sessionId, { serverId: target.serverId, messageId: target.messageId }),
         { tag: 'MemoryDocumentScreen.source' },
       );
     },
     [navigateToSession],
   );
+  const openDiscussion = React.useCallback((target: DiscussionMessageRefV1) => {
+    const result = runGuardedNavigation(() => router.push(buildDiscussionRouteHref({
+      target: { kind: 'discussion', address: target.discussion,
+        discussionId: target.discussion.discussionId, messageId: target.messageId },
+    }) as never));
+    if (result !== true) fireAndForget(result, { tag: 'MemoryDocumentScreen.discussionSource' });
+  }, [router]);
   const [composing, setComposing] = React.useState(false);
   const view = source.view;
   // Only the qualified document read admits access; ambient same-id rows cannot grant it.
@@ -83,19 +112,32 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
   const archive = props.topic === MEMORY_ARCHIVE_TOPIC_TITLE_V1;
   const title = props.topic
     ? memoryTopicLabel(props.topic)
+    : project ? t('projects.pages.memory')
     : (view?.title ?? t('memoryContext.memory.title'));
   const description = props.topic
     ? (view?.topic?.summary ?? '')
+    : project ? t('memoryContext.memory.projectPageDescription', { project: project.name })
     : t('memoryContext.memory.pageDescription');
   // Who can see it and what this reader may do, from the admitted audience; unknown says nothing.
   const meta = React.useMemo((): PageHeaderMetaFact[] => {
-    if (!view) return [];
     const facts: PageHeaderMetaFact[] = [];
+    // The Project is known before its memory is read, so its line holds while the rest arrives.
+    if (project)
+      facts.push({
+        key: 'scope',
+        icon: 'folder',
+        text: t('memoryContext.memory.projectScope', { project: project.name }),
+        testID: 'memory-document.scope',
+      });
+    if (!view) return facts;
+    // Project placement says nothing about which principals hold Artifact grants.
     if (view.shared === true)
       facts.push({
         key: 'audience',
         icon: 'users',
-        text: t('memoryContext.memory.accessShared'),
+        text: view.audience?.team
+          ? t('memoryContext.memory.sharedWithTeam', { team: view.audience.team })
+          : t('memoryContext.memory.accessShared'),
         testID: 'memory-document.audience',
       });
     if (view.shared === false)
@@ -115,7 +157,7 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
         testID: 'memory-document.access',
       });
     return facts;
-  }, [documentAccess, view]);
+  }, [documentAccess, project, view]);
   const selectedFact = React.useMemo(
     () =>
       props.factId
@@ -123,75 +165,125 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
         : null,
     [props.factId, view?.facts],
   );
+  const hrefFor = React.useCallback(
+    (options: Readonly<{ factId?: string; editFactId?: string }>) =>
+      project && !props.topic
+        ? project.href(options)
+        : ref
+          ? memoryDocumentHref(ref, {
+              serverId,
+              ...(props.topic ? { topic: props.topic } : {}),
+              ...options,
+            })
+          : null,
+    [project, props.topic, ref, serverId],
+  );
   const openFact = React.useCallback(
-    (fact: MemoryFactV1 | null, replace: boolean) => {
-      if (!ref) return;
-      const href = memoryDocumentHref(ref, {
-        serverId,
-        ...(props.topic ? { topic: props.topic } : {}),
+    (fact: MemoryFactV1 | null, replace: boolean, editFactId?: string) => {
+      const href = hrefFor({
         ...(fact ? { factId: fact.id } : {}),
+        ...(editFactId ? { editFactId } : {}),
       });
+      if (!href) return;
       const result = runGuardedNavigation(() =>
         replace ? router.replace(href as never) : router.push(href as never),
       );
       if (result !== true)
         fireAndForget(result, { tag: 'MemoryDocumentScreen.openFact' });
     },
-    [props.topic, ref, router, serverId],
+    [hrefFor, router],
   );
   const scale = Math.max(1, fontScale);
   // Decisions lead the list, so the first one shown is the first decision.
-  const firstFact = view?.facts.find((fact) => fact.decision !== undefined) ?? view?.facts[0] ?? null;
+  // Expired facts are folded away on the index, so the first one shown is the first live one.
+  const nowMs = Date.now();
+  const liveFacts = view?.facts.filter((fact) => fact.expiresAtMs === undefined || fact.expiresAtMs > nowMs) ?? [];
+  const firstFact = liveFacts.find((fact) => fact.decision !== undefined) ?? liveFacts[0] ?? view?.facts[0] ?? null;
+
+  const canRemember = Boolean(source.target) && !readOnly && !archive;
+  const rememberButton = canRemember ? (
+    <IconButton
+      testID="memory-document.remember"
+      iconName="plus"
+      variant="plain"
+      accessibilityLabel={t('memoryContext.memory.remember')}
+      tooltip={t('memoryContext.memory.remember')}
+      onPress={() => setComposing(true)}
+    />
+  ) : undefined;
+  // Sharing is the document's own share sheet, offered to whoever may change who sees it.
+  const canShare = !props.topic && (documentAccess === 'owner' || documentAccess === 'admin');
+  const share = React.useCallback(() => {
+    if (!view) return;
+    showDocumentShareSheet({
+      artifactId: props.artifactId,
+      kind: null,
+      name: view.title,
+      ...(project ? { subtitle: t('memoryContext.memory.projectScope', { project: project.name }) } : {}),
+    });
+  }, [project, props.artifactId, view]);
+  const headerActions = props.topic ? undefined : (canShare || rememberButton) ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
+      {canShare ? (
+        <RoundButton testID="memory-document.share" size="small" display="secondary" title={t('common.share')} onPress={share} />
+      ) : null}
+      {rememberButton}
+    </View>
+  ) : undefined;
+  const Header = project ? PageHeader : SettingsPageHeader;
+
+  const body = (split: boolean) => (
+    <MemoryDocumentBody
+      testID="memory-document"
+      source={source}
+      serverId={serverId ?? ''}
+      readOnly={readOnly}
+      composing={composing}
+      onComposingChange={setComposing}
+      emptyText={t('memoryContext.memory.empty')}
+      onOpenSession={openSession}
+      // Beside the detail the selection moves in place; a phone pushes the fact's own page.
+      onOpenFact={(fact) => openFact(fact, split)}
+      selectedFactId={split ? (selectedFact?.id ?? null) : null}
+      viewerAccountId={scope?.accountId ?? null}
+      grouped={!props.topic}
+      editFactId={props.editFactId}
+    />
+  );
 
   const list = (split: boolean) => (
     <ItemList>
-      <SettingsPageHeader
+      <Header
         title={title}
         description={description}
         meta={props.topic ? undefined : meta}
+        actions={headerActions}
+        actionsPlacement="page"
       />
-      <ItemGroup
-        title={
-          props.topic
-            ? t('memoryContext.memory.factsTitle')
-            : t('memoryContext.memory.keyFactsTitle')
-        }
-        description={
-          props.topic
-            ? undefined
-            : t('memoryContext.memory.keyFactsDescription')
-        }
-        actionLayout="trailing"
-        // Facts sit in their own slots; the group still knows how many can be selected.
-        selectableItemCountOverride={view?.facts.length ?? 0}
-        action={
-          source.target && !readOnly && !archive ? (
-            <IconButton
-              testID="memory-document.remember"
-              iconName="plus"
-              variant="plain"
-              accessibilityLabel={t('memoryContext.memory.remember')}
-              tooltip={t('memoryContext.memory.remember')}
-              onPress={() => setComposing(true)}
-            />
-          ) : undefined
-        }
-      >
-        <MemoryDocumentBody
-          testID="memory-document"
-          source={source}
+      {props.topic ? (
+        <ItemGroup
+          title={t('memoryContext.memory.factsTitle')}
+          actionLayout="trailing"
+          // Facts sit in their own slots; the group still knows how many can be selected.
+          selectableItemCountOverride={view?.facts.length ?? 0}
+          action={rememberButton}
+        >
+          {body(split)}
+        </ItemGroup>
+      ) : project ? (
+        // The Project's search heads its memory: typing searches its facts and sessions in place.
+        <MemorySearchPanel
+          testID="memory-document.search"
           serverId={serverId ?? ''}
-          readOnly={readOnly}
-          composing={composing}
-          onComposingChange={setComposing}
-          emptyText={t('memoryContext.memory.empty')}
-          onOpenSession={openSession}
-          // Beside the detail the selection moves in place; a phone pushes the fact's own page.
-          onOpenFact={(fact) => openFact(fact, split)}
-          selectedFactId={split ? (selectedFact?.id ?? null) : null}
-          viewerAccountId={scope?.accountId ?? null}
+          scope={project.searchScope}
+          autoFocus={false}
+          placement="page"
+          placeholder={t('memoryContext.memory.searchProjectPlaceholder', { project: project.name })}
+          idle={body(split)}
         />
-      </ItemGroup>
+      ) : (
+        body(split)
+      )}
     </ItemList>
   );
 
@@ -228,17 +320,22 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
         detail={
           selectedFact ? (
             <FactDetailChrome key={selectedFact.id}>
-            <MemoryFactDetail
-              testID="memory-document.factDetail"
-              fact={selectedFact}
-              documentRef={ref}
-              serverId={serverId}
-              viewerAccountId={
-                source.target?.accountId ?? scope?.accountId ?? null
-              }
-              archived={archive}
-              onOpenSession={openSession}
-            />
+              {(split) => (
+                <MemoryFactDetail
+                  testID="memory-document.factDetail"
+                  fact={selectedFact}
+                  documentRef={ref}
+                  serverId={serverId}
+                  viewerAccountId={
+                    source.target?.accountId ?? scope?.accountId ?? null
+                  }
+                  archived={archive}
+                  onOpenSession={openSession}
+                  onOpenDiscussion={openDiscussion}
+                  // Beside the list the form opens in place; a phone's fact page returns to the list to edit.
+                  onEdit={canRemember ? () => openFact(split ? selectedFact : null, true, selectedFact.id) : undefined}
+                />
+              )}
             </FactDetailChrome>
           ) : null
         }
@@ -279,14 +376,15 @@ function LandOnFirstFact(
 /**
  * Beside the list the fact is a pane of this page: the page keeps its own title and back.
  */
-function FactDetailChrome(props: Readonly<{ children: React.ReactNode }>) {
+function FactDetailChrome(props: Readonly<{ children: (split: boolean) => React.ReactNode }>) {
   const split = useHappierCollectionLayout()?.mode === 'split';
+  const children = props.children(split);
   // A fact's words are its title and are read whole, so they stay in the page rather than being cut
   // into the navigation title; pushed on a phone, the page keeps its Back.
-  if (!split) return <NavigationTitleChromeProvider showsTitle={false} showsBack>{props.children}</NavigationTitleChromeProvider>;
+  if (!split) return <NavigationTitleChromeProvider showsTitle={false} showsBack>{children}</NavigationTitleChromeProvider>;
   return (
     <NavigationTitleChromeProvider showsTitle={false}>
-      <NavigationBackChromeProvider control={null}>{props.children}</NavigationBackChromeProvider>
+      <NavigationBackChromeProvider control={null}>{children}</NavigationBackChromeProvider>
     </NavigationTitleChromeProvider>
   );
 }

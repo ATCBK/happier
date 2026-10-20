@@ -1,15 +1,28 @@
-import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragScopeV1, type EntityDropAdmissionV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
+import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragScopeV1, type EntityDropAdmissionV1, type EntityDropEffectV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionCompanionPresentationItemRefV1 } from '@happier-dev/protocol/sessions';
 import type { SessionBoardSnapshot } from '@/sync/domains/session/board';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { sessionCompanionItemKey } from '../companion/state/sessionCompanionPreference';
 import { t } from '@/text';
+import { ENTITY_DROP_UNCHANGED_CODES } from '@/components/ui/treeDragDrop/entityDropNoChange';
 import { widgetEntitySourceRef } from '@/sync/ops/actions/widgetEntityMovement';
 import type { WidgetInstanceRefV1 } from '@happier-dev/protocol/widgets';
+import { widgetLayoutEntityDropDestinationKey } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+
+// Keep the index decided by the admission owner beside the exact effect that it describes.
+const destinationKeys = new WeakMap<EntityDropEffectV1, string>();
+function atDestination(admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>, key: readonly unknown[]): EntityDropAdmissionV1 {
+    destinationKeys.set(admission.effect, JSON.stringify(key));
+    return admission;
+}
+export function sessionSurfaceEntityDropDestinationKey(admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>): string | null {
+    return admission.effect.actionId === 'widgets.item.move' ? widgetLayoutEntityDropDestinationKey(admission)
+        : destinationKeys.get(admission.effect) ?? null;
+}
 
 type Context = Readonly<{ item: EntityDragItemV1; scope: EntityDragScopeV1; address: SessionAddress; board: SessionBoardSnapshot | null; preview: EntityDropPreviewV1; widgetSourceRef?: WidgetInstanceRefV1 | null }>;
 export function sessionSurfaceDropRefused(code: string): Extract<EntityDropAdmissionV1, { status: 'refused' }> {
-    const message = code === 'same-position' || code === 'already-kept' || code === 'already-placed' ? t('entityDragDrop.reasons.noChange')
+    const message = ENTITY_DROP_UNCHANGED_CODES.has(code) ? t('entityDragDrop.reasons.noChange')
         : code === 'scope-mismatch' ? t('entityDragDrop.surface.scopeMismatch')
         : code === 'widget-placement-unavailable' || code === 'unsupported-kind' ? t('entityDragDrop.surface.widgetMoveUnavailable')
         : code === 'board-read-only' ? t('entityDragDrop.surface.readOnly')
@@ -55,10 +68,10 @@ export function resolveSessionBoardEntityDrop(input: Context & Readonly<{ viewId
     // A move within this Board changes only its shared layout. The current Board
     // projection already proves the item and editor rights; configured widgets
     // use this same owner rather than waiting on cross-surface transfer admission.
-    return { status: 'allowed', effect: { actionId: 'session.board.layout.update', preview: { ...input.preview, glyph: anchor ? anchor.side === 'before' ? 'above' : 'below' : 'move' }, input: {
+    return atDestination({ status: 'allowed', effect: { actionId: 'session.board.layout.update', preview: { ...input.preview, glyph: anchor ? anchor.side === 'before' ? 'above' : 'below' : 'move' }, input: {
         sessionId: input.address.sessionId, expectedLayoutRevision: board.layoutRevision,
         operation: { op: 'item.move', itemId: item.itemId, fromTabId: source.id, toTabId: target.id, ...(anchor ? { anchor } : {}) },
-    } } };
+    } } }, ['session-board-position', input.scope, input.address.sessionId, target.id, index]);
 }
 
 /** Ordinary Keep beside chat copies a reference; configured copies delegate movement to the widget Action. */
@@ -89,8 +102,9 @@ export function resolveSessionCompanionEntityDrop(input: Context & Readonly<{ it
             } } };
         }
         if (items.some(ref => ref.kind === 'widget' && ref.widgetId === item.itemId)) return sessionSurfaceDropRefused('already-kept');
-        return { status: 'allowed', effect: { actionId: 'session.presentation.apply', preview: { ...input.preview, glyph: 'copy' },
-            input: { intent: { kind: 'companion.item.add', item: { kind: 'widget', widgetId: item.itemId } } } } };
+        return atDestination({ status: 'allowed', effect: { actionId: 'session.presentation.apply', preview: { ...input.preview, glyph: 'copy' },
+            input: { intent: { kind: 'companion.item.add', item: { kind: 'widget', widgetId: item.itemId } } } } },
+            ['companion-position', input.scope, input.address.sessionId, items.length]);
     }
     if (item.kind !== 'companion-item') return sessionSurfaceDropRefused('unsupported-kind');
     const key = sessionCompanionItemKey(item.item);
@@ -106,6 +120,7 @@ export function resolveSessionCompanionEntityDrop(input: Context & Readonly<{ it
         return { status: 'allowed', effect: { actionId: 'widgets.item.move', preview: { ...input.preview, glyph: 'move' },
             input: { ref: { surface, instanceId: item.item.instance.id }, to: { surface, index: toIndex } } } };
     }
-    return { status: 'allowed', effect: { actionId: 'session.presentation.apply', preview: { ...input.preview, glyph: 'move' },
-        input: { intent: { kind: 'companion.item.move', item: items[current]!, toIndex } } } };
+    return atDestination({ status: 'allowed', effect: { actionId: 'session.presentation.apply', preview: { ...input.preview, glyph: 'move' },
+        input: { intent: { kind: 'companion.item.move', item: items[current]!, toIndex } } } },
+        ['companion-position', input.scope, input.address.sessionId, toIndex]);
 }

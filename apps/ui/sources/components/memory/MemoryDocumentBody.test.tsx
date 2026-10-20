@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
-import { MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { MEMORY_ARCHIVE_TOPIC_TITLE_V1, MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { MemoryDocReadResultV1Schema, type MemoryDuplicateChoiceRequiredV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import {
@@ -16,6 +16,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
@@ -147,6 +148,11 @@ async function seedDocument(body: MemoryDocBodyV1): Promise<PromptDocArtifactRef
     homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
     return { kind: 'doc', serverId, artifactId };
 }
+async function settleInitialArtifactInventory() {
+    await settled(() => expect(storage.getState().artifactsLoaded).toBe(true));
+    if (!connection) throw new Error('Expected the admitted Memory Account fixture');
+    await awaitPendingArtifactInventory({ scope: { serverId, accountId: 'account-a' }, credentials: connection.credentials });
+}
 function storedBody(ref: PromptDocArtifactRefV1): MemoryDocBodyV1 {
     return MemoryDocBodyV1Schema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(ref.artifactId) ?? 'null'));
 }
@@ -234,6 +240,8 @@ async function readMemory(ref: PromptDocArtifactRefV1, topic?: string) {
 }
 
 it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admitted Memory audience (%s) without inferring privacy from ownership', async audience => {
+    // Measure the display read, not the separate cold inventory hydration that changes its refresh basis.
+    await settleInitialArtifactInventory();
     const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify payment signatures.')], topics: [] });
     if (audience === 'grant') homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'teammate', 'view');
     if (audience === 'public') homes.artifacts(serverId).replaceStoredRow({
@@ -242,11 +250,49 @@ it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admit
     if (audience === 'unknown') homes.answer(serverId, `/v1/artifacts/${ref.artifactId}/access/grants`, {
         status: 503, body: { error: 'database_connection_unavailable' },
     });
+    const requestStart = homes.requests.length;
     const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
     await settled(() => expect(hook.getCurrent().status).toBe('ready'));
     expect(hook.getCurrent().view).toMatchObject({ access: 'owner', shared: audience === 'unknown' ? null : audience !== 'private' });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
+    expect(hook.getCurrent().view).toMatchObject({ audience: audience === 'unknown' ? null : {
+        shared: audience !== 'private', team: null, publicLink: audience === 'public',
+        grants: audience === 'grant' ? [expect.objectContaining({ principal: { kind: 'account', accountId: 'teammate' } })] : [],
+    } });
     expect(hook.getCurrent().target === null).toBe(audience === 'unknown');
     await hook.unmount();
+});
+
+it.each(['Build', MEMORY_ARCHIVE_TOPIC_TITLE_V1])('reads %s facts and their audience from one admitted body', async topic => {
+    await settleInitialArtifactInventory();
+    const ref = await seedDocument({ v: 1, index: [], topics: [
+        { title: topic, summary: 'Saved topic', facts: [fact('topic-fact', 'Use the reviewed topic fact.')] },
+    ] });
+    const requestStart = homes.requests.length;
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId, topic }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().view).toMatchObject({
+        facts: [expect.objectContaining({ id: 'topic-fact' })], topic: { title: topic },
+        access: 'owner', audience: { shared: false },
+    });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
+    await hook.unmount();
+});
+
+it('does not claim the Project Team holds an individually shared Memory grant', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify signatures.')], topics: [] });
+    homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'bob', 'view');
+    if (!connection) throw new Error('Expected Account fixture');
+    const project = { name: 'Payments', teamName: 'Unrelated Team',
+        searchScope: { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } }, href: () => '/projects/payments/memory' };
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} project={project} />
+    </InjectedAuthProvider>);
+    await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+    const audience = screen.findAllByType(PageHeader).flatMap(node => node.props.meta ?? [])
+        .find(entry => entry.testID === 'memory-document.audience');
+    expect(audience?.text).toBe('memoryContext.memory.accessShared');
 });
 
 it('refreshes the admitted Memory audience after a grant-only Account change', async () => {
@@ -365,11 +411,13 @@ it('keeps last-known counts for the same document while a later status read has 
     await screen.unmount();
 });
 
-it('opens a qualified fact source before its Session is loaded on this client', async () => {
+it.each([false, true])('opens a qualified fact source before its Session is loaded on this client (decision: %s)', async decision => {
     if (!connection) throw new Error('Expected the Memory Home connection fixture');
     const source = { serverId, sessionId: 'unloaded-source-session' };
     const ref = await seedDocument({ v: 1, index: [
-        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source },
+        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source,
+          ...(decision ? { decision: { reason: 'Exact committed source', approvedBy: null,
+            sourceMessageRef: { kind: 'session' as const, session: source, messageId: 'committed-source' } } } : {}) },
         fact('manual', 'Keep release notes concise.'),
     ], topics: [] });
     expect(storage.getState().sessions[source.sessionId]).toBeUndefined();
@@ -382,7 +430,7 @@ it('opens a qualified fact source before its Session is loaded on this client', 
     await screen.pressByTestIdAsync('memory-document.fact.from-session.source');
     // The real navigation owner must carry the fact's Home, not require a loaded Session/title.
     expect(navigation.navigate).toHaveBeenCalledWith(
-        `/session/${source.sessionId}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
+        `/session/${source.sessionId}${decision ? '/message/server%3Acommitted-source' : ''}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
     );
     await screen.unmount();
 });
@@ -422,7 +470,7 @@ function serveProjectContext(conflict = false, withWorkspace = false,
         }) }) });
     homes.answer(serverId, 'POST ' + PROJECT_ACCOUNT_ROWS_ROUTE_V1 + '/mutate', { select: input => {
         const mutation = ProjectAccountRowMutationRequestV1Schema.parse(input).mutations[0]!;
-        if (conflict || mutation.expectedRevision !== revision) return { status: 409, body: { status: 'conflict', key, revision: revision + 1 } };
+        if (conflict || mutation.expectedRevision !== revision) return { body: { status: 'conflict', key, revision: revision + 1 } };
         if (mutation.content?.t !== 'plain' || !mutation.content.v || typeof mutation.content.v !== 'object' || !('value' in mutation.content.v)) {
             throw new Error('Expected plain Project organization');
         }
@@ -777,7 +825,7 @@ describe('MemoryDocumentBody', () => {
         await screen.pressByTestIdAsync('session-work-memory.doc.draft.save');
         await settled(() => expect(!screen.findByTestId('session-work-memory.doc.draft') || vi.mocked(Modal.alert).mock.calls.length > 0).toBe(true));
         expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
-        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeTruthy();
+        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeNull();
         await flushHookEffects();
         expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         const rows = homes.artifacts(serverId).list();
@@ -1213,8 +1261,8 @@ describe('MemoryDocumentBody', () => {
         const attached = (account?.read() ?? project?.read().promptStack ?? []).find(entry => entry.id === scope + '.memory');
         expect(attached).toBeTruthy();
         if (!attached || attached.ref.kind !== 'doc') throw new Error('Missing scope memory attachment');
-        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached' });
         const attachedRef: PromptDocArtifactRefV1 = { ...attached.ref, kind: attached.ref.kind };
+        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached', factId: storedBody(attachedRef).index[0]!.id });
         expect(await readMemory(attachedRef)).toMatchObject({ body: { index: [{ text: 'Use the shared build script.', sourceSessionRef: null }] } });
         expect(storedBody(attachedRef).index).toMatchObject([{ text: 'Use the shared build script.' }]);
         if (project) expect(project.read()).toMatchObject({ pinned: true, hidden: true });
@@ -1229,14 +1277,14 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('memory.draft', 'A durable unattached fact.'); });
         await screen.pressByTestIdAsync('memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
         });
         expect(account?.read() ?? project?.read().promptStack).toEqual([]);
         const rows = homes.artifacts(serverId).list();
         expect(rows).toHaveLength(1);
         const ref = { kind: 'doc' as const, serverId, artifactId: rows[0]!.id };
-        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict' });
+        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict', factId: storedBody(ref).index[0]!.id });
         expect(await readMemory(ref)).toMatchObject({ body: { index: [{ text: 'A durable unattached fact.' }] } });
         expect(storedBody(ref).index).toMatchObject([{ text: 'A durable unattached fact.' }]);
     });
@@ -1255,7 +1303,7 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('context.memory.draft', 'Preserve the exact saved document.'); });
         await screen.pressByTestIdAsync('context.memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('context.memory.draft'))).toBe(false);
             expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         });

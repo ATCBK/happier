@@ -10,6 +10,13 @@ import { workflowInputToFieldHint, type WorkflowValidationIssue } from './workfl
 export type WorkflowResolvedSessionTargetV1 = Readonly<{ address: ActionSessionAddressV1; machineId: string }>;
 export type ResolveWorkflowSessionTargetV1 = (value: JsonValue) => Promise<WorkflowResolvedSessionTargetV1 | null>;
 
+export const WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 = 'previousRoundContext';
+
+/** Authored support only; access, terminal state and control eligibility remain caller facts. */
+export function supportsWorkflowAnotherRoundV1(definition: Pick<WorkflowDefinitionV1, 'inputs'>): boolean {
+  return definition.inputs.some(input => input.name === WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 && input.valueType === 'json');
+}
+
 /** Shared preview/default projection; missing required values stay editable in forms. */
 export function resolveWorkflowContextInputDefaultsV1(definition: Pick<WorkflowDefinitionV1, 'inputs'>,
   supplied: Readonly<Record<string, JsonValue>> | undefined, originSession?: ActionSessionAddressV1): Record<string, JsonValue> {
@@ -77,6 +84,8 @@ export type WorkflowRunStartPreparationV1 = Readonly<{
   roleOverrides?: WorkflowRunAcceptedContextV1['roleOverrides'];
   metadata?: WorkflowRunStartRequestV1['metadata'];
   originSessionId?: string;
+  origin?: WorkflowRunStartRequestV1['origin'];
+  onComplete?: WorkflowRunStartRequestV1['onComplete'];
 }>;
 
 /** One preparation owner for new starts and reviewed accepted-run repeats. Admission reopens replay authority. */
@@ -96,6 +105,7 @@ export function prepareWorkflowRunStartV1(params: Readonly<{
   const definition = { ...params.definition, blocks: draft.blocks };
   const originSessionId = accepted && 'origin' in accepted && accepted.origin && 'originSessionId' in accepted.origin
     ? accepted.origin.originSessionId : undefined;
+  const discussion = accepted && 'origin' in accepted ? accepted.origin?.discussion : undefined;
   return {
     definition,
     inputs: params.inputs ?? accepted?.inputs,
@@ -107,6 +117,8 @@ export function prepareWorkflowRunStartV1(params: Readonly<{
       ...(accepted.roleOverrides === undefined ? {} : { roleOverrides: accepted.roleOverrides }),
       ...(accepted.metadata == null ? {} : { metadata: accepted.metadata }),
       ...(originSessionId ? { originSessionId } : {}),
+      ...(discussion ? { origin: { kind: 'discussion' as const, discussion: discussion.discussion,
+        addressingMessageId: discussion.messageId } } : {}),
     }),
   };
 }

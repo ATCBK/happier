@@ -25,6 +25,13 @@ import { presentProviderError } from '@/providers/connection/errorPresentation';
 
 export { resolveApprovalReplayRoute };
 
+/** Availability refusals that arrive before an Action's effect: the Home rolled back, or could not be reached. */
+const TRANSIENT_AVAILABILITY_CODES: ReadonlySet<string> = new Set([
+    'database_connection_unavailable',
+    'database_transaction_conflict_exhausted',
+    'project_requester_home_unavailable',
+]);
+
 /** Live errors and durable execution failures retain the same typed outcome. */
 export function isApprovalDecisionStale(error: unknown): boolean {
     return error instanceof HappyError ? error.code === 'approval_stale'
@@ -36,7 +43,12 @@ export function isApprovalDecisionStale(error: unknown): boolean {
  * code kept apart. Surfaces with a details disclosure show the reason as the headline and the code
  * there; an alert has no disclosure, so it appends the code to the reason.
  */
-export function presentApprovalFailure(error: unknown, fallbackMessage = t('approvals.decisionError')): Readonly<{
+export function presentApprovalFailure(
+    error: unknown,
+    fallbackMessage = t('approvals.decisionError'),
+    /** What a bare machine code reads as when the surface is not an approval decision. */
+    neutralReason = t('approvals.decisionError'),
+): Readonly<{
     reason: string;
     code: string | null;
 }> {
@@ -51,13 +63,27 @@ export function presentApprovalFailure(error: unknown, fallbackMessage = t('appr
     if (error instanceof HappyError && error.code === 'present_user_required') {
         return { reason: t('approvals.decisionAuthorityError'), code: null };
     }
+    // The approved plugin change never reached the Machine's plugin service; the code stays in Technical details.
+    if (code === 'plugin_change_daemon_unavailable') return { reason: t('approvals.pluginChangeDaemonUnavailable'), code };
+    // The Home or its requester was briefly unreachable before the effect ran: nothing changed, and retrying is right.
+    if (typeof code === 'string' && TRANSIENT_AVAILABILITY_CODES.has(code) && !(error instanceof ApprovalExecutionError)) {
+        return { reason: t('approvals.transientFailure'), code };
+    }
     // Detail pages may pass the stored executor diagnostic as their fallback.
     // Keep machine codes as diagnostics after readable copy on every Action.
     const reason = error instanceof ApprovalExecutionError ? t('approvals.failureGeneric')
         : /^[a-z][a-z0-9_]*(?::[a-z0-9_]+)*$/.test(fallbackMessage.trim())
-            ? t('approvals.decisionError') : fallbackMessage;
+            ? neutralReason : fallbackMessage;
     // Retain the typed code, never opaque transport prose or private details.
     return { reason, code: typeof code === 'string' && /^[a-z][a-z0-9_]*$/.test(code) ? code : null };
+}
+
+/**
+ * A settled request whose approved effect failed. The decision was saved, so a bare machine code never
+ * reads as "failed to update approval": it reads as an unrecorded reason, with the code in Technical details.
+ */
+export function presentRecordedApprovalFailure(failure: Readonly<{ errorCode?: string; error?: string }>): ReturnType<typeof presentApprovalFailure> {
+    return presentApprovalFailure(failure, failure.error || failure.errorCode || t('approvals.failureNoReason'), t('approvals.failureNoReason'));
 }
 
 /**

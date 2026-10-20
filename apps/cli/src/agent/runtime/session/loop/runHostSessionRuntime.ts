@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createRepositoryCheckpointCodeRollback } from '@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
@@ -46,6 +47,7 @@ import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creat
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import type { SessionModelMutationScopeV1 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
@@ -59,6 +61,9 @@ import { resolveAutomationWorkerAccountEncryption } from '@/daemon/automation/au
 import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcriptMessageLookup';
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { readHttpStatus } from '@/api/client/httpStatusError';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
+import { isRetryableMcpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 import { HomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
@@ -157,9 +162,10 @@ import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
 import { resolveAttachedRunRuntimeContext } from '@/agent/runtime/resolveAttachedRunRuntimeContext';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
-import type {
-  PermissionModeQueuedPrompt,
-  PermissionModeQueuedPromptMode,
+import {
+  normalizePermissionModeQueuedPromptLocalIds,
+  type PermissionModeQueuedPrompt,
+  type PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
 import { subscribeSessionRuntimePublicationToMetadata } from '@/agent/runtime/identity/metadata/subscription';
 import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
@@ -186,10 +192,10 @@ import {
 import type { SessionProviderInputConsumer } from '@/agent/runtime/session/input/_types';
 import {
   bindSessionProviderInputOutcome,
-  createSessionProviderInputOutcomeNormalizer,
+  createSessionProviderInputOutcomeBinding,
   type SessionProviderInputOutcomePort,
 } from '@/agent/runtime/session/input/providerInputOutcome';
-import { registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { createSessionRunnerRestartAdmission, registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { clearSessionGuardStateOnRunnerStart, type SessionGuardNoticeOwner } from '@/agent/runtime/session/input/sessionGuardNoticeRpc';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
@@ -425,7 +431,7 @@ function createPendingMessageComposerAdmissionAcceptedControl(
         outcome: 'accepted',
         settlement: {
           v: 1,
-          releaseIntents,
+          releaseIntents: [...releaseIntents],
           createdWorkspaceRelativePaths: [],
           workingDirectory: 'accepted-pending-message',
         },
@@ -454,7 +460,7 @@ function createPendingMessageComposerAdmissionAbandonedControl(
       outcome: 'definitiveFailure',
       settlement: {
         v: 1,
-        releaseIntents,
+        releaseIntents: [...releaseIntents],
         createdWorkspaceRelativePaths: [...request.sessionMediaCleanup.createdWorkspaceRelativePaths],
         workingDirectory: request.sessionMediaCleanup.workingDirectory,
       },
@@ -1679,6 +1685,8 @@ export async function runHostSessionRuntime(
     | HostSessionRuntimeHookRuntime
     | null = null;
   let constructionFailureCleanupPromise: Promise<void> | null = null;
+  let nativeStartupRefusal: Readonly<{ code: string; severity: 'error' }> | null = null;
+  let serveRefusedStartupInputs: ((diagnostic: NonNullable<typeof nativeStartupRefusal>) => Promise<void>) | null = null;
   const cleanupFailedConstruction = (
     continuationUnreachable: boolean,
   ): Promise<void> => {
@@ -2069,8 +2077,8 @@ export async function runHostSessionRuntime(
         for (const item of workerItems) if (!await item.recheckAdmission(recheckSignal)) return false;
         return !recheckSignal.aborted;
       },
-      acknowledgeAccepted: (input) => {
-        follow?.acknowledgeAccepted(input);
+      acknowledgeAccepted: (input, pendingSettlement) => {
+        follow?.acknowledgeAccepted(input, pendingSettlement);
         for (const item of workerItems) item.acknowledgeAccepted();
       },
     };
@@ -2191,32 +2199,7 @@ export async function runHostSessionRuntime(
   });
   permissionHandler.setPermissionMode(initialPermissionMode);
 
-  const acceptedEffectByPendingLocalId = new Map<string, Array<() => void>>();
-  const registerProviderAcceptedEffect = (
-    localId: string,
-    onAccepted: (() => void) | null,
-  ): void => {
-    if (!onAccepted) {
-      acceptedEffectByPendingLocalId.delete(localId);
-      return;
-    }
-    const effects = acceptedEffectByPendingLocalId.get(localId);
-    if (effects) effects.push(onAccepted);
-    else acceptedEffectByPendingLocalId.set(localId, [onAccepted]);
-  };
-  const observeAcceptedEffect = (localId: string): void => {
-    const effects = acceptedEffectByPendingLocalId.get(localId);
-    if (!effects) return;
-    acceptedEffectByPendingLocalId.delete(localId);
-    for (const effect of effects) {
-      try {
-        effect();
-      } catch {
-        // Acceptance is authoritative; one settlement cannot invalidate another.
-      }
-    }
-  };
-  const observeProviderInputOutcome = createSessionProviderInputOutcomeNormalizer({
+  const { registerProviderAcceptedEffect, observeProviderInputOutcome, clearAcceptedEffects } = createSessionProviderInputOutcomeBinding({
     getTarget: () => session,
     takeAppliedModel: (localId) => {
       const appliedModel = appliedModelByPendingLocalId.get(localId) ?? null;
@@ -2225,10 +2208,6 @@ export async function runHostSessionRuntime(
     },
     discardAppliedModel: (localId) => {
       appliedModelByPendingLocalId.delete(localId);
-    },
-    observeAcceptedEffect,
-    discardAcceptedEffect: (localId) => {
-      acceptedEffectByPendingLocalId.delete(localId);
     },
   });
   let inputConsumer: SessionProviderInputConsumer<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt> | null = null;
@@ -2280,6 +2259,9 @@ export async function runHostSessionRuntime(
       if (!runtime?.steerPrompt) {
         throw new Error('in-flight steer is not available');
       }
+      currentLifecycleSession.markPendingProviderInputDispatched([
+        ...(options?.localIds ?? []), ...(options?.localId ? [options.localId] : []),
+      ]);
       if (options === undefined) {
         await runtime.steerPrompt(text);
         return;
@@ -2412,7 +2394,8 @@ export async function runHostSessionRuntime(
     });
   };
   const commitContextOnlyWorkerEvents = async (
-    localId: string, events: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[], fallback: TranscriptRawAgentEventV1,
+    localId: string, events: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+      followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[], fallback: TranscriptRawAgentEventV1,
     followWakeEventLocalId?: string,
   ): Promise<void> => {
     if (!events.some((event) => event.localId === localId)) {
@@ -2421,16 +2404,22 @@ export async function runHostSessionRuntime(
     await commitWorkerUpdateEvents(events, followWakeEventLocalId);
   };
   const commitWorkerUpdateEvents = async (
-    events: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[], followWakeEventLocalId?: string,
+    events: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+      followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[], followWakeEventLocalId?: string,
   ): Promise<void> => {
     for (const event of events) {
       await commitContextOnlyHostEvent(event.localId, { type: 'worker-update', update: event.update,
+        ...(event.followMatches?.length ? { followMatches: [...event.followMatches] } : {}),
+        ...(event.followInputLocalId ? { followInputLocalId: event.followInputLocalId } : {}),
         ...(followWakeEventLocalId ? { followWakeEventLocalId } : {}) });
     }
   };
   inputConsumer = createSessionProviderInputConsumer({
     messageQueue,
-    session: createSessionProviderInputConsumerSessionAdapter(currentLifecycleSession),
+    session: createSessionProviderInputConsumerSessionAdapter(currentLifecycleSession, {
+      readNativeRuntimeActivitySnapshot: () => runtimeActivityProjection?.readAgentRuntimeSnapshot()
+        ?? { state: 'unknown', activeCount: 0 },
+    }),
     reconcileWhenEmpty: 'skip',
     pendingQueueDeliveryTiming,
     resolvePendingQueueDeliveryTiming: readPendingQueueDeliveryTiming,
@@ -2444,9 +2433,9 @@ export async function runHostSessionRuntime(
       try {
         return await Promise.race([
           waitForSessionFollowWakeInvalidation(readSessionFollowWakeInvalidationGeneration(), controller.signal),
-          ...(currentLifecycleSession.waitForExecutionRunWorkerUpdateChange
+          ...(!nativeStartupRefusal && currentLifecycleSession.waitForExecutionRunWorkerUpdateChange
             ? [currentLifecycleSession.waitForExecutionRunWorkerUpdateChange(controller.signal)] : []),
-          ...(readWorkflowInputPort() ? [readWorkflowInputPort()!.waitForChange(controller.signal)] : []),
+          ...(!nativeStartupRefusal && readWorkflowInputPort() ? [readWorkflowInputPort()!.waitForChange(controller.signal)] : []),
         ]);
       } finally {
         controller.abort();
@@ -2454,6 +2443,7 @@ export async function runHostSessionRuntime(
       }
     },
     takeContextOnlyInput: async (signal) => {
+      if (nativeStartupRefusal) return null;
       const source = await readWorkflowInputPort()?.take(signal)
         ?? await currentLifecycleSession.takeExecutionRunWorkerUpdate?.(signal);
       if (signal.aborted) return null;
@@ -2514,6 +2504,28 @@ export async function runHostSessionRuntime(
       };
     },
   });
+  const startupInputConsumer = inputConsumer;
+  serveRefusedStartupInputs = async diagnostic => {
+    // Session creation is acknowledged before the caller offers its first input.
+    // Retain the failed host's existing input custody until Stop, so a later
+    // original receives the same terminal refusal instead of triggering respawn.
+    while (!startupRegistrationLifetime.signal.aborted) {
+      const batch = await startupInputConsumer.waitForNextInput({ abortSignal: startupRegistrationLifetime.signal });
+      if (!batch) return;
+      if (batch.message.hostContextOnly) {
+        startupInputConsumer.deferContextOnlyInput(batch);
+        startupInputConsumer.releaseInputBatch();
+        continue;
+      }
+      for (const localInputId of normalizePermissionModeQueuedPromptLocalIds(batch.message)) {
+        observeProviderInputOutcome({ type: 'input-rejected', localInputId,
+          userMessageSeq: batch.message.userMessageSeq ?? null,
+          ...(batch.message.userMessageSeqs ? { userMessageSeqs: batch.message.userMessageSeqs } : {}),
+          diagnostic, retryable: false });
+      }
+      startupInputConsumer.releaseInputBatch();
+    }
+  };
   let connectedServiceApplicationSettledHandler: ((request: Readonly<{
     serviceId: string;
     groupId: string;
@@ -2543,6 +2555,7 @@ export async function runHostSessionRuntime(
   recordStartupPhase('host_input_setup');
   registerSessionProviderInputAdmissionRpc({
     consumer: inputConsumer,
+    runnerRestartAdmission: createSessionRunnerRestartAdmission(() => session.rpcHandlerManager),
     guardNotice,
     rpcHandlerRegistrar: currentControlRpcRegistrar.registrar,
     onApplicationSettled: async (request) => {
@@ -2948,6 +2961,9 @@ export async function runHostSessionRuntime(
     createdRuntime = await config.createSessionRuntime(sessionRuntimeParams);
     recordStartupPhase('agent_runtime_open');
   } catch (error) {
+    if (error instanceof SessionStartupInputRefusalError) {
+      nativeStartupRefusal = { code: error.code, severity: 'error' };
+    }
     if (isAgentNativeResumeIdentityMismatchError(error)) {
       await invalidateTrackedNativeReturnIdentity(initialResumeId);
     }
@@ -3080,6 +3096,7 @@ export async function runHostSessionRuntime(
   // An Agent that contributes no bundled model config keeps the live policy.
   const policyAgentModelConfig = getAgentModelConfig(policyAgentId);
   const authorizeModelTransition = createSessionModelTransitionAuthorizer({
+    signal: startupRegistrationLifetime.signal,
     get sessionId() { return session.sessionId; },
     machineId,
     agentId: policyAgentId,
@@ -3986,7 +4003,7 @@ export async function runHostSessionRuntime(
     modelTransitionOwnerCurrent = false;
     modelTransitionCoordinator = null;
     unbindProviderInputOutcome();
-    acceptedEffectByPendingLocalId.clear();
+    clearAcceptedEffects();
     currentLifecycleSession.setSessionRuntimeControls(null);
     config.onAfterStart = originalOnAfterStart;
     sessionStateMetadataObserver.dispose();
@@ -4011,7 +4028,7 @@ export async function runHostSessionRuntime(
           ...readSessionPreparationFailureDiagnostic(error),
         });
         const startupIssue = !runtimeStopRequested ? classifyPrimarySessionRuntimeIssue({
-          cause: 'session_error', error, provider: policyAgentId,
+          cause: 'session_error', error: nativeStartupRefusal ?? error, provider: policyAgentId,
         }) : null;
         if (startupIssue) {
           // Construction failures happen after Session custody but before the live
@@ -4024,6 +4041,28 @@ export async function runHostSessionRuntime(
           });
           preparationFailurePublished = startupIssue.code === 'preparation_pending'
             && startupIssue.source === 'dependency_failure';
+        }
+        if (nativeStartupRefusal && await terminalizeBeforeAgentAdmission()) return;
+        if (nativeStartupRefusal && serveRefusedStartupInputs && !runtimeStopRequested) {
+          const serving = serveRefusedStartupInputs(nativeStartupRefusal);
+          runtimeStopDelegate = async () => {
+            startupRegistrationLifetime.abort();
+            session.prepareForClose();
+            try { await serving; }
+            finally {
+              await session.endSessionAndClose();
+              await cleanupFailedConstruction(false);
+            }
+          };
+          dispatchRuntimeStop();
+          try { await serving; }
+          finally {
+            if (runtimeStopRequested) await runtimeStopDispatchPromise;
+            else await cleanupFailedConstruction(false);
+          }
+          if (runtimeStopRequested) {
+            return;
+          }
         }
         await cleanupFailedConstruction(
           isAgentSessionContinuationUnreachableError(error),
@@ -4046,6 +4085,9 @@ export async function runHostSessionRuntime(
     const metadataPublicationPending = error instanceof Error && 'code' in error
       && error.code === 'metadata_tuple_ambiguous';
     if (preparationFailurePublished && !metadataPublicationPending
+      && readHttpStatus(error) === null
+      && !isRetryableAccountEncryptionCurrentnessError(error)
+      && !isRetryableMcpServerCatalogUnavailableError(error)
       && !(error instanceof Error && error.cause instanceof HomeReadPreparationError)) return;
     throw error;
   }

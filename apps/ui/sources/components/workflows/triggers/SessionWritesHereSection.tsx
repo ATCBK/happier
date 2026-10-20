@@ -72,7 +72,7 @@ const DestinationRun = React.memo(function DestinationRun(props: Readonly<{
     const visible = useWorkRowOnScreen(rowRef);
     const row = useWorkflowRun(props.runId);
     const router = useRouter();
-    const open = React.useCallback(() => router.push(createWorkflowRunRoute(props.runId) as never), [router, props.runId]);
+    const open = React.useCallback(() => router.push(createWorkflowRunRoute(props.runId, props.serverId) as never), [router, props.runId, props.serverId]);
     const working = row?.summary && describeWorkflowRunState(row.summary.state).marker.kind === 'activity';
     return <View ref={rowRef} collapsable={false}>
         <WorkflowRunItemBody kind="workflow_run" runId={props.runId} serverId={props.serverId}

@@ -70,7 +70,10 @@ export type PermissionModeQueuedPrompt = Readonly<{
   inputProvenance?: SessionMessageProvenance;
   returnedAnswer?: SessionInputReturnedAnswerV1;
   /** Retained information joins this real input without adopting its authority. */
-  returnedAnswerContext?: readonly Readonly<{ reply: SessionInputReturnedAnswerV1; text: string }>[];
+  returnedAnswerContext?: readonly Readonly<{
+    reply: SessionInputReturnedAnswerV1; text: string;
+    localId: string | null; userMessageSeq: number | null;
+  }>[];
   /** Public receipt-bound originals retain their own identity when joining another turn. */
   followDeliveries?: readonly SessionFollowQueuedDelivery[];
   /** Trusted host-only turn input. It is never inserted into MessageQueue/Pending/transcript. */
@@ -190,13 +193,11 @@ export function appendNextTurnContextToQueuedPrompt(
   const followDeliveries = [...prompt.followDeliveries ?? []];
   for (const item of context) {
     if (!isNextTurnContextQueuedPrompt(item)) throw new Error('Only protected next-turn information can join an input');
-    if (item.returnedAnswer) answers.push({ reply: item.returnedAnswer, text: item.text });
+    if (item.returnedAnswer) answers.push({ reply: item.returnedAnswer, text: item.text,
+      localId: item.localId, userMessageSeq: item.userMessageSeq ?? null });
     followDeliveries.push(...item.followDeliveries ?? []);
-    // Optional Follow earns native acceptance only after its exact original
-    // occurrence fits the host context. Returned answers are required content.
-    if (!item.returnedAnswer) continue;
-    for (const localId of normalizePermissionModeQueuedPromptLocalIds(item)) appendUniqueString(localIds, localId);
-    for (const seq of normalizePermissionModeQueuedPromptUserMessageSeqs(item)) appendUniqueSeq(userMessageSeqs, seq);
+    // Retained information is represented context, not another native primary
+    // input or permission witness. Its exact identity travels with that context.
   }
   return { ...prompt, localIds, ...(userMessageSeqs.length ? { userMessageSeqs,
     userMessageSeq: Math.max(...userMessageSeqs) } : {}),

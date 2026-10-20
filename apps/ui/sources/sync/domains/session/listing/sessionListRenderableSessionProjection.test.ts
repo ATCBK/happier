@@ -178,6 +178,10 @@ describe('buildSessionFromListRenderable', () => {
         const report = buildSessionFromListRenderable(row);
         expect(readSessionPresentationAgentId(report)).toBe('claude');
         expect(readSessionOwnerMetadataView(report)?.path).toBe('/repo');
+        const { flavor: _previousAgentId, ...withoutAgent } = row.metadata!;
+        const changed = buildSessionFromListRenderable({ ...row, metadata: withoutAgent,
+            seq: row.seq + 1, metadataVersion: row.metadataVersion + 1 }, { baseSession: report });
+        expect(readSessionPresentationAgentId(changed)).toBeNull();
         const unreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true });
         expect(readSessionPresentationAgentId(unreadable)).toBeNull();
         const warmUnreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true }, { baseSession: source });

@@ -20,6 +20,15 @@ export type SessionCapabilityRowModel = Readonly<{
     action: Readonly<{ kind: 'fix'; status: CapabilityStatus }> | Readonly<{ kind: 'turn_on' | 'remove' | 'none' }>;
     dimmed: boolean; readOnlyReason: 'viewer' | 'new_sessions_only' | 'masked' | 'native_disable_unsupported' | null;
 }>;
+/**
+ * What this device last saw of one Session's sheet, kept in memory by the Session's chip while it lives, so a reopened
+ * sheet holds the size it had and still shows the cost facts it knew while the re-read runs. Not persisted and never
+ * the authority: any fresh read replaces it.
+ */
+export type SessionCapabilitiesLastKnown = Readonly<{
+    rows: Readonly<{ skills: number; mcp: number }>;
+    costs: ReadonlyMap<string, CapabilityCost>;
+}>;
 export type SessionCapabilityAddItem = Readonly<{ kind: 'skill' | 'mcp_server'; id: string; title: string; readOnlyReason: SessionCapabilityRowModel['readOnlyReason'] }>;
 export type SessionCapabilitiesModel = Readonly<{
     chipLabel: string; counts: Readonly<{ skills: number; mcp: number }>; attention: boolean;
@@ -130,5 +139,7 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
             nativeRow: nativeRows?.length && input.nativeSkills ? { machineName: input.nativeSkills.machineName, agentName: input.nativeSkills.agentName, rows: nativeRows } : null },
             { kind: 'mcp', title: t('capabilities.session.mcpServers'), trailing: trailing(mcp, t('capabilities.session.toolsEveryTurn')), rows: mcp, nativeRow: null }],
         addItems, applyNotice: notice, pendingNote: notice?.text ?? null, costKnown: costKnown && perTurn > 0,
-        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) }) : t('capabilities.session.costUnknown'), state: input.state };
+        // Before the first preview there is nothing to be unknown about: the footer waits silently.
+        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) })
+            : input.view === null && input.state === 'resolving' ? '' : t('capabilities.session.costUnknown'), state: input.state };
 }

@@ -25,7 +25,7 @@ export type SavedSecretOperationContextV1 = Readonly<{
   credentials: StoredCredentials;
   serverHttpBaseUrl: string;
   readSnapshot(): ActiveAccountSettingsSnapshot | null;
-  isCurrent(): Promise<boolean>;
+  isCurrent(signal?: AbortSignal): Promise<boolean>;
   replaceAccountSettings(snapshot: ActiveAccountSettingsSnapshot): Promise<boolean>;
   commitLegacyImportResult(input: Readonly<{ expectedSettingsVersion: number; result: SavedSecretLegacyImportResultV1 }>): Promise<boolean>;
   commitProfileCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProfileCatalogSnapshotV1 }>): Promise<boolean>;
@@ -48,7 +48,7 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
   /** A long-lived Session refreshes source observations without replacing an in-flight reader. */
   readSourceSnapshot?: () => ActiveAccountSettingsSnapshot | null;
   serverHttpBaseUrl: string;
-  isCurrent(): Promise<boolean>;
+  isCurrent(signal?: AbortSignal): Promise<boolean>;
 }>): SavedSecretOperationContextV1 {
   const scopeKey = input.snapshot.scopeKey;
   if (!scopeKey || scopeKey !== resolveAccountSettingsScopeKeyForToken(input.credentials.token)) {
@@ -93,11 +93,14 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     }
     return snapshot;
   };
-  const isCurrent = async () => {
+  const isCurrent = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (!readSnapshot()) return false;
     // A failed observation grants no access, but also proves no revocation.
     // Preserve its typed cause and allow the same captured custody to recover.
-    const current = await input.isCurrent();
+    const current = await input.isCurrent(signal);
+    // Canceling this reader is not evidence that the shared custody retired.
+    signal?.throwIfAborted();
     if (!current && snapshot) retire();
     return current && readSnapshot() !== null;
   };

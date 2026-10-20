@@ -20,7 +20,7 @@ import type {
   PluginInvocableActionId,
 } from '@happier-dev/plugin-sdk/actions';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
-import { isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';
+import { getPluginMachineExecutionRouting, isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 
 type FixtureContributionRef = Readonly<{
@@ -291,7 +291,7 @@ const { manifest, activate } = definePlugin({
           'contributed Action result was not returned through ActionsService',
         );
         assert(
-          contributedWithOrigin.executionOrigin.materializationRef.pluginId === contributedAction.pluginId,
+          getPluginMachineExecutionRouting(contributedWithOrigin.executionOrigin).pluginId === contributedAction.pluginId,
           'contributed Action execution origin was not host-stamped for its exact target',
         );
         if (!('status' in hostResult)) {

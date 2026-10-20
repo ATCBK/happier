@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
@@ -17,12 +18,13 @@ import { ArtifactHeaderMetadataV1Schema, ArtifactPublicAudienceV1ReadSchema, typ
 import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, prepareArtifactHeaderForBodyV1 } from '@happier-dev/protocol/artifacts/artifactHeaderRestorationV1';
 import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
 import { artifactKindHasSharedWidgetInputsV1, artifactKindRequiresTextBodyV1, readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
-import { createArtifactPublicLinkActionsV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
+import { createArtifactPublicLinkActionsV1, readArtifactPublicLinksV1, type ArtifactPublicLinkRequestV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
 import { ArtifactBodyV1Schema, ArtifactBodyEnvelopeV1StoredSchema, ArtifactPrivateRevisionMetadataV1Schema, ArtifactPrivateRevisionMetadataV1StoredSchema, ArtifactBlobReferenceV1Schema, ArtifactBlobReadResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { frameSessionDataKeyBundleV0, readSessionDataKeyBundleV0 } from '@happier-dev/protocol/crypto/sessionDataKeyBundleV0';
 import { sealAesGcmPayloadWebCrypto, openAesGcmPayloadWebCrypto } from '@happier-dev/protocol/crypto/sessionDataKeyBundleWebCrypto';
 import { artifactHtmlBundleFromBodyV1, isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { projectTargetActionApprovalInvocationV1, TargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -47,13 +49,17 @@ import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions
 import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
-import { HttpStatusError, readHttpStatus } from '@/api/client/httpStatusError';
+import { createHttpStatusError, HttpStatusError, readHttpStatus } from '@/api/client/httpStatusError';
 import { createBackoff } from '@/utils/time';
 import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEditAcceptTransportInputV1Schema,
   DocEditDeclineTransportInputV1Schema, DocEditDecisionResultV1Schema,
   type DocEditAcceptHostInputV1, type DocEditDeclineInputV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 
 export type AccountArtifactRevision = Readonly<{ headerVersion: number; bodyVersion: number }>;
+
+function readArtifactStorageFailureCode(value: unknown) {
+  return value === 'database_transaction_conflict_exhausted' || value === 'database_connection_unavailable' ? value : null;
+}
 
 // Retry only the revision-fenced HTTP write, never its Action/native effect.
 // The existing transport backoff owns the retry budget. Identical bytes and
@@ -152,12 +158,6 @@ function requireCredentials(credentials: StoredCredentials): Credentials {
   return credentials;
 }
 
-/** Stable private occurrence identity belongs to the admitted Account codec owner. */
-function usageNoticeArtifactId(params: Readonly<{ accountId: string; notice: UsageNoticeArtifactHeaderV1['notice'];
-  mode: 'plain' | 'e2ee'; credentials: StoredCredentials }>): string {
-  return privateNoticeArtifactId({ ...params, occurrence: usageNoticeOccurrence(params) });
-}
-
 function usageNoticeOccurrence(params: Readonly<{ accountId: string; notice: UsageNoticeArtifactHeaderV1['notice'] }>): string {
   return JSON.stringify(params.notice.topic === 'resource_limit'
     ? ['happier:machine-vitals-notice-occurrence:v1', params.accountId, params.notice.machineId,
@@ -167,7 +167,14 @@ function usageNoticeOccurrence(params: Readonly<{ accountId: string; notice: Usa
 }
 
 function accountNoticeOccurrence(accountId: string, notice: Pick<AccountNoticeArtifactHeaderV1, 'source' | 'notice'>): string {
-  if (notice.source.kind === 'host' && notice.notice) return usageNoticeOccurrence({ accountId, notice: notice.notice });
+  if (notice.source.kind === 'host' && notice.notice) {
+    if (notice.notice.topic === 'follow_update') {
+      const original = notice.notice.follow.original;
+      return JSON.stringify(['happier:run-follow-notice:v1', accountId,
+        deriveSessionFollowOriginalOccurrenceKeyV1(original)]);
+    }
+    return usageNoticeOccurrence({ accountId, notice: notice.notice });
+  }
   return JSON.stringify(['happier:plugin-notice:v1', accountId, notice.source]);
 }
 
@@ -384,6 +391,25 @@ export function createAccountArtifactStore(params: Readonly<{
       : response.status === 404 || response.status === 405 ? 'artifact_access_unavailable' : 'artifact_access_failed';
     throw Object.assign(new HttpStatusError(response.status, code), { code, status: response.status });
   };
+  const readAccessGrants = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders) =>
+    ArtifactAccessGrantsListResponseV1Schema.parse(requireAccessResponse(await axios.get(accessUrl(artifactId, 'grants'),
+      await authorizedAccessConfig(artifactId, 'grants', 'GET', signal, authorizationHeaders))));
+  const requestPublicLink = async (request: ArtifactPublicLinkRequestV1, authorizationHeaders?: ArtifactRequestAuthorizationHeaders) => {
+    request.signal?.throwIfAborted();
+    const config = { ...accessConfig(request.signal), ...(authorizationHeaders ? { headers: await authorizationHeaders(request) } : {}) };
+    const url = `${resolveServerHttpBaseUrl()}${request.path}`;
+    const response = request.method === 'GET' ? await axios.get(url, config)
+      : request.method === 'DELETE' ? await axios.delete(url, config) : await axios.post(url, request.body, config);
+    if (response.status < 200 || response.status >= 300) {
+      const payload: unknown = response.data;
+      const code = payload !== null && typeof payload === 'object'
+        && Reflect.get(payload, 'error') === 'public_share_isolation_unavailable'
+        ? 'public_share_isolation_unavailable' : 'public_share_request_failed';
+      throw Object.assign(new Error(code), { code });
+    }
+    request.signal?.throwIfAborted();
+    return response.data;
+  };
   const prepare = async (stored: StoredArtifactHeader, codec: Codec, signal?: AbortSignal,
     authorizationHeaders?: ArtifactRequestAuthorizationHeaders) => {
     if (codec.mode === 'plain') return;
@@ -541,12 +567,15 @@ export function createAccountArtifactStore(params: Readonly<{
       throw Object.assign(new Error('artifact_html_content_invalid'), { code: 'artifact_html_content_invalid' });
     }
   };
-  const fetchHeaderPage = async (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>) => {
+  const fetchHeaderPage = async (options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; includeBody?: boolean; signal?: AbortSignal }>) => {
     options?.signal?.throwIfAborted();
     const url = new URL('/v1/artifacts', resolveServerHttpBaseUrl());
     if (options?.limit !== undefined) url.searchParams.set('limit', String(options.limit));
     if (options?.cursor) url.searchParams.set('cursor', options.cursor);
     if (options?.includeBody) url.searchParams.set('includeBody', 'true');
+    const coarseKind = options?.coarseKind;
+    const filtered = coarseKind !== undefined;
+    if (filtered && coarseKind !== undefined) url.searchParams.set('kind', coarseKind);
     const response = await axios.get(url.toString(), { headers: headers(),
       ...(options?.signal ? { signal: options.signal } : {}), validateStatus: () => true });
     options?.signal?.throwIfAborted();
@@ -555,13 +584,18 @@ export function createAccountArtifactStore(params: Readonly<{
         code: response.status === 400 ? 'invalid_cursor' : 'list_failed', status: response.status,
       });
     }
-    if (!Array.isArray(response.data)) throw Object.assign(new Error('artifact_list_failed'), { code: 'list_failed', status: response.status });
-    const rows: readonly unknown[] = response.data;
+    const data: unknown = response.data;
+    const rows: unknown = filtered && data && typeof data === 'object' ? Reflect.get(data, 'items') : data;
+    const hasUnclassified: unknown = filtered && data && typeof data === 'object' ? Reflect.get(data, 'hasUnclassified') : undefined;
+    if (!Array.isArray(rows) || (filtered && typeof hasUnclassified !== 'boolean')) {
+      throw Object.assign(new Error('artifact_list_failed'), { code: 'list_failed', status: response.status });
+    }
     const last = rows.at(-1);
     const nextCursor = options?.limit !== undefined && rows.length === options.limit
       && last && typeof last === 'object' && typeof Reflect.get(last, 'id') === 'string' && typeof Reflect.get(last, 'updatedAt') === 'number'
       ? encodeAccountArtifactListCursor({ artifactId: Reflect.get(last, 'id'), updatedAt: Reflect.get(last, 'updatedAt') }) : undefined;
-    return { rows, nextCursor };
+    return { rows: rows as readonly unknown[], nextCursor,
+      ...(typeof hasUnclassified === 'boolean' ? { hasUnclassified } : {}) };
   };
   /** Retain raw, body-free inventory only for the caller's finite preparation. */
   const createHeaderReader = (options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => {
@@ -715,6 +749,16 @@ export function createAccountArtifactStore(params: Readonly<{
     createHeaderReader,
     /** Standalone reads are fresh; finite callers share createHeaderReader instead. */
     readHeader: (artifactId: string, options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => createHeaderReader(options)(artifactId),
+    /** Exposure admission reads existing grants/publications without opening content or repairing keys. */
+    readExposure: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal; authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
+      options?.signal?.throwIfAborted();
+      const grants = await readAccessGrants(artifactId, options?.signal, options?.authorizationHeaders);
+      options?.signal?.throwIfAborted();
+      const publicShares = grants.access === 'owner' ? await readArtifactPublicLinksV1({ artifactId, signal: options?.signal,
+        request: request => requestPublicLink(request, options?.authorizationHeaders) }) : null;
+      options?.signal?.throwIfAborted();
+      return { grants, publicShares };
+    },
     publicLinks: async (args: Readonly<{ actionId: ArtifactPublicLinkActionIdV1; input: unknown; signal?: AbortSignal }>,
       onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>) => createArtifactPublicLinkActionsV1({
         randomBytes: getRandomBytes, onPublicLinkIssued,
@@ -728,20 +772,7 @@ export function createAccountArtifactStore(params: Readonly<{
             body: decodeBody(codec, stored.body), encryptionMode: codec.mode, dataKey: codec.dataKey,
             revision: { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion } };
         },
-        request: async (request) => {
-          const url = `${resolveServerHttpBaseUrl()}${request.path}`;
-          const config = accessConfig(request.signal);
-          const response = request.method === 'GET' ? await axios.get(url, config)
-            : request.method === 'DELETE' ? await axios.delete(url, config) : await axios.post(url, request.body, config);
-          if (response.status < 200 || response.status >= 300) {
-            const payload: unknown = response.data;
-            const code = payload !== null && typeof payload === 'object'
-              && Reflect.get(payload, 'error') === 'public_share_isolation_unavailable'
-              ? 'public_share_isolation_unavailable' : 'public_share_request_failed';
-            throw Object.assign(new Error(code), { code });
-          }
-          return response.data;
-        },
+        request: request => requestPublicLink(request),
       })(args),
     readBinary: async (input: Readonly<{ artifactId: string; body: ArtifactBodyV1; signal?: AbortSignal }>): Promise<Uint8Array> => {
       input.signal?.throwIfAborted();
@@ -770,8 +801,7 @@ export function createAccountArtifactStore(params: Readonly<{
     },
     accessGrants: {
       list: async (input: Readonly<{ artifactId: string }>, signal?: AbortSignal, options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
-        const result = ArtifactAccessGrantsListResponseV1Schema.parse(requireAccessResponse(await axios.get(accessUrl(input.artifactId, 'grants'),
-          await authorizedAccessConfig(input.artifactId, 'grants', 'GET', signal, options?.authorizationHeaders))));
+        const result = await readAccessGrants(input.artifactId, signal, options?.authorizationHeaders);
         await prepareCurrent(input.artifactId, signal, options?.authorizationHeaders);
         return result;
       },
@@ -833,6 +863,7 @@ export function createAccountArtifactStore(params: Readonly<{
         const response = await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`,
           { expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             header: codec.encode(withArtifactExcerptV1(nextHeader, retained.body)),
+            kind: deriveArtifactCoarseKindV1(nextHeader),
             ...provenance.wire }, accessConfig(signal));
         const quota = readQuotaFailure(response);
         if (quota) return quota;
@@ -855,9 +886,9 @@ export function createAccountArtifactStore(params: Readonly<{
       }
       return parsed.data;
     },
-    list: async (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>): Promise<Readonly<{ items: readonly AccountArtifactHeader[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> => {
+    list: async (options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; includeBody?: boolean; signal?: AbortSignal }>): Promise<Readonly<{ items: readonly AccountArtifactHeader[]; nextCursor?: string; hasUnclassified?: boolean; coverage: 'complete' | 'partial' }>> => {
       const startedAt = performance.now();
-      const { rows, nextCursor } = await fetchHeaderPage(options);
+      const { rows, nextCursor, hasUnclassified } = await fetchHeaderPage(options);
       const httpMs = performance.now() - startedAt;
       const timing = { accountModeMs: 0, codecMs: 0 };
       const items = await projectHeaderRows(rows, options ?? {}, timing);
@@ -866,7 +897,8 @@ export function createAccountArtifactStore(params: Readonly<{
         accountModeMs: Math.round(timing.accountModeMs), codecMs: Math.round(timing.codecMs),
         decodeAndProjectionMs: Math.round(performance.now() - startedAt - httpMs - timing.accountModeMs - timing.codecMs),
         durationMs: Math.round(performance.now() - startedAt) });
-      return { items, coverage: items.length === rows.length ? 'complete' : 'partial', ...(nextCursor ? { nextCursor } : {}) };
+      return { items, coverage: items.length === rows.length ? 'complete' : 'partial', ...(nextCursor ? { nextCursor } : {}),
+        ...(hasUnclassified === undefined ? {} : { hasUnclassified }) };
     },
     create: async (input: Readonly<{ artifactId?: string; noticeAccountId?: string; header: Readonly<Record<string, unknown>>; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal; beforeWrite?: () => void | Promise<void> }> & ArtifactWriteContent) => {
       input.signal?.throwIfAborted();
@@ -884,10 +916,8 @@ export function createAccountArtifactStore(params: Readonly<{
         if (!accountId || accountId !== input.noticeAccountId) {
           throw Object.assign(new Error('notice_account_scope_mismatch'), { code: 'notice_account_scope_mismatch' });
         }
-        artifactId = notice.source.kind === 'host' && notice.notice
-          ? usageNoticeArtifactId({ accountId, notice: notice.notice, mode: codec.mode, credentials: params.credentials })
-          : privateNoticeArtifactId({ occurrence: JSON.stringify(['happier:plugin-notice:v1', accountId, notice.source]),
-            mode: codec.mode, credentials: params.credentials });
+        artifactId = privateNoticeArtifactId({ occurrence: accountNoticeOccurrence(accountId, notice),
+          mode: codec.mode, credentials: params.credentials });
         if (await fetchStored(artifactId, input.signal)
           || await findRetainedNotice(accountId, accountNoticeOccurrence(accountId, notice), input.signal)) {
           throw Object.assign(new Error('conflict'), { code: 'conflict' });
@@ -897,7 +927,9 @@ export function createAccountArtifactStore(params: Readonly<{
       const content = await prepareWriteContent(codec, input);
       requireBodyForArtifactKind(input.header, content.body);
       input.signal?.throwIfAborted();
-      const header = codec.encode(withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body), content.body));
+      const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body), content.body);
+      const header = codec.encode(nextHeader);
+      const kind = deriveArtifactCoarseKindV1(nextHeader);
       const body = codec.encode({ body: content.body });
       const provenance = (await writeProvenance({ artifactId, bodyVersion: 1, savedBy: input.savedBy, source: input.source, signal: input.signal })).wire;
       // Host-owned admission is rechecked after preparation's last await and
@@ -906,10 +938,11 @@ export function createAccountArtifactStore(params: Readonly<{
       const response = content.blob?.content
         ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
           kind: 'create', artifactId, blobId: content.blob.blobId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance,
+          artifactKind: kind,
         }, content.blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
           ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
         : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts${input.memoryDecisionSource ? '/memory-decision/create' : content.blob ? '/content/binary' : ''}`, {
-        id: artifactId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance,
+        id: artifactId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance, kind,
         ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
         ...(content.blob ? { blob: content.blob } : {}),
       }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
@@ -920,7 +953,13 @@ export function createAccountArtifactStore(params: Readonly<{
         throw Object.assign(new Error(sourceError.data), { code: sourceError.data });
       if (response.status === 404 && input.memoryDecisionSource)
         throw Object.assign(new Error('memory_decision_source_unsupported'), { code: 'memory_decision_source_unsupported' });
-      if (response.status < 200 || response.status >= 300) throw Object.assign(new Error(response.status === 409 ? 'artifact_create_conflict' : 'artifact_create_failed'), { code: response.status === 409 ? 'conflict' : 'create_failed' });
+      if (response.status < 200 || response.status >= 300) {
+        // Only published storage codes may cross this boundary. Retain status
+        // without carrying Axios request headers or arbitrary server content.
+        const storageError = response.status === 503 ? readArtifactStorageFailureCode(response.data?.error) : null;
+        throw createHttpStatusError(response.status, storageError ?? (response.status === 409 ? 'artifact_create_conflict' : 'artifact_create_failed'),
+          storageError ?? (response.status === 409 ? 'conflict' : 'create_failed'));
+      }
       if (response.data?.id !== artifactId) {
         throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
       }
@@ -943,7 +982,9 @@ export function createAccountArtifactStore(params: Readonly<{
       const currentHeader = ArtifactHeaderMetadataV1Schema.safeParse(decode(codec, stored.header));
       if (!currentHeader.success) throw new ArtifactEncryptionMaterialUnavailableError();
       const context = await sharedWriteContext(stored, currentHeader.data, input.header, input.signal, content.body);
-      const header = codec.encode(withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body, context), content.body));
+      const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body, context), content.body);
+      const header = codec.encode(nextHeader);
+      const kind = deriveArtifactCoarseKindV1(nextHeader);
       const body = codec.encode({ body: content.body });
       const source = readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion)?.source;
       const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: input.expectedRevision.bodyVersion + 1, savedBy: input.savedBy, source, signal: input.signal }, stored, codec);
@@ -955,21 +996,27 @@ export function createAccountArtifactStore(params: Readonly<{
           const result = blob?.content
             ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
               kind: 'update', artifactId: input.artifactId, blobId: blob.blobId, header, body, ...provenance.wire,
+              artifactKind: kind,
               expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             }, blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
               ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
             : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}${input.memoryDecisionSource ? '/memory-decision' : blob !== undefined ? '/content/binary' : ''}`, {
               header, expectedHeaderVersion: input.expectedRevision.headerVersion,
               body, expectedBodyVersion: input.expectedRevision.bodyVersion,
-              ...provenance.wire,
+              ...provenance.wire, kind,
               ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
               ...(blob !== undefined ? { blob } : {}),
             }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
-          if (result.status >= 500) throw new HttpStatusError(result.status, 'artifact_update_unavailable');
+          if (result.status >= 500) {
+            const storageError = result.status === 503 ? readArtifactStorageFailureCode(result.data?.error) : null;
+            throw createHttpStatusError(result.status, storageError ?? 'artifact_update_unavailable', storageError ?? undefined);
+          }
           return result;
         });
       } catch (error) {
         if (error instanceof HttpStatusError && (readHttpStatus(error) ?? 0) >= 500) {
+          const storageError = readArtifactStorageFailureCode('code' in error ? error.code : undefined);
+          if (storageError) return { ok: false, errorCode: storageError, error: storageError } as const;
           return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
         }
         throw error;
@@ -1092,7 +1139,7 @@ export function createAccountArtifactStore(params: Readonly<{
       for (;;) {
         input.signal?.throwIfAborted();
         await input.beforeWrite?.();
-        const current = await store.read(artifactId, { signal: input.signal, includeSharedAudience: false })
+        const current: AccountArtifact | null = await store.read(artifactId, { signal: input.signal, includeSharedAudience: false })
           ?? await findRetainedNotice(accountId, occurrence, input.signal);
         if (current) artifactId = current.artifactId;
         const notice = current ? readAccountNoticeArtifactV1(current) : null;

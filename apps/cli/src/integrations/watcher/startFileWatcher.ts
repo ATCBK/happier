@@ -1,4 +1,4 @@
-import { on } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { statSync, watch } from 'node:fs';
 import { lstat, stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
@@ -73,6 +73,157 @@ async function isFileSymlink(file: string): Promise<boolean> {
     }
 }
 
+type DirectoryObservation = {
+    identity: string | null;
+    watcher: ReturnType<typeof watch>;
+    subscribers: Map<string | null, Set<EventEmitter>>;
+};
+
+const directoryObservations = new Map<string, DirectoryObservation>();
+
+/** events.on eagerly allocates two large FixedQueues per idle subscription.
+ * Keep this owner's ordered delivery queue lazy: native transcript corpora have
+ * many logical files sharing a small number of directory attachments. */
+function fileWatcherEvents(emitter: EventEmitter, signal: AbortSignal): AsyncIterableIterator<readonly unknown[]> {
+    type QueuedEvent = { event: readonly unknown[]; next: QueuedEvent | null };
+    let first: QueuedEvent | null = null;
+    let last: QueuedEvent | null = null;
+    let finished = false;
+    let failure: { error: unknown } | null = null;
+    let waiting: Readonly<{
+        resolve(result: IteratorResult<readonly unknown[]>): void;
+        reject(error: unknown): void;
+    }> | null = null;
+    const done: IteratorReturnResult<undefined> = { done: true, value: undefined };
+    const close = () => {
+        finished = true;
+        emitter.off('change', change);
+        emitter.off('error', error);
+        emitter.off('close', close);
+        signal.removeEventListener('abort', close);
+        const current = waiting;
+        waiting = null;
+        current?.resolve(done);
+    };
+    const change = (...event: unknown[]) => {
+        if (finished) return;
+        if (!waiting) {
+            const next: QueuedEvent = { event, next: null };
+            if (last) last.next = next;
+            else first = next;
+            last = next;
+            return;
+        }
+        const current = waiting;
+        waiting = null;
+        current.resolve({ done: false, value: event });
+    };
+    const error = (cause: unknown) => {
+        if (finished) return;
+        if (waiting) {
+            const current = waiting;
+            waiting = null;
+            current.reject(cause);
+        } else failure = { error: cause };
+        close();
+    };
+    emitter.on('change', change);
+    emitter.on('error', error);
+    emitter.on('close', close);
+    signal.addEventListener('abort', close, { once: true });
+    if (signal.aborted) close();
+    return {
+        next() {
+            if (first) {
+                const event = first.event;
+                first = first.next;
+                if (!first) last = null;
+                return Promise.resolve({ done: false as const, value: event });
+            }
+            if (failure) {
+                const cause = failure.error;
+                failure = null;
+                return Promise.reject(cause);
+            }
+            if (finished) return Promise.resolve(done);
+            return new Promise<IteratorResult<readonly unknown[]>>((resolve, reject) => { waiting = { resolve, reject }; });
+        },
+        return() {
+            first = null;
+            last = null;
+            failure = null;
+            close();
+            return Promise.resolve(done);
+        },
+        [Symbol.asyncIterator]() { return this; },
+    };
+}
+
+/** Native transcript files share parent observation, not delivery or recovery. */
+function observeDirectory(directory: string, directoryVersion: string, targetName: string | null) {
+    let observation = directoryObservations.get(directory);
+    if (!observation || observation.identity !== identity(directoryVersion)) {
+        const next: DirectoryObservation = {
+            identity: identity(directoryVersion),
+            watcher: watch(directory, { persistent: true }),
+            subscribers: new Map(),
+        };
+        directoryObservations.set(directory, next);
+        const forget = () => {
+            if (directoryObservations.get(directory) === next) directoryObservations.delete(directory);
+        };
+        next.watcher.on('change', (eventType, filename) => {
+            const name = typeof filename === 'string' && filename ? filename : null;
+            const dispatch = (all: boolean) => {
+                const groups = all ? next.subscribers.values()
+                    : [next.subscribers.get(name), next.subscribers.get(null)];
+                for (const group of groups) for (const events of group ?? []) events.emit('change', eventType, filename);
+            };
+            if (eventType !== 'rename' || name === null) {
+                dispatch(name === null);
+                return;
+            }
+            // A named rename usually concerns one file. Check parent identity
+            // once at the shared attachment, rather than statting it once per
+            // sibling transcript. Parent replacement still wakes every reader.
+            void readVersion(directory).then(
+                current => dispatch(identity(current) !== next.identity),
+                () => dispatch(true),
+            );
+        });
+        next.watcher.on('error', error => {
+            forget();
+            for (const group of next.subscribers.values()) for (const events of group) events.emit('error', error);
+        });
+        next.watcher.on('close', () => {
+            forget();
+            for (const group of next.subscribers.values()) for (const events of group) events.emit('close');
+        });
+        logger.debug('[FILE_WATCHER] Starting watcher');
+        observation = next;
+    }
+    const current = observation;
+    const events = new EventEmitter();
+    const group = current.subscribers.get(targetName) ?? new Set<EventEmitter>();
+    group.add(events);
+    current.subscribers.set(targetName, group);
+    let active = true;
+    return {
+        events,
+        close() {
+            if (!active) return;
+            active = false;
+            group.delete(events);
+            if (group.size === 0) current.subscribers.delete(targetName);
+            events.emit('close');
+            if (current.subscribers.size === 0) {
+                if (directoryObservations.get(directory) === current) directoryObservations.delete(directory);
+                current.watcher.close();
+            }
+        },
+    };
+}
+
 export function startFileWatcher(
     file: string,
     onFileChange: (file: string) => void | Promise<void>,
@@ -109,12 +260,10 @@ export function startFileWatcher(
                 // Watch the parent of a file so replacement/deletion keeps the
                 // same native observation. fs.watch attaches synchronously;
                 // readiness must not be reported before native attachment.
-                const watcher = watch(watchedDirectory, { persistent: true });
-                closeWatcher = () => watcher.close();
-                const events = on(watcher, 'change', {
-                    signal: abortController.signal,
-                    close: ['close'],
-                });
+                const parent = observeDirectory(watchedDirectory, directoryVersion, isDirectory ? null : targetName);
+                const watcher = parent.events;
+                closeWatcher = () => parent.close();
+                const events = fileWatcherEvents(watcher, abortController.signal);
                 // Parent events cover the logical entry. A symlink's content
                 // can change outside that directory, so retain native target
                 // observation within this same attachment and recovery owner.
@@ -123,7 +272,7 @@ export function startFileWatcher(
                 closeWatcher = () => {
                     closing = true;
                     targetWatcher?.close();
-                    watcher.close();
+                    parent.close();
                 };
                 targetWatcher?.on('change', (eventType) => {
                     if (!closing) watcher.emit('change', eventType, targetName);
@@ -136,10 +285,9 @@ export function startFileWatcher(
                 });
                 abortController.signal.addEventListener('abort', closeWatcher, { once: true });
                 if (abortController.signal.aborted) {
-                    watcher.close();
+                    closeWatcher();
                     return;
                 }
-                logger.debug('[FILE_WATCHER] Starting watcher');
                 const attachedEntry = await readEntry(file);
                 if (abortController.signal.aborted) return;
                 const currentVersion = attachedEntry ? version(attachedEntry) : null;

@@ -8,6 +8,7 @@ export type { SecureTempDirectoryInput } from '../fs.js';
 export type { SecureTempTextFileInput } from '../fs.js';
 export type { SqliteDatabaseSync } from './sqlite.js';
 export type { SqliteStatementSync } from './sqlite.js';
+export { canonicalAbsolutePathsEqual } from '../sessions/fileStores/paths.js';
 export { canonicalizePath } from '../sessions/fileStores/paths.js';
 export { canonicalizePathSync } from '../sessions/fileStores/paths.js';
 export { createAbsolutePathSymlink } from '../runtime/createAbsolutePathSymlink.js';

@@ -1,7 +1,7 @@
 import { forEachJsonSchemaChild } from './actionInputJsonSchema.js';
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 import { compilePluginJsonSchema } from '../plugins/actions/jsonSchemaValidation.js';
-import { type PluginJsonSchemaValidator } from '../plugins/actions/protocolComposableSchema.js';
+import type { PluginJsonSchemaValidator } from '../plugins/actions/protocolComposableSchema.js';
 import { cloneStrictPluginJsonValue } from '../plugins/contributions/strictJsonValue.js';
 
 export { readCompleteActionSpecV1 } from './actionSpecSections.js';

@@ -53,6 +53,7 @@ type DaemonProviderLaunchRefusal = Readonly<{
 }>;
 
 export async function prepareDaemonProviderLaunch(input: Readonly<{
+    signal?: AbortSignal;
     options: SpawnSessionOptions;
     effectiveBackendTarget: BackendTargetRefV2;
     catalogAgentId: CatalogAgentId | null;
@@ -190,6 +191,7 @@ export async function prepareDaemonProviderLaunch(input: Readonly<{
             managedPurposeBindingSnapshot,
         }) => {
             return createRuntimeProviderSpawnAuthorizationAttempt({
+                signal: input.signal,
                 selection,
                 machineId,
                 agentTargetKey,

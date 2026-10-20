@@ -69,7 +69,8 @@ describe('BoardsColumn collection search', () => {
                 } : artifact);
                 for (const row of rows) artifactBoundary.replaceStoredRow(row);
                 if (request.path === '/v1/artifacts' && indexGate) await indexGate;
-                if (request.path === '/v1/artifacts') return Response.json(rows);
+                // The Artifact server selects by coarse kind and reports completeness; every row here is classified.
+                if (request.path === '/v1/artifacts') return Response.json(request.url.searchParams.has('kind') ? { items: rows, hasUnclassified: false } : rows);
                 const artifact = rows.find(row => request.path === `/v1/artifacts/${row.id}`);
                 if (artifact && bodyGate) await bodyGate;
                 if (artifact?.id === 'alpha' && unreadableAlpha) return Response.json({ ...artifact,

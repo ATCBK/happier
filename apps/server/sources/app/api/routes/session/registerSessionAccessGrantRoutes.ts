@@ -116,7 +116,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 const recipientAccountId = mutation.directShare.sharedWithUserId;
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId,
-                    cursor: mutation.effects.accountCursors.get(recipientAccountId) ?? 0,
+                    publication: mutation.effects.accountCursors.get(recipientAccountId),
                     event: projectReleasedDirectShareEvent({
                         recipientAccountId,
                         effects: mutation.effects,
@@ -167,7 +167,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 const recipientAccountId = mutation.removedDirectShare.sharedWithUserId;
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId,
-                    cursor: mutation.effects.accountCursors.get(recipientAccountId) ?? 0,
+                    publication: mutation.effects.accountCursors.get(recipientAccountId),
                     event: projectReleasedDirectShareEvent({
                         recipientAccountId,
                         effects: mutation.effects,

@@ -5,7 +5,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone.web';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';

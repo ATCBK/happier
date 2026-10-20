@@ -41,6 +41,10 @@ describe('remembered launch profile through real New Session state', () => {
         await upsertAndActivateServer({ serverUrl: savedHome.serverUrl });
         await restoreConnectionToActiveServer({ token: savedHome.token });
         const scope = { serverId: savedHome.id, accountId: 'owner' };
+        await vi.waitFor(() => {
+            expect(storage.getState().isDataReady).toBe(true);
+            expect(storage.getState().settingsScope).toEqual(scope);
+        });
         const machine = createMachineFixture({ id: 'studio', active: true, activeAt: Date.now() });
         storage.setState({ profileScope: scope, settingsScope: scope,
             settings: { ...settingsDefaults, useProfiles: true, useEnhancedSessionWizard: false },

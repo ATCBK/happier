@@ -114,6 +114,7 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       startAutomationWorkerForMachine: vi.fn(() => automationWorker),
       startMemoryWorkerForMachine,
       startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+      spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' })),
       spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' })),
       stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
       isSessionAlreadyRunning: vi.fn(async () => false),

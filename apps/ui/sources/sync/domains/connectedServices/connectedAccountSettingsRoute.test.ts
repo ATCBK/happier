@@ -34,6 +34,15 @@ const entries: readonly ConnectedServiceRegistryEntry[] = [{
 }];
 
 describe('connectedAccountSettingsRoute', () => {
+    it('opens source purpose setup on the invoking Home and machine', () => {
+        const purpose = { consumer: { pluginId: 'acme.source', localId: 'discover' }, purpose: 'source-api' };
+        expect(buildConnectedAccountsSettingsRoute({ service: entries[0]!.service!, purpose }, {
+            scope: { serverId: 'home', accountId: 'viewer' }, machineId: 'machine',
+        })).toEqual({ pathname: '/(app)/settings/connected-services/connect', params: {
+            purposeConsumerPlugin: 'acme.source', purposeConsumerId: 'discover', purpose: 'source-api',
+            purposeServerId: 'home', purposeAccountId: 'viewer', purposeMachineId: 'machine',
+        } });
+    });
     it('owns the semantic plugin navigation mapping for the overview, service, and account focus', () => {
         expect(buildConnectedAccountsSettingsRoute({})).toBe('/(app)/settings/connected-services');
         expect(buildConnectedAccountsSettingsRoute({

@@ -40,6 +40,60 @@ import { isDeepStrictEqual } from 'node:util';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+
+it('closes selected receiving admission while existing creation drains, then reopens on release', async () => {
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+  let releaseCreation!: () => void;
+  const held = new Promise<void>(resolve => { releaseCreation = resolve; });
+  let starts = 0;
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { starts++; await held; return { runId: 'run' }; });
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, async () => ({ runs: [] }));
+  const creating = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]);
+  try {
+    const late = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    expect(starts).toBe(1);
+    const transported = await rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    expect(transported).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(transported.details)).toBe('noRunCreated');
+    releaseCreation();
+    await creating;
+    await idle;
+    const refused = await late as { errorCode: string; details?: unknown };
+    expect(refused).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(refused.details)).toBe('noRunCreated');
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {})).resolves.toEqual({ runs: [] });
+    reopen();
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ runId: 'run' });
+  } finally { releaseCreation(); reopen(); await creating; }
+});
+
+it('preserves closed-gate no-Run evidence through the bound encrypted transport codec', async () => {
+  const key = new Uint8Array(32).fill(9);
+  const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+    encryptRaw: async value => encodeBase64(encrypt(key, 'legacy', value)),
+    decryptRaw: async value => decrypt(key, 'legacy', decodeBase64(value)),
+  } };
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'e2ee', encryptionKey: key, encryptionVariant: 'legacy', logger: () => {} });
+  const method = `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`;
+  const callId = '0123456789abcdef0123456789abcdef';
+  const handler = vi.fn(async () => ({ runId: 'unexpected' }));
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  try {
+    const params = await socketRpcCodec.encodeParams(content, {}, { method, callId });
+    const result = await rpc.handleRequest({ method, params });
+    const decoded = await socketRpcCodec.decodeResult(content, { ok: true, result }, callId) as { details?: unknown };
+    expect(readExecutionRunStartRunCreation(decoded.details)).toBe('noRunCreated');
+    expect(handler).not.toHaveBeenCalled();
+  } finally { reopen(); }
+});
 
 const bindingCallId = '0123456789abcdef0123456789abcdef';
 const boundWorkspaceModel = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'codex', providerConnectionId: null, modelId: 'bound-model' });
@@ -910,12 +964,23 @@ it.each([
   expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(admitted))).toEqual({
     proof, constraints: { models: null, permissionModes: ['read-only'] },
   });
+  const otherMethod = method === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+    ? RPC_METHODS.SESSION_USER_ACTION_ANSWER : SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND;
+  const otherActionId = actionId === 'session.message.send' ? 'session.user_action.answer' : 'session.message.send';
+  rpc.registerHandler(otherMethod, effect);
+  const changedMethod = { ...request, method: `session-a:${otherMethod}`,
+    params: await sealRpcRequest(encryptionKey, `session-a:${otherMethod}`, input) };
   for (const refused of [
     { ...admitted, params: 'not-valid-ciphertext' },
+    { ...admitted, params: await sealRpcRequest(encryptionKey, request.method, { ...input, changed: true }) },
     { ...admitted, requestId: 'rpc-input-2' },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, target: { kind: 'session' as const, sessionId: 'session-b' } } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, machineId: 'machine-b' } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: 'session.goal.set' } } },
+    { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: otherActionId } } },
+    { ...admitted, ...changedMethod, callerInputAuthorization: { ...proof, binding: { ...proof.binding,
+      requestEnvelopeDigest: computeExternalActionSocketRpcRequestDigestV1({ ...changedMethod, target }),
+    } } },
   ]) {
     expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(refused)))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
@@ -1324,6 +1389,19 @@ describe('RpcHandlerManager.invokeLocal', () => {
     } };
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: true, accountId: 'bob',
       authority: 'account_automation', permissionModes: ['read-only'] });
+    const { callerInputConstraints, ...admittedAuthority } = options.rpcContext;
+    await expect(rpc.invokeLocal('demo.resume', {}, { rpcContext: admittedAuthority,
+      localActionContext: { callerInputConstraints },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    await expect(rpc.invokeLocal('demo.resume', { callerInputConstraints }, { rpcContext: admittedAuthority }))
+      .resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: undefined });
+    await expect(rpc.invokeLocal('demo.resume', {}, { ...options,
+      localActionContext: { callerInputConstraints: { models: null, permissionModes: null } },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    rpc.registerHandler('demo.ceiling', async (_input, context) => context?.callerInputConstraints ?? null);
+    await expect(rpc.invokeLocal('demo.ceiling', {}, { localActionContext: { callerInputConstraints } }))
+      .resolves.toEqual(callerInputConstraints);
+    await expect(rpc.invokeLocal('demo.ceiling', { callerInputConstraints })).resolves.toBeNull();
     current = false;
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: false });
     await expect(rpc.invokeLocal('demo.resume', { machineAdmission }, { localActionContext: { surface: 'ui', authority: 'present_user' } })).resolves.toEqual({ ok: false });
@@ -1991,6 +2069,62 @@ describe('RpcHandlerManager in-flight request tracking', () => {
     await idlePromise;
 
     expect(idleResolved).toBe(true);
+  });
+
+  it('cancels only the idle observer while an admitted request keeps its custody', async () => {
+    const handler = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler('demo.preparing', async () => { await handler.promise; return { ok: true }; });
+    const request = rpc.invokeLocal('demo.preparing', {});
+    const cancellation = new AbortController();
+    const cancelled = rpc.waitForIdle(cancellation.signal);
+    const retired = new Error('observer retired');
+    const rejection = expect(cancelled).rejects.toBe(retired);
+    const incumbent = rpc.waitForIdle();
+    cancellation.abort(retired);
+    try {
+      await rejection;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+    } finally { handler.resolve(); await request; await incumbent; }
+    await expect(rpc.waitForIdle(cancellation.signal)).rejects.toBe(cancellation.signal.reason);
+  });
+
+  it('observes selected Run admission custody without waiting for an unrelated long-lived reader', async () => {
+    const reader = createDeferredVoid();
+    const admission = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { await admission.promise; return { runId: 'run' }; });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, async () => { await reader.promise; return {}; });
+    const read = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, {});
+    const start = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve(); expect(settled).toBe(false);
+      admission.resolve(); await start; await idle;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+      expect(settled).toBe(true);
+    } finally { admission.resolve(); reader.resolve(); await start; await read; await idle; }
+  });
+
+  it('retains selected Run-start custody while receiving-host authorization is still pending', async () => {
+    const authorization = createDeferredVoid();
+    const entered = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {},
+      authorizeRequest: async () => { entered.resolve(); await authorization.promise; return { ok: true }; } });
+    const handler = vi.fn(async () => ({ runId: 'admitted-run' }));
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+    const request = rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    await entered.promise;
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve();
+      expect(handler).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+    } finally { authorization.resolve(); await request; await idle; }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
   });
 });
 

@@ -33,6 +33,15 @@ menu placement, not Action invocation. Discovery never creates a source and neve
 returns credential material; source administration retains its shared approval
 default for Account writes.
 
+Source settings supplies its discovery Action's `connectedAccountPurpose` to
+the shared settings factory. Connect/Manage opens the host's existing purpose
+setup for that qualified Action. Selecting an existing account or pool writes
+the canonical purpose default; return and Refresh to discover candidates.
+Creating a connection alone does not bind this purpose. Agents use the same
+approval-controlled `connectedServices.purposes.default.set` Action with the
+declaration machine, qualified discovery consumer/purpose, and exact target.
+Discovery retains `use` authority and performs no selection write.
+
 Account-only sources declare their Action inputs with the shared
 `TriageSourceConnectedAccountInputsV1` schemas from the same protocol owner.
 These preserve each role's fields while requiring a configured-account instance.
@@ -51,6 +60,13 @@ all three authority arms distinct.
 [`sources/administer-v1`](../packages/triage-protocol/src/v1/sourceAdministration.ts) is the one caller-bound lifecycle mutation ABI: create, reconfigure, remove and reactivate. [`sources/read-configured-v1`](../packages/triage-protocol/src/v1/configuredInstances.ts) is its read half. An optional `source` names an admitted contribution address, never caller provenance. The host stamps provenance, and the target's [`callerSource.ts`](../packages/plugins/triage/src/actions/callerSource.ts) resolves the admitted source before either Action exposes or changes rows. Plugin callers stay within their own source. Host agent/MCP/CLI callers can read all admitted configured sources or filter by that address; create requires an exact admitted source address, while lifecycle operations resolve the source from their stored instance and reject an inconsistent supplied address.
 
 Triage's [`administerConfiguredSourceInstance.ts`](../packages/plugins/triage/src/corpus/configuration/administerConfiguredSourceInstance.ts) owns configured-instance writes and the exact source-ownership comparison. [`readConfiguredSourceRows.ts`](../packages/plugins/triage/src/corpus/configuration/readConfiguredSourceRows.ts) supplies the shared active-row read and cursor handling. Discovery produces candidates, not automatic durable creation; mounted source Settings uses the administration Action rather than a direct Collection writer. The read ABI distinguishes complete from truncated results and refuses invalid or changed caller authority.
+
+Uninstalling or disabling a source does not retire its configured instances. The
+mounted list and Manage sources retain those active Account records, with the
+list reporting that source as unavailable. The caller-scoped configured read
+filters by currently admitted contributions, so its complete result may contain
+fewer records than those Account-backed surfaces; that difference alone does
+not establish stale mounted configuration.
 
 In 0.3 development source, the durable `source-instances` Collection is v4. Its
 binding admits credentialless current Account data; the preceding v3 also admitted
@@ -92,6 +108,23 @@ uncertain write. Sources reuse
 when their provider contract requires at-most-once confirmation. Task body
 inputs preserve multiline document text; row-display strings retain their
 existing single-line projection rules.
+
+For task editing, the existing exact `get` result can return optional
+`taskFields`, using the same closed field vocabulary as edit inputs. Each
+included value is complete; an omitted value means unavailable. These values
+stay local to the edit read and never enter scan results, snapshots or the
+retained list projection. The generic detail form loads them before editing,
+offers only fields declared in `taskCapabilities.editFields` whose current
+values were returned, and submits only changes through `tasks/edit-v1`.
+Snapshot `projectionTruncated` describes display completeness and does not
+disable an unrelated complete field. Sources without full values remain
+readable and show the edit-read failure rather than seeding an empty field.
+
+Task create, edit and transition controls follow the selected source's declared
+roles, configured instance and host execution readiness. An age-stale list or an
+unrelated unavailable source does not disable a ready task's controls. Pending
+or unavailable Machine execution still disables writes, and the source Action
+retains authorization and confirming-read authority.
 
 Task category is derived by the single public `triageTaskStatusCategoryV1`
 mapper from the existing entry state, including its optional active stage and
@@ -159,6 +192,13 @@ selects the declared source role, refuses a failed source write without falling
 through, and explicitly removes an existing v2 duplicate only after the source
 commit. Detail/header and Session cockpit consume the same source relationship
 projection; unavailable source reads retain known work with a stale notice.
+The Session-source read reports coverage per configured instance. A missing
+contribution or failed source role leaves healthy sources readable and returns
+`partial` coverage with the unavailable source named; typed source failures and
+safe invocation codes remain in that lane's diagnostic. A source that declares
+neither relationship role uses the external Collection reader. Incomplete reads
+never become a complete empty cockpit. Refresh replaces healthy-source links
+while retaining last-known links only for sources whose read remains incomplete.
 Legacy `/zen` links redirect to Tasks and keep the selected task identity. The
 Zen-specific draft/start/link route is retired; Start/Send uses the ordinary
 entry attachment and Session orchestrator.

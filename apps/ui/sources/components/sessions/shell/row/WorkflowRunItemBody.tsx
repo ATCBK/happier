@@ -189,7 +189,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
             </View>}
             showChevron={false}
             accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
-            onPress={() => router.push(createWorkflowRunRoute(props.runId) as never)} />
+            onPress={() => router.push(createWorkflowRunRoute(props.runId, props.serverId) as never)} />
     );
     return <GlassSurface testID={`workflow-run-sheet:${props.runId}`} surfaceGroup="card" nested finishRole={null}
         solidColor={theme.colors.surface.base} style={[styles.sheet, {
@@ -217,11 +217,11 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                     {lifecycle.marker.kind !== 'activity' || status.tone !== 'neutral'
                         ? <SessionListRowSubtitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale} style={[styles.statusWord, workStatusWordStyle(status.tone)]}>{word}</SessionListRowSubtitle> : null}
                 </View>}
-                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId)} style={style}>
+                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId, props.serverId)} style={style}>
                     <Pressable style={style} testID={`workflow-run-row:${props.runId}`}
                     accessibilityRole="button" accessibilityState={{ selected: props.selected === true }}
                     accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
-                    onPress={() => router.push(createWorkflowRunRoute(props.runId) as never)}>{content}</Pressable>
+                    onPress={() => router.push(createWorkflowRunRoute(props.runId, props.serverId) as never)}>{content}</Pressable>
                 </WorkspaceDestinationRow>}>
                 {context || starterLabel || resultLine !== null ? <View style={styles.context}>
                     {summary.startedBy === 'trigger' || summary.startedBy === 'agent'

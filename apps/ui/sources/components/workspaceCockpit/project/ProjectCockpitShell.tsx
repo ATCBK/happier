@@ -13,6 +13,7 @@ import { ProjectRightPanelBrowserView } from '@/components/projects/detail/brows
 import { ProjectRightPanelServicesView } from '@/components/projects/detail/services/ProjectRightPanelServicesView';
 import { ProjectScriptsBody } from '@/components/projects/projectSetup/ProjectScriptsBody';
 import { ProjectContextBody } from '@/components/projects/context/ProjectContextBody';
+import { ProjectMemoryBody } from '@/components/projects/memory/ProjectMemoryBody';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { useServicesOpenInBrowser } from '@/components/sessions/localServices/useServicesOpenInBrowser';
@@ -42,8 +43,8 @@ type ProjectCockpitShellProps = Readonly<{
 export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) => (
     <CheckoutReachabilityScope scope={props.workspaceRef}>
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-            {/* Context leads with its own header, so it places the line beneath it (`ProjectContextBody`). */}
-            {props.surface === 'context' ? null : <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />}
+            {/* Context and Memory lead with their own header and read memory, not the checkout. */}
+            {props.surface === 'context' || props.surface === 'memory' ? null : <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />}
             <ProjectCockpitSurface {...props} />
         </View>
     </CheckoutReachabilityScope>
@@ -208,6 +209,10 @@ const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
 
     if (props.surface === 'context') {
         return <ProjectContextBody workspaceRef={props.workspaceRef} testID="project-context-screen" />;
+    }
+
+    if (props.surface === 'memory') {
+        return <ProjectMemoryBody workspaceRef={props.workspaceRef} testID="project-memory-screen" />;
     }
 
     return (

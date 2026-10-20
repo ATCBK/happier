@@ -1,5 +1,5 @@
 import { computeTeamCredentialSourceMemberKeyV1, materializeTeamCredentialDirectMaterialV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
-import type { TeamCredentialDirectMaterialExpected, TeamCredentialDirectMaterialPayloadV1, TeamCredentialDirectMaterialStoredV1, TeamCredentialDirectMaterialOpenRequestV1, TeamCredentialErrorCodeV1 } from '@happier-dev/protocol/teams';
+import type { TeamCredentialDirectMaterialExpected, TeamCredentialDirectMaterialPayloadV1, TeamCredentialDirectMaterialStoredV1, TeamCredentialDirectMaterialOpenRequestV1, TeamCredentialDirectMaterialMineResponseV1, TeamCredentialErrorCodeV1 } from '@happier-dev/protocol/teams';
 import {
   fetchTeamCredentialDirectMaterial,
   TeamCredentialDirectMaterialHttpContractError,
@@ -37,12 +37,15 @@ type RecipientEncryptionMaterial =
   | Readonly<{ mode: 'e2ee'; secretKeyOrSeed: Uint8Array }>
   | Readonly<{ mode: 'e2ee_unavailable' }>;
 
+type AdmittedResource = NonNullable<Extract<TeamCredentialDirectMaterialMineResponseV1, { status: 'ready' }>['admittedResource']>;
+
 type CurrentMaterialRead =
   | Readonly<{
       ok: true;
       recipientMode: 'plain' | 'e2ee';
       stored: TeamCredentialDirectMaterialStoredV1;
       expected: TeamCredentialDirectMaterialExpected;
+      admittedResource?: AdmittedResource;
     }>
   | Readonly<{ ok: false; reason: TeamCredentialDirectMaterialUnavailableReason }>
   | Readonly<{ ok: false; operationError: TeamCredentialDirectMaterialOperationFailure }>;
@@ -52,7 +55,7 @@ export type TeamCredentialDirectMaterialClient = Readonly<{
     teamId?: string;
     signal?: AbortSignal;
   }>): Promise<
-    | Readonly<{ ok: true; payload: TeamCredentialDirectMaterialPayloadV1 }>
+    | Readonly<{ ok: true; payload: TeamCredentialDirectMaterialPayloadV1; admittedResource?: AdmittedResource }>
     | Readonly<{ ok: false; reason: TeamCredentialDirectMaterialUnavailableReason }>
     | Readonly<{ ok: false; operationError: TeamCredentialDirectMaterialOperationFailure }>
   >;
@@ -100,7 +103,14 @@ export function createTeamCredentialDirectMaterialClient(dependencies: Readonly<
       if (computeTeamCredentialSourceMemberKeyV1(payload.sourceMember) !== current.expected.sourceMemberKey) {
         return { ok: false, reason: 'invalid_material' };
       }
-      return { ok: true, payload };
+      if (current.admittedResource && current.admittedResource.teamId !== payload.teamId) {
+        return { ok: false, reason: 'invalid_material' };
+      }
+      return {
+        ok: true,
+        payload,
+        ...(current.admittedResource ? { admittedResource: current.admittedResource } : {}),
+      };
     },
   });
 }
@@ -137,7 +147,10 @@ export function createHttpTeamCredentialDirectMaterialClient(params: Readonly<{
           return { ok: false, operationError: result.error };
         }
         return result.status === 'ready'
-          ? { ok: true, recipientMode: result.recipientMode, stored: result.stored, expected: result.expected }
+          ? {
+              ok: true, recipientMode: result.recipientMode, stored: result.stored, expected: result.expected,
+              ...(result.admittedResource ? { admittedResource: result.admittedResource } : {}),
+            }
           : { ok: false, reason: result.reason };
       } catch (error) {
         input.signal?.throwIfAborted();

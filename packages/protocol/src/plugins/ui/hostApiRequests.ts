@@ -9,6 +9,7 @@ import {
   type PluginContributionIdentityV1,
 } from '../contributionIdentity.js';
 import { PluginIdSchema } from '../pluginId.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../../connect/connectedAccountPurposeIdentity.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import {
   QualifiedConnectedAccountIdSchema,
@@ -468,6 +469,7 @@ export const PluginUiOpenConnectedAccountsRequestV1Schema = lazyZodSchema(() => 
   z.strictObject({
     service: asProtocolZod(PluginContributionIdentityV1Schema),
     accountId: zMini.optional(asProtocolZod(QualifiedConnectedAccountIdSchema)),
+    purpose: zMini.optional(QualifiedConnectedAccountPurposeV1Schema),
   }),
 ]));
 export type PluginUiOpenConnectedAccountsRequestV1 =

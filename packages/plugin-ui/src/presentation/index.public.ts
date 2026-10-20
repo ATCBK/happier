@@ -16,8 +16,6 @@ export type {
   HappierStyleProp,
   HappierTextSelection,
 } from './portableTypes.js';
-export { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from './layout/pageMetrics.js';
-export { resolveHappierRowTitleMetaPlacement } from './layout/pageRowMetrics.js';
 export { HappierRowOperationContext } from './collection/rowOperation.js';
 export {
   HappierItemAddRow,
@@ -229,6 +227,7 @@ export {
   type HappierListDetailLayoutState,
 } from './collection/ListDetailLayout.js';
 export {
+  HappierCollectionNavigationBackClosesDetailContext,
   useHappierCollectionIndexView,
   useHappierCollectionLayout,
   type HappierCollectionIndexView,
@@ -273,12 +272,14 @@ export {
   HappierCollectionList,
   HappierCollectionListGroupLabel,
   HappierCollectionListMark,
+  HappierCollectionRestingRowsContext,
   useHappierCollectionDraftRowTitle,
   type HappierCollectionListFilters,
   type HappierCollectionListHost,
   type HappierCollectionListProps,
   type HappierCollectionListSearch,
   type HappierCollectionListTextRole,
+  type HappierCollectionRestingRows,
 } from './collection/CollectionList.js';
 export {
   HAPPIER_COLLECTION_DETAIL_SLIDE,

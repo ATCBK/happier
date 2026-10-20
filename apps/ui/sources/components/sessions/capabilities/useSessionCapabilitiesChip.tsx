@@ -9,6 +9,7 @@ import { projectWorkspaceRefV1, resolveWorkspaceRefV1 } from '@happier-dev/proto
 import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import type { Message } from '@happier-dev/session-core/messages';
 
+import type { CapabilityCost } from '@/components/capabilities/facts/CapabilityFacts';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import type {
@@ -53,6 +54,7 @@ import {
 } from './SessionCapabilitiesContent';
 import {
   buildSessionCapabilitiesModel,
+  type SessionCapabilitiesLastKnown,
   type SessionCapabilitiesModel,
   type SessionCapabilitiesModelInput,
 } from './sessionCapabilitiesModel';
@@ -111,6 +113,8 @@ export function useSessionCapabilitiesDetail(
   target: SheetTarget,
   modelInput: ModelInput,
   machineName: string,
+  /** The cost facts the sheet last knew: shown while the Account rows they come from are read again. */
+  lastKnownCosts?: SessionCapabilitiesLastKnown['costs'],
 ) {
   const router = useRouter();
   const active = useActiveServerSnapshot(!serverId);
@@ -207,27 +211,28 @@ export function useSessionCapabilitiesDetail(
   const startSignIn = React.useRef(signIn.start);
   startSignIn.current = signIn.start;
   React.useEffect(() => { if (signInRequest) void startSignIn.current({ stepUp: signInRequest.stepUp }); }, [signInRequest]);
+  const freshCost = React.useCallback((kind: 'skill' | 'mcp_server', id: string): CapabilityCost | null => {
+    if (kind === 'skill') {
+      const cost = skills.get(id)?.cost;
+      return cost ? { tokensWhenUsed: cost.bodyTokens } : null;
+    }
+    const entry = servers.get(id);
+    const snapshot = entry?.toolsSnapshot;
+    if (!entry || !snapshot) return null;
+    const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities?.tools
+      ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
+    const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
+    const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
+      annotations: tool.annotations, permissionMode: 'default' }).exposed);
+    return { toolCount: tools.length, tokensPerTurn: tools.reduce((sum, tool) => sum + tool.tokens, 0) };
+  }, [skills, servers, agentId, machine?.agentDeclarationsById]);
   const detail = React.useMemo<Detail>(
     () => ({
       rules,
       names,
       context,
       nativeSkills,
-      cost: (kind, id) => {
-        if (kind === 'skill') {
-          const cost = skills.get(id)?.cost;
-          return cost ? { tokensWhenUsed: cost.bodyTokens } : null;
-        }
-        const entry = servers.get(id);
-        const snapshot = entry?.toolsSnapshot;
-        if (!entry || !snapshot) return null;
-        const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities?.tools
-          ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
-        const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
-        const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
-          annotations: tool.annotations, permissionMode: 'default' }).exposed);
-        return { toolCount: tools.length, tokensPerTurn: tools.reduce((sum, tool) => sum + tool.tokens, 0) };
-      },
+      cost: (kind, id) => freshCost(kind, id) ?? lastKnownCosts?.get(`${kind}:${id}`) ?? null,
       skillStatus: (skillId) => {
         const item = skills.get(skillId);
         return skillStatus(item ?? null, undefined, { skillId, plan: modelInput.view?.skills.plan ?? null, notices, machineName,
@@ -262,7 +267,7 @@ export function useSessionCapabilitiesDetail(
         });
       },
     }),
-    [context, nativeSkills, agentId, machine?.agentDeclarationsById, notices, machineName, modelInput.view?.skills.plan, signInRequest, signIn.fact,
+    [context, nativeSkills, freshCost, lastKnownCosts, notices, machineName, modelInput.view?.skills.plan, signInRequest, signIn.fact,
       signInMachines, diagnostics, rules, names, skills, servers, savedSecretCatalog, grants, machineOnline, router],
   );
   const renderMark = React.useCallback(
@@ -290,9 +295,13 @@ function SessionCapabilitiesSheet(
     maxHeight: number;
     target: SheetTarget;
     undo?: SessionCapabilitiesUndo | null;
+    /** What the chip remembers of this Session's last sheet (read once, when the sheet opens). */
+    readKnown: () => SessionCapabilitiesLastKnown | null;
+    onKnown: (known: SessionCapabilitiesLastKnown) => void;
   }>,
 ) {
   const router = useRouter();
+  const [known] = React.useState(props.readKnown);
   const { detail, renderMark } = useSessionCapabilitiesDetail(
     props.serverId,
     props.base.machineOnline !== false,
@@ -300,6 +309,7 @@ function SessionCapabilitiesSheet(
     props.target,
     props.modelInput,
     props.machineName,
+    known?.costs,
   );
   const model = React.useMemo(
     () =>
@@ -315,6 +325,18 @@ function SessionCapabilitiesSheet(
     () => onAttention(model.attention),
     [onAttention, model.attention],
   );
+  // The chip keeps what this sheet now knows, so the next open holds its size and its cost facts.
+  const { onKnown } = props;
+  const { view } = props.modelInput;
+  React.useEffect(() => {
+    if (view === null) return;
+    const costs = new Map<string, CapabilityCost>();
+    for (const item of [...view.skills.items, ...view.mcp.items]) {
+      const cost = detail.cost?.(item.kind, item.id);
+      if (cost) costs.set(`${item.kind}:${item.id}`, cost);
+    }
+    onKnown({ rows: { skills: model.groups[0].rows.length, mcp: model.groups[1].rows.length }, costs });
+  }, [view, detail, model.groups, onKnown]);
   const onOpen = React.useCallback(
     (destination: 'skills' | 'mcp') =>
       router.push(
@@ -334,6 +356,7 @@ function SessionCapabilitiesSheet(
       renderMark={renderMark}
       machineName={props.machineName}
       maxHeight={props.maxHeight}
+      knownRows={known?.rows}
       testID="session-capabilities"
     />
   );
@@ -375,6 +398,18 @@ function useCapabilitiesChip(
   // Unknown is never zero: until the first preview the chip names what it holds, not "0 skills".
   const label = modelInput.view ? model.chipLabel : `${t('capabilities.skills.title')} · MCP`;
   const attention = model.attention || sheetAttention;
+  // What this Session's sheet last knew (its rows and cost facts), in memory only: the chip outlives the open sheet.
+  const knownRef = React.useRef<Readonly<{ key: string; known: SessionCapabilitiesLastKnown }> | null>(null);
+  const readKnown = React.useCallback(
+    () => (knownRef.current?.key === stabilityKey ? knownRef.current.known : null),
+    [stabilityKey],
+  );
+  const onKnown = React.useCallback(
+    (known: SessionCapabilitiesLastKnown) => {
+      knownRef.current = { key: stabilityKey, known };
+    },
+    [stabilityKey],
+  );
   return React.useMemo(
     () =>
       createCapabilitiesActionChip({
@@ -398,10 +433,14 @@ function useCapabilitiesChip(
             maxHeight={maxHeight}
             target={target}
             undo={undo}
+            readKnown={readKnown}
+            onKnown={onKnown}
           />
         ),
       }),
     [
+      readKnown,
+      onKnown,
       label,
       attention,
       modelInput,

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useLocalSetting } from '@/sync/store/hooks';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 export type HomeWelcome = Readonly<{
   /** The assembly is on screen: Home's planet waits under it. */
@@ -28,16 +28,15 @@ export function useHomeWelcome(
   }>,
 ): HomeWelcome {
   const seenAt = useLocalSetting('homeWelcomeSeenAt');
-  const applyLocalSettings = useApplyLocalSettings();
   const [status, setStatus] = React.useState<
     'idle' | 'playing' | 'resting' | 'done'
   >('idle');
   const play = status === 'idle' && input.eligible && seenAt === null;
   React.useEffect(() => {
     if (!play) return;
-    applyLocalSettings({ homeWelcomeSeenAt: Date.now() });
+    getStorage().getState().applyLocalSettings({ homeWelcomeSeenAt: Date.now() }, { source: 'ui' });
     setStatus(input.loadingShown || input.reducedMotion ? 'done' : 'playing');
-  }, [applyLocalSettings, input.loadingShown, input.reducedMotion, play]);
+  }, [input.loadingShown, input.reducedMotion, play]);
   const [instant, setInstant] = React.useState(false);
   React.useEffect(() => {
     if (instant) setInstant(false);

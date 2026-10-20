@@ -1,3 +1,5 @@
+import { coerceSingleLocationPath, coerceTextFromContentBlocks } from './toolEnvelope';
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -32,32 +34,6 @@ function coerceItemNewText(item: UnknownRecord | null): string | null {
     return null;
 }
 
-function coerceSingleLocationPath(locations: unknown): string | null {
-    if (!Array.isArray(locations) || locations.length !== 1) return null;
-    const first = locations[0];
-    if (!first || typeof first !== 'object') return null;
-    const obj = first as UnknownRecord;
-    const path =
-        (typeof obj.path === 'string' && obj.path.trim().length > 0)
-            ? obj.path.trim()
-            : (typeof obj.filePath === 'string' && obj.filePath.trim().length > 0)
-                ? obj.filePath.trim()
-                : null;
-    return path;
-}
-
-function coerceTextFromContentBlocks(content: unknown): string | null {
-    if (typeof content === 'string') return content;
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const item of content) {
-        if (!item || typeof item !== 'object') continue;
-        const rec = item as UnknownRecord;
-        if (typeof rec.text === 'string') parts.push(rec.text);
-    }
-    return parts.length > 0 ? parts.join('\n') : null;
-}
-
 export function normalizeWriteInput(rawInput: unknown): UnknownRecord {
     const record = asRecord(rawInput) ?? {};
     const out: UnknownRecord = { ...record };
@@ -67,8 +43,8 @@ export function normalizeWriteInput(rawInput: unknown): UnknownRecord {
             ? out.file_path.trim()
             : typeof out.filePath === 'string' && out.filePath.trim().length > 0
                 ? out.filePath.trim()
-                : typeof (out as any).filepath === 'string' && (out as any).filepath.trim().length > 0
-                    ? (out as any).filepath.trim()
+                : typeof out.filepath === 'string' && out.filepath.trim().length > 0
+                    ? out.filepath.trim()
                 : typeof out.path === 'string' && out.path.trim().length > 0
                     ? out.path.trim()
                     : null;
@@ -81,8 +57,8 @@ export function normalizeWriteInput(rawInput: unknown): UnknownRecord {
     const content =
         typeof out.content === 'string'
             ? out.content
-            : typeof (out as any).file_content === 'string'
-                ? (out as any).file_content
+            : typeof out.file_content === 'string'
+                ? out.file_content
             : typeof out.text === 'string'
                 ? out.text
                 : typeof out.data === 'string'
@@ -115,21 +91,21 @@ export function normalizeWriteResult(rawOutput: unknown): UnknownRecord {
     if (!record) return { value: rawOutput };
 
     const out: UnknownRecord = { ...record };
-    const text = coerceTextFromContentBlocks((record as any).content);
+    const text = coerceTextFromContentBlocks(record.content);
     if (text && typeof out.text !== 'string') out.text = text;
 
     const applied =
-        typeof (record as any).applied === 'boolean'
-            ? Boolean((record as any).applied)
-            : typeof (record as any).success === 'boolean'
-                ? Boolean((record as any).success)
-                : typeof (record as any).ok === 'boolean'
-                    ? Boolean((record as any).ok)
+        typeof record.applied === 'boolean'
+            ? Boolean(record.applied)
+            : typeof record.success === 'boolean'
+                ? Boolean(record.success)
+                : typeof record.ok === 'boolean'
+                    ? Boolean(record.ok)
                     : undefined;
     if (typeof applied === 'boolean') out.applied = applied;
 
     if (typeof out.applied !== 'boolean') {
-        const hasError = typeof (record as any).error === 'string' && (record as any).error.trim().length > 0;
+        const hasError = typeof record.error === 'string' && record.error.trim().length > 0;
         if (hasError) out.applied = false;
     }
 

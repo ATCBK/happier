@@ -9,7 +9,7 @@ import { MultiPaneHostWithBottom } from '@/components/ui/panels/MultiPaneHostWit
 import { resolvePaneLayout, type ResolvePaneLayoutInput } from '@/components/ui/panels/paneBreakpoints';
 import { resolveBottomPaneLayout } from '@/components/ui/panels/resolveBottomPaneLayout';
 import type { FocusReturnMutableRef } from '@/keyboard/focusReturn';
-import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage, useLocalSetting } from '@/sync/domains/state/storage';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import { AppPaneScopeLayoutProvider } from './hooks/useAppPaneScopeLayout';
@@ -96,13 +96,6 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     const detailsPaneWidthBasisPx = useLocalSetting('detailsPaneWidthBasisPx');
     const bottomPaneHeightPx = useLocalSetting('bottomPaneHeightPx');
     const bottomPaneHeightBasisPx = useLocalSetting('bottomPaneHeightBasisPx');
-
-    const [, setRightPaneWidthPx] = useLocalSettingMutable('rightPaneWidthPx');
-    const [, setRightPaneWidthBasisPx] = useLocalSettingMutable('rightPaneWidthBasisPx');
-    const [, setDetailsPaneWidthPx] = useLocalSettingMutable('detailsPaneWidthPx');
-    const [, setDetailsPaneWidthBasisPx] = useLocalSettingMutable('detailsPaneWidthBasisPx');
-    const [, setBottomPaneHeightPx] = useLocalSettingMutable('bottomPaneHeightPx');
-    const [, setBottomPaneHeightBasisPx] = useLocalSettingMutable('bottomPaneHeightBasisPx');
 
     const rightPane = props.rightPane ?? null;
     const detailsPane = props.detailsPane ?? null;
@@ -395,13 +388,11 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     ]);
 
     const onCommitRightDockWidthPx = React.useCallback((nextWidthPx: number) => {
-        setRightPaneWidthPx(nextWidthPx);
-        setRightPaneWidthBasisPx(containerWidthPx);
-    }, [containerWidthPx, setRightPaneWidthBasisPx, setRightPaneWidthPx]);
+        getStorage().getState().applyLocalSettings({ rightPaneWidthPx: nextWidthPx, rightPaneWidthBasisPx: containerWidthPx }, { source: 'ui' });
+    }, [containerWidthPx]);
     const onCommitDetailsDockWidthPx = React.useCallback((nextWidthPx: number) => {
-        setDetailsPaneWidthPx(nextWidthPx);
-        setDetailsPaneWidthBasisPx(containerWidthPx);
-    }, [containerWidthPx, setDetailsPaneWidthBasisPx, setDetailsPaneWidthPx]);
+        getStorage().getState().applyLocalSettings({ detailsPaneWidthPx: nextWidthPx, detailsPaneWidthBasisPx: containerWidthPx }, { source: 'ui' });
+    }, [containerWidthPx]);
     // The docked budget is what main's minimum leaves (minus a docked neighbour). A pull past it
     // (`exceededMaxPx`) carries the attempted width, which is what flips the layout to an overlay for a
     // pane that opts in; the docked handle then unmounts mid-drag, so the pulled width is kept.
@@ -432,9 +423,8 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         setDetailsDragWidthPx(width);
     }, [details.overlayWhenWiderThanBudget, onCommitDetailsDockWidthPx]);
     const onCommitBottomDockHeightPx = React.useCallback((nextHeightPx: number) => {
-        setBottomPaneHeightPx(nextHeightPx);
-        setBottomPaneHeightBasisPx(containerHeightPx);
-    }, [containerHeightPx, setBottomPaneHeightBasisPx, setBottomPaneHeightPx]);
+        getStorage().getState().applyLocalSettings({ bottomPaneHeightPx: nextHeightPx, bottomPaneHeightBasisPx: containerHeightPx }, { source: 'ui' });
+    }, [containerHeightPx]);
 
     const rightPaneHiddenByDetails = detailsOpen && applyPaneFocusModeLayoutOverride({
         paneFocusModeActive,

@@ -14,7 +14,7 @@ import { useFailureExplainedByUnreachableHome } from '@/components/navigation/co
 import type { EntityDragDropSnapshot } from '../entityDragDropTypes';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
-import { WIDGET_MOVE_SILENT_CODES } from '../widgetLayoutEntityDrop';
+import { WIDGET_MOVE_PENDING_CODE, WIDGET_MOVE_SILENT_CODES } from '../widgetLayoutEntityDrop';
 
 /**
  * Happier core's words for the ONE outcome presenter (`describeHappierDropOutcome`, plugin-ui): the
@@ -68,9 +68,21 @@ function vocabulary(verdict?: HappierDropVerdict): HappierDropOutcomeVocabulary 
     };
 }
 
+/**
+ * A widget place whose admission is still being read is neither admitted nor refused: the card says it
+ * is checking and never offers the place's verb; released before the answer, it comes back with the reason.
+ */
+function describeWidgetAdmissionPending(verdict: HappierDropVerdict): HappierReleaseOutcome | null {
+    const admission = verdict.admission;
+    if (admission?.status !== 'refused' || admission.reason.code !== WIDGET_MOVE_PENDING_CODE) return null;
+    if (verdict.phase === 'carrying') return { tone: 'quiet', glyph: 'move', title: admission.reason.message };
+    return verdict.phase === 'settled'
+        ? { tone: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: admission.reason.message } : null;
+}
+
 /** The release preview for the drag owner's verdict, in Happier's words. */
 export function describeEntityDropOutcome(verdict: HappierDropVerdict, itemTitle: string | null = null): HappierReleaseOutcome | null {
-    return describeHappierDropOutcome(verdict, vocabulary(verdict), itemTitle);
+    return describeWidgetAdmissionPending(verdict) ?? describeHappierDropOutcome(verdict, vocabulary(verdict), itemTitle);
 }
 
 /** Reachability changes presentation only; the effect owner retains the dispatched result. */
@@ -89,7 +101,7 @@ export function describeEntityDropSettled(verdict: HappierDropVerdict, itemTitle
     // Admission refusals never dispatch, but a release must still leave the same
     // canonical reason under its source after the returning card retires.
     if (verdict.phase !== 'settled' || verdict.admission?.status !== 'refused') return null;
-    const release = describeHappierDropOutcome(verdict, words, itemTitle);
+    const release = describeEntityDropOutcome(verdict, itemTitle);
     return release?.tone === 'refused' ? { kind: 'refused' as const, glyph: 'refused' as const,
         title: release.title, detail: release.detail ?? verdict.admission.reason.message } : null;
 }

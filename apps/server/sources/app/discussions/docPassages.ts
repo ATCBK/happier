@@ -10,11 +10,18 @@ import { discussionFailure, discussionSuccess, type DiscussionResult } from './s
 
 export type DiscussionDocSource = DiscussionDocPassageReplyTargetV1['doc'];
 
+/** Source identity discovery precedes Account admission; disclosure still uses the Artifact reader below. */
+export async function readDiscussionDocSourceAuthorityAccountIdsInTx(tx: Tx, source: DiscussionDocSource | null): Promise<string[]> {
+    if (!source) return [];
+    const artifact = await tx.artifact.findUnique({ where: { id: source.ref.artifactId }, select: { accountId: true } });
+    return artifact ? [artifact.accountId] : [];
+}
+
 /** New posts resolve the existing parent rather than inventing a pending message identity. */
 export async function resolveDiscussionDocTargetInTx(tx: Tx, input: Readonly<{
     discussionId: string; replyTarget?: ReturnType<typeof DiscussionReplyTargetV1Schema.parse>;
 }>): Promise<DiscussionResult<DiscussionDocSource | null>> {
-    if (input.replyTarget?.kind !== 'message') return discussionSuccess(input.replyTarget?.doc ?? null);
+    if (input.replyTarget?.kind !== 'message') return discussionSuccess(input.replyTarget?.kind === 'doc_passage' ? input.replyTarget.doc : null);
     const parent = await tx.discussionMessage.findFirst({ where: { discussionId: input.discussionId, id: input.replyTarget.messageId },
         select: { id: true, replyTargetV1: true } });
     if (!parent) return discussionFailure('discussion_invalid_reply_target');

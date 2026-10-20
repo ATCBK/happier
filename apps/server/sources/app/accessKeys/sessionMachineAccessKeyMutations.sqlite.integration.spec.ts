@@ -98,10 +98,10 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
         const session = await createSession(owner.id, "readiness-session");
         const installed = await createInstalledPlainMachine(owner.id, "readiness-installed");
         await db.machine.update({ where: { id: installed.id }, data: { metadata: "{}" } });
-        await expect(createSessionMachineAccessKeyInTx(db, { accountId: owner.id, machineId: installed.id, sessionId: session.id, data: "key" }))
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: owner.id, machineId: installed.id, sessionId: session.id, data: "key" })))
             .resolves.toEqual({ ok: false, reason: "binding-not-found" });
         const legacy = await createMachine(owner.id, "readiness-legacy");
-        await expect(createSessionMachineAccessKeyInTx(db, { accountId: owner.id, machineId: legacy.id, sessionId: session.id, data: "legacy-key" }))
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: owner.id, machineId: legacy.id, sessionId: session.id, data: "legacy-key" })))
             .resolves.toMatchObject({ ok: true, created: true });
     });
 
@@ -234,12 +234,12 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
         const session = await createSession(owner.id, "owned-session");
         const machine = await createMachine(stranger.id, "stranger-machine");
 
-        await expect(createSessionMachineAccessKeyInTx(db, {
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: stranger.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "key",
-        })).resolves.toEqual({ ok: false, reason: "binding-not-found" });
+        }))).resolves.toEqual({ ok: false, reason: "binding-not-found" });
         await expect(db.accessKey.count()).resolves.toBe(0);
     });
 
@@ -335,18 +335,18 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
         const ownSession = await createSession(custodian.id, "custodian-session");
         const requesterSession = await createSession(requester.id, "requester-session");
         const foreignBinding = { accountId: requester.id, machineId: machine.id, sessionId: requesterSession.id };
-        await createSessionMachineAccessKeyInTx(db, {
+        await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: custodian.id, machineId: machine.id, sessionId: ownSession.id, data: "retained-owner-key",
-        });
+        }));
         // Persistence accepts the exact requester tuple; admission remains at
         // the canonical mutation owner, which refuses foreign use without C41 admission.
         await expect(db.accessKey.create({ data: { ...foreignBinding, data: "requester-key", dataVersion: 7 } }))
             .resolves.toMatchObject({ ...foreignBinding, dataVersion: 7 });
         await db.accessKey.create({ data: { ...foreignBinding, machineId: otherMachine.id, data: "other-key", dataVersion: 3 } });
         await expect(readSessionMachineAccessKeyInTx(db, foreignBinding)).resolves.toMatchObject({ data: "requester-key", dataVersion: 7 });
-        await expect(createSessionMachineAccessKeyInTx(db, { ...foreignBinding, data: "replacement" }))
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, { ...foreignBinding, data: "replacement" })))
             .resolves.toEqual({ ok: false, reason: "binding-not-found" });
-        await expect(updateSessionMachineAccessKeyDataInTx(db, { ...foreignBinding, data: "replacement", expectedVersion: 7 }))
+        await expect(inTx(tx => updateSessionMachineAccessKeyDataInTx(tx, { ...foreignBinding, data: "replacement", expectedVersion: 7 })))
             .resolves.toEqual({ ok: false, reason: "not-found" });
         await expect(db.accessKey.create({ data: { ...foreignBinding, data: "duplicate" } })).rejects.toMatchObject({ code: "P2002" });
         expect(await readMachineAccessKeySessionBindingsInTx(db, { accountId: custodian.id, machineId: machine.id }))
@@ -457,12 +457,12 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
             machineId: machine.id,
             sessionId: session.id,
         })).resolves.toBe("missing");
-        await expect(createSessionMachineAccessKeyInTx(db, {
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: owner.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "key",
-        })).resolves.toEqual({ ok: false, reason: "binding-not-found" });
+        }))).resolves.toEqual({ ok: false, reason: "binding-not-found" });
         await expect(db.accessKey.count()).resolves.toBe(0);
     });
 
@@ -476,12 +476,12 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
             sessionId: session.id,
         } as const;
 
-        const created = await createSessionMachineAccessKeyInTx(db, { ...binding, data: "first" });
+        const created = await inTx(tx => createSessionMachineAccessKeyInTx(tx, { ...binding, data: "first" }));
         expect(created).toMatchObject({ ok: true, created: true });
         if (!created.ok) return;
         expect(created.accessKey).toMatchObject({ data: "first", dataVersion: 1 });
 
-        await expect(createSessionMachineAccessKeyInTx(db, { ...binding, data: "second" }))
+        await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, { ...binding, data: "second" })))
             .resolves.toEqual({ ok: false, reason: "already-exists" });
         await expect(db.accessKey.findUniqueOrThrow({
             where: { accountId_machineId_sessionId: binding },
@@ -541,19 +541,19 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
             machineId: machine.id,
             sessionId: session.id,
         } as const;
-        await createSessionMachineAccessKeyInTx(db, { ...binding, data: "first" });
+        await inTx(tx => createSessionMachineAccessKeyInTx(tx, { ...binding, data: "first" }));
 
-        await expect(updateSessionMachineAccessKeyDataInTx(db, {
+        await expect(inTx(tx => updateSessionMachineAccessKeyDataInTx(tx, {
             ...binding,
             data: "second",
             expectedVersion: 1,
-        })).resolves.toEqual({ ok: true, version: 2 });
+        }))).resolves.toEqual({ ok: true, version: 2 });
 
-        await expect(updateSessionMachineAccessKeyDataInTx(db, {
+        await expect(inTx(tx => updateSessionMachineAccessKeyDataInTx(tx, {
             ...binding,
             data: "third",
             expectedVersion: 1,
-        })).resolves.toEqual({
+        }))).resolves.toEqual({
             ok: false,
             reason: "version-mismatch",
             currentVersion: 2,
@@ -570,16 +570,16 @@ describe("session/machine AccessKey mutations (SQLite integration)", () => {
             machineId: machine.id,
             sessionId: session.id,
         } as const;
-        await createSessionMachineAccessKeyInTx(db, { ...binding, data: "first" });
+        await inTx(tx => createSessionMachineAccessKeyInTx(tx, { ...binding, data: "first" }));
         await db.machine.update({
             where: { id: machine.id },
             data: { revokedAt: new Date() },
         });
 
-        await expect(updateSessionMachineAccessKeyDataInTx(db, {
+        await expect(inTx(tx => updateSessionMachineAccessKeyDataInTx(tx, {
             ...binding,
             data: "second",
             expectedVersion: 1,
-        })).resolves.toEqual({ ok: false, reason: "not-found" });
+        }))).resolves.toEqual({ ok: false, reason: "not-found" });
     });
 });

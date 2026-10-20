@@ -1,4 +1,4 @@
-import { inTx } from "@/storage/inTx";
+import { inTx, transactionResult } from "@/storage/inTx";
 import {
     acquireAccountEncryptionTransitionCoordinatorFenceInTx,
     finalizeAccountEncryptionTransitionCoordinatorInTx,
@@ -320,17 +320,17 @@ export async function updateAccountEncryptionMode(params: Readonly<{
             // rolls back before the retained PATCH reports the refusal.
             throw new AccountEncryptionTransitionFinalizationRejectedError();
         }
-        return {
-            status: "updated",
+        return transactionResult(() => ({
+            status: "updated" as const,
             mode: finalized.mode,
-            version: finalized.version,
+            version: finalized.resolveResult().version,
             ...deriveAccountEncryptionMigrationKeyFingerprints({
                 publicKey: account.publicKey,
                 contentPublicKey:
                     account.currentness.contentPublicKey,
             }),
             updatedAt: finalized.updatedAt,
-        };
+        }));
         });
     } catch (error) {
         if (error instanceof AccountEncryptionTransitionFinalizationRejectedError) {

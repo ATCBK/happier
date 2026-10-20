@@ -12,7 +12,7 @@ import {
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import type { DiscussionDraftSubmission } from '@/sync/ops/discussions/discussionRepository';
 
-import { useDiscussionDraft } from './useDiscussionDraft';
+import { seedDiscussionDraft, useDiscussionDraft } from './useDiscussionDraft';
 
 const scope = { serverId: 'discussion-draft-home', accountId: 'discussion-draft-account' } as const;
 const newAddress = { kind: 'newDiscussion' } as const;
@@ -26,6 +26,44 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('retains only the selected model slot identity across editing and remount before any Send', async () => {
+        writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
+            text: '@Model', mentions: [{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }],
+        } });
+        const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(first.getCurrent().mentions).toEqual([{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }]);
+        act(() => first.getCurrent().setText('Ask @Model'));
+        await first.unmount();
+        const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(restored.getCurrent().mentions).toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer.mentions.value)
+            .toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(restored.getCurrent().pendingMutationAttempt).toBeNull();
+        await restored.unmount();
+    });
+    it('switches keyed route drafts without borrowing subscriptions or clearing another draft submission', async () => {
+        const firstAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000001' };
+        const secondAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000002' };
+        for (const [address, text] of [[newAddress, 'Unrelated singleton'], [firstAddress, 'First passage'], [secondAddress, 'Second passage']] as const) {
+            writeDiscussionSessionDraft({ scope, address, patch: { text, mentions: [] } });
+        }
+        const hook = await renderHook(({ address }) => useDiscussionDraft({ scope, address }), { initialProps: { address: firstAddress } });
+        let first: DiscussionDraftSubmission | undefined;
+        act(() => { first = hook.getCurrent().captureSubmittedCurrentness({ kind: 'create', creationLocalId: 'first-create', messageLocalId: 'first-message' }); });
+        await hook.rerender({ address: secondAddress });
+        expect(hook.getCurrent().text).toBe('Second passage');
+        act(() => { hook.getCurrent().captureSubmittedCurrentness({ kind: 'create', creationLocalId: 'second-create', messageLocalId: 'second-message' }); });
+        await act(async () => { expect(await hook.getCurrent().clearAfterObservedSuccess(first!)).toBe(false); });
+        expect(hook.getCurrent().text).toBe('Second passage');
+        expect(hook.getCurrent().pendingMutationAttempt).toMatchObject({ creationLocalId: 'second-create' });
+        await hook.rerender({ address: firstAddress });
+        expect(hook.getCurrent().pendingMutationAttempt).toMatchObject({ creationLocalId: 'first-create' });
+        await act(async () => { await hook.getCurrent().clearAfterObservedSuccess(first!); });
+        expect(hook.getCurrent().text).toBe('');
+        expect(getSessionComposerDraftSnapshot(scope, secondAddress)?.composer.text.value).toBe('Second passage');
+        expect(getSessionComposerDraftSnapshot(scope, newAddress)?.composer.text.value).toBe('Unrelated singleton');
+        await hook.unmount();
+    });
     it('retains a qualified passage and retry identity across remount, then clears only the submitted basis', async () => {
         const passage = { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: scope.serverId },
             revision: { headerVersion: 2, bodyVersion: 4 }, range: { start: 12, end: 18 }, quote: 'second' };
@@ -374,5 +412,19 @@ describe('useDiscussionDraft', () => {
 
         expect(getSessionComposerDraftSnapshot(scope, existingAddress)).toBeNull();
         await rendered.unmount();
+    });
+    it('seeds an empty new Discussion with an addressed request, and never replaces words already there', async () => {
+        const seed = { scope, title: 'Reading desk isn’t ready', text: '@Ana Its machine is offline.',
+            mentions: [{ start: 0, end: 4, accountId: 'ana' }] } as const;
+        expect(seedDiscussionDraft(seed)).toBe(true);
+        const seeded = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
+        expect(seeded.getCurrent()).toMatchObject({ title: seed.title, text: seed.text, mentions: seed.mentions });
+        await seeded.unmount();
+
+        writeDiscussionSessionDraft({ scope, address: newAddress, patch: { title: '', text: 'My own unsent words', mentions: [] } });
+        expect(seedDiscussionDraft(seed)).toBe(false);
+        const kept = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
+        expect(kept.getCurrent().text).toBe('My own unsent words');
+        await kept.unmount();
     });
 });

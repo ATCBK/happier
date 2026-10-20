@@ -6,6 +6,7 @@ import {
 } from '@happier-dev/protocol/discussions/content';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { DiscussionIdSchema } from '@happier-dev/protocol/discussions/references';
 import {
     MENTION_KIND_V1,
     buildMentionRefV1,
@@ -22,7 +23,9 @@ import {
 export type DiscussionMentionSpan = Readonly<{
     start: number;
     end: number;
-} & ({ accountId: string; sessionId?: never } | { sessionId: string; accountId?: never })>;
+} & ({ accountId: string; sessionId?: never; participantSlotId?: never }
+    | { sessionId: string; accountId?: never; participantSlotId?: never }
+    | { participantSlotId: string; accountId?: never; sessionId?: never })>;
 
 /** The passage travels inside C3's admitted content, beside the human comment. */
 export function prepareDiscussionContentForPassage(input: Readonly<{
@@ -64,8 +67,8 @@ export function resolveDiscussionCreationTitle(input: Readonly<{
 
 /**
  * Opens the human draft's intentionally JSON-shaped mention field into the one
- * composer representation. Invalid or overlapping spans remain ordinary text;
- * they never manufacture an Account identity from a visible `@label`.
+ * composer representation: Account, Session or inert reserved-slot identity.
+ * Invalid or overlapping spans remain ordinary text, never identity from `@label`.
  */
 export function parseDiscussionMentionSpans(
     value: unknown,
@@ -75,11 +78,12 @@ export function parseDiscussionMentionSpans(
     const candidates = value.flatMap((entry): readonly DiscussionMentionSpan[] => {
         if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
         const keys = Object.keys(entry).sort().join(',');
-        if (keys !== 'accountId,end,start' && keys !== 'end,sessionId,start') return [];
+        if (keys !== 'accountId,end,start' && keys !== 'end,sessionId,start' && keys !== 'end,participantSlotId,start') return [];
         const candidate = entry as Record<string, unknown>;
         const identity = keys === 'accountId,end,start'
             ? DiscussionAccountIdSchema.safeParse(candidate.accountId)
-            : SessionIdSchema.safeParse(candidate.sessionId);
+            : keys === 'end,sessionId,start' ? SessionIdSchema.safeParse(candidate.sessionId)
+                : DiscussionIdSchema.safeParse(candidate.participantSlotId);
         if (
             !identity.success
             || !Number.isSafeInteger(candidate.start)
@@ -99,7 +103,8 @@ export function parseDiscussionMentionSpans(
         ) return [];
         return [keys === 'accountId,end,start'
             ? { start, end, accountId: identity.data }
-            : { start, end, sessionId: identity.data }];
+            : keys === 'end,sessionId,start' ? { start, end, sessionId: identity.data }
+                : { start, end, participantSlotId: identity.data }];
     }).sort((left, right) => left.start - right.start || left.end - right.end);
 
     let greatestPreviousEnd = -1;
@@ -138,6 +143,7 @@ export function buildDiscussionContent(
     const parts: DiscussionTextMessageContentV1['parts'][number][] = [];
     let offset = 0;
     for (const mention of parseDiscussionMentionSpans(mentions, text)) {
+        if (typeof mention.participantSlotId === 'string') throw new Error('discussion_participant_start_required');
         if (mention.start > offset) {
             parts.push({ t: 'text', text: text.slice(offset, mention.start).normalize('NFC') });
         }
@@ -170,6 +176,13 @@ export function buildDiscussionContentFromPendingText(input: Readonly<{
  */
 export const DISCUSSION_ACCOUNT_MENTION_KIND = 'happier.account';
 const DISCUSSION_ACCOUNT_MENTION_REF_SCHEME = 'account';
+/** Inert draft identity only. Send resolves it through the current Discussion roster. */
+export const DISCUSSION_MODEL_SLOT_MENTION_KIND = 'happier.discussionParticipant';
+const DISCUSSION_MODEL_SLOT_MENTION_REF_SCHEME = 'discussion-participant';
+export function buildDiscussionModelSlotMentionPayload(participantSlotId: string, label: string) {
+    return { kind: DISCUSSION_MODEL_SLOT_MENTION_KIND,
+        ref: buildMentionRefV1(DISCUSSION_MODEL_SLOT_MENTION_REF_SCHEME, participantSlotId), label };
+}
 
 /** What the `accountMention` kind hands the composer; the composer adds the token and its range. */
 export function buildDiscussionAccountMentionPayload(accountId: string, label: string): Readonly<{
@@ -188,7 +201,8 @@ export function discussionComposerMentionsFromSpans(
     return parseDiscussionMentionSpans(spans, text).map((span) => ({
         ...(typeof span.accountId === 'string'
             ? { kind: DISCUSSION_ACCOUNT_MENTION_KIND, ref: buildMentionRefV1(DISCUSSION_ACCOUNT_MENTION_REF_SCHEME, span.accountId) }
-            : { kind: MENTION_KIND_V1.session, ref: buildMentionRefForKindV1(MENTION_KIND_V1.session, span.sessionId) }),
+            : typeof span.sessionId === 'string' ? { kind: MENTION_KIND_V1.session, ref: buildMentionRefForKindV1(MENTION_KIND_V1.session, span.sessionId) }
+                : buildDiscussionModelSlotMentionPayload(span.participantSlotId, text.slice(span.start, span.end))),
         tokenText: text.slice(span.start, span.end),
         start: span.start,
         end: span.end,
@@ -196,8 +210,9 @@ export function discussionComposerMentionsFromSpans(
 }
 
 /**
- * The composer's concrete Account/Session references as draft spans. Other kinds and
- * malformed identities remain ordinary text; parsing never authorizes execution.
+ * The composer's Account, Session and reserved-slot references as local draft spans.
+ * Other kinds remain ordinary text; only Send resolves slots to canonical Session mentions.
+ * Parsing never authorizes execution.
  */
 export function discussionMentionSpansFromComposerMentions(
     mentions: readonly ComposerStructuredInputMention[],
@@ -213,6 +228,11 @@ export function discussionMentionSpansFromComposerMentions(
         if (mention.kind === MENTION_KIND_V1.session) {
             const sessionId = SessionIdSchema.safeParse(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.session, mention.ref));
             return sessionId.success ? [{ ...range, sessionId: sessionId.data }] : [];
+        }
+        if (mention.kind === DISCUSSION_MODEL_SLOT_MENTION_KIND) {
+            const ref = parseMentionRefV1(mention.ref);
+            const slot = DiscussionIdSchema.safeParse(ref?.scheme === DISCUSSION_MODEL_SLOT_MENTION_REF_SCHEME ? ref.opaque : null);
+            return slot.success ? [{ ...range, participantSlotId: slot.data }] : [];
         }
         return [];
     });

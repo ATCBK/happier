@@ -42,6 +42,8 @@ import {
 } from './participants.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
 import { SessionMessageReplyMutationResultV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { SessionTargetV1Schema } from '../actions/sessionTargetV1.js';
+import { DiscussionAccountParticipantRefV1Schema } from './references.js';
 import { DiscussionMessageWriteV1Schema, DiscussionAttentionTypeV1Schema } from './api.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from './replyTargets.js';
 import { DiscussionMessageRefV1Schema } from './messageRefs.js';
@@ -107,11 +109,19 @@ export const DiscussionReadInputV1Schema = lazyZodSchema(() => z.strictObject({
 })));
 export type DiscussionReadInputV1 = z.infer<typeof DiscussionReadInputV1Schema>;
 
+const DiscussionSessionParticipantTargetV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('session'), sessionId: SessionTargetV1Schema,
+}));
+
 export const DiscussionCreateInputV1Schema = lazyZodSchema(() => z.strictObject({
   creationLocalId: DiscussionActionLocalIdSchema,
   title: DiscussionActionTitleSchema,
   anchor: z.optional(DiscussionAnchorV1Schema),
-  participants: z.optional(DiscussionInitialParticipantsV1Schema),
+  participants: z.optional(z.array(z.union([DiscussionAccountParticipantRefV1Schema, DiscussionSessionParticipantTargetV1Schema])).check(
+    z.refine(participants => DiscussionInitialParticipantsV1Schema.safeParse(participants.filter(participant =>
+      participant.kind === 'account' || typeof participant.sessionId === 'string')).success,
+    { message: 'Discussion invitations must be deduplicated' }),
+  )),
   firstMessage: z.strictObject({
     localId: DiscussionActionLocalIdSchema,
     content: DiscussionMessageContentV1Schema,
@@ -161,9 +171,13 @@ export const DiscussionReadStateSetInputV1Schema = lazyZodSchema(() => z.strictO
 }));
 export type DiscussionReadStateSetInputV1 = z.infer<typeof DiscussionReadStateSetInputV1Schema>;
 
-export const DiscussionInviteInputV1Schema = lazyZodSchema(() => z.union(
-  DiscussionInviteRequestV1Schema.def.options.map(schema => z.safeExtend(schema, DiscussionGetInputV1Schema.shape)),
-));
+export const DiscussionInviteInputV1Schema = lazyZodSchema(() => z.union([
+  z.safeExtend(DiscussionInviteRequestV1Schema.def.options[0], DiscussionGetInputV1Schema.shape),
+  z.extend(DiscussionInviteRequestV1Schema.def.options[1], {
+    ...DiscussionGetInputV1Schema.shape, participant: DiscussionSessionParticipantTargetV1Schema,
+  }),
+  z.safeExtend(DiscussionInviteRequestV1Schema.def.options[2], DiscussionGetInputV1Schema.shape),
+]));
 export type DiscussionInviteInputV1 = z.infer<typeof DiscussionInviteInputV1Schema>;
 
 export const DiscussionParticipantRemoveInputV1Schema = lazyZodSchema(() => z.safeExtend(
