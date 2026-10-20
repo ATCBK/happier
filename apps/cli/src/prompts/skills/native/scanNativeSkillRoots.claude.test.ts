@@ -22,13 +22,15 @@ async function fixture() {
   const plugin = await createPluginTestkit({ manifest: CLAUDE_PLUGIN.manifest, module: CLAUDE_PLUGIN });
   const admitted = ingestPluginManifestV2(CLAUDE_PLUGIN.manifest);
   if (!admitted.ok) throw new Error('Invalid Agent manifest fixture');
+  const capabilities = admitted.manifest.contributes.agents[0]!.capabilities;
+  if (!('skills' in capabilities)) throw new Error('Expected Claude skill capability');
   const controls = plugin.registration('agents', 'claude')!.preflightSessionControls!;
   let current = true;
   const projected = projectAgentPreflightSessionControlsCatalogEntry({ agentId: 'claude', preflightSessionControls: controls,
     systemTools: [{ id: 'claude-cli', title: 'Claude', executableNames: ['claude'] }],
     retirementSignal: new AbortController().signal, isCurrent: () => current });
   const agents = resolveAgentFoundSkillSources({ catalogEntriesById: { claude: { ...projected,
-    skills: admitted.manifest.contributes.agents[0]!.capabilities.skills } } });
+    skills: capabilities.skills } } });
   async function json(path: string, value: unknown) { await writeFile(path, JSON.stringify(value)); }
   async function skill(root: string, name: string) {
     const path = join(root, name); await mkdir(path, { recursive: true });

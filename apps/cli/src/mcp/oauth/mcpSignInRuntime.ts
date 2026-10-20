@@ -195,7 +195,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     const clientSecrets = await secrets(context);
                     const suppliedRaw = await context.configuration.getSecret('clientRegistration');
                     const supplied = suppliedRaw === null ? undefined : McpOAuthClientRegistrationV1Schema.parse(JSON.parse(suppliedRaw));
-                    let registration = configuration.registrations[issuer];
+                    let registration: Registration | undefined = configuration.registrations[issuer];
                     if (supplied === null) { registration = undefined; delete clientSecrets[issuer]; }
                     const flags = network.flags();
                     let clientId: string;

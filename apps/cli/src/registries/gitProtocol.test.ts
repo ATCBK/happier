@@ -77,6 +77,7 @@ describe('Node Git registry transport',()=>{
       const git=createRegistryGitProtocolV1({});
       await expect(git.files({...item.payload.skill,files:item.payload.skill.files.map(file=>({...file,blobSha:'0'.repeat(40)}))},source))
         .rejects.toThrow('registry_blob_sha_mismatch');
+      if(item.payload.skill.ref.kind!=='gitTree')throw new Error('Expected Git registry content');
       await expect(git.files({...item.payload.skill,ref:{...item.payload.skill.ref,treeSha:'0'.repeat(40)}},source))
         .rejects.toThrow('registry_tree_sha_mismatch');
       const controller=new AbortController();controller.abort();

@@ -43,7 +43,7 @@ describe('prepublication author store', () => {
           source: 'export { installed } from "@happier-dev/plugin-ui";\n' },
         { name: '@happier-dev/channels-protocol', source: 'export const installed = true;\n' },
       ];
-      const bundles = [];
+      const bundles: { packageName: string; srcDir: string; destDir: string }[] = [];
       for (const { source, ...manifest } of manifests) {
         const srcDir = join(root, 'packages', ...manifest.name.split('/'));
         await mkdir(join(srcDir, 'dist'), { recursive: true });
