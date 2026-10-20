@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 
 export type ModalModuleMockOptions = Readonly<{
     confirmResult?: boolean;
+    isKeyboardLiftSuppressedByModal?: boolean;
     /** Mount real custom modal content beneath the mocked presentation boundary. */
     renderCustomModals?: boolean;
     /** Keep transient confirmation dialogs open for tests that press their real public controls. */
@@ -126,6 +127,7 @@ export function createModalModuleMock(options: ModalModuleMockOptions = {}) {
             ModalProvider,
             useVisibleModalKind: () => React.useContext(VisibleModalKindContext),
             useOptionalModal: () => ({
+                isKeyboardLiftSuppressedByModal: options.isKeyboardLiftSuppressedByModal ?? false,
                 state: { modals: [] },
                 showModal: spies.show,
                 hideModal: spies.hide,

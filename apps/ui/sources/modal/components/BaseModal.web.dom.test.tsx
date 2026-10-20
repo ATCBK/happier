@@ -45,6 +45,29 @@ const { BaseModal } = await import('./BaseModal');
 const { PopoverScrollSourceProvider, usePopoverScrollSourceRef } = await import('@/components/ui/popover/PopoverScrollSource');
 
 describe('BaseModal (web focus)', () => {
+    it('keeps Escape, focus containment, and thumbnail focus return when the stage owns motion', async () => {
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const close = vi.fn();
+        try {
+            trigger.focus();
+            await act(async () => root.render(<BaseModal visible motion="none" placement="fullscreen" showBackdrop={false}
+                focusReturnRef={{ current: trigger }} onClose={close}><button>Photo</button></BaseModal>));
+            expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+            await act(async () => {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+            });
+            expect(close).toHaveBeenCalledOnce();
+            await act(async () => root.unmount());
+            expect(document.activeElement).toBe(trigger);
+        } finally {
+            await act(async () => root.unmount());
+            trigger.remove(); container.remove();
+        }
+    });
     it('returns focus to the pre-open trigger when its portal dialog unmounts', async () => {
         const backgroundButton = document.createElement('button');
         backgroundButton.textContent = 'Background';
