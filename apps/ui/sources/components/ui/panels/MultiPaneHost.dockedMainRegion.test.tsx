@@ -21,7 +21,7 @@ describe('MultiPaneHost (docked main region)', () => {
                 main={<Main />}
                 rightPane={<Right />}
                 detailsPane={null}
-                layout={{ kind: 'twoPane', right: 'docked', details: 'hidden' }}
+                layout={{ main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}
@@ -52,7 +52,7 @@ describe('MultiPaneHost (docked main region)', () => {
                 main={main}
                 rightPane={null}
                 detailsPane={null}
-                layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}
@@ -70,7 +70,7 @@ describe('MultiPaneHost (docked main region)', () => {
                     main={main}
                     rightPane={<Right />}
                     detailsPane={null}
-                    layout={{ kind: 'twoPane', right: 'docked', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -88,7 +88,7 @@ describe('MultiPaneHost (docked main region)', () => {
                     main={main}
                     rightPane={null}
                     detailsPane={null}
-                    layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -107,6 +107,7 @@ describe('MultiPaneHost (docked main region)', () => {
         const editor = <DraftEditor tracker={tracker} name={pane} />;
         const tree = (overlay: boolean) => {
             const layout: ResolvedPaneLayout = {
+                main: 'docked',
                 kind: overlay ? 'overlayStack' : 'twoPane',
                 right: pane === 'right' ? (overlay ? 'overlay' : 'docked') : 'hidden',
                 details: pane === 'details' ? (overlay ? 'overlay' : 'docked') : 'hidden',
@@ -151,16 +152,16 @@ describe('MultiPaneHost (docked main region)', () => {
             onCommitRightDockWidthPx={() => {}}
             onCommitDetailsDockWidthPx={() => {}}
         />;
-        const screen = await renderScreen(tree({ kind: 'threePane', right: 'docked', details: 'docked' }));
+        const screen = await renderScreen(tree({ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' }));
         const editor = (name: string) => screen.root.findAllByType('DraftEditor').find((node) => node.props.name === name)!;
         for (const pane of ['right', 'details']) {
             await act(async () => { editor(pane).props.onChangeText(`${pane} draft`); });
         }
         for (const layout of [
-            { kind: 'twoPane', right: 'docked', details: 'overlay' },
-            { kind: 'overlayStack', right: 'hidden', details: 'overlay' },
-            { kind: 'overlayStack', right: 'overlay', details: 'hidden' },
-            { kind: 'threePane', right: 'docked', details: 'docked' },
+            { main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' },
+            { main: 'docked', kind: 'overlayStack', right: 'hidden', details: 'overlay' },
+            { main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' },
+            { main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' },
         ] satisfies ResolvedPaneLayout[]) {
             await screen.update(tree(layout));
             for (const pane of ['right', 'details'] as const) {

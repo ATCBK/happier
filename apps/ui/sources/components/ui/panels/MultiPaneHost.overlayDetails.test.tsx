@@ -16,7 +16,7 @@ describe('MultiPaneHost (overlayDetails)', () => {
                 main={<Main />}
                 rightPane={<Right />}
                 detailsPane={<Details />}
-                layout={{ kind: 'twoPane', right: 'docked', details: 'overlay' }}
+                layout={{ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}

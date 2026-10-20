@@ -16,7 +16,7 @@ describe('MultiPaneHost (overlayStack hidden right)', () => {
                     main={<Main />}
                     rightPane={<Tracked tracker={tracker} name="right" />}
                     detailsPane={<Tracked tracker={tracker} name="details" />}
-                    layout={{ kind: 'overlayStack', right: 'hidden', details: 'overlay' }}
+                    layout={{ main: 'docked', kind: 'overlayStack', right: 'hidden', details: 'overlay' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -33,7 +33,7 @@ describe('MultiPaneHost (overlayStack hidden right)', () => {
                     main={<Main />}
                     rightPane={<Tracked tracker={tracker} name="right" />}
                     detailsPane={null}
-                    layout={{ kind: 'overlayStack', right: 'overlay', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -52,7 +52,7 @@ describe('MultiPaneHost (overlayStack hidden right)', () => {
                     main={<Main />}
                     rightPane={<Tracked tracker={createMountTracker()} name="right" />}
                     detailsPane={<Tracked tracker={createMountTracker()} name="details" />}
-                    layout={{ kind: 'overlayStack', right: 'hidden', details: 'overlay' }}
+                    layout={{ main: 'docked', kind: 'overlayStack', right: 'hidden', details: 'overlay' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}

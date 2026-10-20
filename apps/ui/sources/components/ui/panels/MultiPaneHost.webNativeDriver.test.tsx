@@ -62,7 +62,7 @@ describe('pane hosts (web native driver)', () => {
             main={<Main />}
             rightPane={<Right />}
             detailsPane={<Details />}
-            layout={{ kind: 'overlayStack', right: 'overlay', details: 'overlay' }}
+            layout={{ main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'overlay' }}
             rightDockWidthPx={360}
             detailsDockWidthPx={520}
             onCloseRight={() => {}}
@@ -74,7 +74,7 @@ describe('pane hosts (web native driver)', () => {
             main={<Main />}
             rightPane={null}
             detailsPane={null}
-            layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+            layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
             rightDockWidthPx={360}
             detailsDockWidthPx={520}
             onCloseRight={() => {}}

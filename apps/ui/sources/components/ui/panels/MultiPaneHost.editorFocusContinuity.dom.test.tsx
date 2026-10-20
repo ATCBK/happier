@@ -16,6 +16,40 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllGlobals(); });
 
 describe('retained editor DOM focus', () => {
+    it('keeps main and editor nodes, caret and iframe through arrangement and hide/show', async () => {
+        vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }));
+        const { MultiPaneHost } = await import('./MultiPaneHost');
+        const container = document.createElement('div'); document.body.appendChild(container);
+        const root = createRoot(container);
+        cleanups.push(async () => { await act(async () => root.unmount()); container.remove(); });
+        let mounts = 0;
+        function Main() { React.useEffect(() => { mounts += 1; }, []); return <input data-testid="main-draft" defaultValue="Draft" />; }
+        const render = async (mirrored: boolean, hideMain = false) => {
+            await act(async () => root.render(<MultiPaneHost main={<Main />} hideMain={hideMain} mirrored={mirrored}
+                rightPane={null} detailsPane={<><input data-testid="editor-draft" defaultValue="Code" /><iframe data-testid="hosted-page" src="about:blank" /></>}
+                layout={{ main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' }} detailsClosable={!mirrored}
+                rightDockWidthPx={340} detailsDockWidthPx={600} mainDockWidthPx={440}
+                onCloseRight={() => {}} onCloseDetails={() => {}} onCommitRightDockWidthPx={() => {}} onCommitDetailsDockWidthPx={() => {}} />));
+        };
+        await render(false);
+        const main = container.querySelector<HTMLInputElement>('[data-testid="main-draft"]')!;
+        const editor = container.querySelector<HTMLInputElement>('[data-testid="editor-draft"]')!;
+        const iframe = container.querySelector('[data-testid="hosted-page"]');
+        editor.focus(); editor.setSelectionRange(1, 3);
+        for (const mirrored of [true, false]) {
+            await render(mirrored);
+            expect(container.querySelector('[data-testid="editor-draft"]')).toBe(editor);
+            expect(document.activeElement).toBe(editor);
+            expect([editor.selectionStart, editor.selectionEnd]).toEqual([1, 3]);
+            expect(container.querySelector('[data-testid="hosted-page"]')).toBe(iframe);
+        }
+        await render(true, true);
+        expect(container.querySelector('[data-testid="main-draft"]')).toBe(main);
+        expect(main.closest('[inert]')).not.toBeNull();
+        await render(true);
+        expect(container.querySelector('[data-testid="main-draft"]')).toBe(main);
+        expect(main.value).toBe('Draft'); expect(mounts).toBe(1);
+    });
     it.each(['details', 'right'] as const)('retains the %s caret through dock, overlay, and dock but restores the opener on real close', async (kind) => {
         // The OS reduced-motion preference is a browser boundary; pane motion/resizing remain real.
         vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }));
@@ -35,7 +69,7 @@ describe('retained editor DOM focus', () => {
                 main={<button data-testid="opener">Open</button>}
                 detailsPane={kind === 'details' && open ? <Editor /> : null}
                 rightPane={kind === 'right' && open ? <Editor /> : null}
-                layout={{ kind: presentation === 'overlay' ? 'overlayStack' : 'twoPane', details: kind === 'details' ? presentation : 'hidden', right: kind === 'right' ? presentation : 'hidden' }}
+                layout={{ main: 'docked', kind: presentation === 'overlay' ? 'overlayStack' : 'twoPane', details: kind === 'details' ? presentation : 'hidden', right: kind === 'right' ? presentation : 'hidden' }}
                 detailsDockWidthPx={390}
                 rightDockWidthPx={390}
                 onCloseDetails={() => {}}
