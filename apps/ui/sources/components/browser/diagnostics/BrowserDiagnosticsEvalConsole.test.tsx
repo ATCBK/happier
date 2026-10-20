@@ -38,6 +38,21 @@ function createControls(
 }
 
 describe('BrowserDiagnosticsEvalConsole', () => {
+    it('marks a partial preview and keeps expansion available through the last property', async () => {
+        const onExpandObject = vi.fn(() => true);
+        const screen = await renderScreen(<BrowserDiagnosticsEvalConsole testID="diag-eval" controls={createControls({
+            entries: [{ evalRequestId: 'eval_1', expression: 'object', objectGroupId: 'group_1', status: 'completed',
+                result: { type: 'object', objectId: 'object_1', description: 'Object', preview: [], previewTruncated: true } }],
+            objectProperties: { object_1: { status: 'loaded', properties: Array.from({ length: 101 }, (_, i) => ({
+                name: `property_${i}`, value: { type: 'string' as const, value: 'value', preview: [] }, enumerable: true,
+            })) } }, onExpandObject,
+        })} />);
+        expect(JSON.stringify(screen.toJSON())).toContain('…');
+        await act(async () => { screen.pressByTestId('diag-eval-result-eval_1-expand'); });
+        expect(onExpandObject).toHaveBeenCalledWith('object_1', 'group_1');
+        expect(screen.findByTestId('diag-eval-result-eval_1-property_100')).not.toBeNull();
+    });
+
     it('submits a typed expression through the eval control and clears the input', async () => {
         const onSubmitExpression = vi.fn(() => true);
         const screen = await renderScreen(
