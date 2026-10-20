@@ -163,9 +163,10 @@ export function useDocCollaboration(
   const proseName = prose?.title || t('artifacts.untitled');
   // A changed passage opens History on the version its comment was written against, compared with now.
   const openHistory = React.useCallback((compareFromBodyVersion: number) => {
-    if (artifactId)
-      showArtifactHistorySheet({ artifactId, name: proseName, canRestore, compareFromBodyVersion });
-  }, [artifactId, canRestore, proseName]);
+    if (artifactId && client)
+      showArtifactHistorySheet({ artifactId, client, currentDoc: docRead.status === 'ready' ? docRead.value.artifact : undefined,
+        name: proseName, canRestore, compareFromBodyVersion });
+  }, [artifactId, canRestore, client, docRead, proseName]);
   const open = React.useCallback(
     (discussionId: string) => {
       if (!scope) return;

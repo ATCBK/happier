@@ -25,10 +25,12 @@ const { Modal } = await import('@/modal');
 const { getSessionComposerDraftSnapshot, resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { createArtifactActionsClient } = await import('./artifactActionsClient');
 const { ArtifactEditProposal } = await import('./ArtifactEditProposal');
+const initialProfileScope = getStorage().getState().profileScope;
 
 afterEach(() => {
   standardCleanup();
   resetSessionDraftRepositoryForTests();
+  getStorage().setState({ profileScope: initialProfileScope });
   navigation.push.mockClear();
 });
 
@@ -109,6 +111,8 @@ const storedDoc = (revision: { headerVersion: number; bodyVersion: number }) => 
 
 describe('ArtifactEditProposal', () => {
   it('follows the Doc to a newer revision: an open suggestion stops saying it is current and offers Decline, not Accept', async () => {
+    // This cache row belongs to the same Home/Account as the captured proposal client.
+    getStorage().setState({ profileScope: scope });
     getStorage().getState().addArtifact(storedDoc(base));
     let current = base;
     const door = frontDoor({

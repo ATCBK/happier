@@ -20,13 +20,16 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
-import { useActiveServerAccountScope, useArtifact, useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage, useLocalSetting } from '@/sync/domains/state/storage';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
-import { useArtifactActionsClient, type ArtifactActionsClient } from './artifactActionsClient';
+import { createArtifactActionsClient, type ArtifactActionsClient } from './artifactActionsClient';
 import type { ArtifactBodyV1, ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 
 type Revision = Readonly<{ bodyVersion: number; body: ArtifactBodyV1 | null; createdAt: number; sizeBytes: number; provenance?: ArtifactRevisionProvenanceV1 }>;
@@ -53,6 +56,15 @@ type HistoryState = Readonly<{
     failed: boolean;
 }>;
 type HistorySelection = Readonly<{ client: ArtifactActionsClient; artifactId: string; bodyVersion: number }>;
+type HistoryArtifact = Pick<DecryptedArtifact, 'id' | 'title' | 'headerVersion' | 'bodyVersion' | 'body' | 'updatedAt' | 'provenance' | 'seq' | 'access'>;
+type CurrentDoc = Extract<Awaited<ReturnType<ArtifactActionsClient['readDoc']>>, { ok: true }>['value']['artifact'];
+type HistorySubject = Readonly<{
+    artifactId: string;
+    client: ArtifactActionsClient;
+    currentArtifact: HistoryArtifact | undefined;
+    canRestore: boolean;
+    compareFromBodyVersion?: number;
+}>;
 
 /** Two columns (versions beside the preview) from this width; narrower, the preview replaces the list. */
 const SIDE_BY_SIDE_MIN_WIDTH_PX = 640;
@@ -89,13 +101,27 @@ const HISTORY_PANE_HOST: HappierArtifactRevisionListProps['host'] = { ...HISTORY
  * Opened to compare (a suggestion or comment written against an earlier version, C5 Compare), it starts
  * on that version and each preview shows what changed from it to the current text.
  */
-function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore: boolean; compareFromBodyVersion?: number; onClose: () => void }>) {
+function ArtifactHistoryContent(props: HistorySubject & Readonly<{ onClose: () => void }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const client = useArtifactActionsClient();
-    const scope = useActiveServerAccountScope();
+    const { client } = props;
+    const scope = client.scope;
     const router = useRouter();
-    const artifact = useArtifact(props.artifactId);
+    // The sync store is active-Home-only. Its same-id row is useful only while it belongs to this
+    // captured Account; direct Discussion entry may never have put this Doc in that store at all.
+    const activeArtifact = getStorage()(state => areServerAccountScopesEqual(state.profileScope, scope)
+        ? state.artifacts[props.artifactId] : undefined);
+    const retainedArtifact = React.useRef(props.currentArtifact);
+    const artifact = activeArtifact && (!retainedArtifact.current || activeArtifact.seq >= retainedArtifact.current.seq)
+        ? activeArtifact : retainedArtifact.current;
+    React.useEffect(() => { retainedArtifact.current = artifact; }, [artifact]);
+    const readBinary = React.useCallback<typeof sync.fetchArtifactBinary>(async (artifactId, reference, signal) => {
+        // This byte reader is active-Home-only. Admission here binds its existing scope guard to the
+        // captured subject; Sync rechecks the same Account before/after every await, including release.
+        if (!areServerAccountScopesEqual(getActiveServerAccountScope(), scope))
+            throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
+        return sync.fetchArtifactBinary(artifactId, reference, signal);
+    }, [scope]);
     const rowDensity = useItemDensityInputs().resolved;
     const listColors = React.useMemo(() => ({ secondary: theme.colors.text.secondary, tertiary: theme.colors.text.tertiary, divider: theme.colors.border.subtle }),
         [theme.colors.border.subtle, theme.colors.text.secondary, theme.colors.text.tertiary]);
@@ -123,7 +149,6 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     const selected = selection?.client === client && selection.artifactId === artifactId ? selection.bodyVersion : null;
 
     React.useEffect(() => {
-        if (!client) return;
         let active = true;
         setState(previous => ({ client, artifactId,
             data: previous?.client === client && previous.artifactId === artifactId ? previous.data : null,
@@ -150,7 +175,7 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     }, [client, artifactId, compareFrom, current, refreshIntent]);
 
     const restore = React.useCallback(async (bodyVersion: number) => {
-        if (!client || !artifact || artifact.bodyVersion === undefined) return;
+        if (!artifact || artifact.bodyVersion === undefined) return;
         setRestoring(true);
         setRestoreFailed(false);
         const outcome = await client.restoreRevision({
@@ -185,7 +210,7 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
             </View>
         );
     }
-    if (!history?.data || client === null) {
+    if (!history?.data) {
         // Keep the measured View mounted from loading through content. React Native Web
         // observes layout on mount; attaching onLayout only after the read misses that subscription.
         return <View style={styles.root} testID="artifact-history" onLayout={measureBody}>
@@ -245,7 +270,7 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
                     ? <ProseDiffViewer mode="text" testID="artifact-history:changes" oldText={chosen.body} newText={currentBody}
                         prose={{ oldLabel: t('artifacts.browser.history.version', { n: versionNumber(chosen) }), newLabel: t('artifacts.browser.history.now') }} />
                     : typeof chosen.body === 'string' ? <MarkdownView markdown={chosen.body} />
-                    : chosen.body ? <ArtifactBinaryBody artifactId={props.artifactId} reference={chosen.body} name={artifact?.title || t('artifacts.untitled')} readBytes={sync.fetchArtifactBinary} />
+                    : chosen.body ? <ArtifactBinaryBody artifactId={props.artifactId} reference={chosen.body} name={artifact?.title || t('artifacts.untitled')} readBytes={readBinary} />
                         : <Text style={styles.caption}>{t('artifacts.noContent')}</Text>}
             </ScrollView>
         </View>
@@ -285,18 +310,32 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     );
 }
 
-type HistoryModalProps = CustomModalInjectedProps & Readonly<{ artifactId: string; canRestore: boolean; compareFromBodyVersion?: number }>;
+type HistoryModalProps = CustomModalInjectedProps & HistorySubject;
 
 function ArtifactHistoryModal(props: HistoryModalProps): React.ReactElement {
-    return <ArtifactHistoryContent artifactId={props.artifactId} canRestore={props.canRestore}
+    return <ArtifactHistoryContent artifactId={props.artifactId} client={props.client} currentArtifact={props.currentArtifact} canRestore={props.canRestore}
         compareFromBodyVersion={props.compareFromBodyVersion} onClose={props.onClose} />;
 }
 
 /** `compareFromBodyVersion` opens History on that version, showing its changes up to the current text. */
-export function showArtifactHistorySheet(params: Readonly<{ artifactId: string; name: string; canRestore: boolean; compareFromBodyVersion?: number }>): void {
+export function showArtifactHistorySheet(params: Readonly<{
+    artifactId: string; name: string; canRestore: boolean; compareFromBodyVersion?: number;
+    client?: ArtifactActionsClient;
+    /** Already admitted through this client's canonical Doc reader, including direct Discussion entry. */
+    currentDoc?: CurrentDoc;
+}>): void {
+    const state = getStorage().getState();
+    const client = params.client ?? (state.profileScope ? createArtifactActionsClient(state.profileScope) : null);
+    if (!client) return;
+    const doc = params.currentDoc?.artifactId === params.artifactId ? params.currentDoc : undefined;
+    const currentArtifact: HistoryArtifact | undefined = doc ? {
+        id: doc.artifactId, title: typeof doc.header.title === 'string' ? doc.header.title : null,
+        headerVersion: doc.revision.headerVersion, bodyVersion: doc.revision.bodyVersion, body: doc.body,
+        updatedAt: doc.updatedAt, provenance: doc.provenance, seq: doc.seq, access: doc.access,
+    } : areServerAccountScopesEqual(state.profileScope, client.scope) ? state.artifacts[params.artifactId] : undefined;
     Modal.show({
         component: ArtifactHistoryModal,
-        props: { artifactId: params.artifactId, canRestore: params.canRestore,
+        props: { artifactId: params.artifactId, client, currentArtifact, canRestore: params.canRestore && currentArtifact?.access !== 'view',
             ...(params.compareFromBodyVersion === undefined ? {} : { compareFromBodyVersion: params.compareFromBodyVersion }) },
         chrome: {
             kind: 'card',

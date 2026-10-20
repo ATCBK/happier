@@ -2,7 +2,7 @@ import * as React from 'react';
 import * as ReactNative from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, ApprovalRequestSchema, encodePlainArtifactStoredContent, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
 import { HappierArtifactRevisionList } from '@happier-dev/plugin-ui/presentation';
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -31,6 +31,11 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
 import { sync } from '@/sync/sync';
 import { showArtifactHistorySheet } from './ArtifactHistorySheet';
+import { ArtifactEditProposal } from './ArtifactEditProposal';
+import { createArtifactActionsClient } from './artifactActionsClient';
+import { setActiveServer, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { DocEditProposalV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 const initialState = getStorage().getState();
 const artifact: DecryptedArtifact = { id: 'document', title: 'Notes', isDecrypted: true,
@@ -76,6 +81,111 @@ async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], set
 }
 
 describe('Artifact History continuity', () => {
+    it('does not fetch retained binary History from a different active Home', async () => {
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({ width: 900, height: 900, scale: 1, fontScale: 1 });
+        const reference = { blobId: 'dd983306-d7e5-4ce6-a09c-d33f1a4828a1', mime: 'application/octet-stream', sizeBytes: 1, sha256: 'a'.repeat(64) };
+        const served = await serveActionHomes({ homes: [
+            { key: 'b', serverUrl: 'https://history-binary-b.test', accountId: 'reader-b', currentAccount: true },
+            { key: 'a', serverUrl: 'https://history-binary-a.test', accountId: 'reader-a', currentAccount: true },
+        ], route: request => request.path.endsWith('/revisions') ? Response.json({ retentionCount: 10, revisions: [{ bodyVersion: 1,
+            body: encodePlainArtifactStoredContent({ body: reference }), createdAt: 1, sizeBytes: 1 }] })
+            : request.path === '/v1/artifacts/document' ? Response.json({ ...storedHead, ownerAccountId: `reader-${request.home}`,
+                body: encodePlainArtifactStoredContent({ body: reference }) }) : undefined });
+        disposeHome = served.dispose;
+        await served.restoreActiveConnection();
+        const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+        await act(async () => showArtifactHistorySheet({ artifactId: 'document', name: 'B file', canRestore: false,
+            client: createArtifactActionsClient({ serverId: served.homes.b!.id, accountId: 'reader-b' }) }));
+        await flushHookEffects();
+        expect(screen.findByTestId('artifact:download')).not.toBeNull();
+        await screen.pressByTestIdAsync('artifact:download');
+        await vi.waitFor(() => expect(screen.findByTestId('artifact:downloadFailed')).not.toBeNull());
+        expect(served.requests.filter(request => request.home === 'a' && request.path.startsWith('/v1/artifacts/document'))).toEqual([]);
+        await act(async () => {
+            await served.switchAccount('b', 'another-b-account');
+            await setActiveServer({ serverId: served.homes.b!.profileId, scope: 'device' });
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(served.homes.b!.serverUrl);
+            if (!credentials) throw new Error('Expected changed B credentials');
+            await restoreConnectionToActiveServer(credentials);
+        });
+        await screen.pressByTestIdAsync('artifact:download');
+        await vi.waitFor(() => expect(screen.findByTestId('artifact:downloadFailed')).not.toBeNull());
+        expect(served.requests.filter(request => request.home === 'b' && request.accountId === 'another-b-account'
+            && request.path.startsWith('/v1/artifacts/document'))).toEqual([]);
+    });
+    it.each(['restore', 'approval'] as const)('keeps direct Discussion Compare, current prose and Restore on captured Home B while ambient A changes (%s)', async mode => {
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({ width: 900, height: 900, scale: 1, fontScale: 1 });
+        let restored = false;
+        const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'reader-b', encryptionMode: 'plain' });
+        const served = await serveActionHomes({ homes: [
+            { key: 'b', serverUrl: 'https://history-captured-b.test', accountId: 'reader-b', currentAccount: true,
+                settings: mode === 'approval' ? { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                    actions: { 'artifact.revisions.restore': { approvalRequiredSurfaces: ['ui'] } } }) } : undefined },
+            { key: 'c', serverUrl: 'https://history-ambient-c.test', accountId: 'reader-c', currentAccount: true },
+            { key: 'a', serverUrl: 'https://history-ambient-a.test', accountId: 'reader-a', currentAccount: true },
+        ], route: request => {
+            if (request.path === '/v1/artifacts/document') return Response.json({ ...storedHead,
+                ownerAccountId: `reader-${request.home}`, header: encodePlainArtifactStoredContent({ title: `${request.home.toUpperCase()} notes`, kind: 'markdown' }),
+                body: encodePlainArtifactStoredContent({ body: request.home === 'b' ? restored ? 'B original prose' : 'B current prose' : 'Foreign private prose' }),
+                headerVersion: restored && request.home === 'b' ? 4 : 3, bodyVersion: restored && request.home === 'b' ? 4 : 3 });
+            if (request.path.endsWith('/revisions')) return Response.json({ retentionCount: 10, revisions: [{ bodyVersion: 1,
+                body: encodePlainArtifactStoredContent({ body: request.home === 'b' ? 'B original prose' : 'Foreign earlier prose' }), createdAt: 1, sizeBytes: 20 }] });
+            if (request.path.endsWith('/restore')) { restored = true; return Response.json({ success: true, headerVersion: 4, bodyVersion: 4 }); }
+            if (request.home === 'b') return persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined;
+        } });
+        disposeHome = served.dispose;
+        await served.restoreActiveConnection();
+        getStorage().getState().addArtifact({ ...artifact, title: 'Foreign A title', body: 'Foreign A body' });
+        const scope = { serverId: served.homes.b!.id, accountId: 'reader-b' };
+        const client = createArtifactActionsClient(scope);
+        const base = { headerVersion: 1, bodyVersion: 1 };
+        const proposal = DocEditProposalV1Schema.parse({ target: { ref: { kind: 'doc', serverId: scope.serverId, artifactId: 'document' },
+            revision: base, range: { start: 0, end: 16 }, quote: 'B original prose' }, baseRevision: base,
+            before: 'B original prose', after: 'B proposed prose', reason: 'Clarify the source' });
+        const screen = await renderScreen(<ModalProvider><ArtifactEditProposal testID="captured-proposal" client={client}
+            proposalRef={{ kind: 'discussion', discussion: { serverId: scope.serverId, discussionId: 'thread-b' }, messageId: 'proposal-b' }}
+            proposal={proposal} disposition={{ state: 'open' }} viewerAccountId={scope.accountId} resolveAccountLabel={() => null} /></ModalProvider>);
+        await vi.waitFor(() => expect(screen.findByTestId('captured-proposal.compare')).not.toBeNull());
+        await screen.pressByTestIdAsync('captured-proposal.compare');
+        await flushHookEffects();
+        expect(served.requests.filter(request => request.path.endsWith('/revisions')).map(request => [request.home, request.accountId]))
+            .toEqual([['b', 'reader-b']]);
+        expect(screen.findAllByType(ProseDiffViewer).find(node => node.props.testID === 'artifact-history:changes')?.props)
+            .toMatchObject({ oldText: 'B original prose', newText: 'B current prose' });
+        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ chrome: expect.objectContaining({ subtitle: 'B notes' }) }));
+        expect(screen.getTextContent()).not.toContain('Foreign');
+        expect(getActiveServerSnapshot().serverId).toBe(served.homes.a!.id);
+        await act(async () => { await setActiveServer({ serverId: served.homes.c!.profileId, scope: 'device' });
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(served.homes.c!.serverUrl);
+            if (!credentials) throw new Error('Expected C credentials');
+            await restoreConnectionToActiveServer(credentials);
+            getStorage().getState().addArtifact({ ...artifact, title: 'Foreign C title', body: 'Foreign C body', headerVersion: 90, bodyVersion: 90 }); });
+        await flushHookEffects();
+        expect(screen.findAllByType(ProseDiffViewer).find(node => node.props.testID === 'artifact-history:changes')?.props)
+            .toMatchObject({ oldText: 'B original prose', newText: 'B current prose' });
+        expect(served.requests.filter(request => request.path.endsWith('/revisions'))).toHaveLength(1);
+        await screen.pressByTestIdAsync('artifact-history:restore');
+        await vi.waitFor(() => expect(screen.findByTestId('artifact-history')).toBeNull());
+        if (mode === 'restore') {
+            expect(served.requests.find(request => request.path.endsWith('/restore'))).toMatchObject({ home: 'b', accountId: 'reader-b',
+                path: '/v1/artifacts/document/revisions/1/restore', body: { expectedHeaderVersion: 3, expectedBodyVersion: 3 } });
+        } else {
+            const approval = persisted.list()[0];
+            expect(approval).toBeDefined();
+            expect(ApprovalRequestSchema.parse(JSON.parse(persisted.readPlainBody(approval!.id)!))).toMatchObject({
+                actionId: 'artifact.revisions.restore', status: 'open', actionArgs: {
+                    artifactId: 'document', bodyVersion: 1, expectedRevision: { headerVersion: 3, bodyVersion: 3 },
+                } });
+            expect(served.requests.some(request => request.path.endsWith('/restore'))).toBe(false);
+            expect(navigation.push).toHaveBeenLastCalledWith(`/inbox/approvals/${encodeURIComponent(approval!.id)}?serverId=${encodeURIComponent(scope.serverId)}`);
+        }
+        expect(getActiveServerSnapshot().serverId).toBe(served.homes.c!.id);
+        expect(served.requests.filter(request => request.path.startsWith('/v1/artifacts/document')).every(request => request.home === 'b')).toBe(true);
+    });
     it('requests full-page phone chrome and returns from preview to versions without losing its revision data', async () => {
         const { screen, served } = await setup(request => request.path.endsWith('/revisions') ? Response.json(revisions) : undefined, undefined, 390);
         expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({

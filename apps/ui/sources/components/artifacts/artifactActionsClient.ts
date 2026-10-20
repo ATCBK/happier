@@ -86,6 +86,8 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
             : readOutcome(actionId, result);
     };
     return {
+        /** Captured alongside every operation; a modal must not rebind this client to the focused Home. */
+        scope,
         /** Seed the existing private Discussion draft from the source's captured Home. */
         beginPassageComment: (passage: DocPassageRefV1) => {
             const draftId = uuidv5(JSON.stringify(['happier.doc-passage-comment-draft.v1', passage.ref.serverId,

@@ -24,6 +24,7 @@ import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolv
 import { Text } from '@/components/ui/text/Text';
 import { getStorage } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -86,20 +87,25 @@ export function ArtifactEditProposal(
   // The Doc's revision as the app already holds it (kept current by sync, as the Doc page reads it): when
   // another edit lands, this suggestion's currency is read again rather than left as it was on mount.
   const docRevisionKey = getStorage()((state) => {
+    if (!areServerAccountScopesEqual(state.profileScope, client.scope)) return '';
     const stored = state.artifacts[artifactId];
     return stored ? `${stored.headerVersion}.${stored.bodyVersion ?? ''}` : '';
   });
-  const [standaloneCurrency, setCurrency] = React.useState<Currency>('unknown');
-  const admitted = props.docRead?.status === 'ready'
-    && props.docRead.value.ref.artifactId === artifactId
-    && areServerProfileIdentifiersEquivalent(props.docRead.value.ref.serverId, proposalRef?.discussion.serverId)
-      ? props.docRead.value.artifact : null;
-  const currency: Currency = props.docRead === undefined ? standaloneCurrency
-    : admitted ? sameRevision(admitted.revision, base) ? 'current' : 'movedOn' : 'unknown';
+  const [standaloneRead, setStandaloneRead] = React.useState<Readonly<{
+    client: ArtifactActionsClient; artifactId: string; read: AdmittedDocRead;
+  }> | null>(null);
+  const docRead = props.docRead ?? (standaloneRead?.client === client && standaloneRead.artifactId === artifactId
+    ? standaloneRead.read : undefined);
+  const admitted = docRead?.status === 'ready'
+    && docRead.value.ref.artifactId === artifactId
+    && areServerProfileIdentifiersEquivalent(docRead.value.ref.serverId, client.scope.serverId)
+      ? docRead.value.artifact : null;
   const [refusal, setRefusal] = React.useState<
     'movedOn' | 'cantEdit' | 'failed' | null
   >(null);
   const [busy, setBusy] = React.useState<Busy>(null);
+  const currency: Currency = refusal === 'movedOn' ? 'movedOn'
+    : admitted ? sameRevision(admitted.revision, base) ? 'current' : 'movedOn' : 'unknown';
   const [undo, setUndo] = React.useState<
     | Readonly<{ state: 'done'; revision: Revision }>
     | Readonly<{ state: 'conflict' | 'failed' }>
@@ -109,20 +115,15 @@ export function ArtifactEditProposal(
   React.useEffect(() => {
     if (props.docRead !== undefined || disposition.state !== 'open') return;
     let live = true;
-    setCurrency('unknown');
+    setStandaloneRead({ client, artifactId, read: { status: 'loading' } });
     // The Doc lives in this thread's Home (C5 §4), which the client is already bound to; its stored
     // label may be another device's name for that Home, so the read names only the document.
     void client.readDoc({ ref: { kind: 'doc', artifactId } }).then((read) => {
       if (!live) return;
       // A reader is told who can accept up front rather than after pressing Accept.
       if (read.ok && read.value.artifact.access === 'view') setRefusal('cantEdit');
-      setCurrency(
-        read.ok
-          ? sameRevision(read.value.artifact.revision, base)
-            ? 'current'
-            : 'movedOn'
-          : 'unknown',
-      );
+      setStandaloneRead({ client, artifactId, read: read.ok
+        ? { status: 'ready', value: read.value } : { status: 'unavailable' } });
     });
     return () => {
       live = false;
@@ -151,7 +152,6 @@ export function ArtifactEditProposal(
       }
       const code = outcome.failure.code;
       if (code === VERSION_MISMATCH) {
-        setCurrency('movedOn');
         setRefusal('movedOn');
         return;
       }
@@ -183,12 +183,13 @@ export function ArtifactEditProposal(
     );
   }, [artifactId, base.bodyVersion, busy, client, disposition]);
 
-  const docTitle = getStorage()((state) => state.artifacts[artifactId]?.title ?? null);
+  const docTitle = typeof admitted?.header.title === 'string' ? admitted.header.title : null;
   const readOnly = refusal === 'cantEdit' || admitted?.access === 'view';
   // Compare: the version the suggestion was reviewed against beside the current text, in History.
   const compare = React.useCallback(() => showArtifactHistorySheet({
-    artifactId, name: docTitle || t('artifacts.untitled'), canRestore: !readOnly, compareFromBodyVersion: base.bodyVersion,
-  }), [artifactId, base.bodyVersion, docTitle, readOnly]);
+    artifactId, client, currentDoc: admitted ?? undefined,
+    name: docTitle || t('artifacts.untitled'), canRestore: !readOnly, compareFromBodyVersion: base.bodyVersion,
+  }), [admitted, artifactId, base.bodyVersion, client, docTitle, readOnly]);
   const proposer = props.proposer ?? null;
   const askable = proposalRef !== null && proposer !== null
     && !('accountId' in proposer.mention && proposer.mention.accountId === props.viewerAccountId);
