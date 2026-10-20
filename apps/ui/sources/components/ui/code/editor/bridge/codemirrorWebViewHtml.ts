@@ -1,4 +1,5 @@
-import { resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
+import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
+import { minimalCodeEditorEdit } from '../codeEditorDocumentEdit';
 import type { CodeEditorTheme } from '../editorTheme';
 import { CODEMIRROR_WEBVIEW_BUNDLE_JS } from './codemirrorWebViewBundle.generated';
 
@@ -12,6 +13,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
     maxChunkBytes: number;
     uiFontScale?: number;
     osFontScale?: number;
+    lineNumberDigits?: number;
+    reviewLaneWidth?: number;
+    fontFamily?: string;
 }>): string {
     const themeJson = JSON.stringify(params.theme);
     const wrapLines = params.wrapLines ? 'true' : 'false';
@@ -24,6 +28,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
     });
     const fontSizePx = fontMetrics.fontSize;
     const lineHeightPx = fontMetrics.lineHeight;
+    const numberFontSizePx = fontMetrics.lineNumberFontSize;
+    const gutterEnd = CODE_GUTTER_METRICS.numberPaddingRight - 1; // Existing gutter divider occupies the remaining pixel.
+    const markerLane = CODE_GUTTER_METRICS.numberPaddingRight / 3;
 
     const embeddedBundle = typeof CODEMIRROR_WEBVIEW_BUNDLE_JS === 'string'
         ? CODEMIRROR_WEBVIEW_BUNDLE_JS.trim()
@@ -70,7 +77,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       }
       .cm-editor {
         height: 100%;
-        font-family: Menlo, ui-monospace, SFMono-Regular, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-family: ${params.fontFamily ?? 'monospace'};
         font-size: ${fontSizePx}px;
         line-height: ${lineHeightPx}px;
       }
@@ -90,6 +97,8 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       const DEFAULT_CONFIG = {
         wrapLines: ${wrapLines},
         showLineNumbers: ${showLineNumbers},
+        lineNumberDigits: ${Math.max(1, Math.floor(params.lineNumberDigits ?? 1))},
+        reviewLaneWidth: ${params.reviewLaneWidth ?? 0},
         theme: ${themeJson},
       };
 
@@ -247,6 +256,8 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       let currentReadOnly = false;
       let lineSeparator = '\\n';
       let findRequest = null;
+      let keyboardSignatures = new Set();
+      const minimalDocumentEdit = ${minimalCodeEditorEdit.toString()};
 
       function detectLineSeparator(doc) {
         const match = doc.match(/\\r\\n|\\r|\\n/);
@@ -273,6 +284,8 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       }
 
       async function boot() {
+        let decorationRuntime = null;
+        const decorationLayers = new Map();
         const embedded = ${hasEmbeddedBundle ? 'true' : 'false'};
         let EditorState;
         let EditorView;
@@ -281,6 +294,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
         let defaultKeymap;
         let history;
         let historyKeymap;
+        let indentMore, indentLess, undo, redo, undoDepth, redoDepth, cursorCharLeft, cursorCharRight, isolateHistory;
         let indentOnInput;
         let bracketMatching;
         let closeBrackets;
@@ -326,8 +340,15 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           const bundle = globalThis.HAPPIER_CODEMIRROR_WEBVIEW || globalThis.__CM6__ || null;
           if (!bundle) throw new Error('CodeMirror bundle missing');
           ({ EditorState } = bundle);
+          if (bundle.createCodeMirrorDecorations) {
+            decorationRuntime = bundle.createCodeMirrorDecorations(bundle, (layer, item) => {
+              flushPendingDocChange();
+              sendEnvelope({ v: 1, type: 'decorations.press', payload: { layer, item } });
+            });
+          }
           ({ EditorView, lineNumbers, keymap, drawSelection, highlightSpecialChars, highlightActiveLine, highlightActiveLineGutter } = bundle);
           ({ defaultKeymap, history, historyKeymap } = bundle);
+          ({ indentMore, indentLess, undo, redo, undoDepth, redoDepth, cursorCharLeft, cursorCharRight, isolateHistory } = bundle);
           ({ indentOnInput, bracketMatching, syntaxHighlighting, defaultHighlightStyle, HighlightStyle } = bundle);
           ({ closeBrackets, closeBracketsKeymap } = bundle);
           ({ tags } = bundle);
@@ -356,7 +377,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           [
             { EditorState },
             { EditorView, lineNumbers, keymap, drawSelection, highlightSpecialChars, highlightActiveLine, highlightActiveLineGutter },
-            { defaultKeymap, history, historyKeymap },
+            { defaultKeymap, history, historyKeymap, indentMore, indentLess, undo, redo, undoDepth, redoDepth, cursorCharLeft, cursorCharRight, isolateHistory },
             { indentOnInput, bracketMatching, syntaxHighlighting, defaultHighlightStyle, HighlightStyle },
             { closeBrackets, closeBracketsKeymap },
             langJavascript,
@@ -366,6 +387,48 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             { tags },
             { search, SearchQuery, setSearchQuery, getSearchQuery, findNext, findPrevious, openSearchPanel, closeSearchPanel },
           ] = await Promise.all(${cdnModuleImports});
+        }
+
+        function publishHistory() {
+          if (view && undoDepth && redoDepth) sendEnvelope({ v: 1, type: 'history.state', payload: {
+            canUndo: undoDepth(view.state) > 0, canRedo: redoDepth(view.state) > 0,
+          } });
+        }
+        function applyGutterDigits(editor) {
+          const digits = String(Math.max(DEFAULT_CONFIG.lineNumberDigits, String(editor.state.doc.lines).length));
+          if (editor.dom.style.getPropertyValue('--happier-line-number-digits') !== digits) editor.dom.style.setProperty('--happier-line-number-digits', digits);
+          editor.dom.style.setProperty('--happier-review-lane-width', DEFAULT_CONFIG.reviewLaneWidth + 'px');
+        }
+        function reveal(lineNumber, options = {}) {
+          if (!view) return;
+          const line = view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, Math.floor(lineNumber) || 1)));
+          view.dispatch({ selection: { anchor: line.from, head: options.select ? line.to : line.from },
+            ...(options.behavior === 'smooth' ? {} : { effects: EditorView.scrollIntoView(line.from, { y: 'center' }) }) });
+          if (options.behavior === 'smooth') {
+            const editor = view;
+            editor.requestMeasure({
+              read: () => { const block = editor.lineBlockAt(line.from); return Math.max(0, block.top - (editor.scrollDOM.clientHeight - block.height) / 2); },
+              write: top => editor.scrollDOM.scrollTo({ top, behavior: 'smooth' }),
+            });
+          }
+          if (options.focus) view.focus();
+        }
+        function runCommand(command) {
+          if (!view || view.composing) return;
+          if (command === 'find') { sendEnvelope({ v: 1, type: 'find.open', payload: {} }); return; }
+          if (command === 'nextChange' || command === 'prevChange') {
+            if (decorationRuntime) decorationRuntime.navigate(view, command === 'nextChange' ? 1 : -1);
+            return;
+          }
+          if (command === 'moveLeft' || command === 'moveRight') { (command === 'moveLeft' ? cursorCharLeft : cursorCharRight)?.(view); return; }
+          if (view.state.readOnly) return;
+          if (typeof command === 'object' && command) {
+            if (typeof command.replaceDocument === 'string') {
+              const changes = minimalDocumentEdit(view.state.doc.toString(), view.state.toText(command.replaceDocument).toString());
+              if (changes) view.dispatch({ changes, annotations: isolateHistory.of('full'), userEvent: 'input' });
+            } else if (typeof command.insert === 'string') view.dispatch(view.state.replaceSelection(command.insert), { userEvent: 'input' });
+          } else ({ indent: indentMore, outdent: indentLess, undo, redo })[command]?.(view);
+          publishHistory();
         }
 
         const root = document.getElementById('root');
@@ -386,9 +449,22 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             ])
           : defaultHighlightStyle;
         const baseExtensions = [
+          ...(decorationRuntime ? decorationRuntime.extensions : []),
+          EditorView.domEventHandlers({ keydown: (event, editor) => {
+            if (editor.composing || event.isComposing) return false;
+            const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+            const signature = [key, 'shift=' + event.shiftKey, 'ctrl=' + event.ctrlKey, 'meta=' + event.metaKey, 'alt=' + event.altKey].join('|');
+            if (!keyboardSignatures.has(signature)) return false;
+            event.preventDefault();
+            sendEnvelope({ v: 1, type: 'keyboard.shortcut', payload: { key: event.key, code: event.code,
+              modifiers: { shift: event.shiftKey, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey }, repeat: event.repeat } });
+            return true;
+          } }),
           // The host owns the visible FindBar. This input-free panel enables engine decorations.
           search({ createPanel: () => { const dom = document.createElement('span'); dom.hidden = true; return { dom }; } }),
           keymap.of([
+            { key: 'Alt-F5', run: () => { runCommand('nextChange'); return true; } },
+            { key: 'Alt-Shift-F5', run: () => { runCommand('prevChange'); return true; } },
             ...defaultKeymap,
             ...historyKeymap,
             ...closeBracketsKeymap,
@@ -411,11 +487,14 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           },
           '.cm-scroller': {
             backgroundColor: theme.backgroundColor,
+            fontFamily: ${JSON.stringify(params.fontFamily ?? 'monospace')},
           },
           '.cm-content': {
             color: syntax.defaultColor,
             caretColor: theme.textColor,
+            padding: '0',
           },
+          '.cm-line': { padding: '0' },
           '.cm-cursor, .cm-dropCursor': {
             borderLeftColor: theme.textColor,
           },
@@ -426,10 +505,19 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             backgroundColor: theme.backgroundColor,
             borderRight: '1px solid ' + theme.dividerColor,
             color: theme.lineNumberColor,
+            paddingLeft: 'calc(${CODE_GUTTER_METRICS.rowPadding + CODE_GUTTER_METRICS.numberPaddingLeft}px + var(--happier-review-lane-width, ${params.reviewLaneWidth ?? 0}px))',
+            paddingRight: '${gutterEnd}px',
           },
           '.cm-lineNumbers .cm-gutterElement': {
             color: theme.lineNumberColor,
+            padding: '0',
+            fontSize: '${numberFontSizePx}px',
+            minWidth: ${JSON.stringify(params.showLineNumbers ? `max(${CODE_GUTTER_METRICS.numberMinWidth}px, calc(var(--happier-line-number-digits, 1) * ${fontSizePx / numberFontSizePx}ch))` : '0')},
           },
+          '.happier-editor-gutter-change, .happier-editor-gutter-diagnostic, .happier-editor-gutter-blame': { position: 'absolute', top: '0', bottom: '0', width: '${markerLane}px' },
+          '.happier-editor-gutter-change': { right: '${markerLane * 2}px' },
+          '.happier-editor-gutter-diagnostic': { right: '${markerLane}px' },
+          '.happier-editor-gutter-blame': { right: '0' },
           '.cm-activeLine': {
             backgroundColor: theme.activeLineColor,
           },
@@ -471,7 +559,30 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
 
           const extensions = baseExtensions.slice();
           extensions.push(themeExt);
-          if (DEFAULT_CONFIG.showLineNumbers) extensions.push(lineNumbers());
+          extensions.push(EditorView.domEventHandlers({
+            mousemove(event, editor) {
+              const offset = editor.posAtCoords({ x: event.clientX, y: event.clientY });
+              const coords = offset === null ? null : editor.coordsAtPos(offset);
+              const position = offset === null ? null : documentPosition(editor, offset);
+              sendEnvelope({ v: 1, type: 'pointer', payload: position && coords ? {
+                ...position, rect: { x: coords.left, y: coords.top, width: coords.right - coords.left, height: coords.bottom - coords.top },
+              } : null });
+              return false;
+            },
+            mouseleave() {
+              sendEnvelope({ v: 1, type: 'pointer', payload: null });
+              return false;
+            },
+            mousedown(event, editor) {
+              if (event.button !== 0 || (!event.metaKey && !event.ctrlKey) || editor.composing || !editor.contentDOM.contains(event.target)) return false;
+              const offset = editor.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (offset === null) return false;
+              event.preventDefault();
+              sendEnvelope({ v: 1, type: 'activate', payload: documentPosition(editor, offset) });
+              return true;
+            },
+          }));
+          extensions.push(lineNumbers({ formatNumber: number => DEFAULT_CONFIG.showLineNumbers ? String(number) : '' }));
           if (DEFAULT_CONFIG.wrapLines) extensions.push(EditorView.lineWrapping);
           if (langExt) extensions.push(langExt);
           if (readOnly) extensions.push(EditorState.readOnly.of(true));
@@ -480,9 +591,13 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             doc: doc || '',
             extensions: extensions.concat([
               EditorView.updateListener.of((update) => {
+                if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) publishSelection(update.view);
+                if (update.docChanged || update.selectionSet) publishCursor(update.view);
                 if (update.focusChanged) sendEnvelope({ v: 1, type: 'editor.focus', payload: { focused: update.view.hasFocus } });
                 if (findRequest && (update.docChanged || update.selectionSet)) publishFindStatus();
                 if (!update.docChanged) return;
+                applyGutterDigits(update.view);
+                publishHistory();
                 if (applyingRemote) return;
                 if (changeTimer) clearTimeout(changeTimer);
                 changeTimer = setTimeout(() => {
@@ -495,7 +610,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             ]),
           });
 
-          return new EditorView({ state, parent: root });
+          const editor = new EditorView({ state, parent: root });
+          applyGutterDigits(editor);
+          return editor;
         }
 
         function recreateView(doc, language, readOnly) {
@@ -505,9 +622,41 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             view = null;
           }
           view = createView(doc, language, readOnly);
+          publishSelection(view);
+          publishCursor(view);
+          if (decorationRuntime) for (const [layer, items] of decorationLayers) view.dispatch({ effects: decorationRuntime.set.of({ layer, items }) });
           currentLanguage = language;
           currentReadOnly = readOnly;
           if (findRequest) setFind(findRequest);
+          publishHistory();
+        }
+
+        function documentPosition(editor, offset) {
+          const line = editor.state.doc.lineAt(offset);
+          return { line: line.number, character: offset - line.from };
+        }
+
+        function publishCursor(editor) {
+          sendEnvelope({ v: 1, type: 'cursor', payload: documentPosition(editor, editor.state.selection.main.head) });
+        }
+
+        function publishSelection(editor) {
+          const selection = editor.state.selection.main;
+          const first = editor.state.doc.lineAt(selection.from);
+          const last = editor.state.doc.lineAt(selection.to);
+          let rect = null;
+          try {
+            const coords = editor.coordsAtPos(selection.from);
+            if (coords) rect = { x: coords.left, y: coords.top, width: coords.right - coords.left, height: coords.bottom - coords.top };
+          } catch (e) {
+            // A selection can be outside the rendered viewport.
+          }
+          sendEnvelope({ v: 1, type: 'selection', payload: {
+            startLine: first.number,
+            endLine: last.number > first.number && selection.to === last.from ? last.number - 1 : last.number,
+            text: selection.empty ? first.text : editor.state.doc.sliceString(selection.from, selection.to, lineSeparator),
+            rect,
+          } });
         }
 
         function publishFindStatus() {
@@ -608,7 +757,21 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
 
       function onEnvelope(envelope) {
           if (!envelope || envelope.v !== 1 || typeof envelope.type !== 'string') return;
+          if (envelope.type === 'keyboard.config') {
+            keyboardSignatures = new Set(Array.isArray(envelope.payload?.signatures) ? envelope.payload.signatures.filter(value => typeof value === 'string') : []);
+            return;
+          }
           if (envelope.type === 'focus') { if (view) view.focus(); return; }
+          if (envelope.type === 'reveal') { const payload = envelope.payload || {}; reveal(payload.line, payload); return; }
+          if (envelope.type === 'command') { runCommand(envelope.payload?.command); return; }
+          if (envelope.type === 'decorations.set') {
+            const payload = envelope.payload || {};
+            if ((payload.layer === 'change' || payload.layer === 'diagnostic' || payload.layer === 'blame') && Array.isArray(payload.items)) {
+              decorationLayers.set(payload.layer, payload.items);
+              if (view && decorationRuntime) view.dispatch({ effects: decorationRuntime.set.of(payload) });
+            }
+            return;
+          }
           if (envelope.type === 'find.set') {
             const payload = envelope.payload || {};
             if (typeof payload.query === 'string') setFind(payload);
@@ -633,14 +796,17 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           }
           if (envelope.type === 'init') {
             const payload = envelope.payload || {};
+            DEFAULT_CONFIG.lineNumberDigits = Math.max(1, payload.lineNumberDigits ?? DEFAULT_CONFIG.lineNumberDigits);
+            DEFAULT_CONFIG.reviewLaneWidth = payload.reviewLaneWidth ?? DEFAULT_CONFIG.reviewLaneWidth;
             const doc = typeof payload.doc === 'string' ? payload.doc : '';
             const language = payload.language ?? null;
             const readOnly = payload.readOnly === true;
             if (view && currentLanguage === language && currentReadOnly === readOnly) {
               setDoc(doc);
-              return;
-            }
-            recreateView(doc, language, readOnly);
+            } else recreateView(doc, language, readOnly);
+            applyGutterDigits(view);
+            if (payload.reveal) reveal(payload.reveal.line, payload.reveal);
+            view.requestMeasure({ read: () => null, write: () => sendEnvelope({ v: 1, type: 'editor.ready', payload: {} }) });
             return;
           }
           if (envelope.type === 'setDoc') {

@@ -6,13 +6,13 @@ import { flushHookEffects, renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const createModelSpy = vi.fn(() => ({
+const createModelSpy = vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
     getValue: (): string => '',
     setValue: () => {},
     dispose: () => {},
 }));
 
-const createEditorSpy = vi.fn(() => ({
+const createEditorSpy = vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
     onDidChangeModelContent: () => ({ dispose: () => {} }),
     onDidBlurEditorText: () => ({ dispose: () => {} }),
     updateOptions: () => {},
@@ -20,6 +20,8 @@ const createEditorSpy = vi.fn(() => ({
 }));
 const defineThemeSpy = vi.fn();
 const setThemeSpy = vi.fn();
+const typescriptModeSpy = vi.fn();
+const javascriptModeSpy = vi.fn();
 
 const darkEditorTheme = {
     dark: true,
@@ -62,20 +64,32 @@ type EditorThemeFixture = typeof darkEditorTheme | typeof lightEditorTheme;
 const unistylesState = vi.hoisted(() => ({
     currentTheme: null as unknown as EditorThemeFixture,
 }));
+const monacoDom = vi.hoisted(() => ({ listeners: new Map<string, EventListener>() }));
 
 function assertCallable(value: unknown, label: string): (...args: unknown[]) => unknown {
     if (typeof value !== 'function') throw new Error(`expected ${label} to be callable`);
     return value as (...args: unknown[]) => unknown;
 }
 
+/** The installed Monaco 0.55.1 boundary always includes both language-service defaults. */
+function createMonacoLanguageServicesBoundary() {
+    return { typescript: {
+        typescriptDefaults: { setModeConfiguration: typescriptModeSpy },
+        javascriptDefaults: { setModeConfiguration: javascriptModeSpy },
+    } };
+}
+
 function setupMonacoGlobals() {
     (globalThis as any).window = (globalThis as any).window ?? {};
     (globalThis as any).document = (globalThis as any).document ?? {};
+    window.addEventListener ??= vi.fn();
+    window.removeEventListener ??= vi.fn();
 
     (globalThis as any).window.require = (deps: any, onOk?: any, _onErr?: any) => {
         if (typeof onOk === 'function') onOk();
     };
     (globalThis as any).window.monaco = {
+        ...createMonacoLanguageServicesBoundary(),
         editor: {
             createModel: createModelSpy,
             create: createEditorSpy,
@@ -90,6 +104,9 @@ beforeEach(() => {
     createEditorSpy.mockClear();
     defineThemeSpy.mockClear();
     setThemeSpy.mockClear();
+    typescriptModeSpy.mockClear();
+    javascriptModeSpy.mockClear();
+    monacoDom.listeners.clear();
     unistylesState.currentTheme = darkEditorTheme;
 });
 
@@ -97,7 +114,10 @@ vi.mock('react-native', async () => {
     const React = await import('react');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     const View = React.forwardRef((props: any, ref: any) => {
-        React.useImperativeHandle(ref, () => ({}), []);
+        React.useImperativeHandle(ref, () => ({
+            addEventListener: (type: string, listener: EventListener) => monacoDom.listeners.set(type, listener),
+            removeEventListener: (type: string) => monacoDom.listeners.delete(type),
+        }), []);
         return React.createElement('View', props, props.children);
     });
     return createReactNativeWebMock({
@@ -117,9 +137,187 @@ vi.mock('react-native-unistyles', async () => {
 
 import { MonacoEditorSurface } from './MonacoEditorSurface.web';
 import type { CodeEditorHandle } from '../codeEditorTypes';
+import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
+import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
 
 
 describe('MonacoEditorSurface (web)', () => {
+    it('aligns its measured five-digit gutter with the shared code-view and review inset', async () => {
+        setupMonacoGlobals();
+        const updateOptions = vi.fn();
+        const model = { ...createModelSpy.getMockImplementation()!(), getLineCount: () => 1 };
+        const editorBoundary = { ...createEditorSpy.getMockImplementation()!(), updateOptions,
+            getLayoutInfo: () => ({ lineNumbersWidth: 39, contentLeft: 69 }),
+        };
+        createModelSpy.mockReturnValueOnce(model);
+        createEditorSpy.mockReturnValueOnce(editorBoundary);
+        await renderScreen(<MonacoEditorSurface resetKey="gutter" value="one" language="text" onChange={vi.fn()} lineNumberDigits={5} reviewLaneWidth={32} />);
+        expect(createEditorSpy.mock.calls[0]?.[1]).toMatchObject({ lineNumbersMinChars: 5, glyphMargin: false });
+        expect(updateOptions).toHaveBeenCalledWith({ lineDecorationsWidth: 62 });
+    });
+    it('captures Monaco goto chords and dispatches the app commands before built-in handlers', async () => {
+        setupMonacoGlobals();
+        const definition = vi.fn();
+        const references = vi.fn();
+        await renderScreen(<KeyboardShortcutProvider handlers={{ 'code.goToDefinition': definition, 'code.findReferences': references }}>
+            <MonacoEditorSurface resetKey="intelligence-keys" value="const value = 1" language="typescript" onChange={vi.fn()} />
+        </KeyboardShortcutProvider>);
+        const capture = monacoDom.listeners.get('keydown');
+        expect(capture).toEqual(expect.any(Function));
+        for (const modifiers of [{}, { altKey: true }, { shiftKey: true }]) {
+            const event = { key: 'F12', ...modifiers, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isComposing: false };
+            capture!(event as unknown as Event);
+            expect(event.preventDefault).toHaveBeenCalledOnce();
+            expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
+        }
+        expect(definition).toHaveBeenCalledTimes(2);
+        expect(references).toHaveBeenCalledOnce();
+    });
+    it('reads the live selection, rounds its anchor range and releases selection subscriptions', async () => {
+        setupMonacoGlobals();
+        let selection = { startLineNumber: 1, startColumn: 3, endLineNumber: 3, endColumn: 1 };
+        let changed: (() => void) | undefined;
+        const text = 'first\nsecond\nthird';
+        const model = {
+            ...createModelSpy.getMockImplementation()!(),
+            getValue: () => text,
+            getLineContent: (line: number) => text.split('\n')[line - 1],
+            getValueInRange: () => 'rst\nsecond\n',
+        };
+        createModelSpy.mockReturnValueOnce(model);
+        createEditorSpy.mockReturnValueOnce({
+            ...createEditorSpy.getMockImplementation()!(),
+            getSelection: () => selection,
+            getScrolledVisiblePosition: () => ({ left: 20, top: 40, height: 18 }),
+            getDomNode: () => ({ getBoundingClientRect: () => ({ left: 100, top: 200 }) }),
+            onDidChangeCursorSelection: (listener: () => void) => { changed = listener; return { dispose: vi.fn() }; },
+        });
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<MonacoEditorSurface ref={ref} resetKey="selection" value={text} language="text" onChange={vi.fn()} />);
+        expect(ref.current?.getSelection?.()).toEqual({ startLine: 1, endLine: 2, text: 'rst\nsecond\n', rect: { x: 120, y: 240, width: 0, height: 18 } });
+        const listener = vi.fn();
+        const unsubscribe = ref.current!.subscribeSelection!(listener);
+        selection = { startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 3 };
+        changed!();
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(ref.current!.getSelection!()).toMatchObject({ startLine: 2, endLine: 2, text: 'second' });
+        unsubscribe();
+        listener.mockClear();
+        changed!();
+        expect(listener).not.toHaveBeenCalled();
+    });
+    it('disables every built-in TS and JS service before creating a model and delegates hover to the host', async () => {
+        setupMonacoGlobals();
+        await renderScreen(<MonacoEditorSurface resetKey="intelligence-order" value="const answer = 42" language="typescript" onChange={vi.fn()} />);
+        const off = {
+            completionItems: false, hovers: false, documentSymbols: false, definitions: false, references: false,
+            documentHighlights: false, rename: false, diagnostics: false, documentRangeFormattingEdits: false,
+            signatureHelp: false, onTypeFormattingEdits: false, codeActions: false, inlayHints: false,
+        };
+        expect(typescriptModeSpy).toHaveBeenCalledWith(off);
+        expect(javascriptModeSpy).toHaveBeenCalledWith(off);
+        expect(typescriptModeSpy.mock.invocationCallOrder[0]).toBeLessThan(createModelSpy.mock.invocationCallOrder[0]);
+        expect(javascriptModeSpy.mock.invocationCallOrder[0]).toBeLessThan(createModelSpy.mock.invocationCallOrder[0]);
+        expect(createModelSpy.mock.calls[0]).toEqual(['const answer = 42', 'typescript']);
+        expect(createEditorSpy.mock.calls[0]?.[1]).toMatchObject({ hover: { enabled: false } });
+    });
+    it('publishes pointer and activation UTF-16 positions and releases subscribers', async () => {
+        setupMonacoGlobals();
+        let mouseMove: ((event: unknown) => void) | undefined;
+        let mouseLeave: (() => void) | undefined;
+        createEditorSpy.mockReturnValueOnce({
+            ...createEditorSpy.getMockImplementation()!(),
+            getPosition: () => ({ lineNumber: 2, column: 4 }),
+            getTargetAtClientPoint: () => ({ position: { lineNumber: 2, column: 4 } }),
+            getScrolledVisiblePosition: () => ({ left: 20, top: 30, height: 22 }),
+            getDomNode: () => ({ getBoundingClientRect: () => ({ left: 100, top: 200 }) }),
+            onMouseMove: (cb: (event: unknown) => void) => { mouseMove = cb; return { dispose: vi.fn() }; },
+            onMouseLeave: (cb: () => void) => { mouseLeave = cb; return { dispose: vi.fn() }; },
+        });
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<MonacoEditorSurface ref={ref} resetKey="intelligence-events" value="one\n😀 symbol" language="text" onChange={vi.fn()} />);
+        const pointer = vi.fn();
+        const activate = vi.fn();
+        const stopPointer = ref.current!.onPointerPosition!(pointer);
+        const stopActivate = ref.current!.onActivatePosition!(activate);
+        expect(ref.current!.getCursorPosition!()).toEqual({ line: 2, character: 3 });
+        mouseMove!({ target: { position: { lineNumber: 2, column: 4 } } });
+        expect(pointer).toHaveBeenLastCalledWith({ line: 2, character: 3, rect: { x: 120, y: 230, width: 0, height: 22 } });
+        const preventDefault = vi.fn();
+        const stopImmediatePropagation = vi.fn();
+        const mouseDown = monacoDom.listeners.get('mousedown')!;
+        mouseDown({ clientX: 120, clientY: 230, metaKey: true, preventDefault, stopImmediatePropagation } as unknown as Event);
+        expect(preventDefault).toHaveBeenCalled();
+        expect(stopImmediatePropagation).toHaveBeenCalled();
+        expect(activate).toHaveBeenLastCalledWith({ line: 2, character: 3 });
+        mouseLeave!();
+        expect(pointer).toHaveBeenLastCalledWith(null);
+        stopPointer(); stopActivate();
+        pointer.mockClear(); activate.mockClear();
+        mouseMove!({ target: { position: { lineNumber: 2, column: 4 } } });
+        mouseDown({ clientX: 120, clientY: 230, ctrlKey: true, preventDefault, stopImmediatePropagation } as unknown as Event);
+        expect(pointer).not.toHaveBeenCalled();
+        expect(activate).not.toHaveBeenCalled();
+    });
+    it('reveals a line, performs a minimal undoable replacement and ignores accessory commands during composition', async () => {
+        setupMonacoGlobals();
+        const text = 'first\nsecond\nlast';
+        let compositionStart: (() => void) | undefined;
+        let compositionEnd: (() => void) | undefined;
+        const executeEdits = vi.fn();
+        const trigger = vi.fn();
+        const setPosition = vi.fn();
+        const setSelection = vi.fn();
+        const revealLineInCenter = vi.fn();
+        const focus = vi.fn();
+        const model = {
+            getValue: () => text, setValue: vi.fn(), dispose: vi.fn(),
+            getEOL: () => '\n',
+            getLineCount: () => 3, getLineMaxColumn: () => 7,
+            getPositionAt: (offset: number) => ({ lineNumber: offset < 6 ? 1 : offset < 13 ? 2 : 3, column: offset < 6 ? offset + 1 : offset < 13 ? offset - 5 : offset - 12 }),
+            canUndo: () => false, canRedo: () => false,
+        };
+        createModelSpy.mockReturnValueOnce(model);
+        createEditorSpy.mockReturnValueOnce({
+            ...createEditorSpy.getMockImplementation()!(), executeEdits, trigger, setPosition, setSelection, revealLineInCenter, focus,
+            pushUndoStop: vi.fn(),
+            onDidCompositionStart: (cb: () => void) => { compositionStart = cb; return { dispose: vi.fn() }; },
+            onDidCompositionEnd: (cb: () => void) => { compositionEnd = cb; return { dispose: vi.fn() }; },
+        });
+        const ref = React.createRef<CodeEditorHandle>();
+        const onReady = vi.fn();
+        await renderScreen(<MonacoEditorSurface ref={ref} resetKey="commands" value={text} language="text" onChange={vi.fn()} onReady={onReady} />);
+        ref.current!.revealLine(2, { select: true, focus: true, behavior: 'instant' });
+        expect(setPosition).toHaveBeenCalledWith({ lineNumber: 2, column: 1 });
+        expect(setSelection).toHaveBeenCalledWith({ startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 7 });
+        expect(revealLineInCenter).toHaveBeenCalledWith(2, 1);
+        expect(focus).toHaveBeenCalled();
+        expect(onReady).toHaveBeenCalled();
+        ref.current!.runCommand({ replaceDocument: 'first\nSECOND\nlast' });
+        expect(executeEdits).toHaveBeenCalledWith('happier.command', [{
+            range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 7 }, text: 'SECOND', forceMoveMarkers: true,
+        }]);
+        const history = vi.fn();
+        const unsubscribe = ref.current!.subscribeHistory(history);
+        expect(history).toHaveBeenCalledWith({ canUndo: false, canRedo: false });
+        ref.current!.runCommand('undo');
+        expect(trigger).toHaveBeenLastCalledWith('happier.command', 'undo', null);
+        compositionStart!();
+        trigger.mockClear();
+        ref.current!.runCommand('indent');
+        expect(trigger).not.toHaveBeenCalled();
+        compositionEnd!();
+        ref.current!.runCommand('indent');
+        expect(trigger).toHaveBeenLastCalledWith('happier.command', 'editor.action.indentLines', null);
+        unsubscribe();
+    });
+    it('exposes the canonical decoration channel before the editor finishes booting', async () => {
+        setupMonacoGlobals();
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<MonacoEditorSurface ref={ref} resetKey="decoration" value="one" language="text" onChange={vi.fn()} />);
+        expect(ref.current).toHaveProperty('setDecorations', expect.any(Function));
+        expect(ref.current).toHaveProperty('onDecorationPress', expect.any(Function));
+    });
     it('seeds the native find widget through the public action without changing the model', async () => {
         setupMonacoGlobals();
         const trigger = vi.fn();
@@ -152,7 +350,9 @@ describe('MonacoEditorSurface (web)', () => {
         const materials = glassPresetMaterials('everywhere');
         try {
             storage.setState({ settings: { ...previous, glassBlurEnabled: true, glassSurfaceMaterials: materials } });
-            await renderScreen(<MonacoEditorSurface resetKey="glass" value="const x = 1;" language="typescript" onChange={() => {}} />);
+            await renderScreen(<GlassRuntimeEnvironmentProvider value={{ desktopWindow: true, nativeWindowMaterialLive: true }}>
+                <MonacoEditorSurface resetKey="glass" value="const x = 1;" language="typescript" onChange={() => {}} />
+            </GlassRuntimeEnvironmentProvider>);
             expect(defineThemeSpy).toHaveBeenLastCalledWith('happier-editor-dark', expect.objectContaining({
                 colors: expect.objectContaining({ 'editor.background': '#1f1f1f00', 'editor.foreground': '#f8f8f2' }),
             }));
@@ -268,6 +468,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
@@ -330,6 +531,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
@@ -394,6 +596,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
@@ -466,6 +669,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
@@ -532,6 +736,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
@@ -594,6 +799,7 @@ describe('MonacoEditorSurface (web)', () => {
             if (typeof onOk === 'function') onOk();
         };
         (globalThis as any).window.monaco = {
+            ...createMonacoLanguageServicesBoundary(),
             editor: {
                 createModel: () => ({
                     getValue: () => 'hello',
@@ -655,6 +861,7 @@ describe('MonacoEditorSurface (web)', () => {
                 if (Array.isArray(deps) && deps[0] === 'vs/editor/editor.main') {
                     resolveEditorMain = () => {
                         (globalThis as any).window.monaco = {
+                            ...createMonacoLanguageServicesBoundary(),
                             editor: {
                                 createModel: () => ({
                                     getValue: () => 'hello',

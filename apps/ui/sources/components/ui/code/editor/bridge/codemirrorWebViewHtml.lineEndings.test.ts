@@ -132,6 +132,9 @@ describe('native CodeMirror WebView line endings', () => {
         expect(bridge.messages.at(-1)).toEqual({ v: 1, type: 'activate', payload: { line: 2, character: 3 } });
         editor.contentDOM.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
         expect(bridge.messages.at(-1)).toEqual({ v: 1, type: 'pointer', payload: null });
+        const activations = bridge.messages.filter((message) => message.type === 'activate').length;
+        editor.contentDOM.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, metaKey: true, button: 2, clientX: 10, clientY: 20 }));
+        expect(bridge.messages.filter((message) => message.type === 'activate')).toHaveLength(activations);
     });
 
     it('executes accessory commands and whole-document replacement as one undoable edit, guarded during composition', () => {
