@@ -61,6 +61,7 @@ export type SessionModelTransitionProviderTargetAuthorizer = (
     activeSessionBindingMetadata: SessionProviderBindingMetadataV1;
     managedPurposeBindingSnapshot?: QualifiedConnectedAccountPurposeBindingsV1;
   }>,
+  signal?: AbortSignal,
 ) => Promise<SessionModelTransitionProviderTargetAuthorization>;
 
 export function resolveDaemonSessionModelTransitionAuthority(params: Readonly<{
@@ -142,6 +143,7 @@ export async function authorizeSessionModelTransitionProviderTargetWithLease(
     agentId: string;
     agentTargetKey: string;
     lease: PluginRuntimeRegistryLease;
+    signal?: AbortSignal;
     input: Parameters<SessionModelTransitionProviderTargetAuthorizer>[0];
   }>,
 ): Promise<SessionModelTransitionProviderTargetAuthorization> {
@@ -150,6 +152,7 @@ export async function authorizeSessionModelTransitionProviderTargetWithLease(
     machineId: params.machineId,
   });
   const result = await createRuntimeProviderSpawnAuthorizationAttempt({
+    signal: params.signal,
     selection: modelSelection(params.input.selection),
     machineId: params.machineId,
     agentTargetKey: params.agentTargetKey,
@@ -240,6 +243,7 @@ export function resolveSessionModelTransitionAuthorizationRoute(
 }
 
 export function createSessionModelTransitionAuthorizer(params: Readonly<{
+  signal?: AbortSignal;
   sessionId: string;
   machineId: string;
   agentId: string;
@@ -252,12 +256,13 @@ export function createSessionModelTransitionAuthorizer(params: Readonly<{
   authorizeProviderTarget?: SessionModelTransitionProviderTargetAuthorizer;
 }>): SessionModelTransitionAuthorizer {
   const authorizeProviderTargetLocally:
-    SessionModelTransitionProviderTargetAuthorizer = async (input) => {
+    SessionModelTransitionProviderTargetAuthorizer = async (input, signal) => {
       const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
         happyHomeDir: configuration.happyHomeDir,
       });
       try {
         return await authorizeSessionModelTransitionProviderTargetWithLease({
+          signal,
           sessionId: params.sessionId,
           machineId: params.machineId,
           agentId: params.agentId,
@@ -304,7 +309,7 @@ export function createSessionModelTransitionAuthorizer(params: Readonly<{
           ...(managedPurposeBindingSnapshot
             ? { managedPurposeBindingSnapshot }
             : {}),
-        });
+        }, params.signal);
         return refreshed.policy === 'live'
           && refreshed.selection.agentTargetKey
             === target.selection.agentTargetKey
@@ -364,7 +369,7 @@ export function createSessionModelTransitionAuthorizer(params: Readonly<{
         ...(managedPurposeBindingSnapshot
           ? { managedPurposeBindingSnapshot }
           : {}),
-      });
+      }, params.signal);
     } catch (error) {
       if (
         error instanceof Error

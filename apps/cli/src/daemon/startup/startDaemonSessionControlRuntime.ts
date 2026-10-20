@@ -5511,6 +5511,7 @@ export async function startDaemonSessionControlRuntime(
           const spawnResult = await spawnConcurrencyGate.run(
             async () =>
               await executeSpawnSessionRequest({
+                signal: shutdownCancellationDomains.daemonWorkSignal,
                 readMachineResourcesPolicy: params.readMachineResourcesPolicy,
                 readSpawnFailureLimits: params.readSpawnFailureLimits,
                 checkRegistryUpdates: params.checkRegistryUpdates,
@@ -5627,6 +5628,7 @@ export async function startDaemonSessionControlRuntime(
                     }
                   : {}),
               }),
+            shutdownCancellationDomains.daemonWorkSignal,
           );
           // A newly started runner refreshes and drains Pending itself. Its
           // canonical startup acknowledgement is sufficient; a redundant RPC
@@ -5643,6 +5645,14 @@ export async function startDaemonSessionControlRuntime(
           )
         : await run();
     } catch (error) {
+      if (shutdownCancellationDomains.daemonWorkSignal.aborted
+        && error === shutdownCancellationDomains.daemonWorkSignal.reason) {
+        return {
+          type: 'error',
+          errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+          errorMessage: 'Daemon is shutting down',
+        };
+      }
       logger.warn('[DAEMON RUN] Failed before spawn session work started', {
         hasExistingSessionId:
           typeof options.existingSessionId === 'string' &&
@@ -7833,7 +7843,7 @@ export async function startDaemonSessionControlRuntime(
   const foregroundAgentRuntimeAdmission =
     createForegroundAgentRuntimeAdmissionOwner({
       connectedServiceRuntimeRegistry,
-      prepare: async (request) => {
+      prepare: async (request, signal) => {
         let context: RequesterSessionRuntimeContext | null = null;
         const releaseUnadoptedContext = async () => {
           await releaseSessionAccountContext(context);
@@ -7925,6 +7935,7 @@ export async function startDaemonSessionControlRuntime(
             : undefined;
           const prepared = await withSessionAccountHome(requester, () =>
             prepareForegroundAgentRuntimeAdmission(request, {
+              signal: AbortSignal.any([signal, shutdownCancellationDomains.daemonWorkSignal]),
               isSessionAccountCurrent: isForegroundAccountCurrent,
               ...(requester
                 ? {
@@ -8974,6 +8985,7 @@ export async function startDaemonSessionControlRuntime(
             });
             const authorization =
               await authorizeSessionModelTransitionProviderTargetWithLease({
+                signal,
                 sessionId,
                 machineId: params.machineId,
                 agentId: authority.agentId,
@@ -9056,6 +9068,7 @@ export async function startDaemonSessionControlRuntime(
                 try {
                   const refreshed =
                     await authorizeSessionModelTransitionProviderTargetWithLease({
+                      signal,
                       sessionId: sessionId,
                       machineId: params.machineId,
                       agentId: authority.agentId,
@@ -17727,6 +17740,7 @@ export async function startDaemonSessionControlRuntime(
                             machineId: params.machineId,
                             agentId: authority.agentId,
                             agentTargetKey: authority.agentTargetKey,
+                            signal: context.signal,
                             lease,
                             input: authority.input,
                           },

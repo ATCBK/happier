@@ -71,6 +71,7 @@ import {
   resolveProviderSpawnAuthorization,
 } from './resolve';
 import { collectProviderConnectionDnsEvidence } from '../registry/dnsEvidence';
+import { createForegroundAgentRuntimeAdmissionOwner } from '@/daemon/agentRuntime/foregroundAdmission';
 
 const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
 const contributionKey = 'acme.gateway/gateway';
@@ -455,6 +456,67 @@ function definitiveSelection(modelId = 'model-a') {
 }
 
 describe('provider spawn authorization resolver', () => {
+  it.each(['admission', 'commit', 'foreground'] as const)('cancels deferred DNS during %s and releases admission resources', async (phase) => {
+    const providersByContributionKey = new Map([[canonicalContributionKey, {
+      ...contribution,
+      definition: ProviderContributionV1Schema.parse({ ...definition, credential: { ...definition.credential, required: false } }),
+    }]]);
+    const settings = ProviderSettingsV1Schema.parse({ ...grantedSettings({ providersByContributionKey }), secretBindingsByConnectionId: {} });
+    const snapshot: ActiveAccountSettingsSnapshot = {
+      source: 'network', settings: AccountSettingsSchema.parse(accountSettings(settings)),
+      providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: splitProviderSettingsV1(settings).catalog },
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [key], scopeKey: 'account-a',
+    };
+    const controller = new AbortController();
+    let enter = () => {};
+    let release = (_addresses: readonly string[]) => {};
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const network = new Promise<readonly string[]>(resolve => { release = resolve; });
+    let defer = phase !== 'commit';
+    const unsubscribe = vi.fn();
+    const input = {
+      selection: { v: 1 as const, updatedAt: 1, ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: connectionId, modelId: 'model-a' } },
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', agentId: 'codex', lease: lease(undefined, true, 'restart_session', providersByContributionKey, true),
+      getAccountSettingsSnapshot: () => snapshot, subscribeAccountSettingsSnapshot: () => unsubscribe,
+      signal: controller.signal,
+      resolveAddresses: async () => { if (!defer) return ['1.1.1.1']; enter(); return await network; },
+      materializationBaseDir: '/unused', sessionId: `cancel-${phase}`,
+    };
+    let attempt: Awaited<ReturnType<typeof createRuntimeProviderSpawnAuthorizationAttempt>> | undefined;
+    let pending: Promise<unknown> | undefined;
+    try {
+      if (phase === 'foreground') {
+        const owner = createForegroundAgentRuntimeAdmissionOwner({ prepare: async (_request, signal) => {
+          const result = await createRuntimeProviderSpawnAuthorizationAttempt({ ...input, signal });
+          if (result.ok) { result.attempt.cleanupOnFailure(); throw new Error('Cancelled admission unexpectedly succeeded'); }
+          return result;
+        } });
+        const admission = owner.admit({ v: 1, attemptId: 'attempt', sessionId: 'session', foregroundPid: 1234,
+          machineId: 'machine-a', directory: '/workspace', agentId: 'codex',
+          backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } });
+        const settled = expect(admission).rejects.toThrow('unavailable');
+        await entered;
+        pending = owner.release('attempt', 'session');
+        try { await pending; await settled; } finally { release(['1.1.1.1']); await admission.catch(() => undefined); await owner.dispose(); }
+        return;
+      } else if (phase === 'commit') {
+        attempt = await createRuntimeProviderSpawnAuthorizationAttempt(input);
+        expect(attempt, JSON.stringify(attempt)).toMatchObject({ ok: true });
+        if (!attempt.ok) throw new Error('Expected admission');
+        defer = true;
+        pending = attempt.attempt.revalidateBeforeCommit();
+      } else pending = createRuntimeProviderSpawnAuthorizationAttempt(input);
+      await entered;
+      controller.abort();
+      // The DNS resolver is still pending; cancellation must settle independently.
+      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'provider_endpoint_unavailable' } });
+      if (phase === 'commit') expect(unsubscribe).toHaveBeenCalledOnce();
+    } finally {
+      release(['1.1.1.1']);
+      await pending;
+      if (attempt?.ok) attempt.attempt.cleanupOnFailure();
+    }
+  });
   const executableRegistries: ResolvedExecutablePluginRuntimeRegistry[] = [];
 
   afterEach(async () => {

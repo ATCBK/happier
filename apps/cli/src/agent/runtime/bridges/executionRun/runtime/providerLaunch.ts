@@ -22,6 +22,7 @@ import { createExecutionRunCodedError } from '../errors';
 type Cleanup = (() => void | Promise<void>) | null;
 
 export type ExecutionRunProviderSelectionInput = Readonly<{
+    signal?: AbortSignal;
     selection: ProviderBoundModelRef;
     backendTarget: BackendTargetRefV2Input;
     machineId?: string;
@@ -50,8 +51,8 @@ export type ExecutionRunProviderLaunchRequest = Readonly<{
 }>;
 
 export type ExecutionRunProviderLaunchServices = Readonly<{
-    admitInheritedSelection(input: ExecutionRunProviderLaunchRequest): Promise<void>;
-    prepareLaunch(input: ExecutionRunProviderLaunchRequest): Promise<PreparedExecutionRunProviderLaunch>;
+    admitInheritedSelection(input: ExecutionRunProviderLaunchRequest, signal?: AbortSignal): Promise<void>;
+    prepareLaunch(input: ExecutionRunProviderLaunchRequest, signal?: AbortSignal): Promise<PreparedExecutionRunProviderLaunch>;
 }>;
 
 /** Authorizes a rematched child choice without materializing credentials or launching a runtime. */
@@ -81,7 +82,7 @@ export type PreparedExecutionRunProviderLaunch = Readonly<{
     providerBinding?: AgentSessionProviderBinding;
     sanitizeDiagnosticText: (value: string) => string;
     additionalRedactionValues: readonly string[];
-    revalidateBeforeCommit: () => Promise<Readonly<
+    revalidateBeforeCommit: (signal?: AbortSignal) => Promise<Readonly<
         { ok: true } | { ok: false; error: ProviderErrorV1 }
     >>;
     cleanupOnExit: Cleanup;
@@ -156,6 +157,7 @@ function createExecutionRunProviderPreparation(
         },
         createAuthorizationAttempt: async ({ selection, machineId, agentTargetKey, agentId }) =>
             createRuntimeProviderSpawnAuthorizationAttempt({
+                signal: input.signal,
                 selection, machineId, agentTargetKey, agentId, lease,
                 // Each child is authorized against its owning Account, never
                 // the process-global Account of another active Session.
@@ -184,6 +186,7 @@ const nativeLaunch = Object.freeze({
  * runtime creation; only the resulting bounded SDK inputs live for the run.
  */
 export async function prepareExecutionRunProviderLaunch(input: Readonly<{
+    signal?: AbortSignal;
     selection?: ProviderBoundModelRef;
     teamCredentialModel?: TeamCredentialProviderModelSelectionV1;
     backendTarget: BackendTargetRefV2Input;

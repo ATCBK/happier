@@ -58,7 +58,7 @@ export type DirectProviderLaunchResult =
       bindingMetadata: SessionProviderBindingMetadataV1;
       sanitizeDiagnosticText: (value: string) => string;
       additionalRedactionValues: readonly string[];
-      revalidateBeforeCommit: () => Promise<Readonly<
+      revalidateBeforeCommit: (signal?: AbortSignal) => Promise<Readonly<
         { ok: true } | { ok: false; error: ProviderErrorV1 }
       >>;
       transferLaunchMaterializationCleanupOwnership: () => void;
@@ -209,7 +209,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
       launchMaterializationCleanupTransferred = true;
       attempt.transferLaunchMaterializationCleanupOwnership();
     };
-    const revalidateBeforeCommit = async (): Promise<Readonly<
+    const revalidateBeforeCommit = async (signal?: AbortSignal): Promise<Readonly<
       { ok: true } | { ok: false; error: ProviderErrorV1 }
     >> => {
       try {
@@ -217,7 +217,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
           const current = await revalidateManagedEndpoint();
           if (!current.ok) { await cleanupOnExit?.(); return current; }
         }
-        const authorization = await attempt.revalidateBeforeCommit();
+        const authorization = await attempt.revalidateBeforeCommit(signal);
         if (!authorization.ok) await cleanupOnExit?.();
         return authorization;
       } catch {

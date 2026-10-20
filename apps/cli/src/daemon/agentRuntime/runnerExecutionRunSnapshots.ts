@@ -132,7 +132,7 @@ export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: s
         if (operation.kind === 'execution_run.provider.revalidate_v1') {
           if (!provider.preparation) return unavailable();
           const prepared = await provider.preparation;
-          const result = await prepared.revalidateBeforeCommit();
+          const result = await prepared.revalidateBeforeCommit(context.signal);
           if (read(snapshotId!, context) !== retained || !await context.isCurrent()) return unavailable();
           return { ok: true as const, result: { kind: 'execution_run.provider.revalidated' as const, result } };
         }
@@ -144,7 +144,7 @@ export function createRunnerExecutionRunSnapshots(input: Readonly<{ machineId: s
           resolvePreparation: async value => {
             const preparation = await input.resolveProviderPreparation!(value, context);
             if (!preparation) return null;
-            return { ...preparation, isCurrent: async () => !provider.retired && read(snapshotId!, context) === retained
+            return { ...preparation, signal: context.signal, isCurrent: async () => !provider.retired && read(snapshotId!, context) === retained
               && await context.isCurrent() && await preparation.isCurrent() };
           },
         });

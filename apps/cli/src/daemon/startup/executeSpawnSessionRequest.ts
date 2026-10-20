@@ -117,6 +117,7 @@ type SpawnAccountUsageStore = Parameters<typeof resolveConnectedServiceAuthForSp
 type SpawnAuthGroupSwitchCoordinator = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['authGroupSwitchCoordinator'];
 type SpawnPredictiveSwitchGuard = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['predictiveSwitchGuard'];
 export type ExecuteSpawnSessionRequestParams = Readonly<{
+    signal?: AbortSignal;
     readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     readSpawnFailureLimits?: SpawnFailureLimitsReader;
     checkRegistryUpdates?: () => Promise<void>;
@@ -544,6 +545,7 @@ export async function executeSpawnSessionRequest(
             // runtime, so every refusal this owner can already establish is
             // established first.
             const daemonProviderLaunch = await prepareDaemonProviderLaunch({
+                signal: params.signal,
                 readModelProjection: createAccountScopedProviderModelProjectionReader({
                     serverUrl: requesterRuntime?.bootstrap.savedSecretOperationContext.serverHttpBaseUrl
                         ?? resolveServerHttpBaseUrl(),

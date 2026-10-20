@@ -289,9 +289,10 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                         ...(opts.controllerOccurrenceId ? { controllerOccurrenceId: opts.controllerOccurrenceId } : {}),
                         connectedServices: connectedServicesSelection?.bindings ?? null,
                         expectedAccountSettingsScopeKey: accountSettingsSnapshot.scopeKey,
-                    });
+                    }, signal);
                     if (providerLaunch.cleanupOnExit) providerResources.register(providerLaunch.cleanupOnExit);
                 } else providerLaunch = await prepareExecutionRunProviderLaunch({
+                    signal,
                     ...(opts.modelSelection ? { selection: opts.modelSelection } : {}),
                     ...(opts.teamCredentialModel ? { teamCredentialModel: opts.teamCredentialModel } : {}),
                     backendTarget: effectiveBackendTarget,
@@ -536,7 +537,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
 
             let runtime: ExecutionRunHostRuntime;
             try {
-                const providerCurrent = await providerLaunch?.revalidateBeforeCommit();
+                const providerCurrent = await providerLaunch?.revalidateBeforeCommit(signal);
                 if (providerCurrent && !providerCurrent.ok) {
                     const error = Object.assign(
                         new Error(providerCurrent.error.code),

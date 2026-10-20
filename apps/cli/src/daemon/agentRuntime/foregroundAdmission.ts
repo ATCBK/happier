@@ -106,6 +106,7 @@ type Admission = {
   > | null;
   cleanup: Cleanup;
   detachRetirementListener: () => void;
+  cancellation: AbortController;
   released: boolean;
   releasePromise: Promise<void> | null;
   connectedServiceRuntimeTargetPid: number | null;
@@ -138,7 +139,7 @@ export type ForegroundDaemonServiceSubject = Readonly<{
 
 type PendingAdmission = {
   request: ForegroundAgentRuntimeAdmissionOwnerRequestV1;
-  cancelled: boolean;
+  cancellation: AbortController;
   settled: Promise<void>;
   settle(): void;
 };
@@ -147,6 +148,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
   connectedServiceRuntimeRegistry?: ConnectedServiceRuntimeRegistry;
   prepare(
     request: ForegroundAgentRuntimeAdmissionOwnerRequestV1,
+    signal: AbortSignal,
   ): Promise<
     | Readonly<{ ok: true; prepared: PreparedForegroundAgentRuntimeAdmission }>
     | Extract<ForegroundAgentRuntimeAdmissionResponseV1, { ok: false }>
@@ -222,6 +224,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
     }
     if (admission.released) return;
     admission.released = true;
+    admission.cancellation.abort();
     admission.detachRetirementListener();
     const targetPid = admission.connectedServiceRuntimeTargetPid;
     if (targetPid !== null) {
@@ -262,7 +265,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       let settlePending!: () => void;
       const pending: PendingAdmission = {
         request,
-        cancelled: false,
+        cancellation: new AbortController(),
         settled: new Promise<void>((resolve) => {
           settlePending = resolve;
         }),
@@ -273,9 +276,9 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       pendingByAttemptId.set(request.attemptId, pending);
       let promoted = false;
       try {
-        const result = await dependencies.prepare(request);
+        const result = await dependencies.prepare(request, pending.cancellation.signal);
         if (!result.ok) {
-          if (disposed || pending.cancelled) {
+          if (disposed || pending.cancellation.signal.aborted) {
             throw new Error(
               disposed
                 ? 'Foreground Agent runtime admission owner is disposed'
@@ -285,7 +288,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
           return result;
         }
         const prepared = result.prepared;
-        if (disposed || pending.cancelled) {
+        if (disposed || pending.cancellation.signal.aborted) {
           await prepared.cleanup();
           throw new Error(
             disposed
@@ -333,6 +336,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
           claimPromise: null,
           cleanup: prepared.cleanup,
           detachRetirementListener: () => {},
+          cancellation: pending.cancellation,
           released: false,
           releasePromise: null,
           connectedServiceRuntimeTargetPid: null,
@@ -700,7 +704,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
     async release(attemptId: string, sessionId: string): Promise<void> {
       const pending = pendingByAttemptId.get(attemptId);
       if (pending?.request.sessionId === sessionId) {
-        pending.cancelled = true;
+        pending.cancellation.abort();
         await pending.settled;
         return;
       }
@@ -713,7 +717,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       if (!attemptId) return;
       const pending = pendingByAttemptId.get(attemptId);
       if (pending) {
-        pending.cancelled = true;
+        pending.cancellation.abort();
         await pending.settled;
         return;
       }
@@ -727,7 +731,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
         livenessTimer = null;
       }
       const pending = [...pendingByAttemptId.values()];
-      for (const admission of pending) admission.cancelled = true;
+      for (const admission of pending) admission.cancellation.abort();
       await Promise.allSettled(
         [
           ...pending.map((admission) => admission.settled),

@@ -48,22 +48,24 @@ export function createRunnerExecutionRunProviderLaunchServices(input: Readonly<{
         return preparation;
     };
     return Object.freeze({
-        async admitInheritedSelection(request) {
+        async admitInheritedSelection(request, signal) {
             const preparation = await resolve(request);
             await admitExecutionRunInheritedProviderSelection({ ...request, ...preparation,
+                signal: signal ?? preparation.signal,
                 runtimeRegistryLease: input.runtimeRegistryLease });
             if (!isSourceCurrent(request) || !await preparation.isCurrent()) throw changed();
         },
-        async prepareLaunch(request) {
+        async prepareLaunch(request, signal) {
             const preparation = await resolve(request);
             const prepared = await prepareExecutionRunProviderLaunch({ ...request, ...preparation,
+                signal: signal ?? preparation.signal,
                 runtimeRegistryLease: input.runtimeRegistryLease, retainCleanup: input.retainCleanup });
             const isCurrent = async () => isSourceCurrent(request) && await preparation.isCurrent();
             if (!await isCurrent()) { await prepared.cleanupOnExit?.(); throw changed(); }
             return Object.freeze({ ...prepared,
-                revalidateBeforeCommit: async () => {
+                revalidateBeforeCommit: async (signal?: AbortSignal) => {
                     if (await isCurrent()) {
-                        const result = await prepared.revalidateBeforeCommit();
+                        const result = await prepared.revalidateBeforeCommit(signal);
                         if (await isCurrent()) return result;
                     }
                     await prepared.cleanupOnExit?.();

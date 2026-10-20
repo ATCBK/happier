@@ -3093,6 +3093,7 @@ export async function runHostSessionRuntime(
   // An Agent that contributes no bundled model config keeps the live policy.
   const policyAgentModelConfig = getAgentModelConfig(policyAgentId);
   const authorizeModelTransition = createSessionModelTransitionAuthorizer({
+    signal: startupRegistrationLifetime.signal,
     get sessionId() { return session.sessionId; },
     machineId,
     agentId: policyAgentId,

@@ -4,6 +4,67 @@ import { expect, it } from 'vitest';
 import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createAttachedManagedRunFixture } from './startDaemonSessionControlRuntime.accountManagedRun.testkit';
 
+it.each(['open', 'read', 'commit'] as const)('cancels the actual managed Run %s while its Home authority transport is pending', async (phase) => {
+  let defer = false;
+  let enter = () => {};
+  let release = () => {};
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let observedSignal: AbortSignal | undefined;
+  const fixture = await createAttachedManagedRunFixture({ resolveRunAuthority: async (request, signal) => {
+    if (defer) {
+      observedSignal = signal;
+      enter();
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => reject(signal?.reason);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+        void released.then(() => { signal?.removeEventListener('abort', abort); resolve(); });
+      });
+    }
+    return { status: 'current', executionRunId: request.executionRunId, occurrenceId: request.expectedOccurrenceId!,
+      parentSessionId: 'parent-session', intent: 'review', runtimeState: 'idle', teamCredentialProviderModel: null };
+  } });
+  let pending: Promise<unknown> | undefined;
+  try {
+    const controller = new AbortController();
+    let snapshotId: string | undefined;
+    let bindingId: string | undefined;
+    if (phase === 'commit') {
+      const acquired = await fixture.dispatch({ kind: 'execution_run.snapshot.acquire_v1',
+        backendTarget: { kind: 'backend', backendId: fixture.fixture.agentId } });
+      if (!acquired.ok || acquired.result.kind !== 'execution_run.snapshot') throw new Error(JSON.stringify(acquired));
+      snapshotId = acquired.result.snapshotId;
+      const prepared = await fixture.dispatchRequest({ v: 1, context: { token: 'a'.repeat(43), sessionId: 'parent-session', executionRunSnapshotId: snapshotId },
+        operation: { kind: 'execution_run.provider.prepare_v1', backendTarget: { kind: 'backend', backendId: fixture.fixture.agentId },
+          agentId: fixture.fixture.agentId, runId: fixture.proof.executionRunId, controllerOccurrenceId: fixture.proof.executionRunOccurrenceId,
+          selection: { agentTargetKey: fixture.fixture.agentTargetKey, providerConnectionId: 'run-gateway', modelId: 'example' },
+          expectedAccountSettingsScopeKey: fixture.proof.expectedAccountSettingsScopeKey } });
+      expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, result: { kind: 'execution_run.provider.prepared', ok: true } });
+    } else if (phase === 'read') {
+      const opened = await fixture.dispatch({ kind: 'provider_managed.binding.open', requestId: 'open', ...fixture.proof });
+      if (!opened.ok || opened.result.kind !== 'provider_managed.binding') throw new Error(JSON.stringify(opened));
+      bindingId = opened.result.bindingId;
+    }
+    defer = true;
+    pending = fixture.dispatchRequest({ v: 1,
+      context: { token: 'a'.repeat(43), sessionId: 'parent-session', ...(snapshotId ? { executionRunSnapshotId: snapshotId } : {}) },
+      operation: phase === 'commit' ? { kind: 'execution_run.provider.revalidate_v1' }
+        : { kind: phase === 'read' ? 'provider_managed.binding.read' : 'provider_managed.binding.open',
+            requestId: 'cancelled-read', ...fixture.proof, ...(bindingId ? { bindingId } : {}) } }, controller.signal);
+    await entered;
+    controller.abort();
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(pending).resolves.toMatchObject(phase === 'commit'
+      ? { ok: true, result: { kind: 'execution_run.provider.revalidated', result: { ok: false } } }
+      : { ok: false, error: { code: 'provider_endpoint_unavailable' } });
+  } finally {
+    release();
+    await pending;
+    await fixture.cleanup();
+  }
+});
+
 it('admits exact Account Run proofs, recovers only captured proofs after transport loss, isolates release, and refuses an Account lifetime replacement', async () => {
   let homeAvailable = true;
   const fixture = await createAttachedManagedRunFixture({ resolveRunAuthority: request => {

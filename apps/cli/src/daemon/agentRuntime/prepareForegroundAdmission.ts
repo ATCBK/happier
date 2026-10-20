@@ -176,6 +176,7 @@ function readExactForegroundProfileSnapshot(
 }
 
 export type PrepareForegroundAgentRuntimeAdmissionDependencies = Readonly<{
+  signal?: AbortSignal;
   /** Host-private admitted Account ports; never accepted from the foreground request body. */
   requesterSessionBootstrap?: AdmittedRequesterSessionBootstrap;
   requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
@@ -451,6 +452,7 @@ async function prepareForegroundProviderLaunch(input: Readonly<{
       agentTargetKey,
       agentId,
     }) => createRuntimeProviderSpawnAuthorizationAttempt({
+      signal: dependencies.signal,
       selection,
       machineId,
       agentTargetKey,
