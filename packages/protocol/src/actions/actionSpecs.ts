@@ -9900,7 +9900,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   {
     id: 'session.archive', approval: {result: 'none'},
     title: 'Archive session',
-    description: 'Archive the specified session.',
+    description: 'Archive the specified session, optionally also archiving its unarchived direct reports. Each report retains its own rights and approval requirements; results include partial outcomes.',
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'session_archive' },
