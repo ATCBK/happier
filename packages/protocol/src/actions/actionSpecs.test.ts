@@ -567,7 +567,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'session.usageLimit.waitResume.cancel',
   'transcript.unfollow',
   'ui.voice_global.reset',
-  'ui.pet.choose',
   'prompt_doc.update',
   'prompt_doc.create',
   'prompt_doc.favorite.set',
@@ -612,6 +611,7 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
 ] as const;
 
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
+  'ui.pet.choose',
   'prompt_registry.install',
   'plugins.permissions.grants.revoke',
   'session.manager.set',
@@ -3548,13 +3548,22 @@ describe('Action Spec Registry', () => {
     );
   });
 
-  it('registers pet chooser slash aliases as a UI-only action', () => {
+  it('admits typed pet selection from automation while retaining empty chooser navigation', () => {
     const spec = getActionSpec('ui.pet.choose');
     expect(spec.slash?.tokens).toEqual(['/pet', '/h.pet']);
     expect(spec.placements).toContain('slash_command');
     expect(spec.surfaces.ui).toBe(true);
-    expect(spec.surfaces.mcp).toBe(false);
+    expect(spec.surfaces.agent).toBe(true);
+    expect(spec.surfaces.mcp).toBe(true);
     expect(spec.surfaces.cli).toBe(false);
+    expect(spec.executionPlacement).toBe('client');
+    for (const input of [{}, { petRef: { kind: 'builtIn', petId: 'milo' } },
+      { petRef: { kind: 'accountPet', accountPetId: 'custom-cat' } },
+      { deviceOverride: { kind: 'inherit' } }, { deviceOverride: { kind: 'happierManagedLocal', sourceKey: 'managed:cat' } }]) {
+      expect(spec.inputSchema.parse(input)).toEqual(input);
+    }
+    expect(spec.inputSchema.safeParse({ petRef: { kind: 'builtIn', petId: 'milo', unknown: true } }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ deviceOverride: { kind: 'inherit' }, petRef: { kind: 'builtIn', petId: 'milo' } }).success).toBe(false);
   });
 
   it('projects SCM pull-request actions through RPC, SDK and automated request surfaces', () => {
