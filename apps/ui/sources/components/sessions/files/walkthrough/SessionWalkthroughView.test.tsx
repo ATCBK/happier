@@ -176,7 +176,7 @@ const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useA
 const { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
 const { ScmWalkthroughView } = await import('./ScmWalkthroughView');
 const { WalkthroughStopSection } = await import('./WalkthroughStopSection');
-const { getSessionComposerDraftSnapshot, writeExistingSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+const { getSessionComposerDraftSnapshot, getSessionDraftSnapshot, writeExistingSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const initialStorage = getStorage().getState();
 const initialAppliedHome = getAppliedActiveServerSnapshot();
@@ -346,7 +346,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         await act(async () => section.props.onAsk(section.props.stop, question));
         const draft = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId });
         expect(draft?.composer.text.value).toBe(`My pending question\n\n${question}`);
-        const target = draft?.document.target;
+        const target = getSessionDraftSnapshot(scope, { kind: 'session', sessionId })?.document.target;
         expect(target?.kind === 'session' && target.routing.recipient?.value).toMatchObject({ mode: 'scm_diff_summary',
             recipient: { kind: 'execution_run', runId: 'question-generator' },
             target: { cwd: '/repo/exact', resultId: `result:${sessionId}`, expectedRevision: 1, stopIds: ['retained'] },
