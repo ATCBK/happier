@@ -39,6 +39,42 @@ const machine: ManagedMachineV1 = {
 };
 
 describe('managed creation presentation', () => {
+  it('retires a failed pre-effect idle observation only after newer healthy guest presence', () => {
+    const enrolled = { ...machine, enrolledMachineId: 'guest' };
+    const failed: ActionOperationProjection = {
+      serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
+      snapshot: { version: 1, operationId: 'idle-observation', revision: 2, actionId: 'machines.managed.power.set',
+        state: 'failed', scope: { accountId: 'owner', machineId: machine.controller.machineId },
+        title: 'Change power', createdAt: 10, startedAt: 10, settledAt: 20, cancellation: 'supported',
+        progress: { kind: 'phase', phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' },
+        domainRef: { kind: 'managedMachine', id: machine.id, controller: machine.controller, resource: machine.resource },
+        error: { errorCode: 'managed_controller_request_failed', error: 'managed_controller_request_failed' } },
+    };
+    const connected = { enrolledMachine: { machineId: 'guest', installationId: 'guest-installation', online: true,
+      serviceManaged: true, activeAt: 30 } };
+    for (const errorCode of ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable']) {
+      expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
+        error: { errorCode, error: errorCode } } }, connected)).toBeNull();
+    }
+    expect(currentManagedCreationOperation(enrolled, failed)).toBe(failed);
+    for (const guest of [
+      { ...connected.enrolledMachine, activeAt: 15 },
+      { ...connected.enrolledMachine, online: false },
+      { ...connected.enrolledMachine, machineId: 'another-guest' },
+    ]) expect(currentManagedCreationOperation(enrolled, failed, { enrolledMachine: guest })).toBe(failed);
+    // Current explicit Stop and native-effect failures still need attention.
+    expect(currentManagedCreationOperation({ ...enrolled, desired: 'stop' }, failed, connected)).toBe(failed);
+    expect(currentManagedCreationOperation({ ...enrolled, submittedNativeEffect: {
+      intentRevision: 1, requestId: 'native-stop', intent: 'stop', controller: machine.controller,
+    } }, failed, connected)).toBe(failed);
+    expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
+      progress: { kind: 'phase', phase: 'managed.intent.native-effect', label: 'Applying native machine intent' } } }, connected))
+      .not.toBeNull();
+    expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
+      error: { errorCode: 'credential_unavailable', error: 'credential_unavailable' } } }, connected)).not.toBeNull();
+    expect(currentManagedCreationOperation(enrolled, { ...failed, observation: 'unavailable', isUnavailableProjection: true }, connected))
+      .not.toBeNull();
+  });
   it('retires a historical failure after confirmed removal but keeps a later failed request', () => {
     const removed: ManagedMachineV1 = {
       ...machine,

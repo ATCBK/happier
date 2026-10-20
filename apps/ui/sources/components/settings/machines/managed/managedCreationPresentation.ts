@@ -19,7 +19,7 @@ export function managedCreationSetup(machine: ManagedMachineV1) {
 /** What the page knows beside the row: the controller's name and presence, and the provider's display name. */
 export type ManagedCreationContext = Readonly<{
     controller?: Readonly<{ name: string; online: boolean }>;
-    enrolledMachine?: Readonly<{ machineId: string; installationId: string; online: boolean; serviceManaged: boolean }>;
+    enrolledMachine?: Readonly<{ machineId: string; installationId: string; online: boolean; serviceManaged: boolean; activeAt?: number }>;
     provider?: string;
     providerAvailable?: boolean;
     operation?: ActionOperationProjection | null;
@@ -126,13 +126,27 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
         && sameStrictJsonValue(reference.controller, machine.controller)
         : machine.allocation === 'unsubmitted' || machine.allocation === 'may-exist';
     if (!matches) return null;
+    const guest = context.enrolledMachine;
+    const healthyEnrollment = machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
+        && machine.archivedAt === undefined && machine.desired !== 'delete'
+        && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged;
+    // A failed inactivity read never admitted Stop/Delete. A newer connection
+    // from this enrolled service supersedes that observation on the creation
+    // card; Activity retains the actual failure. Explicit or submitted power
+    // effects, credential failures and unavailable history remain actionable.
+    if (healthyEnrollment && !machine.submittedNativeEffect && (machine.desired === 'start' || machine.desired === 'resume')
+        && machine.observation?.availability !== 'absent' && machine.observation?.availability !== 'unavailable'
+        && machine.observation?.storage !== 'lost' && machine.observation?.power !== 'stopped' && machine.observation?.power !== 'suspended'
+        && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
+        && snapshot.actionId === 'machines.managed.power.set' && snapshot.settledAt !== undefined
+        && guest.activeAt !== undefined && guest.activeAt > snapshot.settledAt
+        && snapshot.progress?.kind === 'phase'
+        && ['managed.intent.waiting-idle', 'managed.intent.activity-unknown', 'managed.intent.busy'].includes(snapshot.progress.phase)
+        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable'].includes(snapshot.error?.errorCode ?? '')) return null;
     // Existing 0.3 installation operations stored this CLI activation refusal as
     // action_failed. The enrolled guest's current connection resolves only that
     // readiness failure; unrelated bootstrap/setup failures remain actionable.
-    const guest = context.enrolledMachine;
-    if (machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
-        && machine.archivedAt === undefined && machine.desired !== 'delete'
-        && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged
+    if (healthyEnrollment
         && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
         && snapshot.error?.errorCode === 'action_failed'
