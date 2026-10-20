@@ -24,11 +24,11 @@ function relativePath(path: string, workspaceRoot: string | null): string | null
     return isSafeWorkspaceRelativePath(normalized) ? normalized : null;
 }
 
-function visitCalls(messages: readonly Message[], visit: (message: Extract<Message, { kind: 'tool-call' }>) => void): void {
+function visitCalls(messages: readonly Message[], visit: (message: Extract<Message, { kind: 'tool-call' }>) => void, includeSidechains = true): void {
     for (const message of messages) {
         if (message.kind !== 'tool-call') continue;
         visit(message);
-        visitCalls(message.children, visit);
+        if (includeSidechains) visitCalls(message.children, visit);
     }
 }
 
@@ -54,7 +54,8 @@ function regionForMutation(mutation: ToolCallFileMutation): LiveFileWrite['regio
     return Object.freeze({ startLine, endLine });
 }
 
-export function deriveLiveFileWrites(messages: readonly Message[], options: FileWriteDerivationOptions): ReadonlyMap<string, LiveFileWrite> {
+/** Session-current writes exclude sidechains; workspace presence also covers nested subagent activity. */
+export function deriveLiveFileWrites(messages: readonly Message[], options: FileWriteDerivationOptions & Readonly<{ includeSidechains?: boolean }>): ReadonlyMap<string, LiveFileWrite> {
     const result = new Map<string, LiveFileWrite>();
     visitCalls(messages, message => {
         if (message.tool.state !== 'running') return;
@@ -67,7 +68,7 @@ export function deriveLiveFileWrites(messages: readonly Message[], options: File
             const region = regionForMutation(mutation);
             result.set(normalized, Object.freeze({ toolCallId, sessionId, kind: mutation.kind, startedAt, ...(region ? { region } : {}) }));
         }
-    });
+    }, options.includeSidechains === true);
     return Object.freeze(result);
 }
 

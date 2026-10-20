@@ -55,7 +55,7 @@ describe('deriveLiveFileWrites', () => {
         expect(Object.isFrozen(writes)).toBe(true);
     });
 
-    it('drops terminal calls, includes nested writes, rejects outside-root and traversal paths', () => {
+    it('drops terminal calls and sidechain writes from the session-current projection and rejects unsafe paths', () => {
         const parent = call('task', 'Task', {});
         parent.children = [call('child', 'Delete', { file_path: 'src/deleted.ts' })];
         const writes = deriveLiveFileWrites([
@@ -66,7 +66,9 @@ describe('deriveLiveFileWrites', () => {
             call('outside', 'Write', { path: '/repo-other/no.ts' }),
             call('traversal', 'Write', { path: '../no.ts' }),
         ], options);
-        expect([...writes.keys()]).toEqual(['src/deleted.ts']);
+        expect([...writes.keys()]).toEqual([]);
+        // Workspace presence includes subagents whose transcript exists only as a sidechain.
+        expect([...deriveLiveFileWrites([parent], { ...options, includeSidechains: true }).keys()]).toEqual(['src/deleted.ts']);
     });
 
     it('normalizes Windows paths with root containment and retains explicit input line coordinates', () => {
