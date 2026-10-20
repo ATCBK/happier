@@ -407,6 +407,7 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                         publishSelection({ startLine: Number(value.startLine), endLine: Number(value.endLine), text: value.text,
                             rect: position && ['x', 'y', 'width', 'height'].every((key) => typeof position[key] === 'number' && Number.isFinite(position[key]))
                                 ? { x: Number(position.x), y: Number(position.y), width: Number(position.width), height: Number(position.height) } : null,
+                            collapsed: value.collapsed === true,
                         });
                         return;
                     }

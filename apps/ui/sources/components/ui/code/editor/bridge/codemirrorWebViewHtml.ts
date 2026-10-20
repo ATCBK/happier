@@ -1,6 +1,6 @@
 import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
 import { minimalCodeEditorEdit } from '../codeEditorDocumentEdit';
-import type { CodeEditorTheme } from '../editorTheme';
+import { formatCodeEditorChangeMarkCss, type CodeEditorTheme } from '../editorTheme';
 import { CODEMIRROR_WEBVIEW_BUNDLE_JS } from './codemirrorWebViewBundle.generated';
 
 export type CodeMirrorWebViewTheme = Omit<CodeEditorTheme, 'monacoThemeName'>;
@@ -86,6 +86,8 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
         background: ${params.theme.backgroundColor};
         color: ${params.theme.lineNumberColor};
       }
+      .happier-editor-marker { display: block; position: relative; height: 100%; }
+      ${formatCodeEditorChangeMarkCss(params.theme, (kind) => '.happier-editor-marker.happier-editor-change-' + kind)}
     </style>
   </head>
   <body>
@@ -656,6 +658,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             endLine: last.number > first.number && selection.to === last.from ? last.number - 1 : last.number,
             text: selection.empty ? first.text : editor.state.doc.sliceString(selection.from, selection.to, lineSeparator),
             rect,
+            collapsed: selection.empty,
           } });
         }
 

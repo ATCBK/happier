@@ -28,6 +28,8 @@ export type CodeEditorWithFindProps = CodeEditorProps & Readonly<{
     onFindSeedConsumed?: () => void;
     changeMarkers?: EditorChangeMarkerSeed;
     onChangeMarkersChange?: (controller: EditorChangeMarkersController | null) => void;
+    /** The mounted engine's handle, for host chrome that subscribes to it (the phone key row's Undo/Redo). */
+    onEditorHandleChange?: (handle: TextEditorHandle | null) => void;
 }>;
 
 function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
@@ -45,6 +47,10 @@ function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
         props.onChangeMarkersChange?.(changeMarkers);
         return () => { props.onChangeMarkersChange?.(null); };
     }, [changeMarkers, props.onChangeMarkersChange]);
+    React.useEffect(() => {
+        props.onEditorHandleChange?.(handle);
+        return () => { props.onEditorHandleChange?.(null); };
+    }, [handle, props.onEditorHandleChange]);
     const localRootRef = React.useRef<React.ElementRef<typeof View> | null>(null);
     const inputRef = React.useRef<TextInput | null>(null);
     const { capture, clear, restore } = useFindSurfaceFocusReturn();

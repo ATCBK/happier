@@ -22,6 +22,9 @@ export type CodeEditorTheme = Readonly<{
     findMatchColor?: string;
     findCurrentMatchColor?: string;
     findCurrentMatchForeground?: string;
+    /** The change gutter (P4-R9): added/modified bars in the diff add colour, the deletion wedge in ink. */
+    changeAddedColor: string;
+    changeDeletedColor: string;
     syntax: CodeEditorSyntaxTheme;
 }>;
 
@@ -38,6 +41,7 @@ type CodeEditorThemeSource = Readonly<{
         Theme['colors'],
         | 'accent'
         | 'border'
+        | 'diff'
         | 'surface'
         | 'syntax'
         | 'text'
@@ -62,6 +66,8 @@ export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Part
         findMatchColor: colors.find?.matchAll,
         findCurrentMatchColor: colors.find?.matchCurrent,
         findCurrentMatchForeground: colors.find?.matchCurrentForeground,
+        changeAddedColor: colors.diff.added.border,
+        changeDeletedColor: colors.text.secondary,
         syntax: {
             defaultColor: colors.syntax.default,
             keywordColor: colors.syntax.keyword,
@@ -119,4 +125,41 @@ export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): Monaco
             'input.border': editorTheme.dividerColor,
         }).flatMap(([id, value]) => { const hex = toMonacoHex(value); return hex ? [[id, hex]] : []; })),
     };
+}
+
+/** Width of a change-gutter bar: an optical stroke, the same in both engines. */
+const CHANGE_MARK_WIDTH_PX = 3;
+
+/**
+ * The change gutter's three marks, drawn the same in Monaco and CodeMirror (ade-shell ED3): added is a solid
+ * bar, modified the same bar dashed (blue stays reserved for focus and links), deleted a small wedge pointing
+ * at the gap where lines were removed. Returned as CSS declarations so each engine applies them to its own
+ * marker element.
+ */
+export function resolveCodeEditorChangeMarkStyles(theme: Pick<CodeEditorTheme, 'changeAddedColor' | 'changeDeletedColor'>) {
+    const bar = { width: `${CHANGE_MARK_WIDTH_PX}px`, top: '0', bottom: '0', left: '0', position: 'absolute' } as const;
+    return {
+        added: { ...bar, background: theme.changeAddedColor },
+        modified: { ...bar, background: `repeating-linear-gradient(to bottom, ${theme.changeAddedColor} 0 3px, transparent 3px 6px)` },
+        deleted: { position: 'absolute', left: '0', bottom: '-4px', width: '0', height: '0',
+            borderTop: '4px solid transparent', borderBottom: '4px solid transparent', borderLeft: `5px solid ${theme.changeDeletedColor}` },
+    } as const;
+}
+
+/**
+ * The same marks as one stylesheet, for an engine whose marker element is already placed in its gutter lane
+ * (Monaco's line decoration, CodeMirror's gutter marker): the bars set only their stroke, the wedge hangs
+ * from the element's lower edge.
+ */
+export function formatCodeEditorChangeMarkCss(theme: Pick<CodeEditorTheme, 'changeAddedColor' | 'changeDeletedColor'>, selector: (kind: 'added' | 'modified' | 'deleted') => string,
+    options: Readonly<{ insetPx?: number }> = {}): string {
+    const styles = resolveCodeEditorChangeMarkStyles(theme);
+    const wedge = styles.deleted;
+    const inset = options.insetPx ? `;margin-left:${options.insetPx}px!important` : '';
+    return [
+        `${selector('added')}{width:${styles.added.width}!important;background:${styles.added.background}!important${inset}}`,
+        `${selector('modified')}{width:${styles.modified.width}!important;background:${styles.modified.background}!important${inset}}`,
+        `${selector('deleted')}{background:none!important;overflow:visible!important${inset}}`,
+        `${selector('deleted')}::after{content:'';position:absolute;left:0;bottom:${wedge.bottom};width:0;height:0;border-top:${wedge.borderTop};border-bottom:${wedge.borderBottom};border-left:${wedge.borderLeft}}`,
+    ].join('\n');
 }

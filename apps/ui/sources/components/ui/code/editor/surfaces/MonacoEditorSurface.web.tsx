@@ -10,9 +10,12 @@ import type { CodeEditorFindSet } from '../bridge/codeEditorFindBridge';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { TextInput } from '@/components/ui/text/Text';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
-import { resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
+import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
 import { resolveCodeMonoFontFamily } from '../../codeTypography';
-import { buildMonacoEditorThemeData, resolveCodeEditorTheme } from '../editorTheme';
+import { buildMonacoEditorThemeData, formatCodeEditorChangeMarkCss, resolveCodeEditorTheme } from '../editorTheme';
+
+/** One shared stylesheet for every mounted Monaco editor's change marks; rewritten when the theme changes. */
+const CHANGE_MARK_STYLE_ID = 'happier-editor-change-marks';
 import type { CodeEditorTheme } from '../editorTheme';
 import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { createMonacoDecorations } from './monacoDecorations';
@@ -254,9 +257,20 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             theme.colors.syntax.number,
             theme.colors.syntax.string,
             theme.colors.text.primary,
+            theme.colors.text.secondary,
             theme.colors.text.tertiary,
+            theme.colors.diff.added.border,
         ],
     );
+    // The change gutter's marks (P4-R9) are Monaco line decorations; their stroke comes from the theme owner.
+    React.useEffect(() => {
+        if (typeof document === 'undefined') return;
+        let style = document.getElementById(CHANGE_MARK_STYLE_ID) as HTMLStyleElement | null;
+        if (!style) { style = document.createElement('style'); style.id = CHANGE_MARK_STYLE_ID; document.head.appendChild(style); }
+        style.textContent = formatCodeEditorChangeMarkCss(editorTheme, (kind) => `.monaco-editor .cldr.happier-editor-change-${kind}`,
+            // Monaco's decoration lane starts at the numbers' edge; the mark sits a step into it, clear of the digits.
+            { insetPx: CODE_GUTTER_METRICS.columnGap + 2 });
+    }, [editorTheme]);
     const containerRef = React.useRef<any>(null);
     const editorRef = React.useRef<any>(null);
     const modelRef = React.useRef<any>(null);
@@ -334,6 +348,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 ? selection.endLineNumber - 1 : selection.endLineNumber,
             text: empty ? model.getLineContent(selection.startLineNumber) : model.getValueInRange(selection),
             rect: position && bounds ? { x: bounds.left + position.left, y: bounds.top + position.top, width: 0, height: position.height } : null,
+            collapsed: empty,
         };
     }, []);
     const applyFind = React.useCallback((request?: CodeEditorFindSet) => {
