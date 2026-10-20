@@ -1,9 +1,10 @@
 import * as React from 'react';
 import type { SessionFolderWorkspaceRefV1 } from '@happier-dev/protocol';
-import { useUnistyles } from 'react-native-unistyles';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
-import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { getResolvedBackendCatalogEntries, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { getEnabledAgentIds } from '@/agents/catalog/enabled';
 import { EMPTY_MACHINE_AGENTS } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
@@ -15,6 +16,9 @@ import {
     type SessionFolderSelectionTarget,
 } from '@/components/sessions/organization/sessionFolderSelectionOptions';
 import { MachineSelector } from '@/components/sessions/new/components/MachineSelector';
+import { SessionAuthoringConnectedServicesField } from '@/components/sessions/authoring/controls/SessionAuthoringConnectedServicesField';
+import { useSessionAuthoringChipRenderContext } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -29,11 +33,59 @@ import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { t } from '@/text';
 
 import { selectEmbedAgentOptions } from '../embedAgentOptions';
-import { setEmbedNewChat, setEmbedSessions } from '../embedDraft';
+import { setEmbedConnectedServices, setEmbedNewChat, setEmbedSessions } from '../embedDraft';
 import { EMBED_SETTINGS } from '../embedsSettings';
 import type { EmbedDraftSectionProps } from './EmbedAccessSections';
 
 type OrganizationContext = Readonly<{ serverId: string | null }>;
+
+const styles = StyleSheet.create((theme) => ({
+    connectedAccountControl: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: theme.space.s8,
+        maxWidth: '100%',
+    },
+}));
+
+function EmbedConnectedAccountControl(props: Readonly<{
+    draft: EmbedDraftSectionProps['draft'];
+    onChange: EmbedDraftSectionProps['onChange'];
+    serverId: string | null;
+    agent: ResolvedBackendCatalogEntry;
+    disabled?: boolean;
+}>) {
+    const anchorRef = React.useRef<React.ComponentRef<typeof View> | null>(null);
+    const chipRenderContext = useSessionAuthoringChipRenderContext(anchorRef);
+    const connectedServices = props.draft.access.create?.connectedServices;
+    return (
+        <View ref={anchorRef} style={styles.connectedAccountControl}>
+            <SessionAuthoringConnectedServicesField
+                agentId={props.agent.agentCatalogEntry.agentId}
+                agentIdentity={props.agent.agentCatalogEntry.identity}
+                connectedAccounts={props.agent.agentCatalogEntry.connectedAccounts}
+                context={{ serverId: props.serverId }}
+                value={connectedServices}
+                onChange={(next) => {
+                    if (!props.disabled) props.onChange(setEmbedConnectedServices(props.draft, next ?? undefined));
+                }}
+                chipRenderContext={chipRenderContext}
+                testID="settings-embed-connected-account"
+            />
+            {connectedServices === undefined ? null : (
+                <TextLinkButton
+                    testID="settings-embed-connected-account-use-default"
+                    label={t('profiles.defaultPermissions.useAccountDefault')}
+                    tone="quiet"
+                    disabled={props.disabled}
+                    onPress={() => props.onChange(setEmbedConnectedServices(props.draft, undefined))}
+                />
+            )}
+        </View>
+    );
+}
 
 /**
  * The folders an embed can use. With session creation on, only folders of that computer's Chats
@@ -265,6 +317,28 @@ export const EmbedSessionsSection = React.memo(function EmbedSessionsSection(pro
                             itemProps: { disabled: props.disabled, testID: 'settings-embed-agent-trigger' },
                         }}
                     />
+                    {selectedAgent && (selectedAgent.agentCatalogEntry.connectedAccounts.length > 0
+                        || create.connectedServices !== undefined) ? (
+                        <SettingRow
+                            setting={EMBED_SETTINGS.settings.connectedAccount}
+                            testID="settings-embed-connected-account-row"
+                            subtitle={create.connectedServices === undefined
+                                ? t('profiles.defaultPermissions.useAccountDefault')
+                                : undefined}
+                            subtitleLines={0}
+                            showChevron={false}
+                            accessoryLayout="adaptive"
+                            rightElement={(
+                                <EmbedConnectedAccountControl
+                                    draft={draft}
+                                    onChange={onChange}
+                                    serverId={props.serverId}
+                                    agent={selectedAgent}
+                                    disabled={props.disabled}
+                                />
+                            )}
+                        />
+                    ) : null}
                     <Item
                         title={t('settingsEmbeds.sessions.appSetting')}
                         mode="info"

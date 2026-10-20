@@ -58,6 +58,7 @@ export const EMBED_SETTINGS = defineSettingsPage({
             titleKey: 'settingsEmbeds.sessions.title',
             settings: {
                 createSessions: {},
+                connectedAccount: { titleKey: 'connectedServices.title' },
                 newChat: {},
             },
         },

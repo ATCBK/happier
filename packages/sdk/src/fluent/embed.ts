@@ -96,6 +96,7 @@ export function createEmbed(params: EmbedParams): HappierEmbed {
         agent: grant.create.agentTargetKey,
         directory: { kind: 'managed' }, organizationPlacement: grant.create.placement,
         permissionMode,
+        ...(grant.create.connectedServices === undefined ? {} : { connectedServices: grant.create.connectedServices }),
         ...(input.title === undefined ? {} : { title: input.title }),
         ...(input.initialMessage === undefined ? {} : { initialMessage: input.initialMessage }),
         // Initial selection has no prior mutation to order; keep retry payloads identical.

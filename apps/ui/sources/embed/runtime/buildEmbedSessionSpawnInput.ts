@@ -53,6 +53,7 @@ export function buildEmbedSessionSpawnInput(input: Readonly<{
         agentTarget,
         directory: { kind: 'managed' },
         organizationPlacement: binding.placement,
+        ...(binding.connectedServices === undefined ? {} : { connectedServices: binding.connectedServices }),
         ...(modelSelection === undefined ? {} : { modelSelection }),
         ...(permissionMode === undefined ? {} : { permissionMode }),
     });

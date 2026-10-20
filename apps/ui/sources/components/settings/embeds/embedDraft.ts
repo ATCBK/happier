@@ -2,6 +2,7 @@ import type {
     AccountApiTokenSummaryV1,
     AccountApiTokensUpdateActionInputV1,
     ApiTokenGrantV1,
+    ConnectedServiceBindingsV2,
     ProviderBoundModelRef,
 } from '@happier-dev/protocol';
 import {
@@ -72,9 +73,28 @@ export function setEmbedSessions(draft: EmbedDraft, binding: EmbedCreateBinding 
                 agentTargetKey: binding.agentTargetKey,
                 directory: 'managed',
                 placement: draft.config.organization,
+                ...(draft.access.create?.connectedServices === undefined
+                    ? {}
+                    : { connectedServices: draft.access.create.connectedServices }),
             },
         },
         config: binding === null ? { ...draft.config, newChat: null } : draft.config,
+    };
+}
+
+/** A present value is an exact stored override; omission restores Account-default inheritance. */
+export function setEmbedConnectedServices(
+    draft: EmbedDraft,
+    connectedServices: ConnectedServiceBindingsV2 | undefined,
+): EmbedDraft {
+    if (draft.access.create === null) return draft;
+    const { connectedServices: _current, ...create } = draft.access.create;
+    return {
+        ...draft,
+        access: {
+            ...draft.access,
+            create: connectedServices === undefined ? create : { ...create, connectedServices },
+        },
     };
 }
 

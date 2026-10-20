@@ -46,6 +46,7 @@ export function buildEmbedParentGrantV1(options: EmbedAccessV1, embedConfig: Emb
       agentTargetKey: options.create.agentTargetKey,
       directory: 'managed',
       placement: config.organization,
+      ...(options.create.connectedServices === undefined ? {} : { connectedServices: options.create.connectedServices }),
     },
   });
 }
