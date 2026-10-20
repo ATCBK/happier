@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
   HAPPIER_PAGE_METRICS,
@@ -20,7 +20,6 @@ import { Popover } from '@/components/ui/popover';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { Modal, type CustomModalInjectedProps } from '@/modal';
 import type { MemoryCreationReceipt } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { t } from '@/text';
 
@@ -183,6 +182,9 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             accessibilityLabel={t('memoryContext.memory.sheetDecisionLabel')}
             value={text}
             onChangeText={setText}
+            multiline
+            minLines={1}
+            growWithText
             autoFocus
             selectTextOnFocus
           />
@@ -269,62 +271,26 @@ export function SaveMemoryDecisionForm(props: FormProps) {
   );
 }
 
-function SaveMemoryDecisionModal(
-  props: Omit<FormProps, 'onClose'> &
-    Readonly<{ onCancel: () => void }> &
-    CustomModalInjectedProps,
-) {
-  return (
-    <SaveMemoryDecisionForm
-      seed={props.seed}
-      onCreatedMemory={props.onCreatedMemory}
-      onSaved={() => {
-        props.onSaved();
-        props.onClose();
-      }}
-      onClose={() => {
-        props.onCancel();
-        props.onClose();
-      }}
-    />
-  );
-}
-
 /**
- * The panel anchored to the action that opened it on web, the phone sheet on native. Message action
- * menus and C1's answered lasting question ("Remember this") open this same sheet with their seed.
+ * The panel anchored to the action that opened it on a wide window, the shared phone sheet (the
+ * form carries its own header) on a phone. Message action menus and C1's answered lasting question
+ * ("Remember this") open this same sheet with their seed.
  */
 export function SaveMemoryDecisionSheet(
   props: FormProps & Readonly<{ anchorRef: React.RefObject<View | null> }>,
 ) {
-  const native = Platform.OS !== 'web';
-  React.useEffect(() => {
-    if (!native) return;
-    const modalId = Modal.show({
-      component: SaveMemoryDecisionModal,
-      props: {
-        seed: props.seed,
-        onSaved: props.onSaved,
-        onCreatedMemory: props.onCreatedMemory,
-        onCancel: props.onClose,
-      },
-      onRequestClose: props.onClose,
-      chrome: {
-        kind: 'card',
-        header: 'none',
-        title: t('memoryContext.memory.sheetTitle'),
-        phonePresentation: 'sheet',
-      },
-    });
-    return () => Modal.hide(modalId);
-  }, [native, props.seed.sourceMessageRef.messageId]);
-  if (native) return null;
   return (
     <Popover
       open
+      phonePresentation="sheet"
+      sheetHeader="none"
+      sheetMaterial="solid"
+      accessibilityLabel={t('memoryContext.memory.sheetTitle')}
       anchorRef={props.anchorRef}
       placement="auto-vertical"
       maxWidthCap={HAPPIER_PAGE_METRICS.dialogWidthPx.default}
+      // The panel keeps a gutter from the window edge however tall a duplicate review grows.
+      edgePadding={POPOVER_EDGE_PADDING}
       portal={{
         web: true,
         native: true,
@@ -333,7 +299,16 @@ export function SaveMemoryDecisionSheet(
       }}
       onRequestClose={props.onClose}
     >
-      {({ maxHeight }) => (
+      {({ maxHeight, presentation }) => presentation === 'sheet' ? (
+        <View style={[styles.sheetBody, { maxHeight }]}>
+          <SaveMemoryDecisionForm
+            seed={props.seed}
+            onCreatedMemory={props.onCreatedMemory}
+            onClose={props.onClose}
+            onSaved={props.onSaved}
+          />
+        </View>
+      ) : (
         <FloatingOverlay surfaceChrome="theme" maxHeight={maxHeight}>
           <View style={[styles.popoverBody, { maxHeight }]}>
             <SaveMemoryDecisionForm
@@ -348,6 +323,8 @@ export function SaveMemoryDecisionSheet(
     </Popover>
   );
 }
+
+const POPOVER_EDGE_PADDING = { horizontal: 12, vertical: 12 } as const;
 
 const styles = StyleSheet.create((theme) => ({
   form: {
@@ -378,6 +355,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingTop: theme.space.s4,
   },
   approval: { flex: 1, minWidth: 0 },
+  sheetBody: { alignSelf: 'stretch', flexShrink: 1, minHeight: 0 },
   popoverBody: {
     width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
     maxWidth: '100%',
