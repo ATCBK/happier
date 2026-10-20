@@ -1333,6 +1333,14 @@ observation use that same root. Project-directory escapes and transcript-file
 symlinks remain refused; a completed turn cannot settle Activity when ordered
 source admission fails.
 
+For a linked Claude store that matches the current configured store, takeover
+preserves the native config environment, including an unset `CLAUDE_CONFIG_DIR`.
+An explicit override retains its value; a different linked store retains its
+pinned root. The plugin's `agent/environment.ts` owns that environment overlay,
+also used by target-state handoff and bundle import. Transcript-location metadata
+remains resolved. These development-source rules do not recover the original
+authentication environment of older links.
+
 The process singleton admits one active built-in job per Agent target; configured
 jobs additionally distinguish the admitted Account and pinned version. Another
 start for the same target/version returns its job id. Configured definitions resolve
@@ -1740,6 +1748,13 @@ concrete media files referenced by transcript items through the existing
 exact-file media allowance/adoption path. Roots are never copied into
 `linkData`, persisted or shared state, or transcript records; they grant no
 directory-enumeration or write authority.
+
+In 0.3 development, source admission passes `includeAccountingSource: false`
+to `resolveSource`. Claude, Codex and Pi then resolve the source and media roots
+without enumerating their accounting history. Accounting discovery leaves this
+optional hint unset and retains its file inventory and watch descriptors. Older
+contributions may ignore the hint and return the same valid source with their
+accounting projection; it changes work demand, never source authority.
 
 This is a development/preview authoring contract from the current source tree;
 it does not claim that loaded or packaged release artifacts expose the same

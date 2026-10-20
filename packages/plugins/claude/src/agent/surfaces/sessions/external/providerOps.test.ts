@@ -112,6 +112,10 @@ describe('Claude native External Sessions contribution', () => {
             env: { HAPPIER_CLAUDE_CONFIG_DIR: configDir },
         });
 
+        expect(await contribution.resolveSource({ ...invocation(), includeAccountingSource: false,
+            source: { kind: 'claudeConfig', configDir, projectId: 'project-a' },
+        })).toEqual({ ok: true, value: { source: { kind: 'claudeConfig', configDir, projectId: 'project-a' } } });
+
         expect(await contribution.resolveSource({
             ...invocation(),
             source: {
@@ -133,6 +137,7 @@ describe('Claude native External Sessions contribution', () => {
                     rootField: 'configDir',
                     resourceKey: expect.stringMatching(/^claude:accounting:[A-Za-z0-9_-]{43}$/u),
                     accountingSources: ['claude-assistant-usage', 'claude-sdk-result'],
+                    discoveredFileCount: 0,
                     changeObservation: 'watch_file_changes',
                     watchFileChanges: { files: [], topologyDirectories: [join(configDir, 'projects')] },
                 },
