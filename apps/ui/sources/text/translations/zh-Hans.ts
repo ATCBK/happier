@@ -12519,6 +12519,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
         progressAccessibilityLabel: "下载进度",
+        verifyingDetail: "正在校验",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `已校验 ${verified} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        verifyingAccessibilityLabel: "校验进度",
         failedDetail: "失败",
         failedSubtitle: "无法准备模型。轻点以重试。",
         failedResumableSubtitle: ({ size }: { size: string }) => `下载未完成。已保留 ${size}，轻点即可继续。`,

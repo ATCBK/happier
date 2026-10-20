@@ -12787,6 +12787,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} z ${total} · ${filesDone} z ${filesTotal} ${filesTotal === 1 ? 'pliku' : 'plików'}`,
         progressAccessibilityLabel: "Postęp pobierania",
+        verifyingDetail: "Weryfikacja",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Zweryfikowano ${verified} z ${total} · ${filesDone} z ${filesTotal} ${filesTotal === 1 ? 'pliku' : 'plików'}`,
+        verifyingAccessibilityLabel: "Postęp weryfikacji",
         failedDetail: "Niepowodzenie",
         failedSubtitle: "Nie udało się przygotować modelu. Dotknij, aby spróbować ponownie.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Pobieranie nie zostało ukończone. Zachowano ${size} — dotknij, aby wznowić.`,

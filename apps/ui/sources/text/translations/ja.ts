@@ -13237,6 +13237,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} ファイル`,
         progressAccessibilityLabel: "ダウンロードの進行状況",
+        verifyingDetail: "検証中",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `検証済み ${verified} / ${total} · ${filesDone} / ${filesTotal} ファイル`,
+        verifyingAccessibilityLabel: "検証の進行状況",
         failedDetail: "失敗",
         failedSubtitle: "モデルを準備できませんでした。タップしてもう一度お試しください。",
         failedResumableSubtitle: ({ size }: { size: string }) => `ダウンロードが完了しませんでした。${size} は保存されています。タップして再開できます。`,

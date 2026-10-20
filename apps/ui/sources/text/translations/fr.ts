@@ -12827,6 +12827,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} sur ${total} · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
         progressAccessibilityLabel: "Progression du téléchargement",
+        verifyingDetail: "Vérification",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${verified} sur ${total} vérifiés · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
+        verifyingAccessibilityLabel: "Progression de la vérification",
         failedDetail: "Échec",
         failedSubtitle: "Impossible de préparer le modèle. Touche pour réessayer.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Le téléchargement n'est pas terminé. ${size} sont conservés ; touche pour reprendre.`,
