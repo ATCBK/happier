@@ -3,6 +3,7 @@ import { parseModelPackManifest, type ModelPackManifest } from '@/voice/modelPac
 
 import { downloadManifestFiles } from './installer/download.native';
 import { getFetch, getFs } from './installer/fs.native';
+import { excludeModelPackDirFromBackup, releaseModelPackEngines } from './installer/nativeEngines.native';
 import { fetchRemoteManifest } from './installer/network';
 import {
   assertManifestPathsSafe,
@@ -66,6 +67,7 @@ async function applyPackUpdate(opts: {
   remote: ModelPackManifest;
   signal: AbortSignal;
   onProgress?: (p: ModelPackDownloadProgress) => void;
+  overrides: InstallerOverrides;
 }): Promise<void> {
   const installedSha = new Map(opts.installed.files.map((f) => [f.path, f.sha256.toLowerCase()]));
   // Files missing from the pack are fetched as well, so an update also repairs a damaged install.
@@ -74,6 +76,7 @@ async function applyPackUpdate(opts: {
   ));
   const stagingDir = getPackUpdateDir(opts.fs, opts.id);
   stagingDir.create({ intermediates: true, idempotent: true });
+  excludeModelPackDirFromBackup(opts.overrides, stagingDir.uri);
   // The installed pack stays untouched until every changed file is verified; staged files survive a
   // failed attempt, so retrying the update resumes instead of starting over.
   await downloadManifestFiles({
@@ -86,6 +89,7 @@ async function applyPackUpdate(opts: {
 
   // While files move the pack is not installed, so an interrupted swap reinstalls instead of loading a
   // mix of builds; the reinstall reuses files that already verify.
+  await releaseModelPackEngines(opts.overrides, opts.rootDir.uri);
   if (opts.meta.exists) opts.meta.delete();
   // Dropped files go first: a new build may turn a dropped file's path into a directory, or a dropped
   // directory's path into a file.
@@ -122,6 +126,7 @@ export async function ensureModelPackInstalled(
   const rootDir = getPackRootDir(fs, id);
 
   rootDir.create({ intermediates: true, idempotent: true });
+  excludeModelPackDirFromBackup(overrides, rootDir.uri);
 
   const meta = getMetaFile(fs, rootDir);
   const installed = await readInstalledManifest(meta);
@@ -149,7 +154,9 @@ export async function ensureModelPackInstalled(
         removePackUpdateDir(fs, id);
         return { packDirUri: rootDir.uri, manifest: installed };
       }
-      await applyPackUpdate({ fs, id, rootDir, meta, installed, remote, signal: opts.signal, onProgress: opts.onProgress });
+      await applyPackUpdate({
+        fs, id, rootDir, meta, installed, remote, signal: opts.signal, onProgress: opts.onProgress, overrides,
+      });
       return { packDirUri: rootDir.uri, manifest: remote };
     } catch (error) {
       // Cancelling an update discards its staged files, including ones kept from an earlier failed attempt.
@@ -267,6 +274,7 @@ export async function getModelPackInstallSummary(
 export async function removeModelPack(opts: { packId: string | null }, overrides: InstallerOverrides = {}): Promise<void> {
   const fs = await getFs(overrides);
   const id = normalizePackId(opts.packId);
+  await releaseModelPackEngines(overrides, getPackRootDir(fs, id).uri);
   deletePack(fs, id);
 }
 

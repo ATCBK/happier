@@ -20,6 +20,20 @@ bool Exists(const std::string &path) {
   return SherpaOnnxFileExists(path.c_str()) != 0;
 }
 
+std::string JoinTranscript(const std::string &committed, const std::string &segment) {
+  if (committed.empty()) return segment;
+  if (segment.empty()) return committed;
+  return committed + " " + segment;
+}
+
+std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const SherpaOnnxOnlineStream *stream) {
+  const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(recognizer, stream);
+  std::string text;
+  if (result && result->text) text = std::string(result->text);
+  if (result) SherpaOnnxDestroyOnlineRecognizerResult(result);
+  return text;
+}
+
 }  // namespace
 
 @interface HappierSherpaOnlineAsrEngine () {
@@ -36,12 +50,19 @@ bool Exists(const std::string &path) {
 @end
 
 @interface HappierSherpaOnlineAsrStream () {
+  // Keeps the engine (and its recognizer) alive for the stream's lifetime, even after the module drops it.
+  HappierSherpaOnlineAsrEngine *_engine;
   const SherpaOnnxOnlineRecognizer *_recognizer;
   const SherpaOnnxOnlineStream *_stream;
+  // Text of segments already closed by an endpoint. The stream is reset at each endpoint (otherwise the
+  // utterance-length rule keeps reporting an endpoint on every frame), and callers receive the whole
+  // transcript so far rather than only the open segment.
+  std::string _committedText;
   std::mutex _mutex;
 }
-- (instancetype)initWithRecognizer:(const SherpaOnnxOnlineRecognizer *)recognizer
-                             stream:(const SherpaOnnxOnlineStream *)stream;
+- (instancetype)initWithEngine:(HappierSherpaOnlineAsrEngine *)engine
+                    recognizer:(const SherpaOnnxOnlineRecognizer *)recognizer
+                        stream:(const SherpaOnnxOnlineStream *)stream;
 @end
 
 @implementation HappierSherpaOnlineAsrEngine
@@ -130,17 +151,19 @@ bool Exists(const std::string &path) {
     if (error) *error = [NSError errorWithDomain:@"HappierSherpaNative" code:204 userInfo:@{NSLocalizedDescriptionKey: @"Failed to create ASR stream"}];
     return nil;
   }
-  return [[HappierSherpaOnlineAsrStream alloc] initWithRecognizer:_recognizer stream:stream];
+  return [[HappierSherpaOnlineAsrStream alloc] initWithEngine:self recognizer:_recognizer stream:stream];
 }
 
 @end
 
 @implementation HappierSherpaOnlineAsrStream
 
-- (instancetype)initWithRecognizer:(const SherpaOnnxOnlineRecognizer *)recognizer
-                             stream:(const SherpaOnnxOnlineStream *)stream {
+- (instancetype)initWithEngine:(HappierSherpaOnlineAsrEngine *)engine
+                    recognizer:(const SherpaOnnxOnlineRecognizer *)recognizer
+                        stream:(const SherpaOnnxOnlineStream *)stream {
   self = [super init];
   if (!self) return nil;
+  _engine = engine;
   _recognizer = recognizer;
   _stream = stream;
   return self;
@@ -189,16 +212,13 @@ bool Exists(const std::string &path) {
     SherpaOnnxDecodeOnlineStream(_recognizer, _stream);
   }
 
-  const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(_recognizer, _stream);
-  std::string text;
-  if (result && result->text) {
-    text = std::string(result->text);
-  }
-  if (result) {
-    SherpaOnnxDestroyOnlineRecognizerResult(result);
-  }
-
+  const std::string segment = ReadStreamText(_recognizer, _stream);
   const bool endpoint = SherpaOnnxOnlineStreamIsEndpoint(_recognizer, _stream) != 0;
+  const std::string text = JoinTranscript(_committedText, segment);
+  if (endpoint) {
+    _committedText = text;
+    SherpaOnnxOnlineStreamReset(_recognizer, _stream);
+  }
 
   return @{
     @"text": [NSString stringWithUTF8String:text.c_str()],
@@ -218,14 +238,7 @@ bool Exists(const std::string &path) {
     SherpaOnnxDecodeOnlineStream(_recognizer, _stream);
   }
 
-  const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(_recognizer, _stream);
-  std::string text;
-  if (result && result->text) {
-    text = std::string(result->text);
-  }
-  if (result) {
-    SherpaOnnxDestroyOnlineRecognizerResult(result);
-  }
+  const std::string text = JoinTranscript(_committedText, ReadStreamText(_recognizer, _stream));
 
   SherpaOnnxDestroyOnlineStream(_stream);
   _stream = nullptr;

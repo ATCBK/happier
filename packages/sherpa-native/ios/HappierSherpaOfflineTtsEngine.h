@@ -16,7 +16,8 @@ NS_ASSUME_NONNULL_BEGIN
                             jobId:(NSString *)jobId
                             error:(NSError **)error;
 
-- (void)cancelJob:(NSString *)jobId;
+/// Cancels a running synthesis, or the next one started with this job id if it has not begun yet.
++ (void)cancelJob:(NSString *)jobId;
 
 @end
 

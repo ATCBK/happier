@@ -51,7 +51,7 @@ test("iOS online ASR wrapper matches the vendored sherpa-onnx C API shape", () =
   assert.match(onlineSource, /config\.rule2_min_trailing_silence = 0\.6f;/);
   assert.match(onlineSource, /config\.rule3_min_utterance_length = 15\.0f;/);
   assert.match(onlineSource, /const SherpaOnnxOnlineStream \*_stream;/);
-  assert.match(onlineSource, /initWithRecognizer:_recognizer stream:stream/);
+  assert.match(onlineSource, /initWithEngine:self recognizer:_recognizer stream:stream/);
   assert.doesNotMatch(onlineSource, /wrapper->_/);
 });
 

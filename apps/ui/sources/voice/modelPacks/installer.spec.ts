@@ -4,6 +4,7 @@ import type { DownloadResumable, DownloadOptions, DownloadProgressData } from 'e
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 import { settleWithFakeClock, useInstallerFakeClock } from '@/voice/modelPacks/installerFakeClock.testHarness';
+import type { InstallerSherpaNative } from '@/voice/modelPacks/installer/nativeEngines.native';
 
 const nativeDownload = vi.hoisted(() => vi.fn<(
   url: string, uri: string, options?: DownloadOptions, onProgress?: (progress: DownloadProgressData) => void,
@@ -915,5 +916,84 @@ describe('filesystem mutation failures', () => {
       override delete() { throw new Error('EACCES_directory_delete'); }
     }
     await expect(removeModelPack({ packId: 'example' }, { fs: { ...fs, Directory: UndeletableDirectory } })).rejects.toThrow('EACCES_directory_delete');
+  });
+});
+
+describe('native speech engine lifecycle', () => {
+  const PACK_PATH = '/docs/happier/voice/modelPacks/example';
+
+  // The sherpa native module is a platform boundary: it caches engines that hold the pack's model files.
+  function createSherpaNative(onRelease: () => void = () => {}) {
+    const released: string[] = [];
+    const excluded: string[] = [];
+    return {
+      released,
+      excluded,
+      module: {
+        async release({ assetsDir }: { assetsDir: string }) { onRelease(); released.push(assetsDir); },
+        async excludeFromBackup({ path }: { path: string }) { excluded.push(path); },
+      },
+    };
+  }
+
+  async function installSingleFilePack(fs: ReturnType<typeof createFs>, sherpaNative: InstallerSherpaNative) {
+    const bytes = new Uint8Array([7]);
+    useNativeDownloads(fs, () => bytes);
+    const files = [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: await sha256Hex(bytes), sizeBytes: 1 }];
+    await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+      fs, fetch: fetchManifest(manifest(files)), sherpaNative,
+    });
+  }
+
+  beforeEach(() => { nativeDownload.mockReset(); });
+
+  it('excludes a pack from device backup once, not on every use', async () => {
+    const fs = createFs();
+    const native = createSherpaNative();
+    await installSingleFilePack(fs, native.module);
+    await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal, mode: 'require_installed' }, {
+      fs, sherpaNative: native.module,
+    });
+    expect(native.excluded.filter((path) => path === PACK_PATH)).toEqual([PACK_PATH]);
+  });
+
+  it('still installs when the platform rejects the backup exclusion', async () => {
+    const fs = createFs();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await installSingleFilePack(fs, { excludeFromBackup: async () => { throw new Error('EPERM'); } });
+    expect((await getModelPackInstallSummary({ packId: 'example' }, { fs })).installed).toBe(true);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    warn.mockRestore();
+  });
+
+  it('unloads native engines before removing a pack', async () => {
+    const fs = createFs();
+    await installSingleFilePack(fs, {});
+    let filesPresentAtRelease = false;
+    const native = createSherpaNative(() => { filesPresentAtRelease = fs.files.has(`${PACK_URI}/model.onnx`); });
+    await removeModelPack({ packId: 'example' }, { fs, sherpaNative: native.module });
+    expect(native.released).toEqual([PACK_PATH]);
+    expect(filesPresentAtRelease).toBe(true);
+    expect(fs.files.has(`${PACK_URI}/model.onnx`)).toBe(false);
+  });
+
+  it('unloads native engines before an update swaps the pack files', async () => {
+    const fs = createFs();
+    await installSingleFilePack(fs, {});
+    const oldBytes = fs.files.get(`${PACK_URI}/model.onnx`);
+    let bytesAtRelease: Uint8Array | undefined;
+    const native = createSherpaNative(() => { bytesAtRelease = fs.files.get(`${PACK_URI}/model.onnx`); });
+    const next = new Uint8Array([8]);
+    useNativeDownloads(fs, () => next);
+    await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal, updatePolicy: 'manual_update_if_available' }, {
+      fs,
+      fetch: fetchManifest(manifest([
+        { path: 'model.onnx', url: 'https://example.com/model.onnx?rev=2', sha256: await sha256Hex(next), sizeBytes: 1 },
+      ], 'v2')),
+      sherpaNative: native.module,
+    });
+    expect(native.released).toEqual([PACK_PATH]);
+    expect(bytesAtRelease).toEqual(oldBytes);
+    expect(fs.files.get(`${PACK_URI}/model.onnx`)).toEqual(next);
   });
 });
