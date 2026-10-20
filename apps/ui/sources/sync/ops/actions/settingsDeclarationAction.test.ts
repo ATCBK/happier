@@ -78,6 +78,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import type { ServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -98,9 +99,10 @@ import type { LocalDaemonStatusData } from '@/components/settings/machines/local
 
 describe('Track device-local Settings declaration', () => {
     it('lets an agent read and write Track with SCM writes disabled without changing Account settings', async () => {
-        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: {
-            v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] },
-        } });
+        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            ...settingsDefaults.actionsSettingsV1,
+            approvalWaivedSurfaces: { 'settings.set': ['agent'] },
+        }) });
         // File tracking is independent of SCM write admission; the agent still needs its explicit Settings waiver.
         const owner = createOwner(undefined, false, true, initialAccount);
         const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
@@ -119,8 +121,11 @@ describe('Track device-local Settings declaration', () => {
 
 describe('image Background device-local Settings declaration', () => {
     it('reads and changes the manual image and SVG preferences through the real Actions owner', async () => {
-        const owner = createOwner();
-        const executor = throughActionExecutor(owner.action);
+        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: {
+            v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] },
+        } });
+        const owner = createOwner(undefined, false, true, initialAccount);
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
         const context = { surface: 'agent', authority: 'account_automation' } as const;
         expect(await executor.execute('settings.get', { anchor: 'files.imageBackground' }, context))
             .toMatchObject({ ok: true, result: { value: {} } });
@@ -128,7 +133,7 @@ describe('image Background device-local Settings declaration', () => {
             anchor: 'files.imageBackground', value: { image: 'dark', svg: 'light' },
         }, context)).toMatchObject({ ok: true, result: { value: { image: 'dark', svg: 'light' } } });
         expect(owner.local().filesImageBackgroundByKind).toEqual({ image: 'dark', svg: 'light' });
-        expect(owner.account()).toEqual(settingsDefaults);
+        expect(owner.account()).toEqual(initialAccount);
         expect(await executor.execute('settings.set', {
             anchor: 'files.imageBackground', value: { svg: 'automatic' },
         }, context)).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
@@ -1219,12 +1224,16 @@ function readSummaryCatalogAccount() {
 /** Publish the Account inventory at its real writer; sharing admission and consent stay real. */
 async function admitSettingsSharingCatalog() {
     const account = await readSummaryCatalogAccount();
+    // Notification settings lazily acquire Sync through the native bridge.
+    // Initialize that same owner before mounting this fixture's Account.
+    const syncBridge = await loadSyncSingletonForTests();
     const scope = await activateStorageAccountScope(account.accountLifetime.scope);
     const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } =
         await import('@/sync/domains/plugins/availability/projection');
     onTestFinished(() => {
         clearPluginAccountAvailabilityProjection();
         scope.dispose();
+        syncBridge.dispose();
     });
     replacePluginAccountAvailabilityProjection({ scope: account.accountLifetime.scope, snapshot: {
         availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [], inventoryComplete: true,

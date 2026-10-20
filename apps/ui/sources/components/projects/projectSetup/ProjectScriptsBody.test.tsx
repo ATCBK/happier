@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 
@@ -119,10 +119,6 @@ const { AppPaneScopeLayoutProvider } = await import('@/components/appShell/panes
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { actionOperationStore } =
   await import('@/sync/domains/actionOperations/actionOperationStore');
-const { workspaceFileEditorDraftCache } =
-  await import('@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraftCache');
-const { buildWorkspaceCacheKey } =
-  await import('@/sync/domains/workspaces/workspaceScope');
 const previous = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null =
   null;
@@ -135,13 +131,6 @@ afterEach(async () => {
   connection = null;
   storage.setState(previous);
   actionOperationStore.reset();
-  // Unsaved drafts deliberately outlive the editor; each case starts from the file itself.
-  workspaceFileEditorDraftCache.setDraft({
-    accountId: 'account-1',
-    workspaceCacheKey: buildWorkspaceCacheKey(workspace),
-    filePath: '.happier/project.json',
-    draft: null,
-  });
   shared.calls = [];
   shared.inspection = null;
   shared.inspectionPending = null;
@@ -156,6 +145,16 @@ const workspace = {
   machineId: 'm1',
   rootPath: '/repo',
 };
+let workspaceSequence = 0;
+let workspaceServerUrl = 'https://scripts-body.test';
+beforeEach(() => {
+  workspace.serverId = 'srv_scripts_body';
+  workspaceServerUrl = 'https://scripts-body.test';
+});
+function isolateManifestDrafts() {
+  workspace.serverId = `srv_scripts_body_${++workspaceSequence}`;
+  workspaceServerUrl = `https://scripts-body-${workspaceSequence}.test`;
+}
 const nativeRef = (target: string) => ({
   kind: 'native',
   tool: 'package_script',
@@ -238,7 +237,7 @@ async function render(
   host: Readonly<{ outputScopeId?: string; bottomPresentation?: 'docked' | 'overlay' }> = {},
 ) {
   connection ??= await restoreServerAccountForTest({
-    serverUrl: 'https://scripts-body.test',
+    serverUrl: workspaceServerUrl,
     serverIdentityId: workspace.serverId,
     accountId: 'account-1',
     request: async (url, init) => {
@@ -848,6 +847,7 @@ describe('ProjectScriptsBody runs', () => {
 });
 
 describe('ProjectScriptsBody project file editor', () => {
+  beforeEach(isolateManifestDrafts);
   it.each([false, true])('preserves loaded sub-GB and fractional-GB memory demand and exact byte edits (phone=%s)', async phone => {
     shared.device = phone ? 'phone' : null;
     const initial = { version: 1, scripts: {
@@ -1290,14 +1290,14 @@ describe('ProjectScriptsBody setup row', () => {
 });
 
 describe('ProjectScriptsBody output', () => {
-  const outputScopeId = `project:${encodeURIComponent(workspace.serverId)}:w1`;
+  const outputScopeId = () => `project:${encodeURIComponent(workspace.serverId)}:w1`;
   const withTerminal = () => ({ ...operation('accepted', 1), domainRef: { ...operation('accepted', 1).domainRef, terminalId: 't1' } });
 
   it('opens a run’s output as its host’s bottom terminal tab, borrowing the same PTY, not a modal', async () => {
     const { Modal } = await import('@/modal');
     const show = vi.spyOn(Modal, 'show');
     shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
-    const screen = await render('widget', 'scripts.script:test', { outputScopeId });
+    const screen = await render('widget', 'scripts.script:test', { outputScopeId: outputScopeId() });
     await act(async () => {
       actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [withTerminal() as never] });
     });
@@ -1305,7 +1305,7 @@ describe('ProjectScriptsBody output', () => {
     await vi.waitFor(() => expect(shared.calls.some((call) => call.actionId === 'projects.execution.output.open')).toBe(true));
     await vi.waitFor(() => expect(shared.calls.some((call) => call.actionId === 'session.terminals.open')).toBe(true));
     expect(shared.calls.find((call) => call.actionId === 'session.terminals.open')?.input).toMatchObject({
-      scopeId: outputScopeId,
+      scopeId: outputScopeId(),
       target: { kind: 'terminal_view', machineId: 'm1', terminalId: 't1', terminalKey: 'project-command:t1', cwd: '/repo' },
       title: 'test · m1',
     });
@@ -1317,7 +1317,7 @@ describe('ProjectScriptsBody output', () => {
     // The row owns the running state (elapsed time, latest output line); the terminal opens only when the person asks.
     shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
     shared.responses['projects.script.run'] = { operation: withTerminal() };
-    const screen = await render('widget', 'scripts.script:test.run', { outputScopeId, bottomPresentation });
+    const screen = await render('widget', 'scripts.script:test.run', { outputScopeId: outputScopeId(), bottomPresentation });
     await act(async () => { await screen.pressByTestIdAsync('scripts.script:test.run'); });
     await vi.waitFor(() => expect(shared.calls.some((call) => call.actionId === 'projects.script.run')).toBe(true));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
@@ -1329,7 +1329,7 @@ describe('ProjectScriptsBody output', () => {
     const show = vi.spyOn(Modal, 'show').mockImplementation(() => 'modal' as never);
     shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
     shared.failures['session.terminals.open'] = { ok: false, errorCode: 'terminal_target_unavailable', error: 'terminal_target_unavailable' };
-    const screen = await render('widget', 'scripts.script:test', { outputScopeId });
+    const screen = await render('widget', 'scripts.script:test', { outputScopeId: outputScopeId() });
     await act(async () => {
       actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [withTerminal() as never] });
     });
@@ -1341,6 +1341,7 @@ describe('ProjectScriptsBody output', () => {
 });
 
 describe('ProjectScriptsBody on a phone', () => {
+  beforeEach(isolateManifestDrafts);
   it('lists the project file’s sections and pushes one in place, keeping the draft on Back', async () => {
     shared.device = 'phone';
     shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
@@ -1384,6 +1385,7 @@ describe('ProjectScriptsBody on a phone', () => {
 });
 
 describe('ProjectScriptsBody native previews and tools', () => {
+  beforeEach(isolateManifestDrafts);
   const invocation = (args: string[], requestedVersion?: string) => ({
     tool: 'yarn',
     args,

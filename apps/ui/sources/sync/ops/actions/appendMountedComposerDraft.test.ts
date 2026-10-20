@@ -135,6 +135,40 @@ describe('appendMountedComposerDraft', () => {
         await hook.unmount();
     });
 
+    it('anchors mapped Markdown through the existing file draft owner and permits Comment', async () => {
+        const workspaceScope = { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' };
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'session:source-session', workspaceScope,
+            source: 'markdown', sourceLinesMapped: true, filePath: 'notes.md',
+            getSelection: () => ({ startLine: 3, endLine: 3, text: 'selected code' }),
+            getLinesText: () => '# Notes\n```ts\nselected code\n```', savedText: '# Notes\n```ts\nselected code\n```',
+            sessionTarget: { sessionId: 'source-session' }, openDetailsTab: () => {},
+        }));
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(true); });
+        const drafts = getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey[buildWorkspaceCacheKey(workspaceScope)];
+        expect(drafts).toMatchObject([{ filePath: 'notes.md', source: 'file', body: '', includeInPrompt: true,
+            anchor: { kind: 'range', startLine: 3, endLine: 3 }, snapshot: { selectedLines: ['selected code'] } }]);
+        expect(hook.getCurrent().canComment).toBe(true);
+        await act(async () => { expect(await hook.getCurrent().comment()).toBe(true); });
+        expect(getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey[buildWorkspaceCacheKey(workspaceScope)])
+            .toMatchObject([{ id: drafts?.[0]?.id, includeInPrompt: false }]);
+        await hook.unmount();
+    });
+
+    it('keeps unmapped Markdown as an editable path-only quote without claiming rendered rows as source lines', async () => {
+        const { owner } = mountComposer('Question');
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'markdown', filePath: 'notes.md', getSelection: () => ({ startLine: 40, endLine: 41, text: 'selected code' }),
+            sessionTarget: { sessionId: 'source-session' },
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) }, openDetailsTab: () => {},
+        }));
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(true); });
+        expect(owner.read().document.text).toBe(`Question\n${buildAskSelectionQuote({ text: 'selected code', filePath: 'notes.md' })}`);
+        expect(hook.getCurrent().canComment).toBe(false);
+        expect(getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey).toEqual({});
+        await hook.unmount();
+    });
+
     it('lets Problems use the same no-Session destination with its range questions', async () => {
         const navigate = vi.fn();
         const result = await askAboutRanges({
@@ -206,12 +240,13 @@ describe('appendMountedComposerDraft', () => {
 
     it('forgets the old selection when a retained surface switches file ownership', async () => {
         let current: import('@/components/ui/code/selection/useAskSelection').AskSelection | null = { startLine: 1, endLine: 1, text: 'old code' };
+        const initialProps: { filePath?: string } = { filePath: 'old.ts' };
         const hook = await renderHook((props: { filePath?: string }) => useAskSelection({ scopeId: 'session:source-session',
             workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
             source: 'file', filePath: props.filePath, getSelection: () => current,
             getLinesText: () => 'new code', savedText: 'new code',
             sessionTarget: { sessionId: 'source-session' }, openDetailsTab: () => {},
-        }), { initialProps: { filePath: 'old.ts' } });
+        }), { initialProps });
         current = null;
         await hook.rerender({ filePath: 'new.ts' });
         await act(async () => { expect(await hook.getCurrent().ask()).toBe(false); });

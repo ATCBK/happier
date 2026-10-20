@@ -11,7 +11,7 @@ import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccount
 import { Modal } from '@/modal';
 import { ApprovalRequestSchema } from '@happier-dev/protocol';
 import { runGuardedNavigation, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
-import type { CodeEditorHandle, CodeEditorProps } from '@/components/ui/code/editor/codeEditorTypes';
+import type { TextEditorHandle, CodeEditorProps } from '@/components/ui/code/editor/codeEditorTypes';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -47,19 +47,29 @@ const editorBoundary = vi.hoisted(() => ({ pendingValue: null as string | null }
 vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
     const React = await import('react');
     return {
-        CodeEditor: React.forwardRef<CodeEditorHandle, CodeEditorProps>((props, ref) => {
+        CodeEditor: React.forwardRef<TextEditorHandle, CodeEditorProps>((props, ref) => {
             const value = React.useRef(props.value);
-            value.current = props.value;
+            const seed = React.useRef({ value: props.value, resetKey: props.resetKey });
+            if (seed.current.value !== props.value || seed.current.resetKey !== props.resetKey) {
+                value.current = props.value;
+                seed.current = { value: props.value, resetKey: props.resetKey };
+            }
+            const latestProps = React.useRef(props);
+            latestProps.current = props;
+            // Real platform engines retain their handle across ordinary renders.
             React.useImperativeHandle(ref, () => ({
                 getValue: () => editorBoundary.pendingValue ?? value.current,
                 flushPendingChange: async () => {
                     if (editorBoundary.pendingValue === null) return;
                     value.current = editorBoundary.pendingValue;
                     editorBoundary.pendingValue = null;
-                    props.onChange(value.current);
+                    latestProps.current.onChange(value.current);
                 },
-            }));
-            return React.createElement('CodeEditor', { testID: props.testID, value: props.value, onChangeText: props.onChange });
+            }), []);
+            return React.createElement('CodeEditor', { testID: props.testID, value: props.value, onChangeText: (next: string) => {
+                value.current = next;
+                props.onChange(next);
+            } });
         }),
     };
 });
@@ -293,7 +303,12 @@ describe('ArtifactEditor', () => {
         await act(async () => { await sync.updateArtifactWithHeader(id, current.rawHeader, current.body,
             { expectedRevision: { headerVersion: 1, bodyVersion: 1 } }); });
         await screen.update(<ArtifactEditor artifact={current} mode="edit" />);
+        const { MarkdownCodeEditorField } = await import('@/components/ui/markdown/editor/MarkdownCodeEditorField');
+        expect(screen.findByType(MarkdownCodeEditorField).props.editorRef.current.getValue()).toBe('My draft');
         await screen.pressByTestIdAsync('artifact-editor:save');
+        // The host press starts the shared asynchronous action lifecycle; wait
+        // for its refusal before inspecting the retained draft and CAS request.
+        await vi.waitFor(() => expect(screen.findByTestId('artifact-editor:conflict')).not.toBeNull());
         const writes = homes.requestsFor(`/v1/artifacts/${id}`).filter(request => request.input !== null);
         expect(writes.at(-1)?.input).toMatchObject({ expectedHeaderVersion: 1, expectedBodyVersion: 1 });
         expect(homes.artifacts(serverId).readPlainBody(id)).toBe('Concurrent body');
@@ -301,7 +316,6 @@ describe('ArtifactEditor', () => {
         expect(screen.findByTestId('artifact-editor:title')?.props.value).toBe('Opening');
         expect(navigation.back).not.toHaveBeenCalled();
         expect(navigation.replace).not.toHaveBeenCalled();
-        expect(screen.findByTestId('artifact-editor:conflict')).not.toBeNull();
         await screen.unmount();
     });
 
@@ -361,10 +375,14 @@ describe('ArtifactEditor', () => {
         const artifact = getStorage().getState().artifacts[stored!.id]!;
         const editor = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
         await act(async () => { editor.changeTextByTestId('artifact-editor:body:source', 'Second body'); });
+        const { MarkdownCodeEditorField } = await import('@/components/ui/markdown/editor/MarkdownCodeEditorField');
+        expect(editor.findByType(MarkdownCodeEditorField).props.editorRef.current.getValue()).toBe('Second body');
         await editor.pressByTestIdAsync('artifact-editor:save');
-        expect(persisted.readPlainBody(stored!.id)).toBe('Second body');
-        expect(getStorage().getState().artifacts[stored!.id]).toMatchObject({ body: 'Second body', headerVersion: 2, bodyVersion: 2 });
-        expect(navigation.back).toHaveBeenCalledOnce();
+        await vi.waitFor(() => {
+            expect(persisted.readPlainBody(stored!.id)).toBe('Second body');
+            expect(getStorage().getState().artifacts[stored!.id]).toMatchObject({ body: 'Second body', headerVersion: 2, bodyVersion: 2 });
+            expect(navigation.back).toHaveBeenCalledOnce();
+        });
         await editor.unmount();
     });
 
