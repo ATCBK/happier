@@ -157,6 +157,11 @@ const expoNodeModuleStubsPlugin = {
     name: 'happier-vitest-expo-node-module-stubs',
     enforce: 'pre' as const,
     resolveId(id: string, importer?: string) {
+        // The XML parser and its middleware stay real; only its native drawing catalog is substituted.
+        if (/^\.\/xmlTags(?:\.js)?$/.test(id)
+            && /[\\/]react-native-svg[\\/]lib[\\/]module[\\/]xml\.js(?:\?.*)?$/.test(importer ?? '')) {
+            return resolve('./sources/dev/testkit/mocks/reactNativeSvg.ts');
+        }
         return resolveBrowserVoiceMicSource(id, importer)
             ?? workspaceSourcesPlugin.resolveId(id, importer)
             ?? resolveExpoNodeModuleStub(id, importer);
@@ -205,7 +210,7 @@ export default defineConfig({
                 // at all — which forced surfaces to mock the whole list owner
                 // instead of only the third-party recycler underneath it.
                 // Inlining lets Vite apply the node-safe React Native alias.
-                inline: [/@react-navigation\/native/, /@react-navigation\/elements/, /@react-navigation\/bottom-tabs/, /@legendapp\/list/],
+                inline: [/@react-navigation\/native/, /@react-navigation\/elements/, /@react-navigation\/bottom-tabs/, /@legendapp\/list/, /react-native-svg/],
             },
         },
         env: {
