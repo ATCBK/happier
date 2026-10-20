@@ -3,7 +3,7 @@
  * `settingsSourceControl.markdownEditMode.disabledReason.*`, surfaced as the
  * disabled "Rich" option's subtitle in any Raw/Rich edit-mode menu.
  *
- * Extracted (Lane A) so BOTH the file-pane toolbar (`FileActionToolbar`) and the
+ * Extracted (Lane A) so BOTH the file-pane toolbar (`FilePageHeader`) and the
  * generic `MarkdownEditModeMenu` resolve the disabled-reason copy identically —
  * there is no second copy of this switch to drift.
  *

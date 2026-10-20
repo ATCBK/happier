@@ -14,13 +14,13 @@ import { Icon } from '@/components/ui/icons/Icon';
 
 /**
  * Standalone Raw/Rich edit-mode dropdown (Lane A). Generalizes the file-pane's
- * repurposed view-mode dropdown (`FileActionToolbar`) into a reusable control so
+ * repurposed view-mode dropdown (`FilePageHeader`) into a reusable control so
  * the prompt/skill editor screens get the same menu without copying its markup.
  *
  * The Rich option is `disabled` (with the eligibility reason as its `subtitle`)
  * whenever `richEligible` is false; the reason copy is resolved via the shared
  * `resolveMarkdownRichDisabledReasonCopy` helper (single source of truth shared
- * with `FileActionToolbar`). Reuses the existing
+ * with `FilePageHeader`). Reuses the existing
  * `settingsSourceControl.markdownEditMode.*` translations.
  */
 
