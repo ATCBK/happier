@@ -10,6 +10,12 @@ import { machinePresentationLabel, machineCheckPresentation, configurationLabel 
 
 const cloudPurpose = 'cloud-account', cuaPurpose = 'cua-account';
 const id = 'byoc';
+/** The typed host/account refusal says "connect an account"; a missing or outdated `cua` keeps its own state. */
+function byocCheckFailureCode(error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'credential_unavailable') return 'credential_unavailable';
+    if (error instanceof Error && (error.message === 'cua_native_outdated' || error.message === 'cua_native_unavailable')) return error.message;
+    return 'cua_connection_unavailable';
+}
 export function remoteRoles() {
     const defaults = { scopes: ['machine'], surfaces: ['cli', 'plugin'], hostAccess: ['cua-native-process', cloudPurpose, cuaPurpose] } as const;
     const run = async (role: CuaRemoteRole, input: unknown, context: PluginInvocationContext) =>
@@ -17,8 +23,7 @@ export function remoteRoles() {
     return {
         check: { ...defaults, title: `Check Cua ${id} access`, dangerLevel: 'safe' as const, inputSchema: schemas.checkInput, resultSchema: MachineProvisionerCheckResultV1Schema,
             async run(input: unknown, context: PluginInvocationContext) { try { return machineCheckPresentation(MachineProvisionerCheckResultV1Schema.parse(await run('check', input, context))); }
-                catch (error) { return machineCheckPresentation({ available: false,
-                    code: error instanceof Error && error.message === 'cua_native_outdated' ? 'cua_native_outdated' : 'cua_connection_unavailable' }); } } },
+                catch (error) { return machineCheckPresentation({ available: false, code: byocCheckFailureCode(error) }); } } },
         options: { ...defaults, title: `Read Cua ${id} native choices`, dangerLevel: 'safe' as const,
             inputSchema: ByocOptionsQueryV1Schema, resultSchema: MachineProvisionerOptionsResultV1Schema,
             inputHints: { fields: [

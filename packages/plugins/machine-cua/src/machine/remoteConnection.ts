@@ -48,8 +48,10 @@ export async function remoteNative(context: PluginInvocationContext) {
     const cloud = await context.services.connectedAccounts.materialize(CLOUD_PURPOSE, { kind: 'environment', keys: ['CUA_HOME'] }, { signal: context.signal });
     if (cloud.kind !== 'environment' || !cloud.env.CUA_HOME || cloud.env.CUA_HOME !== material.env.CUA_HOME
         || material.env.CUA_CREDENTIAL_STORE !== 'file') return unavailable();
+    // A missing or outdated `cua` keeps its own state; anything else about the native setup is a connection fact.
     const executable = await resolveCuaExecutable(context).catch((error: unknown) => {
-        throw error instanceof Error && error.message === 'cua_native_outdated' ? error : new Error('cua_connection_unavailable');
+        throw error instanceof Error && (error.message === 'cua_native_outdated' || error.message === 'cua_native_unavailable')
+            ? error : new Error('cua_connection_unavailable');
     });
     return createCuaNativeClient({ exec: context.services.exec, executable,
         environment: { CUA_HOME: home(cloud.env.CUA_HOME), CUA_CREDENTIAL_STORE: 'file' } });

@@ -16,7 +16,8 @@ function processResult(value: unknown): PluginProcessResult {
     return { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } }, stdout: new TextEncoder().encode(JSON.stringify(value)),
         stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
 }
-async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'registry' | 'delete-reply'; cliVersion?: string } = {}) {
+async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'registry' | 'delete-reply'; cliVersion?: string;
+    cliMissing?: boolean; noAccount?: boolean; cloudConnected?: boolean; cloudStatusUnreadable?: boolean } = {}) {
     const actions = new Map<string, ActionHandler>();
     const processRequests: PluginExecSpawnRequest[] = [];
     const purposes: string[] = [];
@@ -29,10 +30,12 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
     await CUA_PLUGIN.activate({ actions: { register(id: string, handler: ActionHandler) { actions.set(id, handler); return { dispose() {} }; } },
         connectedAccounts: { register() { return { dispose() {} }; } } } as unknown as PluginApi);
     const context = { invokedAtMs: Date.parse('2026-10-09T00:30:00Z'), signal: new AbortController().signal, services: {
-        managedServices: { dependencies: { status: async () => ({ state: 'ready', version: options.cliVersion ?? '0.5.0', executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } } }) } },
+        managedServices: { dependencies: { status: async () => options.cliMissing ? { state: 'missing' } : ({ state: 'ready', version: options.cliVersion ?? '0.5.0', executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } } }) } },
         connectedAccounts: {
             async materialize(purpose: string, request: { kind: string; keys?: readonly string[] }) {
                 purposes.push(purpose);
+                // The host refuses an unbound purpose with this typed code (machineProvisioners.test.ts).
+                if (options.noAccount) throw Object.assign(new Error('Account material is unavailable'), { code: 'credential_unavailable' });
                 return { kind: 'environment', env: request.keys?.includes('CUA_CREDENTIAL_STORE')
                     ? { CUA_HOME: '/native/selected', CUA_CREDENTIAL_STORE: 'file' } : { CUA_HOME: '/native/selected' } };
             },
@@ -41,6 +44,8 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
             processRequests.push(request);
             const args = request.args ?? [];
             if (args.includes('status')) {
+                if (options.cloudStatusUnreadable) throw new Error('Native status unavailable');
+                if (options.cloudConnected === false) return processResult({ providers: [{ ...nativeProvider, connected: false }], resources: [] });
                 const resources = created && !hideCreatedOnce ? [row] : [];
                 hideCreatedOnce = false;
                 return processResult({ providers: [nativeProvider], resources });
@@ -102,6 +107,22 @@ describe('activated Cua remote contributions', () => {
         const h = await harness({ cliVersion: '0.2.9' });
         expect(await h.invoke('byoc-check', {})).toMatchObject({ available: false, code: 'cua_native_outdated' });
         expect(h.processRequests).toEqual([]);
+    });
+    it('tells BYOC check apart: no account to connect, cua missing, cloud not connected, status unreadable, and a usable account', async () => {
+        const check = async (options: Parameters<typeof harness>[0]) => {
+            const h = await harness(options);
+            return { result: await h.invoke('byoc-check', {}), processRequests: h.processRequests };
+        };
+        // Host-typed refusal of an unbound purpose and a native cloud with no connected provider are both "connect an account".
+        expect((await check({ noAccount: true })).result).toMatchObject({ available: false, code: 'credential_unavailable' });
+        expect((await check({ cloudConnected: false })).result).toMatchObject({ available: false, code: 'credential_unavailable' });
+        // Missing `cua` is its own state (not "Connection unavailable"), and failing to read the native status is not "no account".
+        expect((await check({ cliMissing: true })).result).toMatchObject({ available: false, code: 'cua_native_unavailable' });
+        expect((await check({ cloudStatusUnreadable: true })).result).toMatchObject({ available: false, code: 'cua_connection_unavailable' });
+        const connected = await check({});
+        expect(connected.result).toMatchObject({ available: true, status: { key: 'machineCua.presentation.ready' } });
+        // The one read is the unfiltered cloud status, never a provider-specific or mutating command.
+        expect(connected.processRequests.map(request => request.args)).toEqual([['--json', '--embedded', 'cloud', 'status']]);
     });
     it('acquires and privately bootstraps exact BYOC compute with both captured purposes and deletes only that created identity', async () => {
         const h = await harness();

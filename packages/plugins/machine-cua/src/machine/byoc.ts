@@ -70,8 +70,9 @@ export function byocCleanupTarget(resource: unknown) {
 const cloudStatusSchema = z.object({ providers: z.array(NativeCloudProviderSchema), resources: z.array(NativeCloudResourceSchema) });
 /** Remote operations on C53's single native boundary. No enrollment or policy. */
 export function createCuaByoc(native: CuaNativeClient) {
-    async function status(cloud: ByocResourceV1['cloud'], signal?: AbortSignal) {
-        const result = await native.json(['--embedded', 'cloud', 'status', cloud], signal);
+    // `cua cloud status` without a cloud lists all of them (cloud_cmd.rs, `provider: Option<String>`).
+    async function status(cloud?: ByocResourceV1['cloud'], signal?: AbortSignal) {
+        const result = await native.json(['--embedded', 'cloud', 'status', ...(cloud ? [cloud] : [])], signal);
         return result.kind === 'success' ? cloudStatusSchema.safeParse(result.value) : undefined;
     }
     async function exactLedger(resource: ByocResourceV1, signal?: AbortSignal) {
@@ -115,6 +116,11 @@ export function createCuaByoc(native: CuaNativeClient) {
             ...(facts.expires_at !== null && { nativeExpiryAt: Date.parse(facts.expires_at) }) };
     }
     return {
+        /** Whether any native cloud is connected; `undefined` when the native status cannot be read. */
+        async hasConnectedCloud(signal?: AbortSignal) {
+            const current = await status(undefined, signal);
+            return current?.success ? current.data.providers.some(provider => provider.connected) : undefined;
+        },
         async options(cloud: ByocResourceV1['cloud'], observedAt: number, signal?: AbortSignal): Promise<MachineProvisionerOptionsResultV1> {
             MachineProvisionerObservationV1Schema.parse({ observedAt, availability: 'unavailable' });
             const current = await status(cloud, signal);

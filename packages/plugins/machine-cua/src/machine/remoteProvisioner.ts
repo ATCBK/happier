@@ -26,7 +26,13 @@ export async function invokeCuaRemoteRole(role: CuaRemoteRole, input: unknown, c
     const native = await remoteNative(context);
     const byoc = createCuaByoc(native);
     const signal = context.signal, now = context.invokedAtMs;
-    if (role === 'check') return { available: true };
+    if (role === 'check') {
+        // Reads the native cloud status: an account with no connected cloud is the typed "connect one" state.
+        const connected = await byoc.hasConnectedCloud(signal);
+        if (connected === undefined) throw new Error('cua_connection_unavailable');
+        if (!connected) throw Object.assign(new Error('cua_cloud_not_connected'), { code: 'credential_unavailable' });
+        return { available: true };
+    }
     if (role === 'options') return byoc.options(ByocOptionsQueryV1Schema.parse(input).cloud, now, signal);
     if (role === 'acquire') {
         const request = schemas.acquireInput.parse(input);
