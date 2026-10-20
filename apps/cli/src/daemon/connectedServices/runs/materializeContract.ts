@@ -134,6 +134,7 @@ export const CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES = {
     blocked: 'connected_service_run_materialization_blocked',
     stale: 'connected_service_run_activation_stale',
     modelUnavailable: 'connected_service_run_model_unavailable',
+    resumeUnavailable: 'provider_session_state_unavailable_for_resume',
 } as const;
 
 export const ConnectedServiceRunRejectedStartRequestSchema = z.strictObject({
@@ -160,6 +161,7 @@ export const ConnectedServiceRunRejectedStartResultSchema = z.union([
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked,
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.stale,
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable,
+            CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable,
         ]),
         modelId: z.optional(z.string()),
         errorMessage: z.optional(z.string()),
@@ -181,7 +183,9 @@ export type ConnectedServiceRunMaterializationHandlerResult =
     }>
     | Readonly<{
         ok: false;
-        errorCode: typeof CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked | typeof CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable;
+        errorCode: typeof CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked
+            | typeof CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable
+            | typeof CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable;
         modelId?: string;
         errorMessage?: string;
     }>;

@@ -1085,7 +1085,8 @@ export function createExecutionRunConnectedServicesBridge(
                             modelId: error.modelId, errorMessage: error.message };
                     }
                     if (error instanceof ConnectedServiceSpawnResumeUnreachableError) {
-                        return blocked('The retained Agent conversation is unavailable in its prepared home. Restore its native state or start a new conversation from the saved result.');
+                        return { ok: false, errorCode: CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable,
+                            errorMessage: 'The retained Agent conversation is unavailable in its prepared home. Restore its native state or start a new conversation from the saved result.' };
                     }
                     if (error instanceof ConnectedServiceMaterializationBlockedError) {
                         // Plugin-authored diagnostic prose reaches the retained

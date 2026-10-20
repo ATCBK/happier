@@ -2583,7 +2583,9 @@ export function createDaemonControlApp({
         401: authSchema401,
         403: z.object({
           ok: z.literal(false),
-          errorCode: z.enum([CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked, CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable]),
+          errorCode: z.enum([CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked,
+            CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable,
+            CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable]),
           modelId: z.optional(z.string()),
           errorMessage: z.optional(z.string()),
         }),

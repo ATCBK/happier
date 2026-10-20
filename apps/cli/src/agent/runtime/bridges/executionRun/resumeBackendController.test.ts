@@ -8,6 +8,7 @@ import { startExecutionRun } from './startExecutionRun';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { resolveExecutionRunLifecycle } from './resolveExecutionRunLifecycle';
+import { ExecutionRunConnectedServicesError } from './runtime/connectedServicesEnv';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -254,7 +255,7 @@ describe('resumeBackendControllerForResumableRun', () => {
     expect(budgetRegistry.getInFlightSnapshot().executionRuns).toBe(0);
   });
 
-  it('distinguishes a backend-declared permanent resume refusal from a transient provision failure', async () => {
+  it.each(['native', 'materialized'] as const)('distinguishes a %s permanent resume refusal from a transient provision failure', async (source) => {
     const run: ExecutionRunState = {
       runId: 'run_resume_classification',
       callId: 'call_resume_classification',
@@ -309,7 +310,7 @@ describe('resumeBackendControllerForResumableRun', () => {
       createRuntime: () => createTestExecutionRunHostRuntime({
         readResumeSupport: async () => true,
         provisionRuntime: async () => {
-          throw new Error('transport unavailable');
+          throw new ExecutionRunConnectedServicesError('transport unavailable', 'connected_service_run_materialization_blocked');
         },
       }).runtime,
     });
@@ -329,6 +330,10 @@ describe('resumeBackendControllerForResumableRun', () => {
         readResumeSupport: async () => true,
         provisionRuntime: async ({ resumeRuntimeId } = {}) => {
           expect(resumeRuntimeId).toBe('vendor_session_1');
+          if (source === 'materialized') throw new ExecutionRunConnectedServicesError(
+            'Restore the native conversation or start a new conversation from the saved result.',
+            'provider_session_state_unavailable_for_resume',
+          );
           throw Object.assign(new Error('Provider session state is missing'), {
             code: 'AGENT_RESUME_PROVIDER_STATE_MISSING',
           });
