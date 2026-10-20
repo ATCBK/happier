@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
 import { renderScreen } from '@/dev/testkit';
+import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 
 let snapshot: unknown = null;
 
@@ -21,8 +22,10 @@ vi.mock('@expo/vector-icons', async () => {
     return createExpoVectorIconsMock();
 });
 
+let touched: string[] = [];
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => createPartialStorageModuleMock(importOriginal, {
     useSessionProjectScmSnapshot: () => snapshot,
+    useWorkspaceScmTouchedPathsForSession: () => touched,
 }));
 
 /** A real snapshot shape: the count is the canonical changed-file list (`selectScmChangedFiles`). */
@@ -44,43 +47,56 @@ function changedSnapshot(count: number, extraEntries: readonly unknown[] = []) {
     };
 }
 
-describe('SessionDetailsEmptyState', () => {
-    it('offers the host file browser alongside Review', async () => {
-        snapshot = changedSnapshot(4);
-        const onBrowseFiles = vi.fn();
+/** The files search is the app's runtime boundary for Open file…; record what it was asked to open. */
+function withSearch(element: React.ReactElement, open: (...args: unknown[]) => void) {
+    return <UniversalSearchRuntimeProvider value={{ open, buildCommands: () => [] }}>{element}</UniversalSearchRuntimeProvider>;
+}
+
+describe('SessionDetailsEmptyState (empty editor column, lab EM1)', () => {
+    it('opens the files search from its one primary action', async () => {
+        snapshot = changedSnapshot(0);
+        touched = [];
+        const open = vi.fn();
         const { SessionDetailsEmptyState } = await import('./SessionDetailsEmptyState');
-        const screen = await renderScreen(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={vi.fn()} onBrowseFiles={onBrowseFiles} />);
-        await screen.pressByTestIdAsync('pane-details-empty-state-secondary-action');
-        expect(onBrowseFiles).toHaveBeenCalledOnce();
+        const screen = await renderScreen(withSearch(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={vi.fn()} />, open));
+        await screen.pressByTestIdAsync('pane-empty-editor-open-file');
+        expect(open).toHaveBeenCalledWith(undefined, undefined, { source: 'files' });
     });
 
-    it('invites reading the session changes and opens Review', async () => {
-        snapshot = changedSnapshot(4);
+    it('lists only the files this session changed and opens one as a file tab', async () => {
+        snapshot = changedSnapshot(3);
+        touched = ['src/file-1.ts'];
         const openDetailsTab = vi.fn();
         const { SessionDetailsEmptyState } = await import('./SessionDetailsEmptyState');
-        const screen = await renderScreen(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={openDetailsTab} />);
-        await screen.pressByTestIdAsync('pane-details-empty-state-action');
+        const screen = await renderScreen(withSearch(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={openDetailsTab} />, vi.fn()));
+        expect(screen.findByTestId('pane-empty-editor-changed-src/file-0.ts')).toBeNull();
+        await screen.pressByTestIdAsync('pane-empty-editor-changed-src/file-1.ts');
+        expect(openDetailsTab).toHaveBeenCalledWith(expect.objectContaining({ kind: 'file' }), { intent: 'pinned' });
+    });
+
+    it('keeps reading every change one press away and counts them like every changed-files list', async () => {
+        snapshot = changedSnapshot(2, [{
+            path: 'vendor/', previousPath: null, kind: 'untracked', includeStatus: '?', pendingStatus: '?',
+            hasIncludedDelta: false, hasPendingDelta: true, stats: STATS,
+        }]);
+        touched = [];
+        const openDetailsTab = vi.fn();
+        const { SessionDetailsEmptyState } = await import('./SessionDetailsEmptyState');
+        const screen = await renderScreen(withSearch(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={openDetailsTab} />, vi.fn()));
+        expect(screen.getTextContent()).toContain('detailsSurface.chrome.reviewChanges:{"count":2}');
+        await screen.pressByTestIdAsync('pane-empty-editor-review');
         expect(openDetailsTab).toHaveBeenCalledWith(
             expect.objectContaining({ key: 'scmReview:working', kind: 'scmReview' }),
             { intent: 'pinned' },
         );
     });
 
-    it('explains Details without an action when nothing changed', async () => {
+    it('offers no review and no list when nothing changed', async () => {
         snapshot = changedSnapshot(0);
+        touched = [];
         const { SessionDetailsEmptyState } = await import('./SessionDetailsEmptyState');
-        const screen = await renderScreen(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={vi.fn()} />);
-        expect(screen.findByTestId('pane-details-empty-state-action')).toBeNull();
-        expect(screen.getTextContent()).toContain('detailsSurface.chrome.emptyReason');
-    });
-
-    it('counts changed files the way every changed-files list does (a folder entry is not a change)', async () => {
-        snapshot = changedSnapshot(2, [{
-            path: 'vendor/', previousPath: null, kind: 'untracked', includeStatus: '?', pendingStatus: '?',
-            hasIncludedDelta: false, hasPendingDelta: true, stats: STATS,
-        }]);
-        const { SessionDetailsEmptyState } = await import('./SessionDetailsEmptyState');
-        const screen = await renderScreen(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={vi.fn()} />);
-        expect(screen.getTextContent()).toContain('detailsSurface.chrome.reviewChanges:{"count":2}');
+        const screen = await renderScreen(withSearch(<SessionDetailsEmptyState sessionId="s1" openDetailsTab={vi.fn()} />, vi.fn()));
+        expect(screen.findByTestId('pane-empty-editor-review')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('panes.emptyEditor.changedInSession');
     });
 });
