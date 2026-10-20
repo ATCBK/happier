@@ -11,6 +11,7 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { ATTACHMENTS_SETTINGS } from '@/components/settings/attachments/attachmentsSettings';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { normalizeAttachmentsUploadsWorkspaceRelativeDir } from '@happier-dev/protocol/account/settings/accountSettings';
 
 const UPLOAD_LOCATION_OPTIONS: ReadonlyArray<{
     id: 'workspace' | 'os_temp';
@@ -50,15 +51,6 @@ const VCS_IGNORE_OPTIONS: ReadonlyArray<{
         subtitleKey: 'settingsAttachments.sourceControlIgnore.options.none.subtitle',
     },
 ];
-
-function normalizeWorkspaceRelativeDir(input: string): string | null {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
-    const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
-    if (parts.some((p) => p === '.' || p === '..')) return null;
-    return parts.join('/');
-}
 
 function parsePositiveInt(input: string, opts: Readonly<{ min: number; max: number }>): number | null {
     const raw = Number(input);
@@ -137,7 +129,7 @@ export const AttachmentsSettingsView = React.memo(function AttachmentsSettingsVi
                         error={directoryError}
                         onDraftChange={() => setDirectoryError(null)}
                         onCommit={(draft) => {
-                            const normalized = normalizeWorkspaceRelativeDir(draft);
+                            const normalized = normalizeAttachmentsUploadsWorkspaceRelativeDir(draft);
                             if (!normalized) {
                                 setDirectoryError(t('settingsAttachments.workspaceDirectory.uploadsDirectory.invalidDirectoryMessage'));
                                 return;
