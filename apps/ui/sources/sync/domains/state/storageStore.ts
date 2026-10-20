@@ -21,11 +21,13 @@ import { createTranscriptLoadingDomain } from '../../store/domains/transcriptLoa
 import { createWorkflowRunsDomain } from '../../store/domains/workflowRuns';
 import type { StorageState } from '../../store/types';
 import { registerStorageStateReader, registerStorageStateSubscribe } from './storageStateReaderBridge';
+import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
+import { observeStoragePerformance } from '../../store/storagePerformance';
 
 export type { KnownEntitlements } from '../../store/types';
 export type { SessionListViewItem } from '../session/listing/sessionListViewData';
 
-export const storage = create<StorageState>()((set, get) => {
+export const storage = observeStoragePerformance(create<StorageState>()((set, get) => {
     const settingsDomain = createSettingsDomain<StorageState>({ set, get });
     const authoringMemoryDomain = createAuthoringMemoryDomain<StorageState>({ set, get });
     const profileDomain = createProfileDomain<StorageState>({ set, get });
@@ -67,7 +69,7 @@ export const storage = create<StorageState>()((set, get) => {
         ...transcriptLoadingDomain,
         ...realtimeDomain,
     };
-});
+}), syncPerformanceTelemetry);
 
 registerStorageStateReader(() => storage.getState());
 registerStorageStateSubscribe((listener) => storage.subscribe((state) => listener(state)));
