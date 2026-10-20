@@ -80,6 +80,14 @@ const GROUPS = [
     },
   },
   {
+    title: 'Files',
+    commands: {
+      'search.files': 'Open a workspace file',
+      'search.symbols': 'Find a symbol in the open file',
+      'search.textInFiles': 'Search text in workspace files',
+    },
+  },
+  {
     title: 'Everything else',
     commands: {
       'commandPalette.open': 'Open Search',
@@ -199,7 +207,13 @@ files and commits in one grouped list.
 
 ${formatBindings(commands.get('commandPalette.open'))}
 
-## Shortcuts
+${commands.has('search.files') ? `In unreleased 0.3 development source, file quick open uses this same Search
+surface, scoped to the workspace. Its registered shortcut is
+${formatBindings(commands.get('search.files'))}; the general shortcut registry must be enabled.
+The browser or operating system may claim a binding before Happier receives it.
+See [Files and the editor](/code/files-and-editor) for the file workflow.
+
+` : ''}## Shortcuts
 
 ${grouped.join('\n\n')}
 ${extras}
