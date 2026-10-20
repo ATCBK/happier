@@ -5,6 +5,7 @@ import { act } from 'react-test-renderer';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createStorageModuleStub, createStorageStoreProxy } from '@/dev/testkit/mocks/storage';
+import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
@@ -300,15 +301,6 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
         getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token' })),
     },
 }));
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => (
-        profile.serverIdentityId ?? profile.id
-    ),
-    getServerProfileById: (serverId: string) => ({
-        id: serverId,
-        serverUrl: 'https://server.example.test',
-    }),
-}));
 vi.mock('@/sync/ops/sessionFolders', () => ({
     setSessionFolderAssignment: setSessionFolderAssignmentSpy,
 }));
@@ -422,6 +414,10 @@ const { default: Screen } = await import('@/app/(app)/session/[id]/info');
 
 describe('/session/[id]/info', () => {
     beforeEach(() => {
+        for (const serverId of ['server-1', 'server-b', 'server-cache-info', 'server_preferred_info', 'server_reactive_info']) {
+            upsertServerProfile({ serverUrl: `https://${serverId}` });
+        }
+        setActiveServerId('server-1');
         storage.setState(storage.getInitialState(), true);
         actionsSettings = settingsDefaults.actionsSettingsV1;
         storage.getState().applySettingsLocal({ actionsSettingsV1: actionsSettings });
@@ -758,7 +754,7 @@ describe('/session/[id]/info', () => {
         const executorOptions = createDefaultActionExecutorSpy.mock.calls[0]?.[0] as any;
         expect(executorOptions?.openSession).toEqual(expect.any(Function));
 
-        await executorOptions.openSession('child-session');
+        await act(async () => { await executorOptions.openSession('child-session'); });
 
         expect(completeSessionForkNavigationSpy).toHaveBeenCalledWith({
             childSessionId: 'child-session',
@@ -768,7 +764,7 @@ describe('/session/[id]/info', () => {
         });
 
         const helperParams = completeSessionForkNavigationSpy.mock.calls[0]?.[0] as any;
-        helperParams.navigate('next-child');
+        await act(async () => { helperParams.navigate('next-child'); });
         expect(routerNavigateSpy).toHaveBeenCalledWith('/session/next-child?serverId=server-b', expect.any(Object));
     });
 
@@ -1365,7 +1361,7 @@ describe('/session/[id]/info', () => {
         expect(sessionOrganizationOps.setSessionPin).toHaveBeenCalledWith({
             credentials: { token: 'token' },
             serverId: 'server-b',
-            serverUrl: 'https://server.example.test',
+            serverUrl: 'https://server-b',
             sessionId: 'session-1',
             pinned: true,
         });
@@ -1380,7 +1376,7 @@ describe('/session/[id]/info', () => {
         expect(sessionOrganizationOps.setSessionTagAssignments).toHaveBeenCalledWith({
             credentials: { token: 'token' },
             serverId: 'server-b',
-            serverUrl: 'https://server.example.test',
+            serverUrl: 'https://server-b',
             sessionId: 'session-1',
             tags: ['urgent', 'review'],
         });
@@ -1560,7 +1556,7 @@ describe('/session/[id]/info', () => {
         expect(sessionOrganizationOps.setSessionFolderAssignment).toHaveBeenCalledWith(expect.objectContaining({
             credentials: { token: 'token' },
             serverId: 'server-1',
-            serverUrl: 'https://server.example.test',
+            serverUrl: 'https://server-1',
             sessionId: 'session-1',
             folderId: 'folder-1',
         }));
@@ -2123,7 +2119,7 @@ describe('/session/[id]/info', () => {
             expect(sessionArchiveSpy).not.toHaveBeenCalled();
             expect(safeRouterBackSpy).not.toHaveBeenCalled();
         } finally {
-            storage.getState().finishSessionArchive(operation);
+            await act(async () => { storage.getState().finishSessionArchive(operation); });
         }
     });
 
