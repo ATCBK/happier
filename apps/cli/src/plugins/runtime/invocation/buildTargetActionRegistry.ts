@@ -1,6 +1,6 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
-import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { deriveActivationTargetRegistrationRights } from '../lifecycle/activation/targets';
 import { PluginActionConfirmationV2Schema, PluginActionConfirmationWhenV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { PluginActionDangerLevelV2Schema } from '@happier-dev/protocol/plugins/actions/vocabulary';
 import { ActionOperationDeclarationV1Schema } from '@happier-dev/protocol/actions/operations/v1';
@@ -52,7 +52,7 @@ import type {
     JsonValue,
     PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
-import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { ActionHandler, PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import {
     readPluginActionInputParser,
     readPluginActionResultParser,
@@ -112,16 +112,29 @@ function readTargetDefinition(value: unknown): TargetActionDefinition {
  * owner has selected the target realm. The target registry validates both
  * JSON input and result around this call.
  */
-function invokeCapturedDaemonActionHandler(
+function invokeCapturedActionHandler(
     handler: Extract<ContributionRuntimeRegistration, Readonly<{ family: 'actions' }>>['value'],
     input: JsonValue,
     context: PluginInvocationContext,
+    account = false,
 ): ReturnType<ActionHandler> {
-    return Reflect.apply(handler, undefined, [input, context]);
+    const invocationContext = account ? Object.freeze({
+        plugin: context.plugin, contribution: context.contribution, surface: context.surface,
+        invokedAtMs: context.invokedAtMs, signal: context.signal,
+        ...(context.caller ? { caller: context.caller } : {}),
+        services: Object.freeze({
+            storage: Object.freeze({ account: context.services.storage.account }),
+            actions: Object.freeze({ execute: context.services.actions.execute,
+                executeAdmittedTargetedOperation: context.services.actions.executeAdmittedTargetedOperation }),
+            targetedContributions: context.services.targetedContributions,
+        }),
+    }) satisfies PluginAccountActionContext : context;
+    return Reflect.apply(handler, undefined, [input, invocationContext]);
 }
 
 export function buildTargetActionInvocationRegistry(params: Readonly<{
     contributes: ResolvedContributionRegistry;
+    executionRealm?: 'account';
     /** The same runtime-owned Resource reader used by Action options discovery. */
     readRuntimeRegistry?(): Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'readUiResource'> | null;
     readCurrentPluginOccurrenceId?(pluginId: string): PluginRuntimeOccurrenceId | null;
@@ -142,6 +155,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     resolveHostBinding: ResolveTargetActionHostBinding;
     resolveHostPolicy: ResolveTargetActionHostPolicy;
     createServices: CreatePluginInvocationServices;
+    readCurrentTargetedDeclarations?(pluginId: string, signal?: AbortSignal): Promise<readonly import('@happier-dev/plugin-sdk/host/registration').TargetedContributionManifestDeclaration[]>;
     prepareInvocationServices?(input: Readonly<{ pluginId: string; localId: string }>): Promise<void>;
     beginDiagnosticScope?: BeginPluginInvocationDiagnosticScope;
     redactDiagnosticText?: (
@@ -165,9 +179,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     resolveOptionalAccess?: ResolveRegistryConnectedAccountOptionalAccess;
 }>) {
     const expectedActions = params.contributes.activationTargets.flatMap((target) => (
-        derivePluginDaemonContributionRegistrationRights(
-            target.manifest.contributes,
-        ).flatMap((right) => right.family === 'actions'
+        deriveActivationTargetRegistrationRights(target).flatMap((right) => right.family === 'actions'
             ? [{ pluginId: target.pluginId, localId: right.localId }]
             : [])
     ));
@@ -262,10 +274,11 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                 },
                 ...(inputParser === undefined ? {} : { inputParser }),
                 ...(resultParser === undefined ? {} : { resultParser }),
-                handler: (input: JsonValue, context: PluginInvocationContext) => invokeCapturedDaemonActionHandler(
+                handler: (input: JsonValue, context: PluginInvocationContext) => invokeCapturedActionHandler(
                     capturedHandler,
                     input,
                     context,
+                    actionDefinition.execution.target === 'account',
                 ),
             }];
         });
@@ -296,6 +309,8 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
             const sourceCustody = params.readCurrentPluginSourceCustody?.(pluginId);
             if (
                 !manifest || !declaration || declaration.execution.target !== resolvedAction.definition.execution?.target
+                || (params.executionRealm === 'account' && declaration.execution.target !== 'account')
+                || (params.executionRealm !== 'account' && declaration.execution.target === 'account')
                 || resolvedAction.pluginId !== pluginId || resolvedAction.definition.id !== localId
                 || occurrenceId == null || sourceCustody == null
             ) return null;
@@ -364,7 +379,9 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
             : {}),
         resolveAuthorizationFacts: params.resolveAuthorizationFacts,
         resolveHostBinding: params.resolveHostBinding,
-        createServices: params.createServices,
+        createServices: params.readCurrentTargetedDeclarations ? (seed, ...args) => params.createServices({ ...seed,
+            readCurrentTargetedDeclarations: signal => params.readCurrentTargetedDeclarations!(seed.plugin.id, signal),
+        }, ...args) : params.createServices,
         ...(params.prepareInvocationServices ? { prepareInvocationServices: params.prepareInvocationServices } : {}),
         ...(params.beginDiagnosticScope
             ? { beginDiagnosticScope: params.beginDiagnosticScope }

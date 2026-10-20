@@ -109,6 +109,8 @@ export type PluginInvocationServicesSeed = Readonly<{
     selectedActionInputCarrier?: PluginUiSelectedActionInputCarrierV1;
     /** Re-read that mounted caller at the final provider-effect boundary. */
     isMountedCallerCurrent?: () => boolean | Promise<boolean>;
+    /** Host-only exact current targeted declarations, never an SDK capability. */
+    readCurrentTargetedDeclarations?(signal?: AbortSignal): Promise<readonly import('@happier-dev/plugin-sdk/host/registration').TargetedContributionManifestDeclaration[]>;
     session?: Readonly<{ id: string }>;
     currentSession?: HostCurrentSessionUiServices;
     signal: AbortSignal;

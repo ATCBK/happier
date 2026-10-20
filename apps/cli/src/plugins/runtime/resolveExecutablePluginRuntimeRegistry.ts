@@ -112,6 +112,8 @@ import {
 } from './bundledActivationSource';
 import { createPluginScmBackendRegistryFromRuntimeRegistry } from '../../scm/pluginBackends/runtimeRegistry';
 import { createPluginActivationSourceResolver } from './pluginActivationSource';
+import { resolveAccountPluginActivationSources, type AccountPluginActivationSourcesInput } from './accountPluginActivationSource';
+import { resolveBuiltInContributions } from '../projection/registry/resolveBuiltInContributions';
 import type {
     PluginDaemonModuleNamespace,
     PreparedPluginActivationGraph,
@@ -156,6 +158,8 @@ import { materializePluginSessionAttachment } from '@/session/attachments/materi
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createPluginSessionsInventory } from '@/session/services/pluginSessionsInventory';
 import { executePluginSessionMessageAction } from '@/session/services/executePluginSessionMessageAction';
 import { createAgentExternalSessionsExecutionSurface } from '@/agent/runtime/registry/agentExternalSessionsExecutionSurface';
@@ -191,6 +195,10 @@ import type {
 import { createStablePluginComposerContentOwner } from './invocation/services/composerContent';
 import type { InvokeContributedAction } from './invocation/services/actions';
 import type { StableTargetedContributionsOwner } from './invocation/services/targetedContributions';
+import { createManifestTargetedContributionsService, mergeTargetedContributionManifestDeclarations,
+    type TargetedContributionManifestDeclaration } from '@happier-dev/plugin-sdk/host/registration';
+import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/approvals/credentialedTargetActionCurrentIntent';
+import { readAccountMachineSourceDeclarations, invokeAccountMachineSourceAction } from './invocation/actions/accountMachineActionTransport';
 import {
     createStablePluginDaemonDatabaseHost,
     type PluginDaemonDatabaseCapability,
@@ -583,6 +591,9 @@ export type ManagedProviderAdoptedPublicOutcome = Readonly<{
 }>;
 
 export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
+    executionRealm?: 'account';
+    revalidateAccountExecution?(pluginId: string, signal?: AbortSignal): Promise<boolean>;
+    readAccountExecutionSelection?(pluginId: string): import('@happier-dev/protocol/plugins/availability').PluginAccountExecutionSelectionV1 | null;
     /** Host reads may launch an installed executable, but never acquire one implicitly. */
     resolveReadyManagedExecutable?(
         executable: ManagedExecutableRef,
@@ -1778,6 +1789,9 @@ export type PluginRuntimeMachineAdmissionTransport = CliActionMachineAdmissionTr
 
 export async function resolveExecutablePluginRuntimeRegistry(
     params?: Readonly<{
+        /** Source and lifetime of the authenticated invoking Account process. */
+        accountExecution?: Pick<AccountPluginActivationSourcesInput, 'credentials' | 'serverUrl' | 'isCurrent'>
+            & Readonly<{ machineId?: string }>;
         signal?: AbortSignal;
         readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
         happyHomeDir?: string;
@@ -1874,13 +1888,16 @@ export async function resolveExecutablePluginRuntimeRegistry(
 ): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     const generation = params?.generation ?? 0;
     const scopedActionRuntime = params?.scopedActionRuntime;
-    const readSessionCredentials = scopedActionRuntime
+    const readSessionCredentials = params?.accountExecution
+        ? async () => params.accountExecution!.credentials
+        : scopedActionRuntime
         ? async () => scopedActionRuntime.credentials
         : readStoredCredentials;
-    const accountCredentialAuthority = scopedActionRuntime
+    const accountCredentialAuthority = scopedActionRuntime || params?.accountExecution
         ? Object.freeze({
             readCredentials: readSessionCredentials,
-            actionsSettingsProvider: scopedActionRuntime.actionsSettingsProvider,
+            actionsSettingsProvider: scopedActionRuntime?.actionsSettingsProvider
+                ?? createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKey(params!.accountExecution!.credentials) }),
         })
         : undefined;
     const pluginStorePaths = resolvePluginStorePaths({
@@ -1903,10 +1920,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ),
         });
     let contributes = params?.contributes
-        ?? await resolveMergedContributionRegistry({
+        ?? (params?.accountExecution ? createResolvedContributionRegistry(resolveBuiltInContributions()) : await resolveMergedContributionRegistry({
             happyHomeDir: params?.happyHomeDir,
-        });
-    const committed = params?.generationAuthority ?? await readCurrentCommittedPluginGenerations(
+        }));
+    const committed = params?.accountExecution ? null : params?.generationAuthority ?? await readCurrentCommittedPluginGenerations(
         pluginStorePaths,
         {
             isolateInvalidInstalledGenerations: true,
@@ -1956,6 +1973,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         : null;
     const resolveBundledActivationSource = createBundledActivationSourceResolver({
         bundledPackageNames: BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES,
+        bundledDeclarations: contributes.pluginDeclarations,
         ...(params?.signal ? { signal: params.signal } : {}),
         immutableArtifactPackageNames: packagedActivationPaths
             ? [...packagedActivationPaths.entryPathsByPackageName.keys()]
@@ -1974,6 +1992,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         ...(packagedRuntimeRoot
             ? {
                 packagedRuntime: packagedRuntimeRoot.packagedRuntime,
+                packagedRuntimeRoot: packagedRuntimeRoot.root,
             }
             : {}),
     });
@@ -1981,7 +2000,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
         string,
         'external' | 'bundled_first_party'
     >();
-    const resolveCommittedActivationSource = createPluginActivationSourceResolver({
+    const accountActivationSources = params?.accountExecution
+        ? await resolveAccountPluginActivationSources({
+            ...params.accountExecution, contributes, paths: pluginStorePaths,
+            resolveBundledActivationSource,
+            ...(params.signal ? { signal: params.signal } : {}),
+        }) : null;
+    if (accountActivationSources) contributes = accountActivationSources.contributes;
+    const resolveInstalledActivationSource = createPluginActivationSourceResolver({
         committed,
         resolveBundledActivationSource,
         ...(params?.resolveDevelopmentSourceAuthority
@@ -1996,7 +2022,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
         ...(params?.happyHomeDir !== undefined ? { happyHomeDir: params.happyHomeDir } : {}),
         activatedManifestAuthorityByPluginId,
     });
-    const activationTargets = collectActivationTargets(contributes);
+    const resolveCommittedActivationSource: typeof resolveInstalledActivationSource = accountActivationSources
+        ? (target) => accountActivationSources.sourcesByPluginId.get(target.pluginId) ?? null
+        : resolveInstalledActivationSource;
+    const activationTargets = collectActivationTargets(contributes, params?.accountExecution ? 'account' : undefined);
     const candidatePluginIds = params?.pluginIds === undefined
         ? new Set([
             ...activationTargets.map((target) => target.pluginId),
@@ -2027,16 +2056,15 @@ export async function resolveExecutablePluginRuntimeRegistry(
             && !(contributes.inputTypes ?? []).some((type) => type.pluginId === pluginId)
             && !(contributes.dragSources ?? []).some((source) => source.pluginId === pluginId)
             && !(contributes.dropTargets ?? []).some((dropTarget) => dropTarget.pluginId === pluginId)) continue;
-        const activationSource = target
-            ? resolveCommittedActivationSource(target, { recordActivatedManifestAuthority: false })
-            : null;
+        const activationSource = accountActivationSources?.sourcesByPluginId.get(pluginId)
+            ?? (target ? resolveCommittedActivationSource(target, { recordActivatedManifestAuthority: false }) : null);
         let candidateSourceCustody = activationSource?.sourceAuthority
             ? resolvePluginSourceCustody(activationSource.sourceAuthority)
             : null;
         // Client-only declarations have no daemon module to resolve or load,
         // but use the same admitted package/development custody as executable
         // peers. A bundled id alone never establishes source authority.
-        if (!target && declaration?.sourceSpec.kind === 'bundled') {
+        if (!candidateSourceCustody && !target && declaration?.sourceSpec.kind === 'bundled') {
             const metadata = BUNDLED_FIRST_PARTY_PLUGIN_METADATA.find((candidate) => (
                 candidate.pluginId === pluginId
                 && candidate.packageName === declaration.sourceSpec.locator
@@ -2214,6 +2242,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         immutableGenerationIdsByPluginId,
         occurrenceIdsByPluginId: candidateOccurrenceIdsByPluginId,
         admittedPluginSourceCustodiesByPluginId,
+        ...(params?.accountExecution ? { isActivationCurrent: params.accountExecution.isCurrent, executionRealm: 'account' as const } : {}),
         activationAdmissionFailuresByPluginId: new Map(
             [...(committed?.rejectedGenerations.entries() ?? [])].map(([pluginId, rejected]) => [
                 pluginId,
@@ -2329,7 +2358,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
         const targets = authoritativeContributes.activationTargets.filter((target) => (
             target.pluginId === pluginId
         ));
-        return targets.length === 1 ? targets[0]! : null;
+        return targets.length === 1 || (targets.length > 0 && targets.every(target => target.account && target.manifest === targets[0]!.manifest))
+            ? targets[0]! : null;
     };
     const canonicalResourceActivationTargets =
         committedContributes?.activationTargets
@@ -2423,7 +2453,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             : (authoritativeContributes.accountCollections ?? Object.freeze([]))
                 .map((entry) => entry.definition),
         ...(params?.accountStorageDependencies ?? {}),
-        ...(accountCredentialAuthority
+        ...(accountCredentialAuthority && !params?.accountExecution
             ? {
                 readCredentials: accountCredentialAuthority.readCredentials,
                 isCurrentAccount: () => false,
@@ -2431,6 +2461,12 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 subscribeChanges: () => () => {},
             }
             : {}),
+        ...(params?.accountExecution ? {
+            readCredentials: readSessionCredentials,
+            isCurrentAccount: () => params.accountExecution!.isCurrent(),
+            resolveAccountScopeKey: () => resolveAccountSettingsScopeKey(params.accountExecution!.credentials),
+            resolveBaseUrl: () => params.accountExecution!.serverUrl,
+        } : {}),
         // Collection admission and plugin-facing feature decisions consume the SAME
         // daemon snapshot resolver; the host does not keep a second one.
         ...(resolveServerFeaturesSnapshot ? { resolveServerFeaturesSnapshot } : {}),
@@ -2555,8 +2591,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
         }
     }
     const resolveRuntimeConsumerLifecycle = consumerAssembly.resolveLifecycle;
-    const isPluginConsumerCurrent = consumerAssembly.isPluginCurrent;
-    const readCurrentPluginOccurrenceId = consumerAssembly.readPluginOccurrenceId;
+    const isPluginConsumerCurrent = (pluginId: string): boolean => consumerAssembly.isPluginCurrent(pluginId)
+        && (accountActivationSources?.isCurrent(pluginId) ?? true);
+    const readCurrentPluginOccurrenceId = (pluginId: string): PluginRuntimeOccurrenceId | null => isPluginConsumerCurrent(pluginId)
+        ? consumerAssembly.readPluginOccurrenceId(pluginId) : null;
     const isCurrentPluginOccurrence = (pluginId: string, occurrenceId: string): boolean => (
         readCurrentPluginOccurrenceId(pluginId) === occurrenceId
     );
@@ -2585,7 +2623,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
             pluginId: input.callerPluginId, family: 'resources', localId: input.resourceId,
         }]);
     }
-    const readCurrentPluginSourceCustody = consumerAssembly.readPluginSourceCustody;
+    const readCurrentPluginSourceCustody = (pluginId: string): PluginSourceCustody | null => isPluginConsumerCurrent(pluginId)
+        ? consumerAssembly.readPluginSourceCustody(pluginId) : null;
     const captureCurrentPluginOccurrence = (
         pluginId: string,
     ): Readonly<{
@@ -4229,6 +4268,21 @@ export async function resolveExecutablePluginRuntimeRegistry(
         automationAssembly.resolveAdoptedDefinitionSet;
     const resolveAutomationEventHistoryGapSource =
         automationAssembly.resolveHistoryGapSource;
+    const readCurrentAccountTargetedDeclarations = async (targetPluginId: string, signal?: AbortSignal): Promise<readonly TargetedContributionManifestDeclaration[]> => {
+        const accountDeclarations = (authoritativeContributes.pluginDeclarations ?? []).flatMap(declaration => {
+            const occurrenceId = readCurrentPluginOccurrenceId(declaration.pluginId);
+            const sourceCustody = readCurrentPluginSourceCustody(declaration.pluginId);
+            return occurrenceId && sourceCustody ? [{ manifest: declaration.manifest, occurrenceId, sourceCustody }] : [];
+        });
+        let machineDeclarations: readonly TargetedContributionManifestDeclaration[] = [];
+        if (params?.accountExecution?.machineId) {
+            try {
+                machineDeclarations = await readAccountMachineSourceDeclarations({ ...params.accountExecution,
+                    machineId: params.accountExecution.machineId, targetPluginId, ...(signal ? { signal } : {}) });
+            } catch { signal?.throwIfAborted(); }
+        }
+        return mergeTargetedContributionManifestDeclarations({ targetPluginId, accountDeclarations, machineDeclarations });
+    };
     const invokeContributedAction = (async (request) => {
         const runtimeRegistry = resolvedRuntimeRegistryOwner;
         if (!runtimeRegistry) {
@@ -4239,8 +4293,42 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 actionHandlerInvocation: 'notStarted' as const,
             });
         }
+        if (params?.accountExecution) {
+            const definition = runtimeRegistry.contributes.actionsById.get(buildQualifiedPluginContributionKey(request.action))?.definition;
+            const localAccountAction = typeof definition?.execution === 'object' && definition.execution !== null
+                && 'target' in definition.execution && definition.execution.target === 'account';
+            if (!localAccountAction) {
+                const machineId = params.accountExecution.machineId;
+                if (!machineId) return { status: 'unavailable' as const, code: 'plugin_action_machine_required',
+                    message: 'This source requires a selected Machine', actionHandlerInvocation: 'notStarted' as const };
+                const callerManifest = authoritativeContributes.pluginDeclarations?.find(declaration => declaration.pluginId === request.caller.pluginId)?.manifest;
+                const callerSourceCustody = readCurrentPluginSourceCustody(request.caller.pluginId);
+                if (!callerManifest || !callerSourceCustody || !request.caller.sourceCustody || !request.caller.occurrenceId
+                    || readCurrentPluginOccurrenceId(request.caller.pluginId) !== request.caller.occurrenceId
+                    || !pluginSourceCustodyEqual(callerSourceCustody, request.caller.sourceCustody)) return {
+                    status: 'unavailable' as const, code: 'plugin_action_generation_retired', message: 'The Account caller is retired',
+                    actionHandlerInvocation: 'notStarted' as const };
+                let sources: readonly TargetedContributionManifestDeclaration[];
+                try { sources = await readAccountMachineSourceDeclarations({ ...params.accountExecution, machineId,
+                    targetPluginId: request.caller.pluginId, signal: request.signal }); }
+                catch { return { status: 'unavailable' as const, code: 'plugin_action_execution_origin_unavailable',
+                    message: 'Current Machine source declarations are unavailable', actionHandlerInvocation: 'notStarted' as const }; }
+                const source = sources.find(row => row.manifest.id === request.action.pluginId
+                    && row.manifest.contributes.actions.some(action => action.id === request.action.localId && action.execution.target === 'daemon'));
+                if (!source) return { status: 'unavailable' as const, code: 'plugin_action_handler_missing',
+                    message: 'The selected Machine has no current source Action', actionHandlerInvocation: 'notStarted' as const };
+                if (!await accountActivationSources!.revalidate(request.caller.pluginId, request.signal)) return {
+                    status: 'unavailable' as const, code: 'plugin_action_generation_retired', message: 'The Account caller is retired',
+                    actionHandlerInvocation: 'notStarted' as const };
+                return await invokeAccountMachineSourceAction({ ...params.accountExecution, machineId, request,
+                    callerManifest, callerSourceCustody, source });
+            }
+        }
         const attempt = await executeContributedAction({
             runtimeRegistry,
+            ...(params?.accountExecution && sessionCredentials ? {
+                requestCurrentIntent: createCredentialedTargetActionCurrentIntent(sessionCredentials),
+            } : {}),
             ...(request.approvalContext ? { approvalContext: request.approvalContext } : {}),
             actionId: buildQualifiedPluginContributionKey(
                 createPluginContributionIdentity({
@@ -4387,6 +4475,13 @@ export async function resolveExecutablePluginRuntimeRegistry(
             projects: new Map<string, string>(),
         });
     };
+    const accountTargetedContributions: StableTargetedContributionsOwner | undefined = params?.accountExecution
+        ? { bind(binding) { return createManifestTargetedContributionsService({
+            readCurrentDeclarations: () => readCurrentAccountTargetedDeclarations(binding.pluginId, binding.signal),
+            // A finite CLI invocation does not replace its admitted source set;
+            // release/Account retirement is enforced by the captured binding.
+            subscribeToCatalogChanges: () => () => {},
+        }).bind(binding); } } : undefined;
     invocationServiceOwners = createProductionPluginInvocationServiceOwners({
         ...(params?.stableEventsBroker
             ? { eventsBroker: params.stableEventsBroker }
@@ -4399,8 +4494,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
         resolveCurrentPluginMaterializationRef,
         ...(params?.resolveCurrentMachineExecutionOriginContext ? { resolveCurrentPluginExecutionOrigin } : {}),
         invokeContributedAction,
-        ...(params?.targetedContributions
-            ? { targetedContributions: params.targetedContributions }
+        ...((params?.targetedContributions ?? accountTargetedContributions)
+            ? { targetedContributions: params?.targetedContributions ?? accountTargetedContributions }
             : {}),
         ...(composerContent ? { composerContent } : {}),
         resolveFilesystemRoots: resolveDaemonPluginFileSystemRoots,
@@ -4916,7 +5011,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     ): PluginFinalPolicyCurrentRuntime | null => {
         const activationTarget = resolveExactActivationTarget(pluginId);
         const declaration = authoritativeContributes.pluginDeclarations?.find((candidate) => candidate.pluginId === pluginId);
-        const clientOnlyDeclaration = declaration
+        const clientOnlyDeclaration = !activationTarget && declaration
             && !declaration.daemonEntryPath && !declaration.devDaemonEntryPath;
         // Final-policy readers retain the exact admitted runtime identity after
         // terminal fencing so they can distinguish `applied: false` from an
@@ -5215,6 +5310,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
         }
     };
     targetActionInvocations = buildTargetActionInvocationRegistry({
+        ...(params?.accountExecution ? { readCurrentTargetedDeclarations: readCurrentAccountTargetedDeclarations } : {}),
+        ...(accountActivationSources ? { executionRealm: 'account' as const } : {}),
         contributes: authoritativeContributes,
         readRuntimeRegistry: () => resolvedRuntimeRegistryOwner,
         resolveCurrentPluginMaterializationRef,
@@ -7139,6 +7236,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
     };
 
     const resolvedRuntimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
+        ...(accountActivationSources ? { executionRealm: 'account' as const,
+            revalidateAccountExecution: accountActivationSources.revalidate,
+            readAccountExecutionSelection: accountActivationSources.readSelection } : {}),
         resolveReadyManagedExecutable: (executable, pluginId) =>
             executableResolver(executable, pluginId, undefined, { requireReady: true }),
         get projectManagedServices() {

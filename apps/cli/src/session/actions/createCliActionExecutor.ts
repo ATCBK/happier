@@ -42,6 +42,7 @@ import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/m
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
+import { executeAccountPluginAction } from './executeAccountPluginAction';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>[0]
   & CliTranscriptActionExecutorOptions
@@ -255,7 +256,10 @@ export function createCliActionExecutor(
   );
   const base = harness.executor;
   const pluginExecutor = params.pluginActionExecutionOwner === 'current_process'
-    ? null : createDaemonPluginActionExecutor({ base });
+    ? null : createDaemonPluginActionExecutor({ base,
+      executeInCurrentProcess: (actionId, input, context) => executeAccountPluginAction({ host: params, deps: harness.deps,
+        actionId, input, ...(context ? { context } : {}) }),
+    });
   const daemonAware = pluginExecutor ?? base;
   const resolveContext = async (context: RpcActionExecutorContext | undefined) => {
     const currentWorkspaceWrites = harness.deps.getCurrentWorkspaceWrites?.();

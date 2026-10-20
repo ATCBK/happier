@@ -38,6 +38,7 @@ import type { PluginUiArtifactDigestV1, PluginUiArtifactsManifestEntryV2, Plugin
 import { DaemonPluginSettingsWatchRequestSchema, DaemonPluginSettingsWatchResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonPluginSettingsWatchResponse } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { DaemonPluginTargetedSourceDeclarationV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import {
     createResolvedContributionRegistry,
@@ -113,6 +114,12 @@ import {
 } from './daemonPluginCollectionCandidatePreparation';
 
 export type DaemonContributionRegistryProjectionRegistrationOptions = Readonly<{
+    /** Account caller provenance is read from the captured authenticated Home, never a Machine occurrence. */
+    resolveAccountPluginExecutionSelection?: (
+        pluginId: string,
+        registry: ResolvedExecutablePluginRuntimeRegistry,
+        signal?: AbortSignal,
+    ) => Promise<import('@happier-dev/protocol/plugins/availability').PluginAccountExecutionSelectionV1>;
     /** The connected machine binds approval requests to its current Account custody. */
     requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
     resolveCaptureRegistry?: () => MachineLiveStreamCaptureRegistry | null;
@@ -1657,6 +1664,36 @@ async function readTargetedContributions(
     const lease = await acquireProjectionRuntimeRegistryLease(opts);
     try {
         const runtimeRegistry = lease.registry;
+        if (request.readMode === 'sourceDeclarations') {
+            const declarations = runtimeRegistry.contributes.pluginDeclarations;
+            if (!declarations || !runtimeRegistry.readPluginOccurrenceId || !runtimeRegistry.readPluginSourceCustody) {
+                return { status: 'unavailable', code: 'plugin_targeted_contributions_unavailable' };
+            }
+            const sourceDeclarations = [];
+            for (const declaration of declarations) {
+                const contributions = declaration.manifest.contributes.targetedPluginContributions
+                    .filter((entry) => entry.target.pluginId === request.pluginId);
+                if (contributions.length === 0) continue;
+                const occurrenceId = runtimeRegistry.readPluginOccurrenceId(declaration.pluginId);
+                if (!occurrenceId) continue;
+                const sourceCustody = runtimeRegistry.readPluginSourceCustody(declaration.pluginId);
+                if (!sourceCustody) return { status: 'unavailable', code: 'plugin_targeted_contributions_unavailable' };
+                const actionIds = new Set(contributions.flatMap((entry) => Object.values(entry.operations)));
+                const rendererIds = new Set(contributions.flatMap((entry) => Object.values(entry.surfaces ?? {})
+                    .flatMap((surface) => [surface.renderer, ...(surface.fallbackRenderers ?? [])])));
+                sourceDeclarations.push(DaemonPluginTargetedSourceDeclarationV1Schema.parse({
+                    manifest: { id: declaration.pluginId, contributes: {
+                        actions: declaration.manifest.contributes.actions.filter((entry) => actionIds.has(entry.id)),
+                        pluginContributionPoints: [],
+                        targetedPluginContributions: contributions,
+                        ui: { renderers: declaration.manifest.contributes.ui.renderers.filter((entry) => rendererIds.has(entry.id)) },
+                    } },
+                    occurrenceId,
+                    sourceCustody,
+                }));
+            }
+            return { status: 'sourceDeclarations', pluginId: request.pluginId, sourceDeclarations };
+        }
         const occurrenceId = runtimeRegistry.readPluginOccurrenceId?.(request.pluginId)
             ?? runtimeRegistry.contributes.occurrenceIdsByPluginId?.[request.pluginId]
             ?? null;
@@ -2669,6 +2706,9 @@ export function registerDaemonContributionRegistryProjectionHandler(
                     ...(request.data.invocation ? { invocation: request.data.invocation } : {}),
                 },
                 registry: lease.registry,
+                ...(opts?.resolveAccountPluginExecutionSelection ? {
+                    resolveAccountExecutionSelection: (pluginId: string) => opts.resolveAccountPluginExecutionSelection!(pluginId, lease.registry, context?.signal),
+                } : {}),
                 resolveCurrentPluginMaterializationRef:
                     lease.resolveCurrentPluginMaterializationRef,
                 resolveExecutionOriginContext: opts?.resolvePluginProjectionExecutionOriginContext

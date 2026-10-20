@@ -1,16 +1,17 @@
 import type { DaemonPluginStructuredMessageActionInvocationV1 } from '@happier-dev/protocol';
 import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { computePluginAccountBundledDeclarationDigestV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { pluginSourceCustodyEqual } from '@/plugins/runtime/sourceAuthority';
+import { normalizePluginSourceCustody, pluginSourceCustodyEqual } from '@/plugins/runtime/sourceAuthority';
 import { listComposerSurfaceDeclarations } from '@/plugins/projection/registry/composer';
 import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
 
 /**
  * Convert a mounted UI or client Action binding into invocation provenance only
- * after the daemon matches it against its admitted runtime lease. The wire
- * record is a claim from the client, not caller authority.
+ * after matching its admitted Machine runtime lease or current Account Action
+ * declaration. The wire record is a claim from the client, not caller authority.
  */
 export async function deriveMountedPluginInvocationCaller(input: Readonly<{
     request: Readonly<{
@@ -18,7 +19,12 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         invocationSurface: 'cli' | 'ui' | 'voice' | 'agent' | 'mcp';
         invocation?: DaemonPluginStructuredMessageActionInvocationV1;
     }>;
-    registry: ResolvedExecutablePluginRuntimeRegistry;
+    registry: Readonly<{
+        contributes: Partial<ResolvedExecutablePluginRuntimeRegistry['contributes']>;
+    }> & Pick<ResolvedExecutablePluginRuntimeRegistry,
+        'readPluginOccurrenceId' | 'readPluginSourceCustody' | 'isPluginOccurrenceCurrent'>;
+    /** Current authenticated Account selection, independent of Machine materialization. */
+    resolveAccountExecutionSelection?: (pluginId: string) => Promise<PluginAccountExecutionSelectionV1>;
     resolveCurrentPluginMaterializationRef?: NonNullable<
         ResolvedExecutablePluginRuntimeRegistry['resolveCurrentPluginMaterializationRef']
     >;
@@ -29,7 +35,7 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
     | Readonly<{
         status: 'available';
         caller: Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
-        /** Re-read live machine identity immediately before target effect. */
+        /** Re-read the admitted source authority immediately before target effect. */
         isMountedCallerCurrent: () => Promise<boolean>;
     }>
 > {
@@ -41,6 +47,57 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
             : undefined;
     if (!binding) return Object.freeze({ status: 'absent' as const });
     const contributes = input.registry.contributes;
+
+    const accountSourceCustody = binding.sourceCustody;
+    if (accountSourceCustody?.kind === 'account_release' || binding.declarationDigest !== undefined) {
+        const resolveSelection = input.resolveAccountExecutionSelection;
+        if (!resolveSelection || !accountSourceCustody || binding.materializationRef !== undefined || invocation?.kind !== 'clientPluginAction') {
+            return Object.freeze({ status: 'unavailable' as const });
+        }
+        const matchesAccountDeclaration = (selection: PluginAccountExecutionSelectionV1): boolean => {
+            if (selection.kind !== 'available' || selection.manifest.id !== binding.pluginId
+                || (binding.pluginVersion !== undefined && binding.pluginVersion !== selection.manifest.version)
+                || (binding.declarationDigest !== undefined
+                    && binding.declarationDigest !== computePluginAccountBundledDeclarationDigestV1(selection.manifest))) return false;
+            const declaration = selection.manifest.contributes.actions?.find(action => action.id === binding.contributionLocalId);
+            if (declaration?.execution.target !== 'account') return false;
+            if (accountSourceCustody.kind === 'account_release') {
+                return pluginSourceCustodyEqual(accountSourceCustody, selection.sourceCustody);
+            }
+            if (accountSourceCustody.kind !== 'bundled_first_party' || selection.sourceCustody.kind !== 'bundled_first_party'
+                || binding.pluginVersion !== selection.manifest.version || binding.declarationDigest === undefined) return false;
+            const claimedRuntime = accountSourceCustody.packagedRuntime;
+            const selectedRuntime = selection.sourceCustody.packagedRuntime;
+            return claimedRuntime.kind !== 'source_declaration'
+                || (claimedRuntime.declarationDigest === binding.declarationDigest
+                    && (selectedRuntime.kind !== 'source_declaration' || claimedRuntime.packageName === selectedRuntime.packageName));
+        };
+        try {
+            const selection = await resolveSelection(binding.pluginId);
+            if (selection.kind !== 'available' || !matchesAccountDeclaration(selection)) {
+                return Object.freeze({ status: 'unavailable' as const });
+            }
+            return Object.freeze({
+                status: 'available' as const,
+                caller: Object.freeze({
+                    kind: 'plugin' as const, pluginId: binding.pluginId,
+                    contribution: Object.freeze({ id: binding.contributionLocalId, qualifiedId: buildQualifiedPluginContributionKey({
+                        pluginId: binding.pluginId, localId: binding.contributionLocalId,
+                    }) }),
+                    // The invoking process owns this occurrence; it is never a Machine lease.
+                    occurrenceId: binding.occurrenceId, sourceCustody: normalizePluginSourceCustody(accountSourceCustody),
+                    originSurface: input.request.invocationSurface,
+                }),
+                isMountedCallerCurrent: async (): Promise<boolean> => {
+                    try {
+                        const current = await resolveSelection(binding.pluginId);
+                        return current.kind === 'available' && current.custodyId === selection.custodyId
+                            && matchesAccountDeclaration(current);
+                    } catch { return false; }
+                },
+            });
+        } catch { return Object.freeze({ status: 'unavailable' as const }); }
+    }
 
     let machineContext: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
     try {

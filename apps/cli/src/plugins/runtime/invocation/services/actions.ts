@@ -11,7 +11,6 @@ import type {
     AdmittedTargetedOperationExecutionOptions,
     AdmittedTargetedOperationExecutionWithOriginOptions,
     AdmittedTargetedOperationExecutionHandle,
-    AdmittedTargetedOperationIdentity,
     ActionsService,
     ContributedActionExecutionWithOriginOptions,
     ContributedActionExecutionWithOriginResult,
@@ -29,13 +28,8 @@ import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult, ActionExecutorContext, ActionPluginCaller, ActionCaller, ActionId } from '@happier-dev/protocol/actions';
 import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual, PluginMachineExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
-import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
-import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { QualifiedConnectedAccountRef, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1 } from '@happier-dev/protocol';
-import { pluginUiSelectedActionInputMatchesOperation, pluginUiTargetedContributionOperationKey, reconstructPluginUiSelectedActionInput, PluginUiSelectedActionInputCarrierV1Schema } from '@happier-dev/protocol/plugins/ui/selectedActionInput';
+import type { QualifiedConnectedAccountRef, PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 import type { PluginUiSelectedActionInputCarrierV1, PluginUiTargetedContributionOperationV1 } from '@happier-dev/protocol/plugins/ui';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionSurfaceBindingContext } from '@happier-dev/protocol/actions/actionSpecs';
@@ -74,6 +68,8 @@ export type PluginActionsServiceSeed = Readonly<{
     selectedActionInputCarrier?: PluginUiSelectedActionInputCarrierV1;
     /** Re-read the originating mounted UI caller immediately before provider effect. */
     isMountedCallerCurrent?: () => boolean | Promise<boolean>;
+    /** Host-only current declaration reader for an opaque targeted operation. */
+    readCurrentTargetedDeclarations?(signal?: AbortSignal): Promise<readonly import('@happier-dev/plugin-sdk/host/registration').TargetedContributionManifestDeclaration[]>;
     session?: Readonly<{ id: string }>;
     /** Host-private active-turn authority for Agent-placed Action execution. */
     readActiveTurnAdmissionWitness?(): import('./types').AgentInvocationTurnAdmissionWitness | null;
@@ -141,161 +137,8 @@ export type InvokeContributedAction = (params: Readonly<{
     signal: AbortSignal;
 }>) => Promise<ContributedActionInvocationResult>;
 
-/**
- * The original host-created handle is the only executable capability. Its
- * public identity can be copied for display or comparison, but no copied value
- * is present in this host-private binding map.
- */
-type AdmittedTargetedOperationSelectedActionInput = Readonly<
-    | { kind: 'none' }
-    | { kind: 'connectedAccount'; fieldPath: string }
-    | { kind: 'unavailable' }
->;
-
-type AdmittedTargetedOperationExecutionBinding = Readonly<{
-    action: PluginContributionRef;
-    contributorOccurrenceId: string;
-    /** Full exact operation identity; the public handle exposes only a copy. */
-    operation: PluginUiTargetedContributionOperationV1;
-    /** The target that admitted this operation, absent from the public operation shape. */
-    targetPluginId: string;
-    /** Exact process-local target occurrence that admitted this operation. */
-    targetOccurrenceId: string;
-    /** Exact Action-definition selection fact, never carrier supplied. */
-    selectedActionInput: AdmittedTargetedOperationSelectedActionInput;
-    /** Exact target parser pair, retained only through this original handle. */
-    targetProtocol: RehydratedPluginContributionPointOperationV1;
-}>;
-
-const admittedTargetedOperationExecutionBindings = new WeakMap<object, AdmittedTargetedOperationExecutionBinding>();
-
-function freezeSelectedActionInput(
-    selectedActionInput: AdmittedTargetedOperationSelectedActionInput | undefined,
-): AdmittedTargetedOperationSelectedActionInput {
-    if (!selectedActionInput || selectedActionInput.kind === 'none') {
-        return Object.freeze({ kind: 'none' as const });
-    }
-    if (selectedActionInput.kind === 'unavailable') {
-        return Object.freeze({ kind: 'unavailable' as const });
-    }
-    return Object.freeze({
-        kind: 'connectedAccount' as const,
-        fieldPath: selectedActionInput.fieldPath,
-    });
-}
-
-export function createAdmittedTargetedOperationExecutionHandle<
-    TInput extends JsonValue = JsonValue,
-    TResult extends JsonValue | void = JsonValue | void,
-    TRole extends string = string,
->(params: Readonly<{
-    action: PluginContributionRef;
-    identity: AdmittedTargetedOperationIdentity<TRole>;
-    /** Exact target occurrence from the admitted snapshot, never public handle data. */
-    targetOccurrenceId: string;
-    /** Host-private fact derived from the exact admitted Action definition. */
-    selectedActionInput?: AdmittedTargetedOperationSelectedActionInput;
-    /** Exact target parser pair selected by cold targeted-contribution admission. */
-    targetProtocol: RehydratedPluginContributionPointOperationV1;
-}>): AdmittedTargetedOperationExecutionHandle<TInput, TResult, TRole> {
-    const identity = Object.freeze({
-        target: Object.freeze({ pluginId: params.identity.target.pluginId }),
-        point: Object.freeze({
-            pointId: params.identity.point.pointId,
-            protocol: Object.freeze({
-                id: params.identity.point.protocol.id,
-                version: params.identity.point.protocol.version,
-            }),
-        }),
-        contributor: Object.freeze({
-            pluginId: params.identity.contributor.pluginId,
-            contributionId: params.identity.contributor.contributionId,
-            occurrenceId: params.identity.contributor.occurrenceId,
-            sourceCustody: params.identity.contributor.sourceCustody,
-        }),
-        role: params.identity.role,
-    });
-    const operation = Object.freeze({
-        point: Object.freeze({
-            pointId: identity.point.pointId,
-            protocol: Object.freeze({
-                id: identity.point.protocol.id,
-                version: identity.point.protocol.version,
-            }),
-        }),
-        contributor: Object.freeze({
-            pluginId: identity.contributor.pluginId,
-            contributionId: identity.contributor.contributionId,
-            occurrenceId: identity.contributor.occurrenceId,
-            sourceCustody: identity.contributor.sourceCustody,
-        }),
-        role: identity.role,
-        action: Object.freeze({
-            pluginId: params.action.pluginId,
-            localId: params.action.localId,
-        }),
-    }) satisfies PluginUiTargetedContributionOperationV1;
-    const handle = Object.freeze({
-        identity,
-        typeProjection: undefined,
-    }) as AdmittedTargetedOperationExecutionHandle<
-        TInput,
-        TResult,
-        TRole
-    >;
-    admittedTargetedOperationExecutionBindings.set(
-        handle,
-        Object.freeze({
-            action: Object.freeze({
-                pluginId: params.action.pluginId,
-                localId: params.action.localId,
-            }),
-            contributorOccurrenceId: identity.contributor.occurrenceId,
-            operation,
-            targetPluginId: identity.target.pluginId,
-            targetOccurrenceId: params.targetOccurrenceId,
-            selectedActionInput: freezeSelectedActionInput(params.selectedActionInput),
-            targetProtocol: params.targetProtocol,
-        }),
-    );
-    return handle;
-}
-
-function readAdmittedTargetedOperationExecutionBinding(
-    operation: unknown,
-): AdmittedTargetedOperationExecutionBinding | null {
-    if (operation === null || typeof operation !== 'object') return null;
-    return admittedTargetedOperationExecutionBindings.get(operation) ?? null;
-}
-
-/**
- * An opaque operation belongs to the exact target occurrenceId that admitted it.
- * The public identity deliberately omits that private fact, so a replacement
- * target cannot recover an old capability from the original object.
- */
-function requireAdmittedTargetedOperationExecutionBinding(
-    operation: unknown,
-    seed: PluginActionsServiceSeed,
-): AdmittedTargetedOperationExecutionBinding {
-    const binding = readAdmittedTargetedOperationExecutionBinding(operation);
-    if (binding === null || binding.targetPluginId !== seed.plugin.id) {
-        throw invalidAdmittedTargetedOperationHandle();
-    }
-    if (!seed.occurrenceId || binding.targetOccurrenceId !== seed.occurrenceId) {
-        throw createPluginActionHandlerNotStartedError({
-            code: 'plugin_action_generation_retired',
-            message: 'Admitted targeted operation target occurrenceId is no longer current',
-        });
-    }
-    return binding;
-}
-
-function invalidAdmittedTargetedOperationHandle(): PluginError {
-    return createPluginActionHandlerNotStartedError({
-        code: 'plugin_admitted_targeted_operation_handle_invalid',
-        message: 'Admitted targeted operation handle is invalid',
-    });
-}
+export { createAdmittedTargetedOperationExecutionHandle } from '@happier-dev/plugin-sdk/host/registration';
+import { requireAdmittedTargetedOperationExecutionBinding, resolveAdmittedTargetedOperationInput, type AdmittedTargetedOperationExecutionBinding } from '@happier-dev/plugin-sdk/host/registration';
 
 function composeActionSignal(retirementSignal: AbortSignal, callerSignal?: AbortSignal): AbortSignal {
     if (!callerSignal || callerSignal === retirementSignal) return retirementSignal;
@@ -353,143 +196,6 @@ function throwIfInactive(
         };
         throw beforeActionHandler ? createPluginActionHandlerNotStartedError(error) : new PluginError(error);
     }
-}
-
-function selectedActionInputInvalid(): PluginError {
-    return createPluginActionHandlerNotStartedError({
-        code: 'plugin_selected_action_input_invalid',
-        message: 'Selected Action input does not match the admitted operation',
-    });
-}
-
-function selectedActionInputUnavailable(): PluginError {
-    return createPluginActionHandlerNotStartedError({
-        code: 'plugin_selected_action_input_unavailable',
-        message: 'Selected Action input is unavailable for the admitted operation',
-    });
-}
-
-function mountedCallerUnavailable(): PluginError {
-    return createPluginActionHandlerNotStartedError({
-        code: 'plugin_mounted_caller_unavailable',
-        message: 'Mounted plugin caller is no longer current',
-    });
-}
-
-/**
- * The admitted-operation handle is the sole daemon consumer of a selected UI
- * settlement. It compares every carried identity to host-private admission,
- * then reconstructs at the last point before the provider Action receives
- * input. The carrier itself is deliberately neither a capability nor storage.
- */
-async function resolveAdmittedTargetedOperationInput(params: Readonly<{
-    seed: PluginActionsServiceSeed;
-    binding: AdmittedTargetedOperationExecutionBinding;
-    input: JsonValue;
-    expectedSelectedConnectedAccountRef: QualifiedConnectedAccountRef | null | undefined;
-    /** One outer UI invocation may reconstruct its selected settlement once. */
-    selectedActionInputClaimed: { current: boolean };
-    signal: AbortSignal;
-}>): Promise<JsonValue> {
-    if (params.seed.selectedActionInputCarrier === undefined) {
-        // Retained setup input has no transient form carrier. Restore only the
-        // exact Account supplied by the target through the admitted field path.
-        const expectedRef = params.expectedSelectedConnectedAccountRef;
-        if (expectedRef === undefined) return params.input;
-        const selected = params.binding.selectedActionInput;
-        if (selected.kind === 'unavailable') throw selectedActionInputUnavailable();
-        if (selected.kind === 'none') {
-            if (expectedRef !== null) throw selectedActionInputInvalid();
-            return params.input;
-        }
-        if (expectedRef === null) throw selectedActionInputInvalid();
-        const reconstructed = reconstructPluginUiSelectedActionInput({
-            input: params.input,
-            connectedAccount: { kind: 'selected', fieldPath: selected.fieldPath, ref: expectedRef },
-        }, { allowMatchingConnectedAccount: true });
-        const parsedInput = reconstructed === null
-            ? null
-            : StrictJsonValueSchema.safeParse(reconstructed);
-        if (!parsedInput || !parsedInput.success) throw selectedActionInputInvalid();
-        return parsedInput.data;
-    }
-    const parsedCarrier = PluginUiSelectedActionInputCarrierV1Schema.safeParse(
-        params.seed.selectedActionInputCarrier,
-    );
-    if (!parsedCarrier.success) {
-        throw selectedActionInputUnavailable();
-    }
-    const carrier = parsedCarrier.data;
-    const carrierMatchesBinding = pluginUiTargetedContributionOperationKey(carrier.operation)
-        === pluginUiTargetedContributionOperationKey(params.binding.operation);
-    if (!carrierMatchesBinding) {
-        // Supplying an outer selected-account fact to any other handle is a
-        // confused-deputy attempt, never a request to run it ordinarily.
-        if (params.expectedSelectedConnectedAccountRef !== undefined) {
-            throw selectedActionInputInvalid();
-        }
-        return params.input;
-    }
-    // Claim before the first currentness await. The carrier is a one-shot
-    // settlement inside this outer invocation, so concurrent setup calls can
-    // never both reach provider I/O. A failed validation/currentness read also
-    // keeps this claim consumed, preventing a credential replay after failure.
-    if (params.selectedActionInputClaimed.current) throw selectedActionInputInvalid();
-    params.selectedActionInputClaimed.current = true;
-    if (params.expectedSelectedConnectedAccountRef === undefined) {
-        throw selectedActionInputInvalid();
-    }
-    if (params.binding.selectedActionInput.kind === 'unavailable') {
-        throw selectedActionInputUnavailable();
-    }
-    if (!params.seed.sourceCustody || !params.seed.isMountedCallerCurrent) {
-        throw selectedActionInputUnavailable();
-    }
-    if (
-        !pluginUiSelectedActionInputMatchesOperation(carrier.result, carrier.operation)
-        || carrier.result.selection.target.pluginId !== params.binding.targetPluginId
-        || carrier.result.selection.target.pluginId !== params.seed.plugin.id
-        || !pluginSourceCustodyV1Equal(
-            carrier.result.selection.target.sourceCustody,
-            params.seed.sourceCustody,
-        )
-    ) {
-        throw selectedActionInputInvalid();
-    }
-    throwIfInactive(params.seed, params.signal, undefined, true);
-    let mountedCallerCurrent = false;
-    try {
-        mountedCallerCurrent = await params.seed.isMountedCallerCurrent();
-    } catch {
-        // Current bound UI caller evidence is external to this service. A
-        // failed re-read cannot authorize disclosure to a provider Action.
-    }
-    throwIfInactive(params.seed, params.signal, undefined, true);
-    if (!mountedCallerCurrent) throw mountedCallerUnavailable();
-    if (!pluginJsonValuesEqual(params.input, carrier.result.input)) {
-        throw selectedActionInputInvalid();
-    }
-
-    const expectedRef = params.expectedSelectedConnectedAccountRef;
-    const selected = params.binding.selectedActionInput;
-    if (selected.kind === 'none') {
-        if (expectedRef !== null || carrier.result.connectedAccount.kind !== 'none') {
-            throw selectedActionInputInvalid();
-        }
-    } else if (
-        expectedRef === null
-        || carrier.result.connectedAccount.kind !== 'selected'
-        || carrier.result.connectedAccount.fieldPath !== selected.fieldPath
-        || !sameQualifiedConnectedAccountRef(expectedRef, carrier.result.connectedAccount.ref)
-    ) {
-        throw selectedActionInputInvalid();
-    }
-    const reconstructed = reconstructPluginUiSelectedActionInput(carrier.result);
-    const parsedInput = reconstructed === null
-        ? null
-        : StrictJsonValueSchema.safeParse(reconstructed);
-    if (!parsedInput || !parsedInput.success) throw selectedActionInputInvalid();
-    return parsedInput.data;
 }
 
 function hasCurrentContributedActionCaller(
@@ -667,6 +373,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
             ...(caller.originSurface ? { originSurface: caller.originSurface } : {}),
             caller,
             initiatingActionCaller: actionCaller,
+            ...(params.seed.approvalContext ? { approvalContext: params.seed.approvalContext } : {}),
             ...(captureExecutionOrigin ? { captureExecutionOrigin: true as const } : {}),
             ...(parsedExpectedExecutionOrigin === undefined
                 ? {}
@@ -710,10 +417,12 @@ export function createPluginInvocationActionsService(params: Readonly<{
         input: NoInfer<TInput>,
         options?: AdmittedTargetedOperationExecutionOptions,
     ): Promise<TResult> => {
-        const binding = requireAdmittedTargetedOperationExecutionBinding(operation, params.seed);
         const signal = composeActionSignal(params.seed.signal, options?.signal);
+        const binding = requireAdmittedTargetedOperationExecutionBinding(operation, params.seed,
+            await params.seed.readCurrentTargetedDeclarations?.(signal));
         const admittedInput = await resolveAdmittedTargetedOperationInput({
             seed: params.seed,
+            assertCurrent: () => throwIfInactive(params.seed, signal, undefined, true),
             binding,
             input,
             expectedSelectedConnectedAccountRef: options?.expectedSelectedConnectedAccountRef,
@@ -980,10 +689,12 @@ export function createPluginInvocationActionsService(params: Readonly<{
         result: TResult;
         executionOrigin: PluginMachineExecutionOriginV1;
     }>> => {
-        const binding = requireAdmittedTargetedOperationExecutionBinding(operation, params.seed);
         const signal = composeActionSignal(params.seed.signal, options?.signal);
+        const binding = requireAdmittedTargetedOperationExecutionBinding(operation, params.seed,
+            await params.seed.readCurrentTargetedDeclarations?.(signal));
         const admittedInput = await resolveAdmittedTargetedOperationInput({
             seed: params.seed,
+            assertCurrent: () => throwIfInactive(params.seed, signal, undefined, true),
             binding,
             input,
             expectedSelectedConnectedAccountRef: options?.expectedSelectedConnectedAccountRef,

@@ -164,6 +164,12 @@ describe('createProductionManagedDependencySourceAdapter', () => {
         expect(processBoundary.execFile).toHaveBeenCalledWith(process.execPath, ['version'], expect.objectContaining({ env: systemEnvironment }));
     });
 
+    it('publishes the system version from a bare `<executable> <version>` probe line', async () => {
+        // `cua --version` prints `cua 0.5.0` with no `version` word.
+        processBoundary.execFile.mockReset().mockResolvedValue({ stdout: `${basename(process.execPath)} 0.5.0\n`, stderr: '' });
+        expect(await systemHost(['--version']).status('system-tool')).toMatchObject({ state: 'ready', version: '0.5.0' });
+    });
+
     it('keeps system versions unknown when the declared probe fails or is absent', async () => {
         processBoundary.execFile.mockReset().mockRejectedValue(Object.assign(new Error('Native probe failed'),
             { exitCode: 1, stdout: 'Version: v0.46.0\n', stderr: '' }));

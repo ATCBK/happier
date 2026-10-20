@@ -1331,6 +1331,27 @@ export class ApiMachineClient {
                 resolveCurrentTarget: async ({ signal }) => await resolveCurrentMachineExecutionOriginContext(signal),
             },
             daemonContributionRegistryProjection: {
+                resolveAccountPluginExecutionSelection: async (pluginId, registry, signal) => {
+                    const unavailable = { kind: 'unavailable' as const, code: 'plugin_account_execution_unavailable' as const };
+                    const runtime = await this.resolveInstalledAccountRuntime(signal ?? new AbortController().signal);
+                    if (!runtime || !await runtime.isCurrent()) return unavailable;
+                    const { computePluginAccountBundledDeclarationDigestV1, computePluginAccountBundledCustodyIdV1 } =
+                        await import('@happier-dev/protocol/plugins/availability');
+                    const { readCurrentAccountPluginExecutionSelection } = await import('@/plugins/runtime/accountPluginActivationSource');
+                    const declaration = registry.contributes.pluginDeclarations?.find(plugin =>
+                        plugin.pluginId === pluginId && plugin.sourceSpec.kind === 'bundled');
+                    const bundled = declaration ? {
+                        manifest: declaration.manifest,
+                        sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const,
+                            packageName: declaration.sourceSpec.locator,
+                            declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest) } },
+                        custodyId: computePluginAccountBundledCustodyIdV1({ packageName: declaration.sourceSpec.locator,
+                            manifest: declaration.manifest, artifacts: declaration.generatedUiArtifactsManifest?.entries ?? [] }),
+                    } : undefined;
+                    const selection = await readCurrentAccountPluginExecutionSelection({ pluginId, credentials: runtime.credentials,
+                        serverUrl: runtime.serverHttpBaseUrl, ...(bundled ? { bundled } : {}), ...(signal ? { signal } : {}) });
+                    return await runtime.isCurrent() ? selection : unavailable;
+                },
                 requestCurrentIntent: async request => {
                     const reportUnavailable: NonNullable<typeof request.reportUnavailable> = reason => {
                         logger.debug('[RPC] Target Action current intent unavailable', {

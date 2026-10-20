@@ -1,8 +1,11 @@
 import { ACTION_IDS } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult, ActionExecutorContext, ActionId, ActionCaller, ActionExecutorDeps, WorkflowRunStartedByV1 } from '@happier-dev/protocol';
 import { resolveWorkflowRunStartedByForActionCallerV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
-import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { parseQualifiedPluginActionId, formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
+import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import { searchActionDefinitionSummaries } from '@happier-dev/protocol/actions/actionCatalog';
 
 import { requestDaemonPluginActionExecution } from '@/daemon/controlClient';
 import type { PluginActionExecutionAttempt } from '@/plugins/runtime/invocation/actions/executeContributedAction';
@@ -22,6 +25,8 @@ type ActionExecutorLike = Readonly<{
 type PluginActionExecutor = ActionExecutorLike & Readonly<{
   invokeContributedAction: NonNullable<ActionExecutorDeps['invokeContributedAction']>;
 }>;
+export type CurrentProcessPluginActionExecutionAttempt = PluginActionExecutionAttempt
+  | Readonly<{ matched: false; accountSelectionUnavailable: true }>;
 
 const DAEMON_OWNED_PLUGIN_META_ACTION_IDS = new Set<string>([
   'action.spec.search',
@@ -38,6 +43,7 @@ const BUILT_IN_ACTION_IDS = new Set<string>(ACTION_IDS);
  */
 export function createDaemonPluginActionExecutor(params: Readonly<{
   base: ActionExecutorLike;
+  executeInCurrentProcess?: (actionId: string, input: unknown, context?: OccurrenceBoundActionExecutorContext) => Promise<CurrentProcessPluginActionExecutionAttempt>;
   requestPluginActionExecution?: PluginActionExecutionRequestOwner;
   /** Exact caller bound by the host, never inferred from a requested target or surface. */
   getInitiatingActionCaller?: () => ActionCaller | null;
@@ -46,6 +52,7 @@ export function createDaemonPluginActionExecutor(params: Readonly<{
 }>): PluginActionExecutor {
   return createPluginActionExecutor({
     base: params.base,
+    ...(params.executeInCurrentProcess ? { executeInCurrentProcess: params.executeInCurrentProcess } : {}),
     requestPluginActionExecution: params.requestPluginActionExecution
       ?? requestDaemonPluginActionExecution,
     ...(params.getInitiatingActionCaller ? { getInitiatingActionCaller: params.getInitiatingActionCaller } : {}),
@@ -67,6 +74,7 @@ export type PluginActionExecutionRequestOwner = (request: Readonly<{
 /** Routes dynamic/meta Actions to one explicit execution owner before the built-in executor. */
 export function createPluginActionExecutor(params: Readonly<{
   base: ActionExecutorLike;
+  executeInCurrentProcess?: (actionId: string, input: unknown, context?: OccurrenceBoundActionExecutorContext) => Promise<CurrentProcessPluginActionExecutionAttempt>;
   requestPluginActionExecution: PluginActionExecutionRequestOwner;
   getInitiatingActionCaller?: () => ActionCaller | null;
   /** Host-stamped descriptive fallback; an exact context caller takes precedence. */
@@ -85,8 +93,11 @@ export function createPluginActionExecutor(params: Readonly<{
     const startedBy = admittingCaller
       ? resolveWorkflowRunStartedByForActionCallerV1(admittingCaller)
       : params.startedBy;
+    const local = await params.executeInCurrentProcess?.(actionId, input, context);
+    if (local?.matched && actionId !== 'action.spec.search') return local;
+    const contributedIdentity = parseQualifiedPluginActionId(actionId);
     const request = {
-      actionId, input, surface,
+      actionId: contributedIdentity ? buildQualifiedPluginContributionKey(contributedIdentity) : actionId, input, surface,
       ...(context?.requiredContributedActionDangerLevel ? { requiredDangerLevel: context.requiredContributedActionDangerLevel } : {}),
       ...(startedBy ? { startedBy } : {}),
       ...(typeof context?.defaultSessionId === 'string' ? { defaultSessionId: context.defaultSessionId } : {}),
@@ -94,6 +105,41 @@ export function createPluginActionExecutor(params: Readonly<{
         && context.expectedContributorOccurrenceId.trim().length > 0
         ? { expectedContributorOccurrenceId: context.expectedContributorOccurrenceId.trim() } : {}),
     };
+    if (local?.matched) {
+      if (!local.result.ok) return local;
+      const parsedLocal = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.search'].safeParse(local.result.result);
+      if (!parsedLocal.success) return { matched: true as const, result: { ok: false as const,
+        errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' } };
+      let remote: PluginActionExecutionAttempt;
+      try { remote = await params.requestPluginActionExecution(request, context?.signal ? { signal: context.signal } : undefined); }
+      catch { context?.signal?.throwIfAborted(); return local; }
+      if (!remote.matched || !remote.result.ok) return local;
+      const parsedRemote = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.search'].safeParse(remote.result.result);
+      if (!parsedRemote.success) return local;
+      const definitions = new Map([...parsedRemote.data.actionSpecs, ...parsedLocal.data.actionSpecs].map(definition => [definition.id, definition]));
+      const query = typeof input === 'object' && input !== null && 'query' in input && typeof input.query === 'string' ? input.query : undefined;
+      const limit = typeof input === 'object' && input !== null && 'limit' in input && typeof input.limit === 'number' ? input.limit : undefined;
+      return { matched: true as const, result: { ok: true as const, result: {
+        actionSpecs: searchActionDefinitionSummaries([...definitions.values()], { query, limit }),
+      } } };
+    }
+    if (local && 'accountSelectionUnavailable' in local) {
+      const reference = PluginContributionIdentityV1Schema.safeParse(actionId === 'action.invoke'
+        && typeof input === 'object' && input !== null && 'action' in input ? input.action : contributedIdentity);
+      const unavailable = { matched: true as const, result: { ok: false as const,
+        errorCode: 'plugin_action_execution_placement_unavailable', error: 'plugin_action_execution_placement_unavailable' } };
+      if (!reference.success) return unavailable;
+      const id = formatQualifiedPluginActionId(reference.data);
+      // This is the incumbent semantic descriptor read, not a second catalog
+      // or an endpoint capability probe. Unknown/Account placement refuses.
+      const descriptor = await params.requestPluginActionExecution({ ...request, actionId: 'action.spec.get', input: { id } },
+        context?.signal ? { signal: context.signal } : undefined);
+      if (!descriptor.matched || !descriptor.result.ok) return unavailable;
+      const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].safeParse(descriptor.result.result);
+      if (!parsed.success || parsed.data.actionSpec.id !== id || parsed.data.actionSpec.executionPlacement !== 'machine') return unavailable;
+      // The daemon's ordinary final owner rechecks its current declaration and
+      // refuses Account placement immediately before any handler invocation.
+    }
     return context?.signal
       ? await params.requestPluginActionExecution(request, { signal: context.signal })
       : await params.requestPluginActionExecution(request);
@@ -121,9 +167,7 @@ export function createPluginActionExecutor(params: Readonly<{
         if (!BUILT_IN_ACTION_IDS.has(normalizedActionId) && !contributedIdentity) {
           return await params.base.execute(actionId, input, context);
         }
-        const attempt = await requestContributed(contributedIdentity
-          ? buildQualifiedPluginContributionKey(contributedIdentity)
-          : normalizedActionId, input, context);
+        const attempt = await requestContributed(normalizedActionId, input, context);
         if (attempt.matched) {
           return attempt.result;
         }

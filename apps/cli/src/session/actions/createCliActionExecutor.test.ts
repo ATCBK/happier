@@ -195,6 +195,7 @@ import {
   type PluginSessionInputAttachmentV1,
 } from '@happier-dev/protocol';
 import { createTargetComposerAttachmentRegistry } from '@/plugins/runtime/lifecycle/contributions/targetComposerAttachments';
+import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 
 const env = process.env;
 const PLUGIN_ACTION_ID = 'acme.cli-action-exec.plugin/actions/review-start';
@@ -459,6 +460,31 @@ function createPlainExecutor(extra: CliActionExecutorTestOverrides = {}) {
     ctx: null,
   });
 }
+
+describe('Account custody transport compatibility', () => {
+  it.each([
+    { failure: { isAxiosError: true, response: { status: 404 } }, placement: 'machine' as const },
+    { failure: { isAxiosError: true, code: 'ECONNREFUSED' }, placement: 'machine' as const },
+    { failure: { isAxiosError: true, response: { status: 404 } }, placement: 'account' as const },
+    { failure: { isAxiosError: true, response: { status: 404 } }, placement: undefined },
+  ])('requires independent current Machine placement when the Account endpoint is unavailable (%j)', async ({ failure, placement }) => {
+    // HTTP and daemon control are the real external boundaries; all source
+    // selection, manifest parsing and Action admission beneath them stay real.
+    mockAxiosPost.mockRejectedValue(failure);
+    const definition = ActionDiscoveryDefinitionV1Schema.parse({ id: 'acme.machine-source/actions/read', kindVersion: 1,
+      title: 'Read', description: null, safety: 'safe', placements: [], slash: null, bindings: null, examples: null,
+      surfaces: { ui: false, voice: false, agent: false, mcp: false, cli: true, rpc: false, api: false, plugin: false },
+      inputHints: null, inputSchema: {}, ...(placement ? { executionPlacement: placement } : {}) });
+    requestDaemonPluginActionExecution.mockImplementation(async (request) => ({ matched: true,
+      result: { ok: true, result: request.actionId === 'action.spec.get' ? { actionSpec: definition } : { machineRead: true } } }));
+    const executor = createCliActionExecutor({ token: 'token', credentials: { token: 'token', encryption: null,
+      credentialProvenance: 'stored_session' }, sessionId: 'sess-1', mode: 'plain', ctx: null,
+      serverId: 'compatibility-home', serverHttpBaseUrl: 'http://compatibility-home.test' });
+    const result = await executor.execute('action.invoke', { action: { pluginId: 'acme.machine-source', localId: 'read' }, input: {} }, { surface: 'cli' });
+    expect(result).toMatchObject(placement === 'machine' ? { ok: true, result: { machineRead: true } }
+      : { ok: false, errorCode: 'plugin_action_execution_placement_unavailable' });
+  });
+});
 
 function createDataKeyExecutor(extra: CliActionExecutorTestOverrides = {}) {
   const machineKey = new Uint8Array(32).fill(7);

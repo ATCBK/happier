@@ -109,6 +109,8 @@ export type TargetActionCurrentIntentUnavailableReason =
   | 'approval_presentation_unavailable' | 'approval_artifact_create_failed' | 'approval_artifact_id_unavailable';
 
 export type TargetActionCurrentIntentRequest = Readonly<{
+  /** Account execution resumes only in the original captured invoking host. */
+  approvalInputCustody?: 'live_only';
   action: ResolvedTargetAction;
   fingerprint: string;
   /** Declared target capability surface. */

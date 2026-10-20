@@ -59,7 +59,7 @@ describe('targeted detail execution origins through admitted runtime publication
 
             const response = await read(fixture.registry);
             expect(response.status).toBe('current');
-            if (response.status !== 'current') throw new Error(`Detail projection refused: ${response.code}`);
+            if (response.status !== 'current') throw new Error(`Detail projection refused: ${response.status === 'unavailable' ? response.code : response.status}`);
             const mount = response.targetedSurfaceMounts.find((entry) => entry.contributor.pluginId === pluginId);
             expect(mount).toMatchObject({
                 role: 'detail',

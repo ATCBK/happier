@@ -730,6 +730,9 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                     ...(seed.isMountedCallerCurrent
                         ? { isMountedCallerCurrent: seed.isMountedCallerCurrent }
                         : {}),
+                    ...(seed.readCurrentTargetedDeclarations
+                        ? { readCurrentTargetedDeclarations: seed.readCurrentTargetedDeclarations }
+                        : {}),
                     ...(seed.session ? { session: seed.session } : {}),
                     ...(seed.sessionListAccess ? { sessionListAccess: seed.sessionListAccess } : {}),
                     // The Agent-placed Action path derives its caller permission mode and

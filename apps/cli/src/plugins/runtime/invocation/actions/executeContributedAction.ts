@@ -19,6 +19,7 @@ import type {
   PluginInvocationOriginSurface,
 } from '@happier-dev/plugin-sdk';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { validateTargetedOperationInput, validateTargetedOperationResult } from '@happier-dev/plugin-sdk/host/registration';
 import type { PluginProcessOutput } from '@happier-dev/plugin-sdk/exec';
 import type { PluginActionHandlerInvocation } from '@happier-dev/plugin-sdk/actions';
 
@@ -335,49 +336,6 @@ function admittedTargetedOperationInvalid(): PluginActionExecutorResult {
   );
 }
 
-function targetedOperationInputInvalid(): PluginActionExecutorResult {
-  return actionHandlerNotStartedFailure(
-    'plugin_targeted_operation_input_invalid',
-    'Targeted operation input does not match the target protocol',
-  );
-}
-
-function targetedOperationResultInvalid(): PluginActionExecutorResult {
-  return {
-    ok: false,
-    errorCode: 'plugin_targeted_operation_result_invalid',
-    error: 'Targeted operation result does not match the target protocol',
-  };
-}
-
-function validateTargetedOperationInput(
-  targetProtocol: RehydratedPluginContributionPointOperationV1,
-  input: unknown,
-): Readonly<{ ok: true; value: unknown }> | Readonly<{ ok: false; result: PluginActionExecutorResult }> {
-  if (targetProtocol.input.kind === 'contributorDefined') {
-    return Object.freeze({ ok: true as const, value: input });
-  }
-  try {
-    const parsed = targetProtocol.input.schema.safeParse(input);
-    if (parsed.success) return Object.freeze({ ok: true as const, value: parsed.data });
-  } catch {
-    // Target-owned parser failures reject before a contributor Action starts.
-  }
-  return Object.freeze({ ok: false as const, result: targetedOperationInputInvalid() });
-}
-
-function validateTargetedOperationResult(
-  targetProtocol: RehydratedPluginContributionPointOperationV1,
-  result: JsonValue | null,
-): Readonly<{ ok: true; value: JsonValue }> | Readonly<{ ok: false; result: PluginActionExecutorResult }> {
-  try {
-    const parsed = targetProtocol.resultSchema.safeParse(result);
-    if (parsed.success) return Object.freeze({ ok: true as const, value: parsed.data });
-  } catch {
-    // Target-owned parser failures cannot expose a contributor Action result.
-  }
-  return Object.freeze({ ok: false as const, result: targetedOperationResultInvalid() });
-}
 
 function matchesAdmittedTargetedOperation(
   operation: AdmittedTargetedOperationExecutionRequest,
@@ -523,6 +481,10 @@ export async function executeContributedAction(params: Readonly<{
     && 'target' in action.definition.execution
     && action.definition.execution.target === 'client'
   );
+  const accountTarget = typeof action.definition.execution === 'object'
+    && action.definition.execution !== null
+    && 'target' in action.definition.execution
+    && action.definition.execution.target === 'account';
   if (params.messageActionReference && !clientTarget) {
     return { matched: true, result: actionHandlerNotStartedFailure(
       'plugin_message_action_unavailable',
@@ -615,6 +577,11 @@ export async function executeContributedAction(params: Readonly<{
   const runtimeRegistry = isExecutablePluginRuntimeRegistry(registry)
     ? registry
     : null;
+  if (accountTarget !== (runtimeRegistry?.executionRealm === 'account')) {
+    return { matched: true, result: actionHandlerNotStartedFailure(
+      'plugin_action_execution_placement_unavailable', 'The Action is unavailable in this execution host',
+    ) };
+  }
   const checkManagedCustody = () => checkManagedProviderOperationCustody({
     contributes, runtimeRegistry, action, operation: params.admittedManagedProviderOperation,
     probeBinding: params.admittedConnectedAccountPurposeBinding,
@@ -849,6 +816,7 @@ export async function executeContributedAction(params: Readonly<{
     const sharedRequester = params.approvalContext !== undefined && isSharedRequesterActionV1(params.approvalContext);
     const requestCurrentIntent = params.requestCurrentIntent
       ? async (request: TargetActionCurrentIntentRequest): Promise<TargetActionCurrentIntentResult> => {
+          if (accountTarget) return await params.requestCurrentIntent!({ ...request, approvalInputCustody: 'live_only' });
           const requestedSurface = request.invocationSurface ?? request.surface;
           const deferredSurface = requestedSurface === 'api' || requestedSurface === 'cli'
             || requestedSurface === 'agent' || requestedSurface === 'mcp' ? requestedSurface : null;
@@ -948,13 +916,16 @@ export async function executeContributedAction(params: Readonly<{
       ...(params.context.operationProgress
         ? { operationProgress: params.context.operationProgress }
         : {}),
-      ...(params.admittedManagedProviderOperation || params.admittedConnectedAccountPurposeBinding || params.context.beforeHandlerInvocation || sharedRequester
+      ...(accountTarget || params.admittedManagedProviderOperation || params.admittedConnectedAccountPurposeBinding || params.context.beforeHandlerInvocation || sharedRequester
         ? { beforeHandlerInvocation: async () => {
             const check = async () => {
               const refusal = await checkManagedCustody();
               if (refusal && !refusal.ok) throw new PluginError({ code: refusal.errorCode, message: refusal.error });
             };
             await check();
+            if (accountTarget && await runtimeRegistry.revalidateAccountExecution?.(pluginId, params.context.signal) !== true) {
+              throw new PluginError({ code: 'plugin_action_generation_retired', message: 'Account Action source is no longer current' });
+            }
             if (revalidateRequesterDecision && !await revalidateRequesterDecision()) {
               throw new PluginError({ code: 'approval_stale', message: 'approval_stale' });
             }

@@ -5,6 +5,7 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { inputTypeResourceReference } from '@happier-dev/protocol/inputs/runtime';
+import { PluginActionExecutionV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 
 import type { ResolvedActionContribution, ResolvedActionDefinition } from '@/plugins/projection/registry/types';
 import { executeContributedAction } from './executeContributedAction';
@@ -18,6 +19,7 @@ import type { PluginExternalActionContext } from '../services/types';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '../../resolveExecutablePluginRuntimeRegistry';
 
 function projectDefinition(definition: ResolvedActionDefinition, identity: NonNullable<ResolvedActionContribution['identity']>): ActionDefinitionV1 {
+  const execution = PluginActionExecutionV2Schema.safeParse(definition.execution);
   return Object.freeze({
     kindVersion: definition.kindVersion,
     id: formatQualifiedPluginActionId(identity),
@@ -38,6 +40,7 @@ function projectDefinition(definition: ResolvedActionDefinition, identity: NonNu
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
     ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
     ...(definition.execution === undefined ? {} : { execution: definition.execution }),
+    ...(execution.success ? { executionPlacement: execution.data.target === 'daemon' ? 'machine' as const : execution.data.target } : {}),
     ...(definition.sideEffectClass === undefined ? {} : { sideEffectClass: definition.sideEffectClass }),
     ...(definition.operation === undefined ? {} : { operation: definition.operation }),
   });
