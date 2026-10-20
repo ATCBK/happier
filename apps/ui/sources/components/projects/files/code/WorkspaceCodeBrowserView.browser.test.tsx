@@ -36,7 +36,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
         } });
         const onVisibleEntriesChange = vi.fn();
         const page = (revealRequest?: Readonly<{ path: string }>) => <WorkspaceCodeBrowserView paneScopeId="code-large-test" scope={fixture!.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} revealRequest={revealRequest}
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} revealRequest={revealRequest}
             onVisibleEntriesChange={onVisibleEntriesChange} />;
         const screen = await fixture.render(page());
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-file-0000.ts')).toBeTruthy());
@@ -74,7 +74,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
         } });
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-presence-test" scope={fixture.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} />);
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} />);
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-LICENSE')).toBeTruthy());
         expect(screen.findByTestId('workspace-code-offline')).toBeNull();
         const readsBeforeExpiry = fixture.requests.filter(request => request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY
@@ -98,7 +98,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const renderPage = (location: WorkspaceCodeLocation) => <WorkspaceCodeBrowserView paneScopeId="code-aside-test"
-            scope={fixture!.scope} rootLabel="Code" location={location} onNavigate={() => {}} history={null} />;
+            scope={fixture!.scope} rootLabel="Code" location={location} onNavigate={() => {}} onOpenFile={() => {}} history={null} />;
         const screen = await fixture.render(renderPage({ path: '', kind: 'folder' }));
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-LICENSE')).toBeTruthy());
         expect(screen.findByTestId('workspace-code-bar-goto')).toBeTruthy();
@@ -133,9 +133,10 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const onNavigate = vi.fn<(location: WorkspaceCodeLocation) => void>();
+        const onOpenFile = vi.fn<(path: string) => void>();
         const rowId = (path: string) => `repository-tree-row-${toTestIdSafeValue(path)}`;
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-test" scope={fixture.scope} rootLabel="Code"
-            location={{ path: 'nested', kind: 'folder' }} onNavigate={onNavigate} presentation="widget" />);
+            location={{ path: 'nested', kind: 'folder' }} onNavigate={onNavigate} onOpenFile={onOpenFile} presentation="widget" />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('touch nested/LICENSE'));
         expect(fixture.requests.filter(request => request.method === RPC_METHODS.SCM_HISTORY_ENTRIES).every(request => {
             const payload = request.payload as { folder: string; paths: string[] };
@@ -147,10 +148,11 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
         await screen.pressByTestIdAsync(rowId('nested/folder.ts'));
         expect(onNavigate).toHaveBeenLastCalledWith({ path: 'nested/folder.ts', kind: 'folder' });
         await screen.pressByTestIdAsync(rowId('nested/LICENSE'));
-        expect(onNavigate).toHaveBeenLastCalledWith({ path: 'nested/LICENSE', kind: 'file' });
+        expect(onOpenFile).toHaveBeenLastCalledWith('nested/LICENSE');
         for (const name of ['name ', ' leading', 'line\nbreak ']) {
             await screen.pressByTestIdAsync(rowId(`nested/${name}`));
-            expect(onNavigate).toHaveBeenLastCalledWith({ path: `nested/${name}`, kind: name === 'line\nbreak ' ? 'folder' : 'file' });
+            if (name === 'line\nbreak ') expect(onNavigate).toHaveBeenLastCalledWith({ path: `nested/${name}`, kind: 'folder' });
+            else expect(onOpenFile).toHaveBeenLastCalledWith(`nested/${name}`);
         }
         await vi.waitFor(() => expect(fixture!.requests.some(request => request.method === RPC_METHODS.SCM_HISTORY_ENTRIES
             && (request.payload as { paths: string[] }).paths.includes('nested/name '))).toBe(true));
@@ -165,7 +167,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-test" scope={fixture.scope} rootLabel="Code"
-            location={{ path: '', kind: 'folder' }} onNavigate={() => {}} presentation="widget" />);
+            location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} presentation="widget" />);
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-root-error')).toBeTruthy());
         expect(fixture.requests.some(request => request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY)).toBe(true);
         expect(screen.findByTestId('workspace-code-empty-repository')).toBeNull();
@@ -182,7 +184,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-pending-test" scope={fixture.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} />);
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} />);
         await vi.waitFor(() => expect(screen.findHostByTestId('workspace-code-listing-pending')).toBeTruthy());
         expect(screen.findHostByTestId('workspace-code-strip-pending')).toBeTruthy();
         expect(screen.findHostByTestId('workspace-code-strip-unavailable')).toBeNull();
@@ -203,7 +205,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-widget-test" scope={fixture.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} history={null}
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} history={null}
             presentation="widget" onOpenInCode={() => {}} />);
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-entry-00')).toBeTruthy());
         // The list holds the preview only, not 64 rows behind a short viewport.
@@ -220,7 +222,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
         } });
         const history = { current: { kind: 'none' as const }, entry: () => ({ kind: 'none' as const }), revision: 1 };
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-narrow-test" scope={fixture.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} history={history}
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} history={history}
             presentation="widget" onOpenInCode={() => {}} />);
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-apps')).toBeTruthy());
         const layoutOf = () => screen.root.findAll(node => node.props.testID === 'workspace-code-history-apps' && typeof node.props.layout === 'string')[0]?.props.layout;
@@ -244,7 +246,7 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-readme-test" scope={fixture.scope}
-            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} history={null} />);
+            rootLabel="Code" location={{ path: '', kind: 'folder' }} onNavigate={() => {}} onOpenFile={() => {}} history={null} />);
         const readmeText = () => screen.root.findAll(node => node.props.testID === 'workspace-code-readme-markdown'
             && typeof node.props.markdown === 'string')[0]?.props.markdown;
         // A failed first read offers the shared Retry, and Retry recovers.

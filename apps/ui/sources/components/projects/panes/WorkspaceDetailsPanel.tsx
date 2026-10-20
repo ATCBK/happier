@@ -1,8 +1,7 @@
-import { IconButton } from '@/components/ui/buttons/IconButton';
 import { useProjectSurfaceActions } from '@/components/projects/detail/useProjectSurfaceActions';
 import { useProjectSurfaceController } from '@/components/projects/detail/useProjectSurfaceController';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -28,7 +27,6 @@ import {
     type DetailsSurfaceScopeV1,
 } from '@/components/appShell/panes/details/surfaces';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useWorkspaceRefs, useAllMachines, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
@@ -59,6 +57,7 @@ import { createWorkspaceSyncConflictDetailsTab } from '@/components/workspaces/s
 import { createWorkspaceSyncRelationshipDetailsTab } from '@/components/workspaces/sync/workspaceSyncRelationshipDetailsTab';
 import { buildActiveDetailsRouteParams, parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { buildProjectRouteHref } from '@/components/projects/detail/projectRouteState';
+import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
 
 export type WorkspaceDetailsPanelHeaderActionRenderParams = Readonly<{
     iconButtonStyle: Readonly<Record<string, unknown>>;
@@ -73,7 +72,6 @@ export type WorkspaceDetailsPanelProps = Readonly<{
     displayPathOverride?: string;
     forceOverviewMode?: boolean;
     showTerminalHeaderAction?: boolean;
-    showFocusModeToggle?: boolean;
     sessionIdForAugmentation?: string | null;
     /**
      * Optional override for the close action. Used by fullscreen/mobile routes that render the same
@@ -119,12 +117,11 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     const navigateChanges = React.useCallback(() => {
         if (deviceType === 'phone') filesController.navigateToSurface('git');
     }, [deviceType, filesController]);
-    const { revealInFilesTree, openChanges } = useProjectSurfaceActions({
+    const { revealInFilesTree, openChanges, openFileInDetails, openFileInDetailsPinned } = useProjectSurfaceActions({
         scopeId: props.scopeId, workspaceRef: props.workspaceRef, activeRootPath: effectiveRootPath,
         onRevealInFilesTreeNavigate: navigateFiles, onOpenChangesNavigate: navigateChanges,
     });
     const displayPath = props.displayPathOverride ?? props.workspaceRef.rootPath;
-    const paneFocusMode = usePaneFocusMode(props.scopeId);
     const allMachines = useAllMachines();
     // The Project Details adapter owns the exact current scope facts for its
     // generic details surfaces. An optional explicit projection remains a
@@ -150,6 +147,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     }), [effectiveRootPath, props.workspaceRef.machineId, props.workspaceRef.serverId]);
 
     const workspaceCacheKey = React.useMemo(() => buildWorkspaceCacheKey(workspaceScope), [workspaceScope]);
+    const resolveTabPresentation = useWorkspaceFileWriteTabPresentation(workspaceScope);
     const workspaceReviewCommentDrafts = useWorkspaceReviewCommentsDrafts(workspaceScope);
     const hasWorkspaceReviewCommentDrafts = workspaceReviewCommentDrafts.length > 0;
 
@@ -210,19 +208,9 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     }), [theme.colors.border.default, theme.colors.surface.base]);
 
     const openFileTab = React.useCallback((path: string, intent: 'default' | 'pinned' = 'default') => {
-        const fileName = path.split('/').pop() ?? path;
-        deferOnWeb(() => {
-            pane.openDetailsTab(
-                {
-                    key: `file:${path}`,
-                    kind: 'file',
-                    title: fileName,
-                    resource: { kind: 'file', path },
-                },
-                { intent },
-            );
-        });
-    }, [pane]);
+        if (intent === 'pinned') openFileInDetailsPinned(path);
+        else openFileInDetails(path);
+    }, [openFileInDetails, openFileInDetailsPinned]);
 
     const openBrowserLaunchpadTab = React.useCallback(() => {
         pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
@@ -486,26 +474,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                         <Icon name="terminal" size={16} color={theme.colors.text.secondary} />
                     </Pressable>
                 ) : null}
-                {props.showFocusModeToggle !== false && Platform.OS === 'web' ? (
-                    <IconButton
-                        onPress={paneFocusMode.toggle}
-                        variant="plain"
-                        size={34}
-                        tooltip={paneFocusMode.active ? t('session.detailsPanel.exitFocusModeA11y') : t('session.detailsPanel.enterFocusModeA11y')}
-                        selected={paneFocusMode.active}
-                        disabled={!paneFocusMode.canEnter}
-                        accessibilityLabel={
-                            paneFocusMode.active
-                                ? t('session.detailsPanel.exitFocusModeA11y')
-                                : t('session.detailsPanel.enterFocusModeA11y')
-                        }
-                        icon={<Icon
-                            name={paneFocusMode.active ? 'arrows-in' : 'arrows-out'}
-                            size={16}
-                            color={theme.colors.text.secondary}
-                        />}
-                    />
-                ) : null}
                 {props.onRequestClose && deviceType !== 'phone' ? (
                     <Pressable
                         onPress={requestClose}
@@ -523,9 +491,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         hasWorkspaceReviewCommentDrafts,
         openBrowserLaunchpadTab,
         pane,
-        paneFocusMode.active,
-        paneFocusMode.canEnter,
-        paneFocusMode.toggle,
         props.onRequestClose,
         props.renderHeaderActionsPrefix,
         props.workspaceRef.machineId,
@@ -563,6 +528,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
             }}
             forceEmptyState={props.forceOverviewMode}
             resolveTabHref={resolveTabHref}
+            resolveTabPresentation={resolveTabPresentation}
             renderTabContent={renderTabContent}
             renderOverlay={renderOverlay}
             renderHeaderActions={renderHeaderActions}

@@ -15,6 +15,8 @@ import { useWorkspaceRepositoryDirectoryRevision } from './useWorkspaceRepositor
 import { readRepositoryTreeClassification } from '@/hooks/workspaces/files/repositoryTreeClassification';
 import { projectRepositoryTreeNodes } from '@/hooks/workspaces/files/repositoryTreeVisibility';
 import { useWorkspaceEntryHistory } from './useWorkspaceEntryHistory';
+import { useWorkspaceFileWriteSettlements } from '@/sync/domains/session/changes/hooks/useWorkspaceFileWriteSettlements';
+import { useWorkspaceLiveFileWrites } from '@/sync/domains/session/changes/hooks/useWorkspaceLiveFileWrites';
 
 const NO_PRESERVED_PATHS: readonly string[] = [];
 
@@ -65,6 +67,7 @@ export function useWorkspaceRepositoryTreeBrowser(input: Readonly<{
     historyEnabled?: boolean;
     headOid?: string | null;
     repoRootPath?: string | null;
+    reconciliationPaused?: boolean;
 }>) {
     const scope = React.useMemo(() => input.scope, [input.scope.serverId, input.scope.machineId, input.scope.rootPath]);
     const workspaceCacheKey = React.useMemo(() => tryBuildWorkspaceCacheKey(scope) ?? '', [scope]);
@@ -103,7 +106,11 @@ export function useWorkspaceRepositoryTreeBrowser(input: Readonly<{
         loadDirectoryEntries,
         warmDirectoryEntries,
         warmChildDirectoriesLimit: 2,
+        reconciliationPaused: input.reconciliationPaused,
     });
+    const fileWriteScope = input.enabled ? scope : null;
+    const liveFileWrites = useWorkspaceLiveFileWrites(fileWriteScope);
+    useWorkspaceFileWriteSettlements(fileWriteScope, tree.reconcilePaths);
     const classification = React.useMemo(() => readRepositoryTreeClassification(tree.nodes, (directoryPath) => ({
         available: getCachedWorkspaceRepositoryGitIgnoreAvailable({ workspaceCacheKey, directoryPath }),
         entries: getCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath }),
@@ -116,5 +123,5 @@ export function useWorkspaceRepositoryTreeBrowser(input: Readonly<{
     const demandedPaths = React.useMemo(() => nodes.filter(node => node.type === 'file' || node.type === 'directory').map(node => node.path), [nodes]);
     const history = useWorkspaceEntryHistory({ scope, folder: input.rootDirectoryPath ?? '', paths: demandedPaths,
         headOid: input.headOid, repoRootPath: input.repoRootPath, enabled: input.enabled && input.historyEnabled === true, reloadToken: input.reloadToken });
-    return { ...tree, nodes, gitIgnoreAvailable, history };
+    return { ...tree, nodes, gitIgnoreAvailable, history, liveFileWrites };
 }

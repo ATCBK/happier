@@ -8,7 +8,7 @@ import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/reposito
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
-import { buildProjectRouteHref } from '../projectRouteState';
+import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 
 export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
     scopeId: string;
@@ -24,23 +24,20 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
 }>) => {
     const pane = useAppPaneScope(props.scopeId);
     const { location, setLocation } = useRepositoryTreeBrowserState(tryBuildWorkspaceCacheKey(props.scope) ?? '');
-    // A controlled Code route owns file pages. The incumbent Files companion promotes files to
-    // Details, and shows their containing folder if the shared Code location is already a file.
+    // Existing Code routes can restore a file page. New file activations enter the shared opener;
+    // the Files companion keeps showing that file's containing folder.
     const companionLocation: WorkspaceCodeLocation = location.kind === 'file'
         ? { kind: 'folder', path: location.path.slice(0, Math.max(0, location.path.lastIndexOf('/'))) }
         : location;
     const onNavigate = React.useCallback((next: WorkspaceCodeLocation) => {
-        if (props.onNavigate) props.onNavigate(next);
-        else if (next.kind === 'file') props.onOpenFile(next.path);
+        if (next.kind === 'file') props.onOpenFile(next.path);
+        else if (props.onNavigate) props.onNavigate(next);
         else setLocation(next);
     }, [props.onNavigate, props.onOpenFile, setLocation]);
-    const fileHref = React.useCallback((path: string) => buildProjectRouteHref({
-        workspaceRefId: props.workspaceRef.id, serverId: props.workspaceRef.serverId, segment: 'code', activeRootPath: props.scope.rootPath,
-        defaultRootPath: props.workspaceRef.rootPath, activeWorktreeId: props.activeWorktreeId,
-        ...(props.onNavigate ? { initialResource: null, codeLocation: { kind: 'file', path } } : {
-            sourceSurface: 'browse', initialResource: { kind: 'file', path },
-        }),
-    }), [props.activeWorktreeId, props.onNavigate, props.scope.rootPath, props.workspaceRef.id, props.workspaceRef.serverId, props.workspaceRef.rootPath]);
+    const fileHref = React.useCallback((path: string) => buildWorkspaceFileLink({ target: {
+        kind: 'project', workspaceRefId: props.workspaceRef.id, serverId: props.workspaceRef.serverId,
+        machineId: props.scope.machineId, rootPath: props.scope.rootPath }, path }),
+    [props.scope.machineId, props.scope.rootPath, props.workspaceRef.id, props.workspaceRef.serverId]);
     const files = pane.scopeState?.right.tabState.files as { revealRequest?: Readonly<{ path: string }> } | undefined;
     // The row of the file open in Details stays selected while its tab is open (lab F1).
     const selectedPath = resolveOpenDetailsFilePath(pane.scopeState?.details);
@@ -50,6 +47,7 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
             rootLabel={resolveWorkspaceRefDisplayName(props.workspaceRef)}
             location={props.location ?? companionLocation}
             onNavigate={onNavigate}
+            onOpenFile={props.onOpenFile}
             onOpenHistory={props.onOpenHistory}
             fileHref={fileHref}
             scope={props.scope}

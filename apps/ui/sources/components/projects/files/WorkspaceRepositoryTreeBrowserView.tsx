@@ -45,6 +45,7 @@ import { readRepositoryFileDropTarget } from '@/components/workspaces/files/repo
 import type { WebFileDragEvent } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
 import { promptRepositoryUploadDestination } from '@/components/workspaces/files/repositoryTree/promptRepositoryUploadDestination';
 import { RepositoryTreeRowActionsMenu } from '@/components/workspaces/files/repositoryTree/RepositoryTreeRowActionsMenu';
+import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 import { useWorkspaceRepositoryTreeWebDropState } from '@/hooks/workspaces/files/useWorkspaceRepositoryTreeWebDropState';
 import { useRepositoryUploadActionTarget } from '@/components/workspaces/files/repositoryTree/useRepositoryUploadActionTarget';
 import { useWorkspaceRepositoryTreeRowActions } from '@/hooks/workspaces/files/useWorkspaceRepositoryTreeRowActions';
@@ -84,6 +85,10 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
     onWebDropTargetChange?: ((target: WorkspaceRepositoryTreeWebDropTarget) => void) | null;
     webDropHoverPath?: string | null;
     renderRowActions?: React.ComponentProps<typeof WorkspaceRepositoryTreeList>['renderRowActions'];
+    /** Target-aware Share/review callbacks are supplied by the Session/Project opener owner. */
+    buildFileMenuContext?: (path: string) => Partial<FileMenuContext>;
+    /** An inline create/rename field retains its rows until the interaction finishes. */
+    reconciliationPaused?: boolean;
     /** The file open in Details: its row stays selected (lab F1). */
     selectedPath?: string | null;
     /** Session adapters may restrict effects, never substitute another Home's target. */
@@ -297,6 +302,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     // The write a New file / New folder started and has not yet heard back from; a Machine under load
     // can take minutes, and nothing else on screen says it is still going.
     const [pendingCreateSignal, setPendingCreateSignal] = React.useState<AbortSignal | null>(null);
+    const [createPromptPending, setCreatePromptPending] = React.useState(false);
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
@@ -334,12 +340,20 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             if (mounted.current) setPendingCreateSignal((current) => (current === signal ? null : current));
         }
     }, []);
+    const requestCreatePath = React.useCallback(async (...args: Parameters<typeof Modal.prompt>) => {
+        setCreatePromptPending(true);
+        try {
+            return await Modal.prompt(...args);
+        } finally {
+            if (mounted.current) setCreatePromptPending(false);
+        }
+    }, []);
 
     const createFile = React.useCallback(() => {
         if (!allowCreateActions) return;
         const lifetime = captureCreateLifetime();
         void (async () => {
-            const raw = await Modal.prompt(
+            const raw = await requestCreatePath(
                 t('files.createFilePromptTitle'),
                 t('files.createFilePromptBody'),
                 { placeholder: 'src/new-file.ts' },
@@ -387,13 +401,13 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             }
             complete();
         })();
-    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, requestCreatePath, whileCreating, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const createFolder = React.useCallback((parentDir?: string) => {
         if (!allowCreateActions) return;
         const lifetime = captureCreateLifetime();
         void (async () => {
-            const raw = await Modal.prompt(
+            const raw = await requestCreatePath(
                 t('files.createFolderPromptTitle'),
                 t('files.createFolderPromptBody'),
                 // From a folder's menu the new folder starts inside it.
@@ -437,7 +451,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
 
             complete();
         })();
-    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, requestCreatePath, whileCreating, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const transfers = useWorkspaceFileTransfers({
         workspaceScope,
@@ -604,6 +618,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         const transferSizeBytes = node.type === 'file' && typeof node.sizeBytes === 'number'
             ? node.sizeBytes
             : null;
+        const fileMenuContext = nodeKind === 'file' ? props.buildFileMenuContext?.(node.path) : undefined;
         return (
             <RepositoryTreeRowActionsMenu
                 href={node.type === 'file' ? props.fileHref?.(node.path) : null}
@@ -611,6 +626,10 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 kind={nodeKind}
                 disableWriteActions={!allowCreateActions}
                 downloadActionsEnabled={transferActionsAvailable && (transferSizeBytes == null || transferSizeBytes >= 0)}
+                fileMenuContext={nodeKind === 'file' ? { ...fileMenuContext,
+                    machineReachable: machineRpcTargetAvailable,
+                    open: fileMenuContext?.open ?? (() => handleTreeOpenFile(node.path)),
+                } : undefined}
                 folderCreation={nodeKind === 'directory' ? { newFolder: allowCreateActions, upload: transferActionsAvailable } : null}
                 onSelect={(itemId) => {
                     if (itemId === 'repository-tree-menuitem-new-folder') createFolder(node.path);
@@ -620,7 +639,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 control={control}
             />
         );
-    }, [allowCreateActions, createFolder, props.fileHref, rowActions, transferActionsAvailable, uploadInto]);
+    }, [allowCreateActions, createFolder, handleTreeOpenFile, machineRpcTargetAvailable, props.buildFileMenuContext, props.fileHref, rowActions, transferActionsAvailable, uploadInto]);
 
     // This pane has no header of its own, so its + menu ends the toolbar (the session pane's header carries it).
     // The one changed-file count, needed only while its chip shows.
@@ -702,6 +721,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                         scope={workspaceScope}
                         directoryListing={machineRpcTargetAvailable}
                         directoryUnavailable={!machineRpcTargetAvailable}
+                        reconciliationPaused={props.reconciliationPaused === true || createPromptPending || pendingCreateSignal !== null || rowActions.isRenaming}
                         onRequestRefresh={refresh}
                         reloadToken={treeReloadNonce}
                         detailsMode={detailsMode}

@@ -8,7 +8,7 @@ import { useProjectInitialResource } from './useProjectInitialResource';
 import { buildProjectRouteHref, readProjectFileRouteTarget } from './projectRouteState';
 import { useFullscreenDetailsRouteController } from '@/components/workspaceCockpit/useFullscreenDetailsRouteController';
 import { useProjectRouteActions } from './useProjectRouteActions';
-import { createProjectFileDetailsTab } from './projectDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 
@@ -34,7 +34,7 @@ function Body(props: Readonly<{ onDismiss?: () => void; workspaceRef?: Workspace
     return React.createElement('ProjectResourceProbe', { scopeId: pane.scopeId, tabs: pane.scopeState?.details.tabs ?? [],
         right: pane.scopeState?.right,
         initialFile: params.initialFile, close: () => pane.closeDetailsTab('file:src/index.ts'),
-        selectFile: () => pane.openDetailsTab(createProjectFileDetailsTab('src/current.ts'), { intent: 'pinned' }),
+        selectFile: () => pane.openDetailsTab(createWorkspaceFileDetailsTab('src/current.ts'), { intent: 'pinned' }),
         closeCurrent: () => pane.closeDetailsTab('file:src/current.ts'),
         selectPage: () => actions.navigateToSegment({ segment: 'changes' }) });
 }

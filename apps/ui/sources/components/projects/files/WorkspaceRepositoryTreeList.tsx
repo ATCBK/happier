@@ -1,4 +1,5 @@
 import { useFilesystemTreeKeyboard } from '@/components/ui/filesystemBrowser/useFilesystemTreeKeyboard';
+import { useFilesystemTreeScrollAnchor } from '@/components/ui/filesystemBrowser/useFilesystemTreeScrollAnchor';
 import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import * as React from 'react';
 import { Platform, View, type ScrollViewProps } from 'react-native';
@@ -79,6 +80,7 @@ type WorkspaceRepositoryTreeListProps = Readonly<{
     /** The workspace, as one identity: what the tree is keyed by AND read through. */
     scope: WorkspaceScopeBase;
     reloadToken?: number;
+    reconciliationPaused?: boolean;
     detailsMode?: boolean;
     visibilityMode?: 'project' | 'all';
     revealedPaths?: readonly string[];
@@ -229,6 +231,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         visibilityMode: props.visibilityMode,
         preservedPaths,
         rootDirectoryPath: props.rootDirectoryPath,
+        reconciliationPaused: props.reconciliationPaused,
     });
 
     // Changed only is a presentation of the same tree: the one changed-file list (the header's and
@@ -270,6 +273,13 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
     }, [props.onGitIgnoreAvailableChange, gitIgnoreAvailable]);
 
     const keyboardListRef = React.useRef<import('@/components/ui/lists/virtualized/virtualizedListTypes').VirtualizedListRef>(null);
+    const rememberVisibleNodes = useFilesystemTreeScrollAnchor({ nodes: shownNodes,
+        scopeKey: JSON.stringify([props.scope.serverId, props.scope.machineId, props.scope.rootPath, props.rootDirectoryPath ?? '', changedOnly]),
+        listRef: keyboardListRef });
+    const onVisibleNodesChange = React.useCallback((visible: readonly WorkspaceRepositoryTreeNode[]) => {
+        rememberVisibleNodes(visible);
+        props.onVisibleNodesChange?.(visible);
+    }, [rememberVisibleNodes, props.onVisibleNodesChange]);
     const focusIndex = React.useCallback((index: number) => keyboardListRef.current?.scrollToIndex({ index, animated: false }), []);
     const treeKeyboard = useFilesystemTreeKeyboard(shownNodes, focusIndex);
     const focusedRevealRef = React.useRef<typeof props.revealRequest>(undefined);
@@ -669,7 +679,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             listFooter={props.listFooter}
             listHeader={props.listHeader}
             listEmpty={emptyRootState ?? props.listEmpty}
-            onVisibleNodesChange={props.onVisibleNodesChange}
+            onVisibleNodesChange={onVisibleNodesChange}
             rootError={rootError}
             retryRoot={retryRoot}
             emptyLabel={props.emptyLabel ?? t('files.noFilesInProject')}

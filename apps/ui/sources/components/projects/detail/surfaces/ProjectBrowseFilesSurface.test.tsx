@@ -50,8 +50,8 @@ it('keeps the Files companion browsing while promoting a literal file to existin
         location={{ path: 'nested', kind: 'folder' }} onNavigate={onNavigate}
         onOpenFile={onOpenFile} onOpenFilePinned={() => {}} />));
     await screen.pressByTestIdAsync(rowId);
-    expect(onNavigate).toHaveBeenCalledWith({ path: 'nested/name ', kind: 'file' });
-    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onOpenFile).toHaveBeenCalledTimes(2);
 });
 
 it('keeps the shared visibility choice reachable on a Code folder page', async () => {

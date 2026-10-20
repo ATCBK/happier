@@ -49,7 +49,10 @@ describe('useWorkspaceRepositoryTreeBrowser', () => {
         const hook = await renderHook(({ paused }: { paused: boolean }) => useWorkspaceRepositoryTreeBrowser({
             scope, enabled: true, expandedPaths, onExpandedPathsChange, reconciliationPaused: paused,
         }), { initialProps: { paused: false } });
-        await vi.waitFor(() => expect(hook.getCurrent().nodes.map(node => node.path)).toEqual(['src']));
+        await vi.waitFor(() => {
+            expect(hook.getCurrent().nodes.map(node => node.path)).toEqual(['src']);
+            expect(hook.getCurrent().nodes[0]?.isLoadingChildren).toBe(false);
+        });
         const applyCall = (id: string, name: string, input: unknown) => storage.getState().applyMessages(sessionId, [{
             id: `call-${id}`, localId: null, createdAt: Date.now(), role: 'agent', isSidechain: false,
             content: [{ type: 'tool-call', id, name, input, description: null, uuid: `uuid-${id}`, parentUUID: null }],

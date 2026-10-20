@@ -70,6 +70,8 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     rootLabel: string;
     location: WorkspaceCodeLocation;
     onNavigate: (location: WorkspaceCodeLocation) => void;
+    /** File activation is owned by the host's shared workspace file opener. */
+    onOpenFile: (path: string) => void;
     onOpenHistory?: ((location: WorkspaceCodeLocation) => void) | null;
     onEditFile?: ((path: string) => void) | null;
     fileHref?: (path: string) => string | null;
@@ -82,8 +84,8 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     /**
      * `page` (default): the Code page. `widget`: the Overview Code widget's body (lab p-overview HOME) —
      * the same strip and table in place, no Go to file or README (the README is its own widget), and a
-     * footer line with the way into the full page. A file pressed in the widget is handed to
-     * `onNavigate` for the host to open in Code.
+     * footer line with the way into the full page. A file pressed in either presentation enters
+     * the host's shared opener through `onOpenFile`.
      */
     presentation?: 'page' | 'widget';
     /** Widget: "Open in Code" (the host opens the Code page at this location). */
@@ -138,7 +140,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const refreshHistory = React.useCallback(() => { setHistoryReload(value => value + 1); if (available) void scm.refresh(); }, [available, scm.refresh]);
 
     const openFolder = React.useCallback((path: string) => onNavigate({ path, kind: 'folder' }), [onNavigate]);
-    const openFile = React.useCallback((path: string) => onNavigate({ path, kind: 'file' }), [onNavigate]);
+    const openFile = props.onOpenFile;
     const onVisibleEntriesChange = props.onVisibleEntriesChange;
     const onNodesChange = React.useCallback((nodes: readonly LazyDirectoryTreeNode[], directory: WorkspaceRepositoryDirectoryState) => {
         const entries = nodes.filter((node) => node.depth === 0 && (node.type === 'file' || node.type === 'directory'));

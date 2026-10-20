@@ -129,7 +129,8 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
                 leading={<Icon name="path" size={14} color={theme.colors.text.secondary} />} />
         </View>
     ), [displayMenu, openWalkThrough, theme.colors.text.secondary]);
-    const defaultOpenDetails = useSessionRightPanelGitOpenDetails(pane);
+    const defaultOpenDetails = useSessionRightPanelGitOpenDetails(pane, { sessionId: props.sessionId,
+        serverId: props.serverId ?? resolveServerIdForSessionIdFromLocalCache(props.sessionId) ?? undefined });
     // Open (or a second tap) jumps to that commit in the Commits view; the view scrolls it into place.
     const openCommitPlan = React.useCallback((groupId?: string) => {
         pane.openDetailsTab(createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'commits' }), { intent: 'pinned' });
