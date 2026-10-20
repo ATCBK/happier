@@ -3,6 +3,7 @@ import { readPullRequestComparison } from '../../../../../apps/cli/src/scm/compa
 import { getGitlabSourceEntryAction } from './operations.js';
 import { listGitlabChanges } from './detailOperations.js';
 import { GitlabChangesResultV1Schema } from './detail/contracts.js';
+import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES, isExternalActionResultWithinResponseEnvelopeLimitV1 } from '@happier-dev/plugin-sdk/actions';
 import {
   createStubGitlabTransport, gitlabTestConfiguredInstance, gitlabNextLinkHeader,
   GITLAB_TEST_COLLISION_SCOPE, GITLAB_TEST_ORIGIN,
@@ -35,6 +36,23 @@ function transport(options: { metadata?: (read: number) => unknown; page?: (requ
 }
 
 describe('merge request comparison evidence', () => {
+  it('stops a repeated file page from an external forge even when its total is unknown', async () => {
+    let pages = 0;
+    const source = { kind: 'pullRequest' as const, locator: { providerId: 'external.forge', repository: 'deployment/project', number: 7,
+      sourceAction: { action: { pluginId: 'external.forge', localId: 'comparison' }, input: {} } } };
+    const captured = await readPullRequestComparison({ source, readPage: async () => {
+      pages++;
+      if (pages > 2) throw new Error('Repeated source page was requested again');
+      return { kind: 'changedFiles', rows: [{ path: 'prefix.ts', status: 'modified', diffAvailable: true,
+        evidence: { state: 'available', patch } }], omittedRowCount: 0, projectionTruncated: false, continuation: `cursor-${pages}`,
+        comparison: { locator: { providerId: source.locator.providerId, repository: source.locator.repository, number: 7 },
+          beforeOid, baseOid, headOid, totalFileCount: null, enumeratedFileCount: pages, freshness: 'current',
+          inventory: 'incomplete', content: 'complete', reasons: ['pages_pending'] } };
+    } });
+    expect(pages).toBe(2);
+    expect(captured).toMatchObject({ state: 'incomplete', files: [{ path: 'prefix.ts' }] });
+    expect(captured.reasons).toContain('Duplicate pull-request path: prefix.ts');
+  });
   it('opens the shared host comparison through the source Get and paged Changes Actions', async () => {
     const stub = transport();
     const entry = await getGitlabSourceEntryAction({ v: 1, instance: input.instance, localRef,
@@ -42,7 +60,7 @@ describe('merge request comparison evidence', () => {
     expect(entry.kind).toBe('present');
     if (entry.kind !== 'present' || entry.comparisonSource?.kind !== 'pullRequest') throw new Error('comparison source missing');
     const source = entry.comparisonSource;
-    expect(source.locator).toMatchObject({ providerId: 'gitlab', repository, number: 7, baseOid, headOid });
+    expect(source.locator).toMatchObject({ providerId: 'gitlab', repository: `${GITLAB_TEST_ORIGIN}/${repository}`, number: 7, baseOid, headOid });
     const captured = await readPullRequestComparison({ source, readPage: async ({ sourceAction, continuation }) => {
       const result = await listGitlabChanges({ ...sourceAction.input, limit: 1, ...(continuation ? { continuation } : {}) }, stub.context);
       return GitlabChangesResultV1Schema.parse(result);
@@ -50,6 +68,21 @@ describe('merge request comparison evidence', () => {
     expect(captured).toMatchObject({ state: 'complete', freshness: 'current', before: beforeOid, after: headOid });
     expect(captured.files.map(row => row.path)).toEqual(['first.ts', 'second.ts']);
     expect(captured.files[1]?.unifiedDiff).toContain(patch);
+  });
+
+  it('keeps same-named merge requests on separate deployments in separate comparison scopes', async () => {
+    const repositories: string[] = [];
+    for (const origin of ['https://first.example', 'https://second.example']) {
+      const collisionScope = `gitlab:${Buffer.from(origin).toString('base64url')}:3`;
+      const instance = gitlabTestConfiguredInstance({ localInstanceKey: origin });
+      const stub = createStubGitlabTransport({ origin, respond: request => new URL(request.url).pathname.endsWith('/user')
+        ? ok({ id: 41, username: 'viewer' }) : ok(metadata) });
+      const entry = await getGitlabSourceEntryAction({ v: 1, instance, localRef: { ...localRef, collisionScope },
+        lastKnownLocator: { v: 1, routingToken: repository } }, stub.context);
+      if (entry.kind !== 'present' || entry.comparisonSource?.kind !== 'pullRequest') throw new Error('comparison source missing');
+      repositories.push(entry.comparisonSource.locator.repository);
+    }
+    expect(repositories).toEqual(['https://first.example/group/subgroup/project', 'https://second.example/group/subgroup/project']);
   });
 
   it.each(['base_sha', 'start_sha', 'head_sha'] as const)('refuses a changed %s without mixing pages', async endpoint => {
@@ -83,8 +116,7 @@ describe('merge request comparison evidence', () => {
       comparison: { inventory: 'complete', content: 'incomplete' } });
   });
 
-  it('preserves exact paths and cannot follow a continuation into another resource', async () => {
-    const path = 'space\tand\nnewline.ts';
+  it.each(['space\tand\nnewline.ts', ' '])('preserves the exact path %j and cannot follow a continuation into another resource', async (path) => {
     const stub = transport({ page: () => ok([file(path)], gitlabNextLinkHeader(
       `${GITLAB_TEST_ORIGIN}/api/v4/projects/other/merge_requests/7/diffs?page=2&per_page=1`)) });
     expect(await listGitlabChanges(input, stub.context)).toMatchObject({ kind: 'changedFiles',
@@ -95,6 +127,28 @@ describe('merge request comparison evidence', () => {
     const stub = transport({ metadata: () => ({ ...metadata, changes_count: '1000+' }), page: () => ok([file('retained.ts')]) });
     expect(await listGitlabChanges(input, stub.context)).toMatchObject({ kind: 'changedFiles', rows: [{ path: 'retained.ts' }],
       comparison: { totalFileCount: null, inventory: 'incomplete', reasons: expect.arrayContaining(['file_count_unavailable']) } });
+  });
+
+  it('lets the shared host keep readable files when a source cannot attest an exact total', async () => {
+    const stub = transport({ metadata: () => ({ ...metadata, changes_count: '1000+' }), page: () => ok([file('retained.ts')]) });
+    const entry = await getGitlabSourceEntryAction({ v: 1, instance: input.instance, localRef,
+      lastKnownLocator: { v: 1, routingToken: repository } }, stub.context);
+    if (entry.kind !== 'present' || entry.comparisonSource?.kind !== 'pullRequest') throw new Error('comparison source missing');
+    const captured = await readPullRequestComparison({ source: entry.comparisonSource,
+      readPage: ({ sourceAction }) => listGitlabChanges(sourceAction.input, stub.context) });
+    expect(captured).toMatchObject({ state: 'incomplete', freshness: 'current', files: [{ path: 'retained.ts' }] });
+    expect(captured.reasons).toContain('file_count_unavailable');
+  });
+
+  it('keeps inventory when patch text cannot cross the Action response envelope', async () => {
+    const stub = transport({ metadata: () => ({ ...metadata, changes_count: '1' }), page: () => ok([
+      file('retained.ts', { diff: `${patch}${'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES)}` }),
+    ]) });
+    const result = GitlabChangesResultV1Schema.parse(await listGitlabChanges(input, stub.context));
+    expect(isExternalActionResultWithinResponseEnvelopeLimitV1(result)).toBe(true);
+    expect(result).toMatchObject({ kind: 'changedFiles', omittedRowCount: 0,
+      rows: [{ path: 'retained.ts', evidence: { state: 'unavailable', reason: 'transport_limit' } }],
+      comparison: { inventory: 'complete', content: 'incomplete' } });
   });
 
   it('does not claim clean evidence when the provider stops before the reported file count', async () => {

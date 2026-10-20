@@ -132,7 +132,7 @@ describe('GitLab plugin manifest', () => {
     // a protocol role, not one of the native detail planes.
     const contribution = PLUGIN_MANIFEST.contributes.targetedPluginContributions[0];
     expect(Object.keys(contribution?.operations ?? {}).sort())
-      .toEqual(['get', 'listInstances', 'prepareReviewWorkspace', 'readPullRequestStatus', 'scan', 'verifyReviewWorkspace']);
+      .toEqual(['get', 'listInstances', 'listScopeUnits', 'prepareReviewWorkspace', 'readPullRequestStatus', 'scan', 'verifyReviewWorkspace']);
   });
 
   it('binds prepared-workspace materialization as the protocol-owned local write', () => {
