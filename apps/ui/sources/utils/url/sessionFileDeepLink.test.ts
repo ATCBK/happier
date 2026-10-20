@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSessionFileDeepLink, parseSearchFileTarget, parseSessionFileDeepLinkAnchor } from './sessionFileDeepLink';
+import { buildSessionFileDeepLink, buildWorkspaceFileLink, parseSearchFileTarget, parseSessionFileDeepLinkAnchor } from './sessionFileDeepLink';
 
 describe('sessionFileDeepLink', () => {
+    it('shares one file-link builder across Session and Project targets with anchor and view intent', () => {
+        for (const target of [
+            { kind: 'session' as const, sessionId: 's1', serverId: 'home-a' },
+            { kind: 'project' as const, workspaceRefId: 'project-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo/checkout' },
+        ]) {
+            const path = 'src/has space.ts';
+            const anchor = { kind: 'range' as const, filePath: path, startLine: 9, endLine: 12 };
+            const href = buildWorkspaceFileLink({ target, path, anchor, view: 'changes', blame: true });
+            const parsed = parseSearchFileTarget(href);
+            expect(parsed).toMatchObject({ path, anchor, serverId: 'home-a' });
+            expect(parsed).toMatchObject(target.kind === 'session' ? { sessionId: 's1' } : { workspaceRefId: 'project-a' });
+            const url = new URL(href, 'https://happier.test');
+            expect(url.searchParams.get('fileView')).toBe('changes');
+            expect(url.searchParams.get('blame')).toBe('1');
+            if (target.kind === 'project') expect(url.searchParams.get('activeRootPath')).toBe('/repo/checkout');
+        }
+    });
     it('reads file intent on canonical Project pages without admitting unpublished alias routes', () => {
         expect(parseSearchFileTarget('/projects/project-a/code?serverId=home-b&initialFile=src%2Fa.ts&source=file&anchor=fileLine&startLine=9'))
             .toEqual({ workspaceRefId: 'project-a', serverId: 'home-b', path: 'src/a.ts', anchor: { kind: 'fileLine', startLine: 9 } });
@@ -20,6 +37,8 @@ describe('sessionFileDeepLink', () => {
         expect(parseSearchFileTarget(diffUrl)).toMatchObject({ anchorSource: 'diff', anchor });
     });
     it('parses terminal line and column suffixes without splitting drives or literal filename colons', () => {
+        expect(parseSearchFileTarget('C:12')).toBeNull();
+        expect(parseSearchFileTarget('src/a.ts::12')).toBeNull();
         expect(parseSearchFileTarget('C:\\x\\a.ts:12:4')).toEqual({ path: 'C:\\x\\a.ts', anchor: { kind: 'fileLine', startLine: 12 }, column: 4 });
         expect(parseSearchFileTarget('C:\\x\\a.ts:12')).toEqual({ path: 'C:\\x\\a.ts', anchor: { kind: 'fileLine', startLine: 12 } });
         expect(parseSearchFileTarget('a:b.ts')).toBeNull();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
-import { isBinaryContent, isKnownBinaryPath } from './filePresentation';
+import { isBinaryContent, resolveFileViewerKind } from './filePresentation';
 
 describe('getFileLanguageFromPath', () => {
     it('maps known file extensions to syntax highlighter languages', () => {
@@ -43,12 +43,60 @@ describe('getFileLanguageFromPath', () => {
     });
 });
 
-describe('isKnownBinaryPath', () => {
-    it('detects binary file extensions', () => {
-        expect(isKnownBinaryPath('assets/logo.png')).toBe(true);
-        expect(isKnownBinaryPath('build/app.exe')).toBe(true);
-        expect(isKnownBinaryPath('src/app.ts')).toBe(false);
-        expect(isKnownBinaryPath('assets/icon.svg')).toBe(false);
+describe('resolveFileViewerKind', () => {
+    it('projects alpha capability from the same resolved kind and MIME row', () => {
+        for (const path of ['icon.png', 'icon.webp', 'icon.gif', 'icon.ico', 'icon.svg', 'icon.avif']) {
+            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(true);
+        }
+        expect(resolveFileViewerKind({ path: 'photo.jpg' }).alphaCapable).toBe(false);
+        expect(resolveFileViewerKind({ path: 'icon.png', mimeType: 'image/jpeg' }).alphaCapable).toBe(false);
+        expect(resolveFileViewerKind({ path: 'photo.jpg', mimeType: 'image/png' }).alphaCapable).toBe(true);
+        expect(resolveFileViewerKind({ path: 'icon.png', isBinaryContent: true }).alphaCapable).toBe(false);
+    });
+
+    it('provides precise kinds and MIME across file families', () => {
+        for (const [path, kind, mimeType, previewable] of [
+            ['logo.png', 'image', 'image/png', true],
+            ['icon.svg', 'svg', 'image/svg+xml', true],
+            ['README.md', 'markdown', 'text/markdown', false],
+            ['app.ts', 'code', 'text/plain', false],
+            ['spec.pdf', 'pdf', 'application/pdf', true],
+            ['clip.m4v', 'video', 'video/x-m4v', true],
+            ['song.mp3', 'audio', 'audio/mpeg', true],
+            ['archive.zip', 'binary', 'application/zip', false],
+            ['C:\\project.mp4\\plain.unknown', 'code', 'text/plain', false],
+        ] as const) {
+            expect(resolveFileViewerKind({ path })).toMatchObject({ kind, mimeType, previewable });
+        }
+    });
+
+    it('prefers specific MIME and falls back from generic MIME to the path', () => {
+        expect(resolveFileViewerKind({ path: 'photo.jpg', mimeType: ' application/pdf; charset=binary ' }).kind).toBe('pdf');
+        expect(resolveFileViewerKind({ path: 'icon.SVG', mimeType: 'application/octet-stream' }).kind).toBe('svg');
+        expect(resolveFileViewerKind({ path: 'icon.svg', isBinaryContent: true }).kind).toBe('binary');
+        expect(resolveFileViewerKind({ path: 'unknown.asset', isBinaryContent: true })).toMatchObject({ kind: 'binary', mimeType: 'application/octet-stream' });
+        expect(resolveFileViewerKind({ path: 'photo', mimeType: 'image/heic' })).toMatchObject({ kind: 'image', mimeType: 'image/heic', previewable: true });
+        expect(resolveFileViewerKind({ path: 'recording', mimeType: 'audio/opus' })).toMatchObject({ kind: 'audio', mimeType: 'audio/opus', previewable: true });
+    });
+
+    it('owns alpha capability for the image well in the same classification', () => {
+        for (const path of ['logo.png', 'logo.webp', 'logo.gif', 'logo.ico', 'logo.svg']) {
+            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(true);
+        }
+        for (const path of ['photo.jpg', 'photo.bmp', 'README.md', 'unknown']) {
+            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(false);
+        }
+        expect(resolveFileViewerKind({ path: 'photo.png', mimeType: 'image/jpeg' }).alphaCapable).toBe(false);
+    });
+
+    it('refines supplied generic bytes without reading anything itself', () => {
+        const bytes = (text: string) => new TextEncoder().encode(text);
+        expect(resolveFileViewerKind({ path: 'upload', head: bytes('%PDF-1.7') }).kind).toBe('pdf');
+        expect(resolveFileViewerKind({ path: 'wrong.txt', head: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) }).kind).toBe('image');
+        expect(resolveFileViewerKind({ path: 'script', head: bytes('#!/bin/sh\necho hi') }).kind).toBe('code');
+        expect(resolveFileViewerKind({ path: 'bad.pdf', head: bytes('not a PDF') }).kind).toBe('binary');
+        expect(resolveFileViewerKind({ path: 'offset.pdf', head: bytes('padding\n%PDF-1.7') }).kind).toBe('pdf');
+        expect(resolveFileViewerKind({ path: 'late.pdf', head: bytes('x'.repeat(1024) + '%PDF-1.7') }).kind).toBe('binary');
     });
 });
 
@@ -65,10 +113,4 @@ describe('isBinaryContent', () => {
     it('allows plain text including whitespace controls', () => {
         expect(isBinaryContent('line 1\nline 2\tline 3\r\n')).toBe(false);
     });
-});
-
-
-it('classifies M4V and mixed-separator video paths as opaque binary files', () => {
-    expect(isKnownBinaryPath('assets/clip.m4v')).toBe(true);
-    expect(isKnownBinaryPath('C:\\project.mp4\\plain.txt')).toBe(false);
 });
