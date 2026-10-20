@@ -210,13 +210,12 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
     });
 
-    const reportCount = target.session.managedSessions?.total ?? 0;
     const confirmArchiveSession = React.useCallback(async () => {
-        const confirmation = await confirmSessionArchive({ reportCount });
+        const confirmation = await confirmSessionArchive({ leadSessionId: target.sessionId, serverId: target.serverId });
         if (!confirmation.confirmed) return;
         alsoArchiveReportsRef.current = confirmation.alsoArchiveReports;
         performArchiveMutation();
-    }, [performArchiveMutation, reportCount]);
+    }, [performArchiveMutation, target.serverId, target.sessionId]);
 
     const handleRenameSession = React.useCallback(async () => {
         const newName = await Modal.prompt(

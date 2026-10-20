@@ -52,7 +52,7 @@ describe('archive confirmation policy', () => {
         getStorage().setState({ settings: { ...settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {} }) } });
         vi.mocked(Modal.confirm).mockClear();
         try {
-            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' })).toEqual({ confirmed: true, alsoArchiveReports: false });
             expect(Modal.confirm).not.toHaveBeenCalled();
         } finally {
             getStorage().setState({ settings });
@@ -66,11 +66,39 @@ describe('archive confirmation policy', () => {
         }) } });
         vi.mocked(Modal.confirm).mockClear();
         try {
-            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' })).toEqual({ confirmed: true, alsoArchiveReports: false });
             expect(Modal.confirm).not.toHaveBeenCalled();
         } finally {
             getStorage().setState({ settings });
         }
     });
 
+});
+
+describe('archive confirmation scope', () => {
+    const lead = (reports: ReadonlyArray<ReturnType<typeof createSessionFixture>>) => getStorage().setState({
+        sessions: Object.fromEntries(reports.map((report) => [report.id, report])),
+        sessionListRowsByServerId: {},
+    });
+
+    it('does not offer "Also archive" when the only sub-session is already archived', async () => {
+        lead([createSessionFixture({ id: 'done', serverId: 'home-a', manager: { sessionId: 'lead' }, archivedAt: 4 })]);
+        vi.mocked(Modal.show).mockClear();
+        expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' }))
+            .toEqual({ confirmed: true, alsoArchiveReports: false });
+        expect(Modal.show).not.toHaveBeenCalled();
+    });
+
+    it('counts only the sub-sessions the cascade would archive', async () => {
+        lead([
+            createSessionFixture({ id: 'live', serverId: 'home-a', manager: { sessionId: 'lead' } }),
+            createSessionFixture({ id: 'done', serverId: 'home-a', manager: { sessionId: 'lead' }, archivedAt: 4 }),
+        ]);
+        vi.mocked(Modal.show).mockClear();
+        const pending = confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' });
+        const shown = vi.mocked(Modal.show).mock.calls[0]![0] as unknown as { props: { reportCount: number; onResolve: (r: { confirmed: boolean; alsoArchiveReports: boolean }) => void } };
+        expect(shown.props.reportCount).toBe(1);
+        shown.props.onResolve({ confirmed: false, alsoArchiveReports: false });
+        await pending;
+    });
 });

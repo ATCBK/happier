@@ -11,6 +11,7 @@ import { Typography } from '@/constants/Typography';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { getStorage } from '@/sync/domains/state/storage';
+import type { Session } from '@/sync/domains/state/storageTypes';
 import { selectSessionReportSubtree } from '@/components/sessions/work/reportSubtree';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
@@ -119,14 +120,29 @@ export function SessionArchiveConfirmModal(props: SessionArchiveConfirmModalProp
     );
 }
 
-export async function confirmSessionArchive(params: Readonly<{ reportCount: number }>): Promise<SessionArchiveConfirmation> {
-    if (params.reportCount <= 0) {
+type SessionArchiveLead = Readonly<{ leadSessionId: string; serverId: string | null }>;
+
+/**
+ * The direct reports archiving a lead can still change: the one set the confirmation counts and the
+ * cascade archives. An already archived report is history, not something Archive would do to it, so it is
+ * neither offered nor counted.
+ */
+function selectArchivableSessionReports(params: SessionArchiveLead): readonly Session[] {
+    const state = getStorage().getState();
+    return selectSessionReportSubtree(state.sessions, params.leadSessionId, params.serverId, state.sessionListRowsByServerId).filter((session) => (
+        readSessionManagerSessionIdV1(session) === params.leadSessionId && session.archivedAt == null
+    ));
+}
+
+export async function confirmSessionArchive(params: SessionArchiveLead): Promise<SessionArchiveConfirmation> {
+    const reportCount = selectArchivableSessionReports(params).length;
+    if (reportCount <= 0) {
         return { confirmed: true, alsoArchiveReports: false };
     }
     return await new Promise<SessionArchiveConfirmation>((resolve) => {
         Modal.show({
             component: SessionArchiveConfirmModal,
-            props: { reportCount: params.reportCount, onResolve: resolve },
+            props: { reportCount, onResolve: resolve },
         });
     });
 }
@@ -141,10 +157,7 @@ export async function archiveSessionReports(params: Readonly<{
     serverId: string | null;
     context?: SessionActionExecutionContext;
 }>): Promise<void> {
-    const state = getStorage().getState();
-    const reports = selectSessionReportSubtree(state.sessions, params.leadSessionId, params.serverId, state.sessionListRowsByServerId).filter((session) => (
-        readSessionManagerSessionIdV1(session) === params.leadSessionId && session.archivedAt == null
-    ));
+    const reports = selectArchivableSessionReports(params);
     const notArchived: string[] = [];
     for (const report of reports) {
         const serverId = params.serverId;

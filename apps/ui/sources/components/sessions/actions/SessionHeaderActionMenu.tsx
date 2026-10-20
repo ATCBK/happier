@@ -910,7 +910,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
               }
               let alsoArchiveReports = false;
               if (actionId === SESSION_ACTION_ARCHIVE_ID) {
-                const confirmation = await confirmSessionArchive({ reportCount: session?.managedSessions?.total ?? 0 });
+                const confirmation = await confirmSessionArchive({ leadSessionId: props.sessionId, serverId: sessionServerId ?? null });
                 if (!confirmation.confirmed) return;
                 alsoArchiveReports = confirmation.alsoArchiveReports;
               }
