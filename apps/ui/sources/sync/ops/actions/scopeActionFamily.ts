@@ -99,6 +99,20 @@ export function registerFileViewActionOwner(key: string, read: () => FileViewAct
   fileViewOwners.set(key, read);
   return () => { if (fileViewOwners.get(key) === read) fileViewOwners.delete(key); };
 }
+function selectFileViewActionOwner(tabId: string | undefined,
+  context?: Pick<ActionExecutorContext, 'serverId' | 'runtimeAccountId'>): FileViewActionOwner | null {
+  const owners = [...fileViewOwners.values()].map(read => read()).filter(owner =>
+    (tabId ? owner.tabId === tabId : owner.active)
+    && (!context?.serverId || owner.serverId === context.serverId)
+    && (!context?.runtimeAccountId || owner.accountId === context.runtimeAccountId));
+  // Ambiguous unaddressed surfaces cannot choose another page's state.
+  return owners.length === 1 ? owners[0]! : null;
+}
+
+/** The File page `file.view.get/set` would address with no tab id; the palette reads it to offer its commands. */
+export function readActiveFileViewActionOwner(): FileViewActionOwner | null {
+  return selectFileViewActionOwner(undefined);
+}
 let readLibraryOwner: (() => WorkflowLibraryViewController) | null = null;
 
 /** The focused Library joins the same client-local view-control bridge as Sessions and shell chrome. */
@@ -151,12 +165,7 @@ export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unkno
   }
   if (actionId === 'file.view.get' || actionId === 'file.view.set') {
     const input = ScopeActionInputSchemas[actionId].parse(rawInput);
-    const owners = [...fileViewOwners.values()].map(read => read()).filter(owner =>
-      (input.tabId ? owner.tabId === input.tabId : owner.active)
-      && (!context?.serverId || owner.serverId === context.serverId)
-      && (!context?.runtimeAccountId || owner.accountId === context.runtimeAccountId));
-    // Ambiguous unaddressed surfaces cannot choose another page's state.
-    const owner = owners.length === 1 ? owners[0] : null;
+    const owner = selectFileViewActionOwner(input.tabId, context);
     if (!owner) return unavailable('client_surface_unavailable');
     if (actionId === 'file.view.get') return { tabId: owner.tabId, mode: owner.mode, blame: owner.blame,
       ...(owner.changesScope ? { changesScope: owner.changesScope } : {}) };
