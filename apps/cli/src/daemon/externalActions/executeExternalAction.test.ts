@@ -29,7 +29,7 @@ import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay, type Approv
 import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { ActionsSettingsV1Schema, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
-  ExternalActionExecutionAuthorizationV1Schema, projectExternalActionExecutionResultV1,
+  ExternalActionExecutionAuthorizationV1Schema, ExternalActionServerPrincipalV1Schema, projectExternalActionExecutionResultV1,
   projectExternalActionHttpError, ExternalActionHttpErrorSchema,
   parseExternalActionDaemonDispatchResult } from '@happier-dev/protocol/actions/externalActionApi';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
@@ -1352,14 +1352,14 @@ describe('executeExternalAction', () => {
     const envelope = { v: 1 as const, requestId: 'signed-private-request', target, input: { sessionId: target.sessionId } };
     const authentication = { kind, tokenEpoch: 1 };
     const result = await executeExternalAction({ actionId: 'session.board.get', envelope,
-      principal: { accountId: principal.accountId, authority: 'account_automation', authentication },
+      principal: ExternalActionServerPrincipalV1Schema.parse({ accountId: principal.accountId, authority: 'account_automation', authentication }),
       currentMachineId: 'machine-1', currentServerId: 'home-profile', currentInstallationId: 'installation-1',
-      executionAuthorization: { v: 1, token: 'opaque-home-authorization', binding: {
+      executionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'opaque-home-authorization', binding: {
         accountId: principal.accountId, authentication, accountEncryptionMode: 'e2ee',
         serverIdentityId: 'srv_home', machineId: 'machine-1', custodianAccountId: principal.accountId,
         installationId: 'installation-1', actionId: 'session.board.get', requestId: envelope.requestId, target,
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
-      } },
+      } }),
       externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23)).secretKey,
       verifyExecutionAuthorization: async () => true,
       resolveTarget: async () => { throw new Error('Private V1 must refuse before target reads'); },

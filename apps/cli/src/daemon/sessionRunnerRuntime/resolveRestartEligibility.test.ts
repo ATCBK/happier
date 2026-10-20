@@ -31,12 +31,12 @@ describe('resolveSessionRunnerRestartEligibility', () => {
       .toEqual({ eligible: false, disabledReason: 'restart_admission_unsupported' });
     expect(resolveSessionRunnerRestartEligibility(trackedRunner({
       sessionRunnerPid: 4243, runnerRestartAdmissionUnsupportedPid: 4243,
-      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346,
+      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346, processCommandHash: 'command-hash',
         processCommand: trackedRunner().processCommand },
     }))).toEqual({ eligible: false, disabledReason: 'restart_admission_unsupported' });
     expect(resolveSessionRunnerRestartEligibility(trackedRunner({
       sessionRunnerPid: 4243, runnerRestartAdmissionUnsupportedPid: 4242,
-      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346,
+      runnerProcessIdentity: { pid: 4243, processStartTimeMs: 12_346, processCommandHash: 'command-hash',
         processCommand: trackedRunner().processCommand },
     }))).toEqual({ eligible: true, disabledReason: null });
     expect(resolveSessionRunnerRestartEligibility(trackedRunner()))

@@ -119,6 +119,7 @@ describe('registered Session native auth refresh through the canonical coordinat
                 if (action.type !== 'error') throw new Error('Expected rejected grant');
                 if (reason) {
                     expect(daemonFailure.errorDetail).toMatchObject({ uxDiagnostic: { diagnostics: { reason } } });
+                    if (!('launchError' in action)) throw new Error('Missing launch diagnostic');
                     expect(action.launchError?.message).toContain(reason);
                     expect(fetch).not.toHaveBeenCalled();
                 } else {

@@ -62,6 +62,7 @@ describe('recovered runner machine control', () => {
     http.fetch.mockImplementation(async () => stored);
     vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { accessKey: { id: 'binding' } } });
     http.tuple.mockImplementation(async (request) => {
+      if (stored.agentStateVersion === undefined) throw new Error('Missing Agent-state version');
       stored = { ...stored, ownerMetadata: request.patch.ownerMetadata,
         metadataVersion: stored.metadataVersion + 1, agentStateVersion: stored.agentStateVersion + 1 };
       return { success: true, metadataLayoutVersion: 1,

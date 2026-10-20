@@ -862,7 +862,7 @@ describe('materializeConnectedServicesForSpawn', () => {
         }),
         registerRunTargets: registration => { registry.registerRunTarget({ ...registration, pid: registration.runnerPid,
           connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw }); },
-        unregisterRunTargets: runKey => registry.unregisterRunKey(runKey),
+        unregisterRunTargets: runKey => { registry.unregisterRunKey(runKey); },
         resolveRunMaterializedRoot: () => home,
         createAdoptedRootCleanup: () => null,
         captureRunnerIdentity: ({ runId }) => ({ identity: params,

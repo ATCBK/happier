@@ -268,6 +268,20 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   // owners, the full Profile pager and requester runtime stay real.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
     const path = new URL(url).pathname;
+    if ((surface === 'follow-source' || surface === 'follow-receiver')
+      && path === `/v1/sessions/${followSourceId}/messages`) {
+      expect(config?.headers?.Authorization).toBe(`Bearer ${requesterToken}`);
+      const afterSeq = Number(config?.params?.afterSeq ?? new URL(url).searchParams.get('afterSeq') ?? 0);
+      const messages = ['moved-out-original', 'moved-in-original', 'completed-original'].map((localId, index) => ({
+        id: localId, localId, seq: index + 1, createdAt: index + 1, updatedAt: index + 1,
+        sidechainId: null, messageRole: 'agent', content: { t: 'plain', v: buildAcpAgentMessageEnvelope({
+          provider: 'claude', body: index === 2
+            ? { type: 'task_complete', id: localId }
+            : { type: 'turn_failed', id: localId },
+        }) },
+      })).filter(row => row.seq > afterSeq);
+      return { status: 200, data: { messages, hasMore: false, nextBeforeSeq: null, nextAfterSeq: null } };
+    }
     if (path === '/v2/changes') {
       const after = Number(config?.params?.after ?? new URL(url).searchParams.get('after') ?? 0);
       return { status: 200, data: { changes: followAccountChanges.filter(change => change.cursor > after),
@@ -591,8 +605,14 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       expect(followEnqueued).toEqual([]);
       sourceProject = 'payments';
       await deliver({ ...occurrence, sourceMessage: { localId: 'moved-in-original', seq: 2 } });
-      expect(followEnqueued).toHaveLength(1);
-      expect(followEnqueued[0]).toMatchObject({ followSources: [{ rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } }],
+      // A notification traverses every still-undelivered original with current
+      // facts; the earlier nonmatch did not advance the server's zero frontier.
+      expect(followEnqueued).toEqual(['moved-out-original', 'moved-in-original'].map((localId, index) => expect.objectContaining({
+        followSources: [expect.objectContaining({ rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } })],
+        followDeliveryV1: { v: 1, original: { sourceSessionId: followSourceId,
+          sourceMessage: { localId, seq: index + 1 } }, event: { kind: 'failed_or_stopped' }, delivery: 'wake' },
+      })));
+      expect(followEnqueued[1]).toMatchObject({ followSources: [{ rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } }],
         followRelations: [{ relation: 'follower' }, { relation: 'manager', attachedAt: 10 }],
         followDeliveryV1: { original: { sourceSessionId: followSourceId, sourceMessage: { localId: 'moved-in-original', seq: 2 } }, delivery: 'wake' } });
       if (surface === 'follow-receiver') {
@@ -607,7 +627,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
           sourceMessage: { localId: 'completed-original', seq: 3,
             policies: [{ preset: 'custom', events: { finished: { delivery: 'quiet' } } }] } } });
       }
-      expect(followReads.filter(path => path.endsWith('/session-follow-rules'))).toHaveLength(1);
+      expect(followReads).toContain('/v2/account/session-follow-rules');
       expect(getActiveAccountSettingsSnapshot()).toBe(alice);
       return;
     }
@@ -620,6 +640,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       return;
     }
     if (surface === 'follow-wake' || surface === 'follow-pending') {
+      if (!host) throw new Error('Missing requester control host');
       const requester = runtime;
       const installationId = host.installation?.installationId;
       if (!installationId) throw new Error('Missing real installation');

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, snapshotSessionRolesAtSpawnV1, type SessionRolesV1 } from '@happier-dev/protocol';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, snapshotSessionRolesAtSpawnV1, projectSessionOwnerCompatibilityViewV1, type SessionRolesV1 } from '@happier-dev/protocol';
 import { ApiClient } from '@/api/api';
 import type { Metadata } from '@/api/types';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
@@ -101,7 +101,7 @@ describe('host-stamped Session creation facts transport', () => {
       api, sessionTag: 'ordinary-origin-tag', metadata: runnerMetadata,
       state: { controlledByUser: false }, uiLogPrefix: '[test]',
       startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
-    })).rejects.toThrow('observed-create-boundary');
+    })).rejects.toMatchObject({ code: 'outcome_unknown' });
 
     expect(post.mock.calls[0]?.[1]).toMatchObject(facts);
     expect(post.mock.calls[0]?.[1]).not.toHaveProperty('origin');
@@ -193,7 +193,7 @@ describe('host-stamped Session creation facts transport', () => {
     const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('observed-create-boundary'));
     await expect(getOrCreateSessionByTag({
       credentials, tag: 'replay-origin-tag', metadata: {}, agentState: null, ...origin,
-    })).rejects.toThrow('observed-create-boundary');
+    })).rejects.toMatchObject({ code: 'outcome_unknown' });
     expect(post.mock.calls[0]?.[1]).toMatchObject(origin);
     expect(post.mock.calls[0]?.[1]).not.toHaveProperty('origin');
   });
@@ -228,7 +228,7 @@ describe('host-stamped Session creation facts transport', () => {
       api, sessionTag: 'worker-relation-tag', metadata: runnerMetadata,
       state: { controlledByUser: false }, uiLogPrefix: '[test]',
       startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
-    })).rejects.toThrow('observed-create-boundary');
+    })).rejects.toMatchObject({ code: 'outcome_unknown' });
     expect(post.mock.calls[0]?.[1]).toMatchObject({ manager });
   });
 
@@ -249,11 +249,12 @@ describe('host-stamped Session creation facts transport', () => {
     const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('observed-create-boundary'));
     const api = await ApiClient.create(credentials);
     await expect(initializeBackendRunSession({
-      api, sessionTag: 'worker-roles-tag', metadata: { ...runnerMetadata,
-        sessionWorkflowActivityHeadlineV1: { v: 1, backendId: 'codex', updatedAt: 1, activeRuns: [] } },
+      api, sessionTag: 'worker-roles-tag', metadata: { ...projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 },
+        ownerMetadata: { v: 1, work: { sessionWorkflowActivityHeadlineV1: { v: 1, backendId: 'codex', updatedAt: 1, activeRuns: [] } } } }),
+        ...runnerMetadata },
       state: { controlledByUser: false }, uiLogPrefix: '[test]',
       startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
-    })).rejects.toThrow('observed-create-boundary');
+    })).rejects.toMatchObject({ code: 'outcome_unknown' });
     const input = post.mock.calls[0]?.[1] as { ownerMetadata: { t: 'plain'; v: unknown }; sharedMetadata: { ciphertext: string } };
     expect(input.ownerMetadata).toMatchObject({ t: 'plain', v: { work: {
       sessionWorkflowActivityHeadlineV1: { v: 1, backendId: 'codex', updatedAt: 1, activeRuns: [] },
@@ -298,7 +299,7 @@ describe('host-stamped Session creation facts transport', () => {
       const create = creator === 'runner'
         ? api.getOrCreateSession({ tag: 'worker-create', metadata, state: null })
         : getOrCreateSessionByTag({ credentials, tag: 'worker-create', metadata, agentState: null });
-      await expect(create).rejects.toThrow('observed-create-boundary');
+      await expect(create).rejects.toMatchObject({ code: 'outcome_unknown' });
       const input = post.mock.calls.at(-1)?.[1];
       expect(input).toMatchObject({ ownerMetadata: { t: 'plain', v: { work: { sessionRolesV1: {
         roleId: 'builder', sessionRoles: initialSessionRolesV1.sessionRoles, notes: initialSessionRolesV1.notes,

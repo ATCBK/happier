@@ -249,6 +249,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   let source: ProjectSourceV1 | null = { id: 'source', revision: 2, name: 'App', repository, audience: [], createdByAccountId: 'account' };
   const networkPaths: string[] = [];
   const rpcOutcomes: unknown[] = [];
+  let changeRequesterRowsBeforePreparation: (() => void) | undefined;
   let originalMoveIngress: ((request: ReturnType<typeof ExternalActionExecutionAuthorizationRequestV1Schema.parse>) => Promise<unknown>) | undefined;
   const homeRequest = (method: 'GET' | 'POST', path: string, body: unknown, headers: unknown) => {
     if (!home || !headers || typeof headers !== 'object' || !Object.hasOwn(headers, EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER)) return null;
@@ -416,8 +417,15 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       await trustRead;
       return { status: 200, data: { status: 'absent' } };
     }
-    if (path === '/v1/account/project-rows/list') return { status: 200,
-      data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: protectedMoveRows ?? rows }) };
+    if (path === '/v1/account/project-rows/list') {
+      if (changeRequesterRowsBeforePreparation && rpcOutcomes.some(outcome => typeof outcome === 'object'
+        && outcome !== null && 'phase' in outcome && outcome.phase === 'installed.prepareBetween')) {
+        changeRequesterRowsBeforePreparation();
+        changeRequesterRowsBeforePreparation = undefined;
+      }
+      return { status: 200,
+        data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: protectedMoveRows ?? rows }) };
+    }
     if (path === '/v1/account/project-rows/mutate') {
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changes: ProjectAccountRowV1[] = [];
@@ -564,7 +572,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const rpc = manager;
   const admission = { actorAccountId: 'account', custodianAccountId: 'account', machineId: target.machineId,
     installationId: installation.installationId, role: 'manage' as const, encryptionMode: 'plain' as const };
-  const sourceRpc = worker ? new RpcHandlerManager({ scopePrefix: ref.machineId, localMachineId: ref.machineId, encryptionMode: 'plain',
+  const sourceRpc: RpcHandlerManager | undefined = worker ? new RpcHandlerManager({ scopePrefix: ref.machineId, localMachineId: ref.machineId, encryptionMode: 'plain',
     authorizeRequest: request => authorizeMachineRpcRequest(request, { machineId: ref.machineId,
       resolveCustodianAccountId: async () => sourceAccountId, resolveInstallationId: () => sourceInstallation.installationId,
       verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input, privateKey: sourceInstallation.privateKey,
@@ -734,9 +742,12 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     workingDirectory: rootPath, accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] }, nativeIo: {
       ...nativeIo.commandIo, resolveTool: async tool => ({ executablePath: `/managed/${tool}`, version: '1' }) },
     inspectSetup: async ({ workspace, context, reviewSetupConsent }) => {
-      const requester = { credentials: readRequesterAccountActionContext(context.externalActionExecutionAuthorization)?.credentials ?? credentials,
-        authorization: context.externalActionExecutionAuthorization, serverHttpBaseUrl: params.serverHttpBaseUrl };
-      const association = await resolveProjectSetupAcceptedWorkspace({ ...requester, address: workspace,
+      const authorization = context.externalActionExecutionAuthorization;
+      const requesterCredentials = readRequesterAccountActionContext(authorization)?.credentials ?? credentials;
+      const requester = { credentials: requesterCredentials, authorization, serverHttpBaseUrl: params.serverHttpBaseUrl };
+      const association = await resolveProjectSetupAcceptedWorkspace({
+        ...(authorization ? { authorization, effectActionId: authorization.binding.actionId } : { credentials: requesterCredentials }),
+        serverHttpBaseUrl: params.serverHttpBaseUrl, address: workspace,
         serverId: homeId, signal: context.signal });
       return await inspectProjectSetup({ workspace: association.workspace, projectAssociation: association, requester,
         purpose: 'setup', approvalContext: context, platform: { os: process.platform, arch: process.arch },
@@ -1110,7 +1121,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
               return result.response;
             };
             const app = createDaemonControlApp({ machineId: ref.machineId, controlToken: 'source-control',
-              getChildren: () => [], stopSession: async () => false,
+              getChildren: () => [], stopSession: async () => ({ status: 'not_found' }),
               spawnSession: async () => { throw new Error('Unexpected Session spawn'); }, requestShutdown() {}, onHappySessionWebhook() {},
               externalActionApi: { currentServerId: 'srv_n2', currentAccountId: 'account', executor: sourceExecutor,
                 resolveTarget, verifyPat: async () => { throw new Error('Unexpected PAT'); } } });
@@ -1194,14 +1205,18 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       await currentnessChannel?.push('account', { mode: 'plain', version: encryptionVersion, updatedAt: encryptionVersion,
         signingKeyFingerprint: null, contentKeyFingerprint: null });
     }; },
-    async changeRequesterWorkerRoot() {
+    async changeRequesterWorkerRootBeforePreparation() {
       const otherRoot = join(directory, 'other-account-worker');
       await mkdir(otherRoot);
       const index = rows.findIndex(row => row.key.kind === 'workspace-ref' && row.key.id === workerRef.id);
       const row = rows[index];
       if (!row || row.key.kind !== 'workspace-ref') throw new Error('Missing worker WorkspaceRef');
-      rows[index] = ProjectAccountRowV1Schema.parse({ key: row.key, revision: row.revision + 1,
+      const replacement = ProjectAccountRowV1Schema.parse({ key: row.key, revision: row.revision + 1,
         content: { t: 'plain', v: { key: row.key, value: { ...workerRef, rootPath: otherRoot } } } });
+      // A pre-request same-Account row update may legitimately refresh the
+      // installed projection during passive inspection. Move Home's root only
+      // after acceptance so the real preparation guard observes the mismatch.
+      changeRequesterRowsBeforePreparation = () => { rows[index] = replacement; };
     },
     disconnectInstalledMachine: () => installedSocket?.disconnect(),
     source: () => source, hasApproval: () => artifact !== undefined,

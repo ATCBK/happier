@@ -91,7 +91,7 @@ describe('provider-account usage startup activation', () => {
       quotaFetchers: [{ serviceId: 'openai-codex' }],
       awaitReadiness: async () => {},
       hydrate: async ({ serviceIds }) => (await hydrateProviderAccountUsageStoreFromConnectedServiceInventory({
-        serviceIds, credentials: { token: 'token' }, store: createProviderAccountUsageStore(), nowMs: 1_000,
+        serviceIds, credentials: { token: 'token', encryption: null }, store: createProviderAccountUsageStore(), nowMs: 1_000,
         api: {
           getAccountEncryptionMode: async () => 'plain',
           listAccounts: async () => ({ service, accounts: ++inventories <= 12 && inventories % 2 === 1 ? [{

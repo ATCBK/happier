@@ -30,7 +30,7 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { formatSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
-import { configuration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
 import { normalizeServerHttpBaseUrl, publishServerHttpRuntimeOrigin, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { probeAlreadyRunningExistingSessionServiceability } from '@/daemon/startup/pendingQueueNudge';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
@@ -1225,8 +1225,8 @@ describe('requester Session lifecycle custody', () => {
         return { type: 'success', sessionId: 'session' };
       },
     } });
-    const previousHome = configuration.happyHomeDir;
-    configuration.happyHomeDir = directory!;
+    vi.stubEnv('HAPPIER_HOME_DIR', directory!);
+    reloadConfiguration();
     try {
       const result = await handler({ directory: directory!, agentTarget: { kind: 'agent', identity: { pluginId, localId: 'agent' } } }, {
         signal: new AbortController().signal, requesterSessionBootstrap: prepared.admitted,
@@ -1241,7 +1241,7 @@ describe('requester Session lifecycle custody', () => {
       try {
         await resources.release(); redaction.close();
         await plugin.dispose(); await prepared.cleanupOnFailure();
-      } finally { configuration.happyHomeDir = previousHome; }
+      } finally { vi.unstubAllEnvs(); reloadConfiguration(); }
     }
   });
 

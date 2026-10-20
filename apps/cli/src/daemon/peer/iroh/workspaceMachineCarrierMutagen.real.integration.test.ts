@@ -319,13 +319,23 @@ async function startNativePeerProcess(addonPath: string, topology: 'direct' | 'r
   ]);
   const localAddon = loadIrohNodeNativeAddon(addonPath);
   // Narrowly isolated IPC fixture for the genuine out-of-process native boundary.
-  const proxy = Object.fromEntries(Object.keys(localAddon).map(method => [method,
-    method === 'getAvailability' ? () => localAddon.getAvailability() : (request: string) => new Promise<string>((resolve, reject) => {
+  const invoke = (method: keyof typeof localAddon) => (request: string) => new Promise<string>((resolve, reject) => {
       const id = ++nextId;
       pending.set(id, { resolve, reject });
       child.send({ id, method, request });
-    }),
-  ])) as ReturnType<typeof loadIrohNodeNativeAddon>;
+    });
+  const proxy: ReturnType<typeof loadIrohNodeNativeAddon> = {
+    getAvailability: () => localAddon.getAvailability(),
+    createEndpoint: invoke('createEndpoint'), startHomeAcceptor: invoke('startHomeAcceptor'),
+    stopHomeAcceptor: invoke('stopHomeAcceptor'), ensureHomeTunnel: invoke('ensureHomeTunnel'),
+    releaseHomeTunnel: invoke('releaseHomeTunnel'), shutdownEndpoint: invoke('shutdownEndpoint'),
+    getEndpointStatus: invoke('getEndpointStatus'), getTunnelStatus: invoke('getTunnelStatus'),
+    startMachineAcceptor: invoke('startMachineAcceptor'), stopMachineAcceptor: invoke('stopMachineAcceptor'),
+    getMachineAcceptorStatus: invoke('getMachineAcceptorStatus'), startMachineTunnel: invoke('startMachineTunnel'),
+    startMachineHttpTunnel: invoke('startMachineHttpTunnel'), stopMachineTunnel: invoke('stopMachineTunnel'),
+    getMachineTunnelStatus: invoke('getMachineTunnelStatus'),
+    ...(localAddon.waitMachineTunnelClosed ? { waitMachineTunnelClosed: invoke('waitMachineTunnelClosed') } : {}),
+  };
   return {
     native: createIrohNodeNativeModule(proxy),
     async kill() {

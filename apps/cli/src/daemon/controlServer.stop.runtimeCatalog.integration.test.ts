@@ -320,7 +320,7 @@ describe('daemon control server: /stop', () => {
     const app = createDaemonControlApp({
       getChildren: () => [...runners.values()],
       machineId: 'machine_local',
-      stopSession: (sessionId, _intent, signal) => stopSession(sessionId, { signal }),
+      stopSession: (sessionId, _intent, signal) => stopSession(sessionId, { metadataContext: { credentials: { token: 'test-token', encryption: null }, currentness: { signal } } }),
       spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
       requestShutdown,
       requestSelfRestart,

@@ -130,6 +130,7 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
       transactions.push(transaction);
     }
     for (const transaction of transactions) {
+      if (!transaction.snapshot) throw new Error('Missing OAuth attempt snapshot');
       const attemptId = transaction.snapshot.attemptId;
       expect(await persistence.attempts.oauth.read?.(attemptId)).not.toBeNull();
       await transaction.close();

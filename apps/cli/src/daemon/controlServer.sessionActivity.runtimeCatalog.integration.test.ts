@@ -7,22 +7,14 @@ import { createDaemonControlApp } from './controlServer';
 import { createDaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { SessionActivityChangedResponseSchema } from './sessions/sessionActivityChangedContract';
 import { reloadConfiguration } from '@/configuration';
-import { retainExecutionRunState } from './executionRunRegistry';
-import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
 
 describe('private Session activity invalidation', () => {
-  it('re-reads an exact retained terminal Run before dispatch even after its parent runner retires', async () => {
+  it('forwards canonical Run hints after the parent retires and rejects a mismatched source Session', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'happier-run-follow-hint-'));
     vi.stubEnv('HAPPIER_HOME_DIR', directory);
     reloadConfiguration();
-    const run = { runId: 'run-1', callId: 'call', sidechainId: 'side', sessionId: 'parent', depth: 0,
-      intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex', instructions: '',
-      permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response',
-      status: 'failed', startedAtMs: 1, finishedAtMs: 2, terminalOccurrenceId: 'terminal-1',
-    } satisfies ExecutionRunState;
     const received: unknown[] = [];
     try {
-      await retainExecutionRunState(run);
       const app = createDaemonControlApp({
         getChildren: () => [], machineId: 'machine', stopSession: async () => ({ status: 'not_found' }),
         spawnSession: async () => ({ type: 'success', sessionId: 'parent' }), requestShutdown: () => {},
@@ -30,15 +22,21 @@ describe('private Session activity invalidation', () => {
         onSessionActivityChanged: (_sessionId, occurrence) => { received.push(occurrence); },
       });
       try {
-        const notify = (sessionId: string, terminalEventId: string) => app.inject({ method: 'POST', url: '/session-activity-changed',
+        const notify = (sessionId: string, terminalEventId: string, sourceSessionId = sessionId) => app.inject({ method: 'POST', url: '/session-activity-changed',
           headers: { 'x-happier-daemon-token': 'token' }, payload: { sessionId,
-            runFollowOccurrence: { source: { kind: 'execution_run', sessionId, runId: 'run-1' }, terminalEventId } },
+            followOccurrence: { original: { source: { kind: 'execution_run', sessionId: sourceSessionId, runId: 'run-1' }, terminalEventId },
+              event: { kind: 'failed_or_stopped' } } },
         });
         expect((await notify('parent', 'terminal-1')).statusCode).toBe(200);
-        expect(received).toEqual([{ source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId: 'terminal-1' }]);
+        expect(received).toEqual([{ original: { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId: 'terminal-1' },
+          event: { kind: 'failed_or_stopped' } }]);
         expect((await notify('parent', 'old-terminal')).statusCode).toBe(200);
-        expect((await notify('other', 'terminal-1')).statusCode).toBe(200);
-        expect(received).toHaveLength(1);
+        expect(received).toEqual(['terminal-1', 'old-terminal'].map(terminalEventId => ({
+          original: { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId },
+          event: { kind: 'failed_or_stopped' },
+        })));
+        expect((await notify('other', 'terminal-1', 'parent')).statusCode).toBe(200);
+        expect(received).toHaveLength(2);
       } finally { await app.close(); }
     } finally {
       vi.unstubAllEnvs();
@@ -61,7 +59,7 @@ describe('private Session activity invalidation', () => {
       expect(SessionActivityChangedResponseSchema.parse(response.json())).toEqual({ ok: true, personalFollow: {
         sourceSessionId: 'session', requests: [{ requestId: 'question', policies: [{ preset: 'important' }] }],
       } });
-      expect(SessionActivityChangedResponseSchema.safeParse({ ...response.json(), privateRuleId: 'not-transportable' }).success).toBe(false);
+      expect(SessionActivityChangedResponseSchema.safeParse({ ...SessionActivityChangedResponseSchema.parse(response.json()), privateRuleId: 'not-transportable' }).success).toBe(false);
     } finally { await app.close(); }
   });
   it('accepts only authenticated content-free current Session edges and preserves publication during temporary drain', async () => {
@@ -72,7 +70,7 @@ describe('private Session activity invalidation', () => {
       stopSession: async () => ({ status: 'not_found' }),
       spawnSession: async () => ({ type: 'success', sessionId: 'session' }), requestShutdown: () => {},
       onHappySessionWebhook: () => {}, controlToken: 'token', admissionDrain: drain,
-      onSessionActivityChanged: sessionId => { changed.push(sessionId); },
+      onSessionActivityChanged: sessionId => { if (sessionId) changed.push(sessionId); },
     });
     try {
       await app.ready();

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import {
   verifyRunnerAgentBindingAgainstGeneration,
 } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import {
   attestFreshRunnerAgentBinding,
@@ -42,10 +43,16 @@ describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority', () => {
       const runtimeRoot = join(happyHomeDir, 'source-bundles', label, 'apps', 'cli');
       const pluginRoot = join(happyHomeDir, 'source-bundles', label, 'packages', 'plugins', 'antigravity');
       const factoryExport = label === 'runner-a' ? 'createRunnerA' : 'createDaemonB';
+      const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.agent.antigravity');
+      if (!locator) throw new Error('Fixture bundled declaration locator missing');
+      const declarationPath = join(runtimeRoot, locator.manifestRelativePath);
       await mkdir(join(runtimeRoot, 'package-dist'), { recursive: true });
+      await mkdir(dirname(declarationPath), { recursive: true });
+      await mkdir(join(pluginRoot, 'src'), { recursive: true });
       await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
       await writeFile(join(pluginRoot, `agent-${label}.mjs`), `export function ${factoryExport}() { return {}; }\n`);
-      await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(
+      await writeFile(join(pluginRoot, 'src', 'index.ts'), `export { ${factoryExport} } from '../agent-${label}.mjs';\n`);
+      const declaration = JSON.stringify(
         createPluginManifestV2Fixture({
           id: 'happier.agent.antigravity',
           version: label === 'runner-a' ? '0.0.0' : '1.0.0',
@@ -60,7 +67,9 @@ describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority', () => {
             capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
           }] },
         }),
-      ));
+      );
+      await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), declaration);
+      await writeFile(declarationPath, declaration);
       return { runtimeRoot, pluginRoot };
     };
     try {

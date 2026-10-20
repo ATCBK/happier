@@ -440,6 +440,7 @@ describe('registerDaemonExternalActionRoute', () => {
 
   it('serializes exact response bytes, projects one extra byte, and stays usable through the Fastify adapter', async () => {
     const exactLimitResult = createExactLimitMultibyteResponseResult();
+    if (!('session' in exactLimitResult)) throw new Error('Missing Session status fixture');
     const followUpResult = createSessionStatusResult('usable');
     const execute = vi.fn<ExternalActionExecutor['execute']>()
       .mockResolvedValueOnce({ ok: true, result: exactLimitResult })

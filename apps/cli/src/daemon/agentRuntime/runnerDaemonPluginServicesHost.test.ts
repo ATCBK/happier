@@ -199,6 +199,63 @@ function isWireRecord(
 }
 
 describe('runner daemon PluginServices host', () => {
+    it('retires a resumed Run snapshot before preparation and rejects stale or foreign cleanup', async () => {
+        const services = createUnavailablePluginServices();
+        const disposed: string[] = [];
+        const host = createRunnerDaemonPluginServicesHost({
+            async createInvocation({ executionRunSnapshotId }) {
+                return {
+                    services, resourceDescriptors: {},
+                    subscriptionCapabilities: { settingsWatch: false, eventSubscriptions: [], resourceWatches: [], notificationPreferencesWatch: false },
+                    dispose() { disposed.push(executionRunSnapshotId ?? 'session'); },
+                    authorizeOperation: () => true,
+                    executeCurrentGlobalAction: services.actions.execute,
+                    currentGlobalMcp: services.mcp,
+                    currentGlobalExternalSessions: services.sessions.external,
+                };
+            },
+        });
+        const parentBinding = { ...binding, pluginVersion: '2.0.0' };
+        const first = { ...direct, executionRunSnapshotId: 'run-snapshot-1', runnerRetainedAgent: parentBinding };
+        const second = { ...first, executionRunSnapshotId: 'run-snapshot-2' };
+        const prepare = { kind: 'plugin_services.prepare_v1' as const, ...requestBase() };
+        const close = { kind: 'plugin_services.close_v1' as const, ...requestBase({ lifecycle: true }) };
+        try {
+            await host.dispatch({ ...first, operation: prepare });
+            await expect(host.dispatch({ ...first, operation: prepare })).rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            // A resumed occurrence may prepare before the old signal-driven close arrives.
+            await host.dispatch({ ...second, operation: prepare });
+            expect(disposed).toEqual(['run-snapshot-1']);
+            await expect(host.dispatch({ ...second, executionRunSnapshotId: 'run-snapshot-3',
+                runnerRetainedAgent: binding, operation: prepare }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            // Cleanup retains the daemon-authenticated parent binding after the child snapshot releases.
+            const cleanup = { ...second, retainedAgent: parentBinding, operation: close };
+            await expect(host.dispatch({ ...cleanup, executionRunSnapshotId: first.executionRunSnapshotId }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, runnerRetainedAgent: binding }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, retainedAgent: binding }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, runner: { ...runner, snapshotIdentity: 'foreign-runner' } }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, sessionId: 'foreign-session' }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, executionRunSnapshotId: undefined, runnerRetainedAgent: undefined }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            expect(disposed).toEqual(['run-snapshot-1']);
+            await host.dispatch(cleanup);
+            expect(disposed).toEqual(['run-snapshot-1', 'run-snapshot-2']);
+            const ordinaryPrepare = { ...prepare, invocationId: 'ordinary-session' };
+            await host.dispatch({ ...direct, operation: ordinaryPrepare });
+            await expect(host.dispatch({ ...second, operation: ordinaryPrepare }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            expect(disposed).toEqual(['run-snapshot-1', 'run-snapshot-2']);
+        } finally {
+            await host.dispose();
+        }
+    });
+
     it('projects only bounded preparation codes and owner stages through the strict refusal consumer', () => {
         const privateText = 'Bearer private-df43-secret /private/df43/path';
         for (const error of [

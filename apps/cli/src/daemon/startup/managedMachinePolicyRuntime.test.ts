@@ -10,6 +10,7 @@ import { createHostActionOperationRuntime } from '@/daemon/actionOperations/crea
 import { executeManagedMachinePolicyAction } from './managedMachinePolicyAction';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 afterEach(() => vi.restoreAllMocks());
 describe('daemon managed policy census transport', () => {
@@ -30,7 +31,7 @@ describe('daemon managed policy census transport', () => {
             acquireRuntimeRegistryLease: async () => { throw new Error('No native runtime is installed'); },
             observeActionExecution: request => operations.observeExecution(request),
             executeManagedPolicyAction: (current, context, runApproved) => executeManagedMachinePolicyAction({ machine: current,
-                context, runApproved, serverId: 'home', createExecutor: overrides => createActionExecutor(overrides) }),
+                context, runApproved, serverId: 'home', createExecutor: overrides => createActionExecutor({ ...createUnavailableActionTransportDeps(), ...overrides }) }),
         });
         const list = async () => ActionOperationListV1ResponseSchema.parse(await operations.handlers.listV2({})).items;
         const runtime = createDaemonManagedMachinePolicyRuntime({

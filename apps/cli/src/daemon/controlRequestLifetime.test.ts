@@ -16,12 +16,14 @@ describe('daemon control request response lifetime', () => {
       const lifetime = createDaemonControlRequestLifetime({ raw: request } as FastifyRequest, { raw: response } as FastifyReply);
       const socket = response.socket;
       if (!socket) throw new Error('Expected connected HTTP socket');
+      if (!socket._writev) throw new Error('Expected native batched write boundary');
+      const writableSocket = Object.assign(socket, { _writev: socket._writev });
       let writePending = false;
       // Hold the OS write completion rather than relying on a payload exceeding
       // the host's socket buffers. HTTP/stream completion and cancellation stay real.
       const writes = delivery === 'interrupted' ? [
         vi.spyOn(socket, '_write').mockImplementation(() => { writePending = true; }),
-        vi.spyOn(socket, '_writev').mockImplementation(() => { writePending = true; }),
+        vi.spyOn(writableSocket, '_writev').mockImplementation(() => { writePending = true; }),
       ] : [];
       response.once('close', () => {
         observeClosed({ ended: response.writableEnded, finished: response.writableFinished, aborted: lifetime.signal.aborted, writePending });

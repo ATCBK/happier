@@ -129,7 +129,9 @@ it('preserves requester custody across unavailable observations and recovers saf
     const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ operationContext: custody });
     profileStatus = 503;
     expect(await readRequesterHomeWithinActionLifetime(() => store.read(signal), signal)).toEqual(purposes.value);
-    const secrets = createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: custody.readSnapshot()!.scopeKey, operationContext: custody });
+    const scopeKey = custody.readSnapshot()?.scopeKey;
+    if (!scopeKey) throw new Error('Missing requester Account scope');
+    const secrets = createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: scopeKey, operationContext: custody });
     profileStatus = 503;
     expect(await readRequesterHomeWithinActionLifetime(() => secrets.readMaterial!('missing-secret', { signal }), signal)).toBeNull();
     let enteredProfile!: () => void;

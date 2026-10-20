@@ -46,6 +46,7 @@ import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/art
 import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
 import * as installationStore from '@/daemon/identity/store';
 import { RPC_METHODS, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
+import { sessionUiActionClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { requiresExactDaemonApprovalReplay, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { logger } from '@/ui/logger';
@@ -75,6 +76,7 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 const processIdentityBoundary = vi.hoisted(() => vi.fn());
 // Process inspection is the OS boundary. Tests that do not configure the
@@ -123,7 +125,7 @@ describe('daemon Session Account authority', () => {
   it.each(['caller', 'authorization'] as const)('recovers a retryable %s Home read inside the accepted Action lifetime before delivering once', async phase => {
     if (phase === 'caller') {
       vi.useFakeTimers();
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => { vi.useRealTimers(); });
     }
     const lifetime = new AbortController();
     onTestFinished(() => lifetime.abort());
@@ -231,7 +233,7 @@ describe('daemon Session Account authority', () => {
           : { v: 1, ok: true, value: { message: stored, messageSeq: 2 } };
       },
       createExecutor: (_depth, _current, publisher) => {
-        const real = createActionExecutor(createDiscussionActionDeps({ credentials: { token: 'token', encryption: null },
+        const real = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createDiscussionActionDeps({ credentials: { token: 'token', encryption: null },
           serverId, serverHttpBaseUrl, resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
             features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
           }) }), ...(publisher ? { postAgentMessage: async (request, options) => {
@@ -248,7 +250,7 @@ describe('daemon Session Account authority', () => {
               : { ...request, request: { ...request.request, docEditProposal: undefined } };
             denied.push(await publisher(wrongMarker, options));
             return publisher(request, options);
-          } } : {}) }));
+          } } : {}) }) });
         return { execute: (id, args, context) => real.execute(id, args, { ...context,
           actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] } }) }) };
       },
@@ -827,12 +829,13 @@ describe('daemon Session Account authority', () => {
     const deliveries: ReturnType<typeof UiActionDispatchRequestV1Schema.parse>[] = [];
     let completeClient!: () => void;
     const clientCompleted = new Promise<void>(resolve => { completeClient = resolve; });
+    const clientMethod = kind === 'find' ? sessionUiActionClientRpcMethod('bob-session') : RPC_METHODS.UI_ACTION_EXECUTE;
     const reverse = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      hasConnectedClientRpcHandler: method => method === clientMethod,
       // Connected-client RPC is this slice's outer boundary. The paired UI test
       // owns the real receiver/native operation, not an in-process substitute here.
       callConnectedClientRpc: async (method, payload, options) => {
-        expect(method).toBe(RPC_METHODS.UI_ACTION_EXECUTE);
+        expect(method).toBe(clientMethod);
         deliveries.push(UiActionDispatchRequestV1Schema.parse(payload));
         options.onIssued();
         await clientCompleted;
