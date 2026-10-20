@@ -26,7 +26,7 @@ const requests = installSessionActionRpcBoundary(request => {
     return rpc({ machineId, method, payload: request.params });
 });
 await loadSyncSingletonForTests();
-const { searchConversations, hasConversationSearchScanFallback, mergeConversationSearchHits } = await import('./searchConversations');
+const { searchConversations, hasConversationSearchScanFallback, isConversationSearchOnDemandOff, mergeConversationSearchHits } = await import('./searchConversations');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 const hit = (sessionId: string, time: number, score = 0.5): MemorySearchHitV1 => ({
     sessionId, seqFrom: 1, seqTo: 2, createdAtFromMs: time, createdAtToMs: time, summary: 'quartz match', score,
@@ -378,6 +378,42 @@ describe('conversation search fan-out', () => {
             conversationSearch: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch, standardSearch: { enabled: false } } });
         const result = await searchConversations({ ...input, machines: [{ id: 'one', online: true }] });
         expect(result).toEqual({ hits: [], machines: [{ machineId: 'one', status: 'disabled-by-settings', standardSearchEnabled: false }] });
+    });
+    it('does not report Search on demand off when its settings read fails, and reads the setting again on retry', async () => {
+        const source = { agentId: 'claude', sourceKey: 'native', source: { kind: 'claudeConfig' }, contentSearch: true };
+        const request = { ...input, machines: [input.machines[0]], mode: 'standard' as const,
+            query: { ...input.query, corpora: ['external_transcripts' as const] }, readSources: async () => [source] };
+        rpc.mockRejectedValueOnce(new Error('Settings transport unavailable'));
+        const unavailable = await searchConversations(request);
+        expect(unavailable.machines).toMatchObject([{ status: 'partial' }]);
+        expect(isConversationSearchOnDemandOff(unavailable, 'one')).toBe(false);
+        expect(list).not.toHaveBeenCalled();
+
+        list.mockResolvedValue({ ok: true, candidates: [{ remoteSessionId: 'native', updatedAtMs: 1,
+            match: { snippet: 'quartz', sourceItemId: 'message', messageIndex: 0 } }], contentCoverage: 'complete' });
+        const recovered = await searchConversations(request);
+        expect(recovered.hits).toMatchObject([{ mode: 'standard', candidate: { remoteSessionId: 'native' } }]);
+        expect(recovered.machines).toMatchObject([{ status: 'ok', standardSearchEnabled: true }]);
+        expect(isConversationSearchOnDemandOff(recovered, 'one')).toBe(false);
+    });
+    it.each(['indexing', 'read-failed', 'ready', 'sessions-read-failed'] as const)('reports a positively disabled standard fallback only when the native index needs it (%s)', async state => {
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true,
+                conversationSearch: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch, standardSearch: { enabled: false },
+                    indexExternal: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch.indexExternal, enabled: true, agents: ['claude'] } } };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return { ...status, sources: [{
+                source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'native' }, state: state === 'indexing' ? 'indexing' : 'ready',
+            }] };
+            if (state === 'read-failed' || state === 'sessions-read-failed') throw new Error('Index transport unavailable');
+            return { v: 1, ok: true, hits: [] };
+        });
+        const result = await searchConversations({ ...input, machines: [input.machines[0]], mode: 'auto',
+            query: { ...input.query, corpora: state === 'sessions-read-failed' ? ['sessions'] : ['external_transcripts'] },
+            readSources: async () => [{ agentId: 'claude', sourceKey: 'native', source: { kind: 'claudeConfig' }, contentSearch: true }] });
+        const needsBlockedFallback = state === 'indexing' || state === 'read-failed';
+        expect(result.machines).toMatchObject([{ status: state === 'ready' ? 'ok' : needsBlockedFallback ? 'disabled-by-settings' : 'partial', standardSearchEnabled: false }]);
+        expect(isConversationSearchOnDemandOff(result, 'one')).toBe(needsBlockedFallback);
+        expect(list).not.toHaveBeenCalled();
     });
     it('retains native source identity and forwards date and paging filters', async () => {
         const native = { type: 'external_transcript', source: { type: 'external_transcript', agentId: 'pi', sourceKey: 'pi-local', nativeSessionId: 'native' },

@@ -40,10 +40,10 @@ export function hasConversationSearchScanFallback(result: ConversationSearchResu
     )) ?? false;
 }
 
-/** The machine answered and Search on demand is off there, so no scan can run on it. */
+/** A read setting explicitly blocks the standard fallback needed for this search. */
 export function isConversationSearchOnDemandOff(result: ConversationSearchResult | null, machineId: string | null | undefined): boolean {
     const machine = result?.machines.find(value => value.machineId === machineId);
-    return machine !== undefined && machine.status !== 'offline' && machine.status !== 'outdated' && !machine.standardSearchEnabled;
+    return machine?.status === 'disabled-by-settings' && !machine.standardSearchEnabled;
 }
 
 function indexedRows(machineId: string | null, hits: readonly MemorySearchResultHitV1[]): ConversationSearchHit[] {
@@ -159,6 +159,8 @@ export async function searchConversations(input: Readonly<{
         input.signal?.throwIfAborted();
         if (!machine.online && input.retryUnreachableMachines !== true) return { machineId: machine.id, status: 'offline', standardSearchEnabled: false };
         const target = { serverId: input.serverId, accountId: input.accountId, machineId: machine.id, signal: input.signal };
+        // False fails closed on a read failure; only disabled-by-settings
+        // establishes that a successfully read setting blocks search.
         let standardSearchEnabled = false;
         try {
             const settingsRead = await fetchDaemonMemorySettings(target);
@@ -326,7 +328,11 @@ export async function searchConversations(input: Readonly<{
                     await publish();
                 }
             }
-            return { machineId: machine.id, status: indexReadFailed ? 'partial' : machineStatus, standardSearchEnabled, ...(documents ? { documents } : {}) };
+            const standardFallbackBlocked = !standardSearchEnabled && query.scope.type === 'global'
+                && (!query.corpora || query.corpora.includes('external_transcripts'))
+                && (!nativeIndexedUsable || sourcesUnavailable || projectedSources.some(source => !source.indexReady));
+            return { machineId: machine.id, status: standardFallbackBlocked ? 'disabled-by-settings'
+                : indexReadFailed ? 'partial' : machineStatus, standardSearchEnabled, ...(documents ? { documents } : {}) };
         } catch (error) {
             input.signal?.throwIfAborted();
             return { machineId: machine.id,

@@ -150,52 +150,39 @@ Choose **Search more conversations** when offered to continue from that page.
 **Stop** leaves coverage incomplete. A very large conversation may remain
 incomplete on repeated attempts; continuation does not guarantee a full scan.
 
-Standard search supports Claude Code, Codex, Pi, OhMyPi, Antigravity,
-OpenCode, Copilot's event-v1 history, Droid's schema-2 history,
-CodeBuddy's CLI 2.170.0 JSONL history, Devin's CLI 3000.6.7 schema-16 history,
-Kilo's CLI 1.0.25 JSON-file history,
-Auggie's CLI 0.36.0 native
-session format, FX's CLI v0.0.14 schema-4 history and Kimi Code's protocol 1.4
-history (characterized from CLI 0.18.0) in this development channel.
-File-based sources search decoded
-transcript text; OpenCode reads messages through its native client. Codex
-app-server-only threads without a searchable local transcript remain a
-coverage gap. Indexed search uses the selected Agents' existing transcript
-readers, including these sources where their configured history can be read; an
-Agent being installed does not guarantee readable history. Older daemons show
-an update hint. Partial coverage or an unsupported source is not a claim that
-no conversation matched. A standard scan creates no persistent content index.
+### Supported native history
 
-This development channel also reads Grok's local paired session files,
-Cursor CLI's JSONL transcripts with v1 chat metadata, and Kiro's v1 CLI
-chat store. These sources need no export. Unknown formats report incomplete
-or unsupported coverage. Kiro's separate ACP V3 history is outside the v1
-reader; native CLI version coverage still needs release validation.
+This matrix applies to **0.3 development**, not a released stable build. Every supported row supplies standard content search and opt-in native indexing through the same transcript reader.
 
-Kilo reads its existing local history without starting a vendor server or
-requiring an export. Other Kilo history formats report incomplete or
-unsupported coverage; installing a different CLI version does not establish
-that its history uses the supported format.
+| Agent | Standard search and opt-in indexing in 0.3 development |
+| --- | --- |
+| Claude Code | Local JSONL transcripts; appends and rewrites use the existing reader. |
+| Codex | Local rollout families; app-server-only threads without a readable transcript remain a coverage gap. |
+| Pi | Native JSONL history, through the shared decoded-text search helper. |
+| OhMyPi | Native JSONL history, with source-wide change observation. |
+| Antigravity | Native JSONL history, with source-wide change observation. |
+| OpenCode | Decoded messages from its native client; requires an available endpoint. |
+| Gemini | CLI v0.64.0 JSONL recordings and legacy JSON; patches, checkpoints and inclusive rewinds select visible history. |
+| Qwen Code | CLI v0.25.3 JSONL, including archived chats; active-parent replay and streaming fragments preserve visible text across compression. |
+| Copilot | Event-v1 history; transient deltas and model-only compaction data are excluded. |
+| Droid | Schema-2 history characterized from CLI 0.170.0; follows the visible active parent chain. |
+| CodeBuddy | CLI 2.170.0 JSONL, including native replay and rewind. |
+| Grok | Paired summary and history files; producing CLI version unknown. |
+| Cursor CLI | JSONL transcripts with v1 chat metadata; producing CLI version unknown. |
+| Kiro | V1 paired CLI chat store; separate ACP V3 history remains unsupported. |
+| Kimi Code | CLI 0.18.0 / wire protocol 1.4; retains compacted history and applies undo/clear boundaries. |
+| Kilo | CLI 1.0.25 JSON session/message/part files; other storage dialects remain unsupported. |
+| FX | CLI v0.0.14 schema-4 events and referenced tool results; legacy formats and opt-in sessions-v2 remain unsupported. |
+| Auggie | CLI 0.36.0 JSON snapshots; backups and temporary files are excluded, and summaries cannot recover discarded history. |
+| Devin | CLI 3000.6.7 schema-16 database; active ancestry excludes abandoned branches and private thinking. |
+| Custom ACP | Unsupported without a named definition and characterized native-history reader; list/resume alone is insufficient. |
+| CodeRabbit and DeepSec review Agents | No arbitrary native conversation corpus is characterized; their Happier review output belongs to Happier-session search. |
 
-Kimi reads existing local Kimi Code history without an export or a running
-Agent. Other wire versions report unsupported coverage; unknown records and
-unreadable ranges keep coverage incomplete.
+Both modes require readable history on an online machine and a matching development daemon. The table describes characterized formats, not every version of an installed Agent. Unknown formats and unreadable ranges report partial or unsupported coverage, never a complete search with no matches. Installed-CLI capture and platform validation remain release checks for the new readers. File readers require no export or vendor process; OpenCode uses its native client.
 
-Auggie reads saved local conversations without an export or a running vendor
-process. Backups and temporary snapshots are excluded; unreadable or unknown
-formats remain incomplete or unsupported. A rewritten or summarized native
-history replaces the indexed content rather than preserving abandoned text.
+Devin reads only private temporary byte copies of its database and WAL, opens those copies read-only, then deletes them. SQLite never opens the vendor files. A copy taken during a write may be slightly stale; failed reads retain indexed history, while confirmed deletion removes it.
 
-FX reads committed local turns and referenced tool results without an export
-or vendor process. Model-context checkpoints do not hide earlier archived
-messages. Legacy formats, opt-in sessions-v2 and unknown frames remain incomplete
-or unsupported.
-Devin reads a private temporary byte copy of its native database and WAL;
-it never opens the vendor database with SQLite. Reads during a write may be
-slightly stale. Unknown schemas and unreadable copies remain incomplete or
-unsupported. No export or running vendor process is required.
-Custom ACP history remains definition-specific; list/resume support alone
-is not transcript coverage.
+Older daemons show an update hint. A standard scan creates no persistent content index; only Memory stores opted-in native content.
 
 In this development channel, the **Browse Existing Sessions** conversation view
 also reads eligible indexes as you type. Choose **Search** to include an explicit

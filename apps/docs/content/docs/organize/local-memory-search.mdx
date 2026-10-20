@@ -170,41 +170,48 @@ that content stored too. Native indexing defaults to off, with no Agents
 selected, all history as its window, and tool output excluded. The history
 window works within the machine's existing backfill and coverage choices.
 
-Standard on-demand search supports Claude Code, Codex, Pi, OhMyPi, Antigravity,
-OpenCode, Copilot's event-v1 history, Droid's schema-2 history,
-CodeBuddy's CLI 2.170.0 JSONL history, Devin's CLI 3000.6.7 schema-16 history,
-Kilo's CLI 1.0.25 JSON-file history,
-Auggie's CLI 0.36.0 native
-session format, FX's CLI v0.0.14 schema-4 history and Kimi Code's protocol 1.4
-history (characterized from CLI 0.18.0). Indexed search uses existing
-transcript readers for selected
-Agents, including these sources where their history is readable. Unsupported or
-unavailable readers cannot supply an index simply because the Agent appears
-in the selection list. Both modes depend on the machine being online.
+### Supported native history
 
-In this development channel, Gemini's CLI v0.64.0 recording format and legacy
-JSON history, plus Qwen Code's CLI v0.25.3 native history, also support standard
-search and opt-in indexing. Patches, rewinds and active-branch changes update
-the searchable history; Qwen compression preserves visible conversation text.
-No export or running vendor process is required to read these files.
+This matrix applies to **0.3 development**, not a released stable build. Every supported row supplies standard content search and opt-in native indexing through the same transcript reader.
 
-In this development channel, Grok's paired session files, Cursor CLI's
-JSONL transcripts with v1 metadata, and Kiro's v1 CLI chat store also supply
-standard search and opt-in indexing. Transcript and metadata changes use
-the same observation pipeline. Unknown formats stay incomplete or
-unsupported; Kiro's separate ACP V3 store is outside the v1 reader.
+| Agent | Standard search and opt-in indexing in 0.3 development |
+| --- | --- |
+| Claude Code | Local JSONL transcripts; appends and rewrites use the existing reader. |
+| Codex | Local rollout families; app-server-only threads without a readable transcript remain a coverage gap. |
+| Pi | Native JSONL history, through the shared decoded-text search helper. |
+| OhMyPi | Native JSONL history, with source-wide change observation. |
+| Antigravity | Native JSONL history, with source-wide change observation. |
+| OpenCode | Decoded messages from its native client; requires an available endpoint. |
+| Gemini | CLI v0.64.0 JSONL recordings and legacy JSON; patches, checkpoints and inclusive rewinds select visible history. |
+| Qwen Code | CLI v0.25.3 JSONL, including archived chats; active-parent replay and streaming fragments preserve visible text across compression. |
+| Copilot | Event-v1 history; transient deltas and model-only compaction data are excluded. |
+| Droid | Schema-2 history characterized from CLI 0.170.0; follows the visible active parent chain. |
+| CodeBuddy | CLI 2.170.0 JSONL, including native replay and rewind. |
+| Grok | Paired summary and history files; producing CLI version unknown. |
+| Cursor CLI | JSONL transcripts with v1 chat metadata; producing CLI version unknown. |
+| Kiro | V1 paired CLI chat store; separate ACP V3 history remains unsupported. |
+| Kimi Code | CLI 0.18.0 / wire protocol 1.4; retains compacted history and applies undo/clear boundaries. |
+| Kilo | CLI 1.0.25 JSON session/message/part files; other storage dialects remain unsupported. |
+| FX | CLI v0.0.14 schema-4 events and referenced tool results; legacy formats and opt-in sessions-v2 remain unsupported. |
+| Auggie | CLI 0.36.0 JSON snapshots; backups and temporary files are excluded, and summaries cannot recover discarded history. |
+| Devin | CLI 3000.6.7 schema-16 database; active ancestry excludes abandoned branches and private thinking. |
+| Custom ACP | Unsupported without a named definition and characterized native-history reader; list/resume alone is insufficient. |
+| CodeRabbit and DeepSec review Agents | No arbitrary native conversation corpus is characterized; their Happier review output belongs to Happier-session search. |
 
-Devin's reader observes its native database and WAL through the same pipeline,
-reading only private temporary byte copies. Unknown schemas and failed reads
-retain previously indexed history; confirmed session deletion removes it.
+Both modes require readable history on an online machine and a matching development daemon. The table describes characterized formats, not every version of an installed Agent. Unknown formats and unreadable ranges report partial or unsupported coverage, never a complete search with no matches. Installed-CLI capture and platform validation remain release checks for the new readers. File readers require no export or vendor process; OpenCode uses its native client.
+
+Devin reads only private temporary byte copies of its database and WAL, opens those copies read-only, then deletes them. SQLite never opens the vendor files. A copy taken during a write may be slightly stale; failed reads retain indexed history, while confirmed deletion removes it.
+
+Being installed or appearing in the Agent selection list does not prove readable history. Enable indexing only for the sources you want stored locally.
 
 The index follows native transcript changes through the existing source
 observation. Confirmed source removal drops its indexed content; an incomplete
 or failed read does not count as proof of deletion. Index status reports
 progress for the machine. Actions also expose source readiness, so Search can
 use a ready native index and fall back to an explicitly started scan for
-sources that are not ready. Browse Existing Sessions currently remains an
-explicit standard scan.
+sources that are not ready. Browse Existing Sessions uses eligible indexes as
+you type; its Search control explicitly includes unready sources when Search
+on demand is enabled.
 
 ## Backfill behavior
 

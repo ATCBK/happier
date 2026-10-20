@@ -348,6 +348,13 @@ adds a rolling cutoff to the existing backfill/content policy, enforced on each
 selected source turn even when its tail is unchanged; tool output is a separate
 opt-in. Selected Agents must actually supply usable readers.
 
+Memory requests native identities and activity without optional title enrichment.
+Claude and Codex apply the requested activity cutoff before transcript enrichment
+and candidate-page admission; Memory retains its eligibility filter for readers
+that ignore these optional inventory hints. Source observation remains source-wide
+so an older conversation can become eligible after an append. A short window
+therefore reduces body work, rather than promising a bounded filesystem inventory.
+
 Source disappearance removes derived chunks, FTS and embeddings after complete
 inventory or explicit missing/unavailable evidence. Replacement or an expired
 native cursor resets that source for re-reading; a failed or incomplete read
@@ -568,104 +575,43 @@ History keeps the existing metadata browse owner for **Titles**;
 unified conversation-search owner above, adapting native hit identities into the
 existing candidate Open/Find path. Standard content scans use
 `searchTarget: 'content'` only after explicit activation and require a positive
-advertised `contentSearch` capability. Claude Code and Codex rollout files
-use the shared SDK direct-search helper, as do Pi, OhMyPi and Antigravity.
-It prefilters source files with host-provided packaged ripgrep where safe, then
-re-matches decoded transcript text through Protocol's `contentSearchMatch`.
-Unicode/escaped/process-unsafe queries retain decoded fallback. OpenCode
-searches decoded client messages through the same helper without ripgrep.
-Copilot event-v1 logs and Droid schema-2 transcripts use the same SDK search
-and source-observation owners. Copilot excludes transient deltas and model-only
-compaction data; Droid follows the visible active parent chain. Native rewrites
-replace indexed history, while unknown formats and failed reads remain explicit.
-CodeBuddy reads the native JSONL dialect characterized from CLI 2.170.0,
-preserving its replay/rewind rules and typed text through the same owners.
-Kilo's plugin reads the characterized CLI 1.0.25 JSON-file dialect directly
-from XDG data `kilo/storage`, joining ordered message parts without starting
-a vendor server or importing its migrating Storage module. It uses the same
-SDK matcher, with source-wide observation of session, message and part files.
-Same-message edits and native rewind replace the indexed projection; unknown
-versions or content remain partial/unsupported. Other Kilo storage dialects
-are not inferred from OpenCode compatibility.
-Kimi's plugin reads current Kimi Code 0.18.0 / protocol 1.4 history from
-`KIMI_CODE_HOME` (default `~/.kimi-code`), joining session state and index
-metadata with the main Agent's wire log. One decoder serves direct search,
-paging and read-after, retaining compacted history and applying undo/clear
-boundaries. Injected user context and tool-input metadata are excluded from
-matches. State, index and wire changes use the existing source observer;
-unreadable stores cannot prove deletion. Other wire versions are unsupported;
-unknown records or fields keep coverage incomplete. No resume, migration,
-export or vendor process is needed to read this history.
-Auggie's plugin reads the native JSON snapshots written by CLI 0.36.0 under
-`~/.augment/sessions` (or the admitted `augmentHome` cache root). One exchange
-projection serves content search, pages and read-after; native node identities
-carry Open/Find locators. Text fragments are joined in order, fallback text is
-used only without text nodes, and tool-input/usage metadata is excluded. Backups
-and temporary files are not independent conversations. Unknown envelopes or
-material nodes remain unsupported/partial; summary replacement does not recover
-discarded history. Source-wide observation drives the existing Memory worker:
-append advances, rewrite resets, confirmed deletion retires rows, and a failed
-read retains the prior projection. No vendor process, export or second watcher
-is involved.
+advertised `contentSearch` capability.
 
-FX's plugin reads the schema-4 conversation store written by CLI v0.0.14
-under `~/.fx/sessions`, replaying committed turns, steering and referenced tool
-results through one projection for content search, pages and read-after.
-Context checkpoints do not erase archived history or expose model-only summaries.
-Source observation includes metadata, event logs and result files; rewrite and
-removal retire abandoned indexed text. Legacy metadata dialects, opt-in sessions-v2
-and unknown frames remain partial/unsupported, as do incomplete recorded tool
-results. The native id agrees with ACP
-`session/list`; the plugin reader replaces the old resume-only declaration.
+### Native Agent coverage (0.3 development)
 
-Gemini's 0.3 development reader replays the CLI v0.64.0 JSONL recording
-format, including patches, checkpoints and inclusive rewinds, and the legacy
-JSON snapshot shape. It shares native-file discovery with resume import under
-`GEMINI_CLI_HOME/.gemini/tmp` (or the default home). Search and transcript pages
-consume the same active-history projection: display text is preserved across
-native parts, tool inputs are excluded, and unknown dialects remain incomplete
-or unsupported. Existing source observation drives Memory append, rewrite and
-confirmed-deletion handling without a vendor process or export.
+| Agent | Standard search and opt-in indexing in 0.3 development |
+| --- | --- |
+| Claude Code | Local JSONL transcripts; appends and rewrites use the existing reader. |
+| Codex | Local rollout families; app-server-only threads without a readable transcript remain a coverage gap. |
+| Pi | Native JSONL history, through the shared decoded-text search helper. |
+| OhMyPi | Native JSONL history, with source-wide change observation. |
+| Antigravity | Native JSONL history, with source-wide change observation. |
+| OpenCode | Decoded messages from its native client; requires an available endpoint. |
+| Gemini | CLI v0.64.0 JSONL recordings and legacy JSON; patches, checkpoints and inclusive rewinds select visible history. |
+| Qwen Code | CLI v0.25.3 JSONL, including archived chats; active-parent replay and streaming fragments preserve visible text across compression. |
+| Copilot | Event-v1 history; transient deltas and model-only compaction data are excluded. |
+| Droid | Schema-2 history characterized from CLI 0.170.0; follows the visible active parent chain. |
+| CodeBuddy | CLI 2.170.0 JSONL, including native replay and rewind. |
+| Grok | Paired summary and history files; producing CLI version unknown. |
+| Cursor CLI | JSONL transcripts with v1 chat metadata; producing CLI version unknown. |
+| Kiro | V1 paired CLI chat store; separate ACP V3 history remains unsupported. |
+| Kimi Code | CLI 0.18.0 / wire protocol 1.4; retains compacted history and applies undo/clear boundaries. |
+| Kilo | CLI 1.0.25 JSON session/message/part files; other storage dialects remain unsupported. |
+| FX | CLI v0.0.14 schema-4 events and referenced tool results; legacy formats and opt-in sessions-v2 remain unsupported. |
+| Auggie | CLI 0.36.0 JSON snapshots; backups and temporary files are excluded, and summaries cannot recover discarded history. |
+| Devin | CLI 3000.6.7 schema-16 database; active ancestry excludes abandoned branches and private thinking. |
+| Custom ACP | Unsupported without a named definition and characterized native-history reader; list/resume alone is insufficient. |
+| CodeRabbit and DeepSec review Agents | No arbitrary native conversation corpus is characterized; their Happier review output belongs to Happier-session search. |
 
-Qwen Code's 0.3 development reader covers the CLI v0.25.3 native JSONL dialect
-under `QWEN_RUNTIME_DIR`, `QWEN_HOME`, or `~/.qwen`, including archived chats.
-The native session ID agrees with ACP list/load. One decoder selects the active
-parent chain, joins streaming fragments and preserves visible history across
-model-context compression. Content matching uses that decoded projection,
-excluding tool inputs and model-only summaries. Unknown versions remain
-unsupported; the shared observer drives Memory append, rewrite and confirmed
-deletion. This replaces the undeployed resume-only Qwen source declaration.
+Both modes require readable history on an online machine and a matching development daemon. The table describes characterized formats, not every version of an installed Agent. Unknown formats and unreadable ranges report partial or unsupported coverage, never a complete search with no matches. Installed-CLI capture and platform validation remain release checks for the new readers. File readers require no export or vendor process; OpenCode uses its native client.
 
-Devin's 0.3 development reader covers the native schema-16 database characterized
-from CLI 3000.6.7. Each read byte-copies `sessions.db` and any `-wal` into a
-private temporary directory, opens only that copy through the SDK's read-only
-SQLite boundary, then deletes the copy and its sidecars. The vendor database is
-never opened by SQLite. A copy during a write may be slightly stale; unreadable
-copies and unknown schemas remain unavailable/unsupported. One active-ancestry
-decoder serves content search, pages and read-after, excluding abandoned branches,
-private thinking and tool-input metadata. DB/WAL observation uses the incumbent
-Memory worker; failed reads retain indexed rows and confirmed session deletion
-retires them. No export, vendor process, checkpoint or second watcher is used.
-Custom ACP history remains definition-specific; list/resume alone does not
-provide a native content reader or indexing source.
-Codex shares root-family discovery across each requested candidate page and
-projects JSONL records as they are read, retaining identities and possible
-snippets rather than every decoded body. Rollback selection still completes
-before a match becomes authoritative. Searched discovery uses the requested
-page size; its continuation preserves remaining candidates, including empty
-partial pages.
-These bundled source declarations advertise `contentSearch: true`.
+Devin reads only private temporary byte copies of its database and WAL, opens those copies read-only, then deletes them. SQLite never opens the vendor files. A copy taken during a write may be slightly stale; failed reads retain indexed history, while confirmed deletion removes it.
 
-The 0.3 development readers also cover Grok's paired `summary.json` and
-`chat_history.jsonl`, Cursor CLI's `agent-transcripts` JSONL with v1 chat
-metadata, and Kiro's v1 paired CLI chat store. Each plugin owns one decoder
-shared by content search, transcript paging and native indexing. Observation
-includes transcript and identity/semantic sidecars; rewrites retire abandoned
-indexed text. Unrecognised records or versions remain partial/unsupported.
-These dialects are characterised from pinned Orca fixtures and vendor docs,
-with producing CLI versions unknown; installed-CLI capture remains release
-validation. Kiro ACP V3 is a distinct, uncharacterised store outside the v1
-source and resume claim.
+Each positive declaration is backed by one plugin-owned projection for candidates, transcript pages and read-after. Source observation includes transcript, topology and semantic sidecars through the incumbent accounting/observation pipeline; matching uses the SDK helper and Protocol `contentSearchMatch`. There is no second watcher or content index. Tool-input metadata and model-only summaries are excluded. Native rewrites replace the indexed projection; unavailable stores do not prove deletion.
+
+Kimi joins `KIMI_CODE_HOME` (default `~/.kimi-code`) session state/index with the main wire log. Auggie resolves `~/.augment/sessions` or the admitted `augmentHome`; FX resolves `~/.fx/sessions` and observes referenced results. Gemini shares discovery with resume import under `GEMINI_CLI_HOME/.gemini/tmp` or the default home; Qwen resolves `QWEN_RUNTIME_DIR`, `QWEN_HOME` or `~/.qwen`. Kilo reads XDG `kilo/storage` without loading the vendor's migrating Storage module. Grok/Cursor/Kiro fixtures are pinned to Orca and vendor documentation; no producing native CLI version is inferred.
+
+Claude/Codex/Pi/OhMyPi/Antigravity use host-provided packaged ripgrep where safe, then re-match decoded text. Unicode/escaped/process-unsafe queries retain decoded fallback; OpenCode matches decoded native-client messages without ripgrep. Codex shares root-family discovery per candidate page and retains identities and possible snippets instead of all bodies; rollback selection precedes authoritative matching. The requested page size counts candidates, and empty partial pages preserve continuation.
 No transcript body is written into the persistent candidate metadata index;
 optional content indexing belongs only to Memory. Codex
 app-server-only threads have no searchable file corpus; unsupported sources,
@@ -805,8 +751,18 @@ delivers admitted client Actions after approval/prepare through
 `clientActionReverseDispatch`, using the existing authenticated machine-scoped
 reverse-RPC channel (`ui.actions.execute.v1`). The connected app executes them
 through `createDefaultActionExecutor` and its mounted domain adapters; there is
-no second Find, prompt or Next executor. Find and Next are exposed to Agents
-and MCP; the picker is Agent-exposed but remains excluded from MCP.
+no second Find, prompt or Next executor. Find, Next and the picker are exposed
+to Agents and MCP.
+
+Session-bound Find, picker, composer, current-context and conversation-search
+calls select the app viewing the addressed Session, through the same channel's
+Session-qualified method. An explicit composer Session takes precedence over
+the invoking Session. The app's current-UI owner advertises that method only
+while the Session is viewed and rechecks it before execution. No matching view
+returns the Action's unavailable result; multiple matching clients return
+`client_ambiguous` without execution. Calls without a Session address also
+require a single answering client. They never fall back to an arbitrary app.
+Other client Actions retain their existing placement-specific routing.
 
 With no advertising app connected, Find and the picker return
 `{ status: 'unavailable', reason: 'noClient' }`, Next returns
