@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSettingHref, defineSettingsPage } from './settingDeclarations';
+import { buildSettingHref, collectDeclaredFeatureIds, defineSettingsPage } from './settingDeclarations';
 import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
 import { SOURCE_CONTROL_SETTINGS } from '@/components/settings/sourceControl/sourceControlSettings';
 
 describe('scoped setting links', () => {
+    it('keeps a mixed section’s feature decisions per row regardless of row order', () => {
+        const mixed = defineSettingsPage({ pageId: 'sourceControl', sections: { files: { settings: {
+            showLineNumbersInDiffs: {},
+            trackAgentEdits: { anchor: 'files.trackAgentEdits' },
+        } } } });
+        expect(mixed.settings.showLineNumbersInDiffs.featureId).toBe('scm.writeOperations');
+        expect(mixed.settings.trackAgentEdits.featureId).toBeUndefined();
+        // This isolated mixed section must still request the feature snapshot for its SCM row.
+        expect(collectDeclaredFeatureIds([mixed])).toEqual(['scm.writeOperations']);
+    });
     it('keeps Track’s canonical settings Action anchor when its row lives on the source-control page', () => {
         const ref = SOURCE_CONTROL_SETTINGS.settings.trackAgentEdits;
         expect(ref).toMatchObject({ anchor: 'files.trackAgentEdits', sectionId: 'sourceControl.files',

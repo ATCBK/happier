@@ -174,13 +174,15 @@ const MAX_SEGMENTED_OPTIONS = 4;
 
 export const SourceControlSettingsView = React.memo(function SourceControlSettingsView() {
     const { push } = useRouter();
+    // The canonical declaration gates legacy SCM rows; the mixed Files page is not gated.
+    const scmWriteOperationsEnabled = useFeatureEnabled(SOURCE_CONTROL_SETTINGS.settings.commitStrategy.featureId!);
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
         MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.sourceControl,
     );
     const executionTarget = administrationTargetSelection.resolveExecutionTarget();
     const contributionCatalog = useDaemonScmContributionCatalog({
-        machineId: executionTarget?.machine.id ?? null,
-        serverId: executionTarget?.serverId ?? null,
+        machineId: scmWriteOperationsEnabled ? executionTarget?.machine.id ?? null : null,
+        serverId: scmWriteOperationsEnabled ? executionTarget?.serverId ?? null : null,
     });
     const [scmCommitStrategy, setScmCommitStrategy] = useSettingMutable('scmCommitStrategy');
     const [scmGitRepoPreferredBackend] = useSettingMutable('scmGitRepoPreferredBackend');
@@ -308,15 +310,16 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
         <ItemList style={{ paddingTop: 0 }}>
             <SettingsPageHeader
                 description={t('settingsSourceControl.page.description')}
-                actions={(
+                actions={scmWriteOperationsEnabled ? (
                     <MachineAdministrationTargetSelector
                         selection={administrationTargetSelection}
                         testIDPrefix="settings.sourceControl.administration.target"
                         presentation="chip"
                     />
-                )}
+                ) : undefined}
             />
 
+            {scmWriteOperationsEnabled ? <>
             {/* The generator's agent and instructions wait on its switch, in this section. */}
             <SettingSection section={SOURCE_CONTROL_SETTINGS.sectionRefs.commits}>
             <ItemGroup
@@ -728,6 +731,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     <SettingSection key={plugin.backendId} section={SOURCE_CONTROL_SETTINGS.sectionRefs.backends}>{group}</SettingSection>
                 ) : group;
             })}
+            </> : null}
 
             <ItemGroup
                 title={t('settingsSourceControl.editor')}
