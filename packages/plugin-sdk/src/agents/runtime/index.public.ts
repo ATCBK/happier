@@ -1,5 +1,26 @@
 export { ACP_AGENT_CLI_TRANSPORT_TIMEOUTS } from '../../agentRuntime/projections.js';
 export { canPublishSessionResumeIdentity } from '../../agentRuntime/projections.js';
+export {
+  AGENT_STARTUP_FAILURE_PREVIEWS,
+  estimateUsageModelCost,
+  isSessionModeSelectionUnavailable,
+  listHappierToolAutoApprovedNamesV1,
+  listHappierToolAutoApprovedNameSpellingsV1,
+  parseMcpToolWireNameV1,
+  readAgentStartupFailureCode,
+  resolveUsageTokenCategories,
+  SessionGoalControlFailureV1Schema,
+} from '../../agentRuntime/projections.js';
+export type { AgentStartupFailureCode } from '../../agentRuntime/projections.js';
+export type {
+  McpToolIdentityV1,
+  ResolvedUsageModelPrice,
+  UsageAccountingMetadata,
+  UsageModelCostEstimate,
+  UsageModelPriceCatalog,
+  UsageModelPriceOverridesV1,
+  UsageModelPriceRates,
+} from '../../agentRuntime/projections.js';
 export { ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES } from '../../agentRuntime/projections.js';
 export { ACP_WRITE_LIKE_PERMISSION_KINDS } from '../../agentRuntime/projections.js';
 export type { AcpForkSessionRequestV1 } from '../../agentRuntime/projections.js';

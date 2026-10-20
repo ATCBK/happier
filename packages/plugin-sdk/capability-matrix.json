@@ -2737,7 +2737,7 @@
     {
       "specifier": "./machine-provisioners",
       "sourceModule": "src/machine-provisioners/index.ts",
-      "realm": "any",
+      "realm": "daemon",
       "producer": "src/machine-provisioners/index.ts",
       "lifecycle": "published",
       "provingConsumer": "packages/plugins/machine-lima/src/manifest.ts",
