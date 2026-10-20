@@ -488,7 +488,7 @@ describe('NativeMicSession', () => {
             createNativeFileRecording: () => createVoiceFileRecording({ ...audioSession.nativeModule,
                 startFileRecording: async () => ({ recordingId: 'mute-ack' }),
                 setFileRecordingMuted: nativeMute,
-                stopFileRecording: async () => ({ uri: null }),
+                stopFileRecording: async () => ({ uri: 'file:///tmp/mute-ack.m4a' }),
             }),
         });
         await session.beginRecording();

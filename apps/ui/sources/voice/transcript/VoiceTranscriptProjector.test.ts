@@ -48,7 +48,7 @@ describe('VoiceTranscriptProjector', () => {
         older.update({ snapshot, binding, deviceId: 'older-device', sessionSeq: 10 });
         newer.update({ snapshot, binding, deviceId: 'newer-device', sessionSeq: 10 });
         const provenance = newer.update({ snapshot: { ...snapshot, status: 'connected' }, binding,
-            deviceId: 'newer-device', sessionSeq: 10 });
+            deviceId: 'newer-device', sessionSeq: 10 })?.continuation;
         expect(provenance).not.toBeNull();
         if (!provenance) throw new Error('Expected a connected continuation');
         let persisted: Promise<PersistedSessionTranscriptMessage> | undefined;

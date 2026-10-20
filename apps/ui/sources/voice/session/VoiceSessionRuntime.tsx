@@ -211,10 +211,13 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       if (note) {
         // Read before this device's own note lands: the conversation was last voiced elsewhere.
         if (snapshot.adapterId && snapshot.sessionId && readVoiceContinuationArrival(
-          readStoredSessionMessagesForAddress(storage.getState(), note.conversation), note.conversation, note.deviceId,
+          readStoredSessionMessagesForAddress(storage.getState(), note.continuation.conversation), note.continuation.conversation, note.continuation.deviceId,
         )) recordVoiceSessionArrival(snapshot.adapterId, snapshot.sessionId);
-        appendVoiceConversationNoteText({ conversationSessionId: note.conversation.sessionId,
-          text: 'Voice continued.', continuation: note });
+        void Promise.resolve(appendVoiceConversationNoteText({ conversationSessionId: note.continuation.conversation.sessionId,
+          text: 'Voice continued.', ...note })).then(
+          () => continuation.settle(note, true),
+          () => continuation.settle(note, false),
+        );
       }
     };
     const unsubscribe = controller.subscribe(syncPublishedSnapshot);

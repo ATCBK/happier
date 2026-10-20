@@ -254,7 +254,7 @@ describe('runVoiceAgentTurnWithTools local effect custody', () => {
     const result = await run('send it');
     expect(targetPendingRequests()).toEqual([]);
     expect(result.toolResultBatches[0]?.[0]).toMatchObject({ t: 'sendSessionMessage',
-      result: { ok: false, errorCode: 'session_not_found' } });
+      result: { ok: false, errorCode: 'not_found' } });
   });
 
   it('speaks only the outcome-informed follow-up when a requested send fails before dispatch', async () => {
@@ -265,7 +265,7 @@ describe('runVoiceAgentTurnWithTools local effect custody', () => {
     const result = await run('send it', { onAssistantTurn: async ({ assistantText }) => {
       // The non-streaming TTS consumer awaits this callback before continuing.
       expect(parseVoiceToolResultsFollowUp(wireTurns.at(-1)?.message)).toMatchObject({
-        toolResults: [expect.objectContaining({ t: 'sendSessionMessage', result: { ok: false, errorCode: 'session_not_found' } })],
+        toolResults: [expect.objectContaining({ t: 'sendSessionMessage', result: { ok: false, errorCode: 'not_found' } })],
       });
       expect(targetPendingRequests()).toEqual([]);
       spoken.push(assistantText);

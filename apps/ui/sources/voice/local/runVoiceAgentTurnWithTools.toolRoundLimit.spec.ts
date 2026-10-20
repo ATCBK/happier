@@ -82,12 +82,12 @@ describe('runVoiceAgentTurnWithTools tool-round limit', () => {
       onAssistantTurn, onToolResults, onOutputEvent,
     });
     expect(result).toMatchObject({ disposition: 'tool_round_limit_reached',
-      assistantTurns: ['I will check once.'], totalActions: 1 });
+      assistantTurns: [], totalActions: 1 });
     expect(result.toolResultBatches).toHaveLength(1);
     expect(result.toolResultBatches[0]?.[0]).toMatchObject({ t: 'listAgentBackends', args: {} });
     expect(daemon.readRetainedRun()).toBeNull();
     expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(false);
-    expect(onAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(onAssistantTurn).not.toHaveBeenCalled();
     expect(onAssistantTurn).not.toHaveBeenCalledWith(expect.objectContaining({
       assistantText: 'Done. I also changed it.',
     }));
@@ -130,7 +130,7 @@ describe('runVoiceAgentTurnWithTools tool-round limit', () => {
       userText: 'check it', durableLocalId: 'tool-round-limit-2', voiceAgentSessions,
       maxToolRounds: 1, onAssistantTurn });
     expect(result.disposition).toBe('completed');
-    expect(result.assistantTurns).toEqual(['I will check once.', 'The check completed.']);
+    expect(result.assistantTurns).toEqual(['The check completed.']);
     expect(onAssistantTurn).toHaveBeenLastCalledWith({
       assistantText: 'The check completed.', actions: [], turnIndex: 1,
     });

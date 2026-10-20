@@ -778,10 +778,11 @@ describe('createLocalVoiceCaptureOwner', () => {
         const nativeMute = vi.fn(async ({ muted }: { muted: boolean }) => { if (!muted) await resume.promise; });
         const recording = createExpoAudioRecordingMicSession({
             requestPermission: sdk.permission,
+            deleteRecordedAudio: vi.fn(async () => {}),
             createNativeFileRecording: () => createVoiceFileRecording({ ...nativeAudio.nativeModule,
                 startFileRecording: async () => ({ recordingId: 'resume-failure' }),
                 setFileRecordingMuted: nativeMute,
-                stopFileRecording: async () => ({ uri: null }),
+                stopFileRecording: async () => ({ uri: 'file:///tmp/resume-failure.m4a' }),
             }),
         });
         recordingSessions.push(recording);

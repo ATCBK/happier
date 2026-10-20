@@ -57,8 +57,10 @@ export function appendVoiceConversationNoteText(params: Readonly<{
     conversationSessionId: string;
     text: string;
     continuation?: VoiceContinuationProvenance;
-}>): void {
-    projector.projectNoteText(params);
+    localId?: string;
+    createdAt?: number;
+}>): ReturnType<typeof projector.projectNoteText> {
+    return projector.projectNoteText(params);
 }
 
 export function projectCanonicalVoiceTranscriptEvent(params: Readonly<{

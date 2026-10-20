@@ -36,7 +36,7 @@ describe('Voice continuation attempt projection', () => {
         const projection = createVoiceContinuationProjection();
         expect(projection.update({ snapshot, binding: null, deviceId: 'a', sessionSeq: 10 })).toBeNull();
         expect(projection.update({ snapshot, binding, deviceId: 'a', sessionSeq: 10 })).toBeNull();
-        expect(projection.update({ snapshot: { ...snapshot, status: 'connected' }, binding, deviceId: 'a', sessionSeq: 12 }))
+        expect(projection.update({ snapshot: { ...snapshot, status: 'connected' }, binding, deviceId: 'a', sessionSeq: 12 })?.continuation)
             .toEqual({ v: 1, deviceId: 'a', conversation });
         expect(projection.update({ snapshot: { ...snapshot, status: 'connected' }, binding, deviceId: 'a', sessionSeq: 12 })).toBeNull();
         const note = { kind: 'agent-text' as const, id: 'note', localId: 'note', seq: 11, createdAt: 1, text: 'Continued',
