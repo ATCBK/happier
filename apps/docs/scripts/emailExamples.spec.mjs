@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SessionSpawnNewInputV2Schema } from '../../../packages/protocol/src/sessions/creation/sessionSpawnNewInputV2.ts';
+import { AutomationScheduleTriggerInputSchema } from '../../../packages/protocol/src/automations/automationTriggerDefinition.ts';
 
 const root = resolve(import.meta.dirname, '../../..');
 const read = (path) => readFileSync(resolve(root, path), 'utf8');
@@ -13,6 +15,12 @@ function object(value) {
 }
 
 describe('Email integration documentation examples through canonical schemas', () => {
+  it('admits the channel assistant recipe and existing-conversation schedule through their owners', () => {
+    const [recipe, schedule] = examples(read('apps/docs/content/docs/extending/channels.mdx'));
+    SessionSpawnNewInputV2Schema.parse(recipe);
+    AutomationScheduleTriggerInputSchema.parse(schedule);
+  });
+
   it('admits the published HTTP spawn, send, history and run-now envelopes and restricted grant', async () => {
     const { getActionSpec } = await import('../../../packages/protocol/src/actions/actionSpecs.ts');
     const { ExternalActionRequestEnvelopeV1Schema } = await import('../../../packages/protocol/src/actions/externalActionApi.ts');
@@ -35,7 +43,6 @@ describe('Email integration documentation examples through canonical schemas', (
     const [recipe, remote, workflow, schedule] = examples(read('apps/docs/content/docs/extending/email-agent-recipes.mdx'));
     const checked = await Promise.allSettled([
       (async () => {
-        const { SessionSpawnNewInputV2Schema } = await import('../../../packages/protocol/src/sessions/creation/sessionSpawnNewInputV2.ts');
         SessionSpawnNewInputV2Schema.parse({ ...object(recipe), executionTarget: { serverId: 'example-home', machineId: 'example-machine' } });
         return 'recipe';
       })(),
@@ -46,7 +53,6 @@ describe('Email integration documentation examples through canonical schemas', (
         return 'MCP';
       })(),
       (async () => {
-        const { AutomationScheduleTriggerInputSchema } = await import('../../../packages/protocol/src/automations/automationTriggerDefinition.ts');
         AutomationScheduleTriggerInputSchema.parse(schedule);
         return 'schedule';
       })(),
