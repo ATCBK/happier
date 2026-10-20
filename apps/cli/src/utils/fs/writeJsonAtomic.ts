@@ -4,7 +4,7 @@
  * Used for replacing durable files so consumers never read partially-written content.
  */
 
-import { mkdir, rename, unlink, writeFile, chmod } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile, chmod, open, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -46,6 +46,10 @@ export async function writeFileAtomically(input: Readonly<{
   writeTemporaryFile: (temporaryPath: string) => Promise<void>;
   /** Synchronous currentness fence immediately before the final rename. */
   beforeCommit?: () => void;
+  /** Workspace replacements retain permission bits; durable private stores stay 0600. */
+  mode?: 'preserve';
+  /** Flush staged bytes before the currentness fence and publication. */
+  fsync?: boolean;
 }>): Promise<void> {
   const path = input.path;
   const dir = dirname(path);
@@ -53,9 +57,24 @@ export async function writeFileAtomically(input: Readonly<{
   const tmpPath = join(dir, `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   try {
     await input.writeTemporaryFile(tmpPath);
-    await bestEffortChmod0600(tmpPath);
+    // Acquire the writable descriptor before retaining a read-only destination mode.
+    const staged = input.fsync ? await open(tmpPath, 'r+') : null;
+    try {
+      if (input.mode === 'preserve') {
+        const destination = await stat(path).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (destination && process.platform !== 'win32') await chmod(tmpPath, destination.mode & 0o7777);
+      } else {
+        await bestEffortChmod0600(tmpPath);
+      }
+      await staged?.sync();
+    } finally {
+      await staged?.close();
+    }
     await renameWithWindowsRetries(tmpPath, path, input.beforeCommit);
-    await bestEffortChmod0600(path);
+    if (input.mode !== 'preserve') await bestEffortChmod0600(path);
   } catch (error) {
     await unlink(tmpPath).catch(() => {});
     throw error;

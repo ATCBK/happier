@@ -4,9 +4,18 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { writeJsonAtomic } from './writeJsonAtomic';
+import { writeFileAtomically, writeJsonAtomic } from './writeJsonAtomic';
 
 describe('writeJsonAtomic', () => {
+  it.each([0o751, 0o444])('preserves destination permissions (%o) when publishing flushed workspace content', async mode => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-preserve-mode-'));
+    const path = join(dir, 'executable');
+    await writeFile(path, 'before', { mode });
+    await writeFileAtomically({ path, mode: 'preserve', fsync: true,
+      writeTemporaryFile: temporaryPath => writeFile(temporaryPath, 'after') });
+    expect(await readFile(path, 'utf8')).toBe('after');
+    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(mode);
+  });
   it('creates a new JSON file when the destination does not exist', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-writeJsonAtomic-new-'));
     const path = join(dir, 'state.json');
