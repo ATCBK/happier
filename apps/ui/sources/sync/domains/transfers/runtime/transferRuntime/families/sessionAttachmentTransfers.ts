@@ -195,6 +195,7 @@ export async function downloadDaemonSessionAttachmentToDestination(params: Reado
     attachmentHandle: SessionAttachmentHandleV1;
     destination: Parameters<typeof downloadBulkPayloadViaMachineRpcToDestination>[0]['destination'];
     onInit?: Parameters<typeof downloadBulkPayloadViaMachineRpcToDestination>[0]['onInit'];
+    onProgress?: Parameters<typeof downloadBulkPayloadViaMachineRpcToDestination>[0]['onProgress'];
     signal?: AbortSignal | null;
 }>): ReturnType<typeof downloadBulkPayloadViaMachineRpcToDestination> {
     const context = params.transferContext;
@@ -210,6 +211,7 @@ export async function downloadDaemonSessionAttachmentToDestination(params: Reado
         abort: (request) => observeTransferOperation(
             context.call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT, request), params.signal),
         onInit: params.onInit,
+        onProgress: params.onProgress ?? null,
         signal: params.signal,
     });
 }

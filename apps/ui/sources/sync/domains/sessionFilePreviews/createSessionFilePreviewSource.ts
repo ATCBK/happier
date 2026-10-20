@@ -35,10 +35,15 @@ type PreviewDestination = Readonly<{
     cleanup: () => Promise<void>;
 }>;
 
+/** Bytes received so far; `totalBytes` is the transfer's announced size. */
+export type PreviewLoadProgress = Readonly<{ receivedBytes: number; totalBytes: number }>;
+export type PreviewLoadProgressListener = (progress: PreviewLoadProgress) => void;
+
 type PreviewByteLoader = (input: Readonly<{
     maxBytes: number | null;
     destination: PreviewDestination;
     signal: AbortSignal | null;
+    onProgress: PreviewLoadProgressListener | null;
 }>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: string }>>;
 
 async function createPreviewSource(input: Readonly<{
@@ -47,6 +52,7 @@ async function createPreviewSource(input: Readonly<{
     maxBytes: number | null;
     expectedSizeBytes?: number | null;
     signal?: AbortSignal | null;
+    onProgress?: PreviewLoadProgressListener | null;
     load: PreviewByteLoader;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
     const viewer = resolveFileViewerKind({ path: input.filePath, mimeType: input.mimeType });
@@ -127,6 +133,7 @@ async function createPreviewSource(input: Readonly<{
             maxBytes,
             destination,
             signal: input.signal ?? null,
+            onProgress: input.onProgress ?? null,
         });
         if (!load.ok) {
             await destination.cleanup();
@@ -188,11 +195,12 @@ export async function createSessionFilePreviewSource(input: Readonly<{
     maxBytes: number | null;
     expectedSizeBytes?: number | null;
     signal?: AbortSignal | null;
+    onProgress?: PreviewLoadProgressListener | null;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
     // Callers own their preview budget; every source also shares the web buffering budget.
     return await createPreviewSource({
         ...input,
-        load: async ({ destination, signal, maxBytes }) => {
+        load: async ({ destination, signal, maxBytes, onProgress }) => {
             const { downloadDaemonWorkspaceFileToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime');
             const download = await downloadDaemonWorkspaceFileToDestination({
                 machineId: input.scope.machineId,
@@ -206,6 +214,9 @@ export async function createSessionFilePreviewSource(input: Readonly<{
                     }
                 },
                 signal,
+                onProgress: onProgress
+                    ? ({ downloadedBytes, totalBytes }) => onProgress({ receivedBytes: downloadedBytes, totalBytes })
+                    : null,
             });
             return download.ok ? { ok: true } : { ok: false, error: download.error };
         },
@@ -220,6 +231,7 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
     maxBytes: number | null;
     expectedSizeBytes?: number | null;
     signal?: AbortSignal | null;
+    onProgress?: PreviewLoadProgressListener | null;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
     return await createPreviewSource({
         filePath: input.fileName,
@@ -227,7 +239,8 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
         maxBytes: input.maxBytes,
         expectedSizeBytes: input.expectedSizeBytes,
         signal: input.signal,
-        load: async ({ destination, signal, maxBytes }) => {
+        onProgress: input.onProgress ?? null,
+        load: async ({ destination, signal, maxBytes, onProgress }) => {
             const { downloadDaemonSessionAttachmentToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime');
             const context = (await import('@/sync/sync')).sync.getSessionAttachmentTransferContext(input.handle.sessionId, { purpose: 'attachmentPreview' });
             if (!context) return { ok: false, error: 'Session attachment scope is unavailable' };
@@ -239,6 +252,9 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
                 onInit: async ({ sizeBytes }) => maxBytes !== null && sizeBytes > maxBytes
                     ? { success: false, error: PREVIEW_TOO_LARGE_ERROR }
                     : undefined,
+                onProgress: onProgress
+                    ? ({ downloadedBytes, totalBytes }) => onProgress({ receivedBytes: downloadedBytes, totalBytes })
+                    : null,
             });
             return download.ok ? { ok: true } : { ok: false, error: download.error };
         },
