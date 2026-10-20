@@ -2340,7 +2340,7 @@ describe('declared settings owner', () => {
         if (!('items' in discovered) || !discovered.items) throw new Error('Discovery failed');
         const byAnchor = new Map(discovered.items.map((item) => [item.anchor, item]));
         for (const anchor of [
-            'appearance.themeMode', 'transcript.displayMode', 'session.layout', 'session.attentionPromotion',
+            'appearance.themeMode', 'transcript.displayMode', 'session.layout', 'session.attentionPromotion', 'session.backgroundWorkAttention',
             'notifications.localEnabled', 'notifications.ready', 'notifications.readyPreview', 'notifications.requestPreview',
             'notifications.localPermissionRequests', 'notifications.localUserActions', 'notifications.foregroundBehavior',
         ]) {
@@ -2401,6 +2401,14 @@ describe('declared settings owner', () => {
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'session.attentionPromotion', value: 'withinGroups' } }))
             .toEqual({ anchor: 'session.attentionPromotion', value: 'withinGroups' });
         expect(owner.account().sessionListAttentionPromotionModeV1).toBe('withinGroups');
+
+        for (const value of ['keepWorkingUnread', 'showUnread', 'keepWorking']) {
+            expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'session.backgroundWorkAttention', value } }))
+                .toEqual({ anchor: 'session.backgroundWorkAttention', value });
+            expect(owner.account()).toHaveProperty('sessionListBackgroundWorkAttentionModeV1', value);
+            expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'session.backgroundWorkAttention' } }))
+                .toEqual({ anchor: 'session.backgroundWorkAttention', value });
+        }
 
         // This device's notifications keep every sibling field of their nested record.
         const before = owner.local().attentionDeviceOverridesV1;

@@ -425,7 +425,7 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
             }
             const { host, ...label } = projectPortableDeclaration(anchor, declaration);
             const combinedHost = combineHostPredicates(section.host, host);
-            const rowFeatureId = portable?.featureId ?? featureId;
+            const rowFeatureId = portableLabelsByAnchor.get(anchor)?.featureId ?? featureId;
             settingAnchors.push(anchor);
             settings[settingId] = {
                 ...label,
