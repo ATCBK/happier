@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-
+import { createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import { parseDiscordMessageDispatch } from './discordMessage.js';
 
@@ -32,7 +32,7 @@ describe('Discord message parser', () => {
       channel: { kind: 'shared', channelId: 'channel-1' }, context,
     });
     expect(parsed).toMatchObject({ kind: 'message', message: { text: content, attachments: [{
-      attachmentId: 'discord:attachment:channel-1:message-1:file-1', name: 'lead.pdf',
+      attachmentId: createConversationAttachmentIdV1('discord', ['channel-1', 'message-1', 'file-1']), name: 'lead.pdf',
       mediaType: 'application/octet-stream', byteLength: 25_000_000,
     }] } });
     expect(JSON.stringify(parsed)).not.toContain('https:');

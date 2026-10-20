@@ -1,4 +1,5 @@
 import type { HeaderValue } from 'mailparser';
+import { createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 export interface EmailContentOptions {
   quotedHistory?: 'stripKnown' | 'always' | 'never';
@@ -33,6 +34,10 @@ function singleAddress(value: HeaderValue | undefined) {
 }
 
 export async function parseEmail(raw: Uint8Array, options: EmailContentOptions = {}): Promise<ParsedEmail> {
+  return parseEmailParts(raw, options, []);
+}
+
+async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, parentParts: readonly string[]): Promise<ParsedEmail> {
   const [{ simpleParser }, { shapeEmailBody }] = await Promise.all([
     import('mailparser'),
     import('./shape.js'),
@@ -60,15 +65,16 @@ export async function parseEmail(raw: Uint8Array, options: EmailContentOptions =
   for (const [index, attachment] of mail.attachments.entries()) {
     if (attachment.contentType.startsWith('image/') && attachment.contentDisposition !== 'attachment' &&
       attachment.cid && shaped.signatureOnlyCids.has(attachment.cid)) continue;
-    const attachmentId = `mime:${attachment.partId ?? index + 1}`;
+    const parts = [...parentParts, `mime:${attachment.partId ?? index + 1}`];
+    const attachmentId = createConversationAttachmentIdV1('email', parts);
     const name = attachment.filename ?? (attachment.contentType === 'text/calendar' ? 'invite.ics' : `attachment-${index + 1}`);
     const bytes = new Uint8Array(attachment.content);
     attachments.push({ attachmentId, name, mediaType: attachment.contentType, bytes });
     if (attachment.contentType === 'message/rfc822' || /\.eml$/i.test(name)) {
-      const nested = await parseEmail(bytes, { ...options, quotedHistory: 'never', stripSignatures: false, knownThread: false });
+      const nested = await parseEmailParts(bytes, { ...options, quotedHistory: 'never', stripSignatures: false, knownThread: false }, parts);
       forwarded = true;
       text = [text, `--- Forwarded email (untrusted): ${name} ---\nFrom: ${nested.from ?? 'unknown'}\nSubject: ${nested.subject}\n\n${nested.text}\n--- End forwarded email ---`].filter(Boolean).join('\n\n');
-      attachments.push(...nested.attachments.map((file) => ({ ...file, attachmentId: `${attachmentId}/${file.attachmentId}` })));
+      attachments.push(...nested.attachments);
     }
   }
   return {

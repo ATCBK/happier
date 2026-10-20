@@ -3,6 +3,9 @@ import {
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
   ConversationAttachmentFetchInputV1Schema,
   ConversationAttachmentFetchResultV1Schema,
+  createConversationAttachmentIdV1,
+  readConversationAttachmentIdV1,
+  encodeConversationAttachmentBytesV1,
   ConversationConnectionTestInputV1Schema,
   classifyConversationProviderMaterializationFailureV1,
   ConversationConnectionTestResultV1Schema,
@@ -418,19 +421,15 @@ function normalizedIngressFromUpdate(
 }
 
 function telegramAttachmentId(botId: string, messageId: string, file: TelegramIncomingAttachment): string {
-  return `telegram-file:v1:${Buffer.from(JSON.stringify([botId, messageId, file.fileId, file.byteLength ?? null])).toString('base64url')}`;
+  return createConversationAttachmentIdV1('telegram', [botId, messageId, file.fileId, file.byteLength ?? null]);
 }
 
 function readTelegramAttachmentId(value: string, botId: string, messageId: string): Readonly<{ fileId: string; byteLength?: number }> | null {
-  const prefix = 'telegram-file:v1:';
-  if (!value.startsWith(prefix)) return null;
-  try {
-    const decoded: unknown = JSON.parse(Buffer.from(value.slice(prefix.length), 'base64url').toString('utf8'));
-    if (!Array.isArray(decoded) || decoded.length !== 4 || decoded[0] !== botId || decoded[1] !== messageId
-      || typeof decoded[2] !== 'string' || !decoded[2]
-      || (decoded[3] !== null && (typeof decoded[3] !== 'number' || !Number.isSafeInteger(decoded[3]) || decoded[3] < 0))) return null;
-    return { fileId: decoded[2], ...(decoded[3] === null ? {} : { byteLength: decoded[3] }) };
-  } catch { return null; }
+  const decoded = readConversationAttachmentIdV1(value, 'telegram');
+  if (decoded === null || decoded.length !== 4 || decoded[0] !== botId || decoded[1] !== messageId
+    || typeof decoded[2] !== 'string' || !decoded[2]
+    || (decoded[3] !== null && (typeof decoded[3] !== 'number' || !Number.isSafeInteger(decoded[3]) || decoded[3] < 0))) return null;
+  return { fileId: decoded[2], ...(decoded[3] === null ? {} : { byteLength: decoded[3] }) };
 }
 
 /** Materialization only: stable native file IDs outlive Telegram's temporary download paths. */
@@ -448,7 +447,7 @@ export async function fetchTelegramAttachments(input: unknown, context: PluginIn
     const result = await ready.api.downloadFile(file, { signal: context.signal });
     context.signal.throwIfAborted();
     if (result.kind !== 'downloaded') return ConversationAttachmentFetchResultV1Schema.parse(result);
-    attachments.push({ attachmentId: request.attachmentIds[index]!, base64: Buffer.from(result.bytes).toString('base64') });
+    attachments.push({ attachmentId: request.attachmentIds[index]!, base64: encodeConversationAttachmentBytesV1(result.bytes) });
   }
   return ConversationAttachmentFetchResultV1Schema.parse({ kind: 'fetched', attachments });
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ConversationNormalizedIngressV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ConversationNormalizedIngressV1Schema, createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import { parseDiscordMessageDispatch } from './discordMessage.js';
 import { mapDiscordMessageToSocketIngress } from './discordObservation.js';
@@ -33,7 +33,7 @@ describe('Discord Gateway observation mapping', () => {
     });
     const ingress = mapDiscordMessageToSocketIngress({ parsed });
     expect(ingress).toMatchObject({ kind: 'fullText', observation: { message: { text: '', attachments: [{
-      attachmentId: 'discord:attachment:channel-1:message-1:file-1', name: 'photo.png', mediaType: 'image/png', byteLength: 3,
+      attachmentId: createConversationAttachmentIdV1('discord', ['channel-1', 'message-1', 'file-1']), name: 'photo.png', mediaType: 'image/png', byteLength: 3,
     }] } } });
     expect(ConversationNormalizedIngressV1Schema.parse(ingress)).toEqual(ingress);
   });

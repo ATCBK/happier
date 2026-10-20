@@ -1,4 +1,4 @@
-import { countConversationTextUnits, type ConversationProviderFailureV1 } from '@happier-dev/channels-protocol/v1';
+import { countConversationTextUnits, rethrowConversationProviderLifecycleFailureV1, type ConversationProviderFailureV1 } from '@happier-dev/channels-protocol/v1';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
 
 const TELEGRAM_BOT_API_BASE_URL = 'https://api.telegram.org';
@@ -284,10 +284,13 @@ function parseTextEntities(value: unknown, text: string | null): readonly Telegr
 
 function parseIncomingAttachments(message: JsonRecord, messageId: string): readonly TelegramIncomingAttachment[] {
   const attachments: TelegramIncomingAttachment[] = [];
+  const uniqueIds = new Set<string>();
   function add(value: unknown, name: string, mediaType: string): void {
     if (!isRecord(value)) return;
     const fileId = readString(value.file_id);
-    if (!fileId || attachments.some(file => file.fileId === fileId)) return;
+    const uniqueId = readString(value.file_unique_id);
+    if (!fileId || attachments.some(file => file.fileId === fileId) || (uniqueId && uniqueIds.has(uniqueId))) return;
+    if (uniqueId) uniqueIds.add(uniqueId);
     const size = readSafeInteger(value.file_size);
     attachments.push({ fileId, name: readString(value.file_name)?.trim() || name,
       mediaType: readString(value.mime_type)?.trim() || mediaType,
@@ -423,7 +426,7 @@ export function createTelegramBotApi(input: Readonly<{
       }, options);
       return parseBotApiEnvelope(response.body);
     } catch (error) {
-      if (options?.signal?.aborted) throw error;
+      rethrowConversationProviderLifecycleFailureV1(error, options?.signal);
       return null;
     }
   }
@@ -464,7 +467,7 @@ export function createTelegramBotApi(input: Readonly<{
         if (response.body.byteLength > TELEGRAM_MAX_DOWNLOAD_FILE_BYTES) return unsupported;
         return { kind: 'downloaded', bytes: response.body };
       } catch (error) {
-        if (options?.signal?.aborted) throw error;
+        rethrowConversationProviderLifecycleFailureV1(error, options?.signal);
         return { kind: 'notReady', reason: 'network', diagnostic: 'Telegram could not download the attachment.' };
       }
     },

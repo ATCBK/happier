@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import { ConversationAttachmentFetchResultV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ConversationAttachmentFetchResultV1Schema, createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import {
   deliverDiscordMessage,
@@ -95,7 +95,7 @@ describe('Discord Channels provider Actions', () => {
   const attachmentInput = {
     v: 1, connectionId: 'connection-1', providerConnectionKey: 'discord:application:application-1',
     providerConfigVersion: 1, providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' }, credentialRef,
-    messageId: 'message-1', attachmentIds: ['discord:attachment:channel-1:message-1:file-1'],
+    messageId: 'message-1', attachmentIds: [createConversationAttachmentIdV1('discord', ['channel-1', 'message-1', 'file-1'])],
   };
   const freshAttachment = {
     id: 'file-1', filename: 'lead.pdf', content_type: 'application/pdf', size: 3,
@@ -107,16 +107,20 @@ describe('Discord Channels provider Actions', () => {
     channelId?: string;
     downloadStatus?: number;
     downloadError?: Error;
+    messageError?: Error;
     onDownload?: () => void;
     signal?: AbortSignal;
   }> = {}) {
     const request = vi.fn(async (request: Parameters<Parameters<typeof channelsCallerContext>[0]['request']>[0]) => {
       if (request.url.endsWith('/oauth2/applications/@me')) return jsonResponse({ id: 'application-1' });
       if (request.url.endsWith('/users/@me')) return jsonResponse({ id: 'discord-bot-1', username: 'Happier', bot: true });
-      if (request.url.endsWith('/channels/channel-1/messages/message-1')) return jsonResponse({
-        id: options.messageId ?? 'message-1', channel_id: options.channelId ?? 'channel-1',
-        attachments: [options.attachment ?? freshAttachment],
-      });
+      if (request.url.endsWith('/channels/channel-1/messages/message-1')) {
+        if (options.messageError) throw options.messageError;
+        return jsonResponse({
+          id: options.messageId ?? 'message-1', channel_id: options.channelId ?? 'channel-1',
+          attachments: [options.attachment ?? freshAttachment],
+        });
+      }
       options.onDownload?.();
       if (options.downloadError) throw options.downloadError;
       return { status: options.downloadStatus ?? 200, finalUrl: request.url, headers: {}, body: Uint8Array.of(0, 128, 255) };
@@ -189,7 +193,7 @@ describe('Discord Channels provider Actions', () => {
 
   it('propagates host generation retirement during the renewed message read', async () => {
     const error = new PluginError({ code: 'plugin_final_generation_retired', message: 'Retired' });
-    const { context } = channelsCallerContext({ request: async () => { throw error; } });
+    const { context } = attachmentContext({ messageError: error });
     await expect(fetchDiscordAttachment(attachmentInput, context)).rejects.toBe(error);
   });
 
