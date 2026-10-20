@@ -4,7 +4,6 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { StoredCredentials } from '@/persistence';
-import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { readSessionMessageReply, type DiscussionReplyReturnPublisher } from '@/session/services/sessionMessageReply';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -52,6 +51,8 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
         || progress.discussion.messageId !== original.discussion.messageId
         || progress.discussion.throughSeq !== original.discussion.throughSeq) return denied();
     }
+    const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
+    if (!await current()) return denied();
     const receipt: { value?: DiscussionAgentPostResponseV1 } = {};
     const transportFailure: { value?: Readonly<{ error: unknown }> } = {};
     let phase = 'action_admission';
