@@ -81,6 +81,7 @@ export type FilesPaneTranslations = Readonly<{
         cardLabel: string;
         languageServer: string;
         starting: (params: Readonly<{ server: string; machine: string }>) => string;
+        loadingProject: (params: Readonly<{ server: string; machine: string }>) => string;
         startingDetail: string;
         serverStopped: (params: Readonly<{ server: string; machine: string }>) => string;
         serverCouldNotStart: (params: Readonly<{ server: string; machine: string }>) => string;
@@ -198,6 +199,7 @@ export const filesPaneTranslationsEnglish = { en: {
             cardLabel: "About this name",
             languageServer: "the language server",
             starting: ({ server, machine }) => "Starting " + server + " on " + machine + "…",
+            loadingProject: ({ server, machine }) => server + " is loading the project on " + machine + "…",
             startingDetail: "First answers take a few seconds on a large project.",
             serverStopped: ({ server, machine }) => server + " stopped on " + machine + ".",
             serverCouldNotStart: ({ server, machine }) => server + " couldn’t start on " + machine + ".",

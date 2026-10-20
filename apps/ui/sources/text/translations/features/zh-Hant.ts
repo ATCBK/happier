@@ -3035,6 +3035,7 @@ const filesPaneTranslations = { 'zh-Hant': {
             languageServer: "語言伺服器",
             starting: ({ server, machine }) => "正在 " + machine + " 上啟動 " + server + "…",
             startingDetail: "大型專案的首次回應需要幾秒鐘。",
+            loadingProject: ({ server, machine }) => server + " 正在 " + machine + " 上載入專案…",
             serverStopped: ({ server, machine }) => machine + " 上的 " + server + " 已停止。",
             serverCouldNotStart: ({ server, machine }) => server + " 無法在 " + machine + " 上啟動。",
             serverMissing: ({ server, machine }) => machine + " 上未安裝 " + server + "。",

@@ -3035,6 +3035,7 @@ const filesPaneTranslations = { 'zh-Hans': {
             languageServer: "语言服务器",
             starting: ({ server, machine }) => "正在 " + machine + " 上启动 " + server + "…",
             startingDetail: "大型项目的首次响应需要几秒钟。",
+            loadingProject: ({ server, machine }) => server + " 正在 " + machine + " 上加载项目…",
             serverStopped: ({ server, machine }) => machine + " 上的 " + server + " 已停止。",
             serverCouldNotStart: ({ server, machine }) => server + " 无法在 " + machine + " 上启动。",
             serverMissing: ({ server, machine }) => machine + " 上未安装 " + server + "。",

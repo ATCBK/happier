@@ -3040,6 +3040,7 @@ const filesPaneTranslations = { ja: {
             languageServer: "言語サーバー",
             starting: ({ server, machine }) => machine + " で " + server + " を起動しています…",
             startingDetail: "大きなプロジェクトでは最初の応答に数秒かかります。",
+            loadingProject: ({ server, machine }) => server + " が " + machine + " でプロジェクトを読み込んでいます…",
             serverStopped: ({ server, machine }) => machine + " の " + server + " が停止しました。",
             serverCouldNotStart: ({ server, machine }) => machine + " で " + server + " を起動できませんでした。",
             serverMissing: ({ server, machine }) => machine + " に " + server + " がインストールされていません。",

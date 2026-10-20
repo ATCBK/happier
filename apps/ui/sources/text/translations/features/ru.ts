@@ -3062,6 +3062,7 @@ const filesPaneTranslations = { ru: {
             languageServer: "языковой сервер",
             starting: ({ server, machine }) => "Запуск " + server + " на " + machine + "…",
             startingDetail: "В большом проекте первые ответы занимают несколько секунд.",
+            loadingProject: ({ server, machine }) => server + " загружает проект на " + machine + "…",
             serverStopped: ({ server, machine }) => server + " остановился на " + machine + ".",
             serverCouldNotStart: ({ server, machine }) => "Не удалось запустить " + server + " на " + machine + ".",
             serverMissing: ({ server, machine }) => server + " не установлен на " + machine + ".",

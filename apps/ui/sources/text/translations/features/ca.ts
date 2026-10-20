@@ -3042,6 +3042,7 @@ const filesPaneTranslations = { ca: {
             languageServer: "el servidor de llenguatge",
             starting: ({ server, machine }) => "S’està iniciant " + server + " a " + machine + "…",
             startingDetail: "En un projecte gran, les primeres respostes triguen uns segons.",
+            loadingProject: ({ server, machine }) => server + " està carregant el projecte a " + machine + "…",
             serverStopped: ({ server, machine }) => server + " s’ha aturat a " + machine + ".",
             serverCouldNotStart: ({ server, machine }) => server + " no s’ha pogut iniciar a " + machine + ".",
             serverMissing: ({ server, machine }) => server + " no està instal·lat a " + machine + ".",
