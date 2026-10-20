@@ -1975,7 +1975,9 @@ describe('createPluginReloadController', () => {
 
         await expect(leasePromise).rejects.toThrow(/shut down/i);
         expect(dispose).toHaveBeenCalledTimes(1);
-        await expect(controller.acquireRuntimeRegistry()).rejects.toThrow(/shut down/i);
+        await expect(controller.acquireRuntimeRegistry()).rejects.toMatchObject({
+            code: 'plugin_runtime_shutdown', retryable: true,
+        });
     });
 
     it('targets an immutable-generation disposition without widening to healthy same-plugin Agent or Provider generations', () => {

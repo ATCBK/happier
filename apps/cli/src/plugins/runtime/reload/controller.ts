@@ -1,4 +1,5 @@
 import { logger } from '@/ui/logger';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type {
     PluginRunningSessionDisposition,
     PluginRunningSessionRevocationScope,
@@ -256,7 +257,11 @@ function normalizeShutdownTimeoutMs(value: number | undefined): number | null {
 }
 
 function createShutdownError(): Error {
-    return new Error('Plugin runtime registry has shut down');
+    return new PluginError({
+        code: 'plugin_runtime_shutdown',
+        message: 'Plugin runtime registry has shut down',
+        retryable: true,
+    });
 }
 
 class ColdInitializationSupersededError extends Error {
