@@ -4,7 +4,8 @@ import type { Artifact, ArtifactCreateRequest, DecryptedArtifact } from '@/sync/
 import type { ArtifactDataKeyCache } from './syncArtifacts';
 import type { ServerFetch } from '@/sync/http/client';
 import { HappyError } from '@/utils/errors/errors';
-import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { createUsageNoticeArtifactFixture, createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { readAccountNoticeArtifactHeader } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
     decodePlainArtifactStoredContent,
@@ -213,8 +214,9 @@ describe('syncArtifacts plaintext account storage', () => {
         expect(mocks.fetchArtifact).not.toHaveBeenCalled();
     });
 
-    it('enriches open usage notice headers with exact-read privacy and body before Inbox admission', async () => {
-        const notice = createUsageNoticeArtifactFixture({ ownerAccountId: 'owner' });
+    it.each(['usage', 'account'] as const)('enriches open %s notice headers with exact-read privacy and body before Inbox admission', async kind => {
+        const notice = kind === 'usage' ? createUsageNoticeArtifactFixture({ ownerAccountId: 'owner' })
+            : createAccountNoticeArtifactFixture({ ownerAccountId: 'owner' });
         const full: Artifact = { ...buildPlainArtifact(), id: notice.id,
             header: encodePlainArtifactStoredContent(notice.header),
             body: encodePlainArtifactStoredContent({ body: notice.body }),
@@ -229,6 +231,8 @@ describe('syncArtifacts plaintext account storage', () => {
 
         expect(applied[0]?.[0]).toMatchObject({ id: notice.id, publicAudience: 'unknown' });
         expect(applied.at(-1)?.[0]).toMatchObject({ id: notice.id, publicAudience: 'none', body: notice.body });
+        expect(readAccountNoticeArtifactHeader(applied.at(-1)![0], 'owner'))
+            .toMatchObject({ kind: 'account_notice.v1', status: 'open', resolved: false });
     });
 
     it('surfaces retained malformed plain Artifact reads and socket updates as locked instead of throwing', async () => {

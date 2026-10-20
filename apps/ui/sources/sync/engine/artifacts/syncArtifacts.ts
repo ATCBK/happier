@@ -50,7 +50,7 @@ import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, pre
 import { ArtifactPublicAudienceV1ReadSchema, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { isArtifactHtmlHeaderV1, artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
-import { readUsageNoticeArtifactHeaderV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { readAccountNoticeArtifactHeaderV1, readUsageNoticeArtifactHeaderV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { hashArtifactBinaryContent, openArtifactBinaryContent, sealArtifactBinaryContent } from '@/sync/domains/artifacts/artifactBinaryContent';
 import { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import type { ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
@@ -813,15 +813,18 @@ export async function fetchAndApplyArtifactsList(params: {
         }
 
         // The always-mounted Inbox badge consumes strict open approval bodies and
-        // private usage notices. Settled receipts are demanded by their transcript;
+        // private Account notices. Settled receipts are demanded by their transcript;
         // Launch Profiles have their own scoped catalog read owner.
         const detailHeads = decryptedArtifacts.filter(decrypted => {
             const header = decrypted.header;
             const isApprovalIndex = header?.kind === 'approval_request.v1'
                 || header?.kind === 'target_action_approval.v1'
                 || header?.kind === 'execution_run_host_action_approval.v1';
-            const isOpenUsageNotice = readUsageNoticeArtifactHeaderV1(decrypted.rawHeader ?? header)?.status === 'open';
-            return decrypted.isDecrypted && ((isApprovalIndex && header?.approvalStatus === 'open') || isOpenUsageNotice);
+            const noticeHeader = decrypted.rawHeader ?? header;
+            const notice = readAccountNoticeArtifactHeaderV1(noticeHeader);
+            const isOpenNotice = notice ? notice.status === 'open' && !notice.resolved
+                : readUsageNoticeArtifactHeaderV1(noticeHeader)?.status === 'open';
+            return decrypted.isDecrypted && ((isApprovalIndex && header?.approvalStatus === 'open') || isOpenNotice);
         });
         await fetchAndApplyArtifactBodies({ ...params, credentials, artifactIds: detailHeads.map(artifact => artifact.id) });
         log.log('📦 fetchArtifactsList: Artifacts applied to storage');
