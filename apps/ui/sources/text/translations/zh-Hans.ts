@@ -1778,6 +1778,12 @@ const zhHansValues = {
   inbox: {
         work: inboxWorkTranslations.zhHans,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: '结果尚未确认。请检查机器。' },
+            failureGeneric: '操作未完成。',
+        },
     openSession: ({ session }: { session: string }) => `打开会话：${session}`,
     stoppedResumeToAnswer: '已停止 — 恢复后即可答复',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `待审阅：${session}`,

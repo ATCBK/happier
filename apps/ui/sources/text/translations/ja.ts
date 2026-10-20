@@ -1947,6 +1947,12 @@ const jaValues = {
   inbox: {
         work: inboxWorkTranslations.ja,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: '結果を確認できていません。マシンを確認してください。' },
+            failureGeneric: '操作が完了しませんでした。',
+        },
     openSession: ({ session }: { session: string }) => `セッションを開く: ${session}`,
     stoppedResumeToAnswer: '停止中 — 再開して回答',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `確認の準備完了: ${session}`,

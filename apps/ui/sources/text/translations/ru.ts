@@ -1792,6 +1792,12 @@ const ruValues = {
   inbox: {
         work: inboxWorkTranslations.ru,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Результат не подтверждён. Проверьте машину.' },
+            failureGeneric: 'Действие не завершено.',
+        },
     openSession: ({ session }: { session: string }) => `Открыть сессию: ${session}`,
     stoppedResumeToAnswer: 'Остановлена — возобновите, чтобы ответить',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `Готово к проверке: ${session}`,

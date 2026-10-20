@@ -1964,6 +1964,12 @@ const esValues = {
   inbox: {
         work: inboxWorkTranslations.es,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Resultado sin confirmar. Revisa la máquina.' },
+            failureGeneric: 'La acción no se completó.',
+        },
     openSession: ({ session }: { session: string }) => `Abrir sesión: ${session}`,
     stoppedResumeToAnswer: 'Detenida — reanuda para responder',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `Lista para revisar: ${session}`,

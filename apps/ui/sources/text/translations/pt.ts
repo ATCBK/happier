@@ -2000,6 +2000,12 @@ const ptValues = {
   inbox: {
         work: inboxWorkTranslations.pt,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Resultado não confirmado. Verifique a máquina.' },
+            failureGeneric: 'A ação não foi concluída.',
+        },
     openSession: ({ session }: { session: string }) => `Abrir sessão: ${session}`,
     stoppedResumeToAnswer: 'Parada — retome para responder',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `Pronta para revisão: ${session}`,

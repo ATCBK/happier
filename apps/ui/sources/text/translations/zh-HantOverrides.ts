@@ -1922,6 +1922,12 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     inbox: {
         work: inboxWorkTranslations.zhHant,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: '結果尚未確認。請檢查機器。' },
+            failureGeneric: '操作未完成。',
+        },
         openSession: ({ session }: { session: string }) => `開啟工作階段：${session}`,
         stoppedResumeToAnswer: '已停止 — 恢復後即可回覆',
         readySessionAccessibilityLabel: ({ session }: { session: string }) => `待檢視：${session}`,

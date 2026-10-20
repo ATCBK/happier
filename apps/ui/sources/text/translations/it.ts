@@ -1777,6 +1777,12 @@ const itValues = {
   inbox: {
         work: inboxWorkTranslations.it,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Esito non confermato. Controlla la macchina.' },
+            failureGeneric: 'L’azione non è stata completata.',
+        },
     openSession: ({ session }: { session: string }) => `Apri sessione: ${session}`,
     stoppedResumeToAnswer: 'Interrotta — riprendi per rispondere',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `Pronta per la revisione: ${session}`,

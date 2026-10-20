@@ -1798,6 +1798,12 @@ const caValues = {
     inbox: {
         work: inboxWorkTranslations.ca,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Resultat sense confirmar. Comprova la màquina.' },
+            failureGeneric: 'L’acció no s’ha completat.',
+        },
         openSession: ({ session }: { session: string }) => `Obre la sessió: ${session}`,
         stoppedResumeToAnswer: 'Aturada — reprèn-la per respondre',
         readySessionAccessibilityLabel: ({ session }: { session: string }) => `A punt per revisar: ${session}`,

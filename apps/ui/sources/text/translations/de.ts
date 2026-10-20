@@ -1584,6 +1584,12 @@ export const de: TranslationStructure = {
     inbox: {
         work: inboxWorkTranslations.de,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Ergebnis nicht bestätigt. Prüfe die Maschine.' },
+            failureGeneric: 'Die Aktion wurde nicht abgeschlossen.',
+        },
         openSession: ({ session }: { session: string }) => `Session öffnen: ${session}`,
         stoppedResumeToAnswer: 'Gestoppt — zum Antworten fortsetzen',
         readySessionAccessibilityLabel: ({ session }: { session: string }) => `Bereit zur Überprüfung: ${session}`,

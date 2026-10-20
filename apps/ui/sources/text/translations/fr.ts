@@ -1799,6 +1799,12 @@ const frValues = {
   inbox: {
         work: inboxWorkTranslations.fr,
         ...actionOperationInboxTranslations,
+        actionOperations: {
+            ...actionOperationInboxTranslations.actionOperations,
+            status: { ...actionOperationInboxTranslations.actionOperations.status,
+                outcomeUncertain: 'Résultat non confirmé. Vérifiez la machine.' },
+            failureGeneric: 'L’action ne s’est pas terminée.',
+        },
     openSession: ({ session }: { session: string }) => `Ouvrir la session : ${session}`,
     stoppedResumeToAnswer: 'Arrêtée — reprendre pour répondre',
     readySessionAccessibilityLabel: ({ session }: { session: string }) => `Prêt à vérifier : ${session}`,
