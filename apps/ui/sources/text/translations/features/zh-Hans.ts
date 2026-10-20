@@ -10286,6 +10286,8 @@ const sessionListFilterTranslations = { zhHans: translated({
         filtersNoOptions: '没有可用的筛选条件', filtersClear: '清除筛选条件', filtersDone: '完成', filtersArchived: '已归档',
         filtersNeedsMeOnly: '仅需要我处理的', filtersNeedsMeOnlyDescription: '等待你处理的会话', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} 更多`,
+        filtersStatus: '状态', filtersStatusFailed: '失败', filtersProject: '项目', filtersProjectIs: '是', filtersProjectIsNot: '不是',
+        filtersProjectNot: ({ names }: { names: string }) => `项目不是 ${names}`,
         filtersResultCount: ({ count }: { count: number }) => `${count} 项`,
         queryInitialLoadingTitle: '正在加载会话…', queryUpdatingTitle: '正在更新会话…',
         querySomeHomesUnavailableTitle: '部分 Home 不可用', querySomeHomesUnavailableDescription: 'Happier 正在显示可访问的内容。请在这些 Home 恢复在线后重试。',

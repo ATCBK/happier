@@ -10327,6 +10327,8 @@ const sessionListFilterTranslations = { ru: translated({
         filtersNoOptions: 'Нет доступных фильтров', filtersClear: 'Сбросить фильтры', filtersDone: 'Готово', filtersArchived: 'Архив',
         filtersNeedsMeOnly: 'Только ждущие меня', filtersNeedsMeOnlyDescription: 'Сессии, которые ждут вас', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} ещё`,
+        filtersStatus: 'Статус', filtersStatusFailed: 'С ошибкой', filtersProject: 'Проект', filtersProjectIs: 'Это', filtersProjectIsNot: 'Не это',
+        filtersProjectNot: ({ names }: { names: string }) => `Проект не ${names}`,
         filtersResultCount: ({ count }: { count: number }) => (count % 10 === 1 && count % 100 !== 11) ? `${count} элемент` : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) ? `${count} элемента` : `${count} элементов`,
         queryInitialLoadingTitle: 'Загрузка сессий…', queryUpdatingTitle: 'Обновление сессий…',
         querySomeHomesUnavailableTitle: 'Некоторые Home недоступны', querySomeHomesUnavailableDescription: 'Happier показывает доступные данные. Повторите попытку, когда эти Home снова будут в сети.',

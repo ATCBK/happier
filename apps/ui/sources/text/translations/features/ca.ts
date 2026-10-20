@@ -10302,6 +10302,8 @@ const sessionListFilterTranslations = { ca: translated({
         filtersNoOptions: 'No hi ha filtres disponibles', filtersClear: 'Neteja els filtres', filtersDone: 'Fet', filtersArchived: 'Arxivades',
         filtersNeedsMeOnly: 'Només el que em necessita', filtersNeedsMeOnlyDescription: 'Sessions que t\'esperen', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} més`,
+        filtersStatus: 'Estat', filtersStatusFailed: 'Amb error', filtersProject: 'Projecte', filtersProjectIs: 'És', filtersProjectIsNot: 'No és',
+        filtersProjectNot: ({ names }: { names: string }) => `El projecte no és ${names}`,
         filtersResultCount: ({ count }: { count: number }) => count === 1 ? `1 element` : `${count} elements`,
         queryInitialLoadingTitle: 'S’estan carregant les sessions…', queryUpdatingTitle: 'S’estan actualitzant les sessions…',
         querySomeHomesUnavailableTitle: 'Alguns Homes no estan disponibles', querySomeHomesUnavailableDescription: 'Happier mostra allò que pot trobar. Torna-ho a provar quan aquests Homes estiguin en línia.',

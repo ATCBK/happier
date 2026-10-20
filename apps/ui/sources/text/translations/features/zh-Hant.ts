@@ -10286,6 +10286,8 @@ const sessionListFilterTranslations = { zhHant: translated({
         filtersNoOptions: '沒有可用的篩選條件', filtersClear: '清除篩選條件', filtersDone: '完成', filtersArchived: '已封存',
         filtersNeedsMeOnly: '僅需要我處理的', filtersNeedsMeOnlyDescription: '等待你處理的工作階段', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} 更多`,
+        filtersStatus: '狀態', filtersStatusFailed: '失敗', filtersProject: '專案', filtersProjectIs: '是', filtersProjectIsNot: '不是',
+        filtersProjectNot: ({ names }: { names: string }) => `專案不是 ${names}`,
         filtersResultCount: ({ count }: { count: number }) => `${count} 個項目`,
         queryInitialLoadingTitle: '正在載入工作階段…', queryUpdatingTitle: '正在更新工作階段…',
         querySomeHomesUnavailableTitle: '部分 Home 無法使用', querySomeHomesUnavailableDescription: 'Happier 正在顯示可存取的內容。請在這些 Home 恢復連線後再試一次。',

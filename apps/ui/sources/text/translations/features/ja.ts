@@ -10291,6 +10291,8 @@ const sessionListFilterTranslations = { ja: translated({
         filtersNoOptions: '利用できるフィルターはありません', filtersClear: 'フィルターをクリア', filtersDone: '完了', filtersArchived: 'アーカイブ済み',
         filtersNeedsMeOnly: '自分の対応が必要なもののみ', filtersNeedsMeOnlyDescription: 'あなたを待っているセッション', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `他 ${count} 件`,
+        filtersStatus: '状態', filtersStatusFailed: '失敗', filtersProject: 'プロジェクト', filtersProjectIs: '一致', filtersProjectIsNot: '除外',
+        filtersProjectNot: ({ names }: { names: string }) => `除外するプロジェクト:${names}`,
         filtersResultCount: ({ count }: { count: number }) => `${count} 件`,
         queryInitialLoadingTitle: 'セッションを読み込み中…', queryUpdatingTitle: 'セッションを更新中…',
         querySomeHomesUnavailableTitle: '一部の Home を利用できません', querySomeHomesUnavailableDescription: 'Happier は到達できる範囲を表示しています。Home がオンラインに戻ったら再試行してください。',

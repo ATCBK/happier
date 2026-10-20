@@ -10302,6 +10302,8 @@ const sessionListFilterTranslations = { it: translated({
         filtersNoOptions: 'Nessun filtro disponibile', filtersClear: 'Cancella filtri', filtersDone: 'Fine', filtersArchived: 'Archiviate',
         filtersNeedsMeOnly: 'Solo ciò che mi serve', filtersNeedsMeOnlyDescription: 'Sessioni in attesa di te', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} altri`,
+        filtersStatus: 'Stato', filtersStatusFailed: 'Non riuscite', filtersProject: 'Progetto', filtersProjectIs: 'È', filtersProjectIsNot: 'Non è',
+        filtersProjectNot: ({ names }: { names: string }) => `Il progetto non è ${names}`,
         filtersResultCount: ({ count }: { count: number }) => count === 1 ? `1 elemento` : `${count} elementi`,
         queryInitialLoadingTitle: 'Caricamento sessioni…', queryUpdatingTitle: 'Aggiornamento sessioni…',
         querySomeHomesUnavailableTitle: 'Alcuni Home non sono disponibili', querySomeHomesUnavailableDescription: 'Happier mostra ciò che può raggiungere. Riprova quando gli Home saranno di nuovo online.',
