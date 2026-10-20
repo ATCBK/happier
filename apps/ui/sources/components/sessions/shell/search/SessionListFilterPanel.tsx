@@ -75,6 +75,14 @@ const FOOTER_ACTION_GAP = 8;
 const ROW_TEXT = ITEM_TITLE_TEXT_METRICS.compact;
 const SUBTITLE_TEXT = ITEM_SUBTITLE_TEXT_METRICS.compact;
 
+/**
+ * The narrowest scope tile that holds its whole name: the compact tile's padding, icon slot and radio
+ * plus a text column for the longest single word a scope name has in any locale ("zugänglichen",
+ * "participação"). Narrower panels (the session list's sidebar popover, a phone sheet) drop to one
+ * column, so a name wraps between words and never mid-word.
+ */
+const SCOPE_TILE_MIN_WIDTH = 170;
+
 const SCOPE_ICONS: Readonly<Record<string, IconName>> = {
     'scope:my_work': 'user-circle',
     'scope:assigned_to_me': 'at',
@@ -397,7 +405,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             value={selectedScopeId}
                             onChange={handleScopeChange}
                             density="compact"
-                            minimumColumns={2}
+                            minimumTileWidth={SCOPE_TILE_MIN_WIDTH}
                             accessibilityLabel={labels.scope}
                             testIdPrefix="session-list-filter-scope"
                         />
