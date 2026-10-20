@@ -1,6 +1,6 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
-import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
+import { readRetryLaterHints, type ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 
 import { isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
@@ -31,6 +31,7 @@ export function createLoopbackHomeIdentityProbe(params: Readonly<{
       ) {
         return {
           status: 'retry_later',
+          ...snapshot.retryLater,
           errorMessage: `Home identity probe returned ${snapshot.httpStatus}`,
         };
       }
@@ -96,6 +97,7 @@ export function createLoopbackReadinessProbe(params: Readonly<{
       if (authResponse.status >= 500) {
         return {
           status: 'retry_later',
+          ...readRetryLaterHints(authResponse.headers),
           errorMessage: `Authenticated probe returned ${authResponse.status}`,
         };
       }

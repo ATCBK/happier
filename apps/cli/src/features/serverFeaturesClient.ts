@@ -1,3 +1,4 @@
+import { readRetryLaterHints, type RetryLaterHints } from '@happier-dev/connection-supervisor';
 import type { FeaturesResponse as ServerFeatures } from '@happier-dev/protocol';
 import { AsyncTtlCache } from '@happier-dev/protocol/common/asyncTtlCache';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
@@ -13,7 +14,13 @@ export type CliServerFeaturesSnapshot =
       provenance?: 'authenticated' | 'public';
     }>
   | Readonly<{ status: 'unsupported'; reason: 'endpoint_missing' | 'invalid_payload' }>
-  | Readonly<{ status: 'error'; reason: 'network' | 'timeout' | 'response_status'; httpStatus?: number }>;
+  | Readonly<{
+      status: 'error';
+      reason: 'network' | 'timeout' | 'response_status';
+      httpStatus?: number;
+      /** When the server said how long it will be unavailable (Retry-After on a non-OK response). */
+      retryLater?: RetryLaterHints;
+    }>;
 
 export type FetchServerFeaturesSnapshotParams = Readonly<{
   serverUrl: string;
@@ -41,6 +48,10 @@ const publicCache = new AsyncTtlCache<CliServerFeaturesSnapshot>({
   successTtlMs: READY_TTL_MS,
   errorTtlMs: TRANSIENT_TTL_MS,
 });
+
+function withRetryLater(hints: RetryLaterHints): Readonly<{ retryLater?: RetryLaterHints }> {
+  return hints.retryAfterMs === undefined && hints.reason === undefined ? {} : { retryLater: hints };
+}
 
 function isEndpointMissing(status: number): boolean {
   return status === 404 || status === 405 || status === 501;
@@ -117,7 +128,12 @@ async function requestServerFeaturesSnapshot(
     if (!response.ok) {
       return isEndpointMissing(response.status)
         ? { status: 'unsupported', reason: 'endpoint_missing' }
-        : { status: 'error', reason: 'response_status', httpStatus: response.status };
+        : {
+          status: 'error',
+          reason: 'response_status',
+          httpStatus: response.status,
+          ...withRetryLater(readRetryLaterHints(response.headers)),
+        };
     }
 
     const parsed = await decodeServerFeaturesResponseBody(

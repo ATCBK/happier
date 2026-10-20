@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AxiosHeaders } from 'axios';
 import { FEATURES_RESPONSE_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol';
 
 const axiosGet = vi.hoisted(() => vi.fn());
 
-vi.mock('axios', () => ({
+// Keep the real AxiosHeaders so mocked responses carry the headers a real response always has.
+vi.mock('axios', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('axios')>()),
   default: { get: axiosGet },
 }));
 
@@ -19,8 +22,8 @@ describe('createLoopbackReadinessProbe', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_expected' } },
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
-    axiosGet.mockResolvedValueOnce({ status: 500, data: { error: 'Internal Server Error' } });
-    axiosGet.mockResolvedValueOnce({ status: 200 });
+    axiosGet.mockResolvedValueOnce({ status: 500, headers: new AxiosHeaders(), data: { error: 'Internal Server Error' } });
+    axiosGet.mockResolvedValueOnce({ status: 200, headers: new AxiosHeaders() });
     const probe = createLoopbackReadinessProbe({
       serverUrl: 'http://127.0.0.1:48123',
       token: 'account-token',
@@ -29,6 +32,34 @@ describe('createLoopbackReadinessProbe', () => {
 
     await expect(probe()).resolves.toMatchObject({ status: 'retry_later' });
     await expect(probe()).resolves.toEqual({ status: 'ready' });
+  });
+
+  it('carries the server-announced maintenance window from the Home identity read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Server reload in progress', {
+      status: 503,
+      headers: { 'retry-after': '2', 'x-happier-retry-reason': 'server_restarting' },
+    })));
+
+    await expect(createLoopbackReadinessProbe({
+      serverUrl: 'http://127.0.0.1:48123',
+      token: 'account-token',
+    })()).resolves.toMatchObject({ status: 'retry_later', retryAfterMs: 2_000, reason: 'server_restarting' });
+    expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  it('carries the server-announced maintenance window from the authenticated read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_expected' } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    axiosGet.mockResolvedValueOnce({
+      status: 503,
+      headers: new AxiosHeaders({ 'Retry-After': '3', 'X-Happier-Retry-Reason': 'server_restarting' }),
+    });
+
+    await expect(createLoopbackReadinessProbe({
+      serverUrl: 'http://127.0.0.1:48123',
+      token: 'account-token',
+    })()).resolves.toMatchObject({ status: 'retry_later', retryAfterMs: 3_000, reason: 'server_restarting' });
   });
 
   it('requires both the expected Home identity and authenticated account access', async () => {
