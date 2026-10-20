@@ -14,7 +14,8 @@ import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionTranscriptSurfac
 import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema, V2SessionByIdResponseSchema, V2SessionListResponseSchema, V2SessionMessageResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelIntentPatchSuccessV1Schema, SessionMetadataInactiveModelIntentVersionConflictV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { buildSessionOrganizationAssignmentSnapshotHttpRequestV1, SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
 import { normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { SessionListQueryResponseV1Schema, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { buildSessionListServerQueryV1, SessionListUnavailableQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
@@ -543,61 +544,93 @@ export async function fetchSessionOrganizationPlacement(params: Readonly<{
   sessionId: string;
   signal?: AbortSignal;
   deadlineAtMs?: number;
+  resolveAuthorizationHeaders?: SessionOrganizationPlacementsHttpParams['resolveAuthorizationHeaders'];
 }>): Promise<SessionOrganizationPlacementV1> {
   const sessionId = params.sessionId.trim();
   if (!sessionId) {
     throw new Error('Session organization placement requires a Session id');
   }
-  const remainingMs = params.deadlineAtMs === undefined
-    ? configuration.sessionControlHttpTimeoutMs
-    : Math.floor(params.deadlineAtMs - Date.now());
-  if (params.signal?.aborted || remainingMs <= 0) {
-    const error = new Error('Session organization placement lookup was cancelled');
-    error.name = 'AbortError';
-    throw error;
-  }
+  const placements = await fetchSessionOrganizationPlacements({ ...params, sessionIds: [sessionId] });
+  return placements.get(sessionId)!;
+}
 
-  const query = new URLSearchParams({
-    includeFolders: 'false',
-    includeTags: 'false',
-    includeLabels: 'false',
-    assignmentSessionIds: sessionId,
-  });
-  const path = `/v2/session-organization?${query.toString()}`;
-  const response = await axios.get(`${resolveServerHttpBaseUrl()}${path}`, {
-    headers: {
-      ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-      Authorization: `Bearer ${params.token}`,
-      'Content-Type': 'application/json',
-    },
-    ...(params.signal ? { signal: params.signal } : {}),
-    timeout: remainingMs,
-    validateStatus: () => true,
-  });
-  if (isAuthenticationStatus(response.status)) {
-    throwAuthenticationStatusError(response.status);
+type SessionOrganizationPlacementsHttpParams = Readonly<{
+  token: string;
+  sessionIds: readonly string[];
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+  serverHttpBaseUrl?: string;
+  resolveAuthorizationHeaders?: (request: ReturnType<typeof buildSessionOrganizationAssignmentSnapshotHttpRequestV1>) => Readonly<Record<string, string>> | null;
+}>;
+
+type SessionOrganizationPlacementBatch =
+  | Readonly<{ ok: true; placements: ReadonlyMap<string, SessionOrganizationPlacementV1> }>
+  | Readonly<{ ok: false; error: unknown }>;
+
+/** One assignment transport; optional list facts retain successful batches when another is unavailable. */
+export async function* fetchSessionOrganizationPlacementBatches(
+  params: SessionOrganizationPlacementsHttpParams,
+): AsyncGenerator<SessionOrganizationPlacementBatch> {
+  const sessionIds = [...new Set(params.sessionIds.map(id => id.trim()).filter(Boolean))];
+  for (let offset = 0; offset < sessionIds.length; offset += SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS) {
+    const remainingMs = params.deadlineAtMs === undefined
+      ? configuration.sessionControlHttpTimeoutMs
+      : Math.floor(params.deadlineAtMs - Date.now());
+    if (params.signal?.aborted || remainingMs <= 0) {
+      const error = new Error('Session organization placement lookup was cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+    try {
+      const ids = sessionIds.slice(offset, offset + SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS);
+      const request = buildSessionOrganizationAssignmentSnapshotHttpRequestV1(ids);
+      const authorizationHeaders = params.resolveAuthorizationHeaders
+        ? params.resolveAuthorizationHeaders(request) : { Authorization: `Bearer ${params.token}` };
+      if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
+      const response = await axios.get(`${params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()}${request.path}`, {
+        headers: {
+          ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+          ...authorizationHeaders,
+          'Content-Type': 'application/json',
+        },
+        ...(params.signal ? { signal: params.signal } : {}),
+        timeout: remainingMs,
+        validateStatus: () => true,
+      });
+      if (isAuthenticationStatus(response.status)) throwAuthenticationStatusError(response.status);
+      if (response.status !== 200) throwUnexpectedStatusError(request.path, response.status);
+      const snapshot = parseOrThrow(SessionOrganizationSnapshotResponseSchema, response.data,
+        'Unexpected /v2/session-organization response shape').snapshot;
+      const folders = new Map<string, string>();
+      for (const assignment of snapshot.folderAssignments) {
+        if (folders.has(assignment.sessionId)) throw new Error('Unexpected duplicate Session organization placement assignments');
+        folders.set(assignment.sessionId, assignment.folderId);
+      }
+      const tags = new Map<string, string[]>();
+      for (const assignment of snapshot.tagAssignments) {
+        if (tags.has(assignment.sessionId)) throw new Error('Unexpected duplicate Session organization placement assignments');
+        tags.set(assignment.sessionId, assignment.tagIds);
+      }
+      yield { ok: true, placements: new Map(ids.map(sessionId => [sessionId, normalizeSessionCreationOrganizationPlacementV1({
+        folderId: folders.get(sessionId) ?? null, tagIds: tags.get(sessionId) ?? [],
+      })])) };
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      yield { ok: false, error };
+    }
   }
-  if (response.status !== 200) {
-    throwUnexpectedStatusError(path, response.status);
+}
+
+/** Strict reads require every requested assignment batch to be available. */
+export async function fetchSessionOrganizationPlacements(
+  params: SessionOrganizationPlacementsHttpParams,
+): Promise<ReadonlyMap<string, SessionOrganizationPlacementV1>> {
+  const placements = new Map<string, SessionOrganizationPlacementV1>();
+  for await (const batch of fetchSessionOrganizationPlacementBatches(params)) {
+    if (!batch.ok) throw batch.error;
+    for (const [sessionId, placement] of batch.placements) placements.set(sessionId, placement);
   }
-  const snapshot = parseOrThrow(
-    SessionOrganizationSnapshotResponseSchema,
-    response.data,
-    'Unexpected /v2/session-organization response shape',
-  ).snapshot;
-  const folderAssignments = snapshot.folderAssignments.filter(
-    (assignment) => assignment.sessionId === sessionId,
-  );
-  const tagAssignments = snapshot.tagAssignments.filter(
-    (assignment) => assignment.sessionId === sessionId,
-  );
-  if (folderAssignments.length > 1 || tagAssignments.length > 1) {
-    throw new Error('Unexpected duplicate Session organization placement assignments');
-  }
-  return normalizeSessionCreationOrganizationPlacementV1({
-    folderId: folderAssignments[0]?.folderId ?? null,
-    tagIds: tagAssignments[0]?.tagIds ?? [],
-  });
+  return placements;
 }
 
 function looksLikeMissingSessionLookupByTagsRoute404(data: unknown): boolean {

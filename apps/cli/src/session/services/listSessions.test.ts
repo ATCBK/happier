@@ -5,6 +5,8 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 import { createSessionListResponseFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
+import { readCliSessionListTagAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
 import {
   SessionAwarenessListResultV1Schema,
   encodeV2SessionListCursorV1,
@@ -120,6 +122,22 @@ describe('listSessions', () => {
         : { coverage: 'partial', matchCount: 0 });
       expect(get).toHaveBeenCalledTimes(1);
       expect(new URL(String(get.mock.calls[0]?.[0])).searchParams.get('assignmentSessionIds')).toBe('one,two');
+    } finally { get.mockRestore(); }
+  });
+
+  it('keeps known-empty tag facts from a successful batch while another batch is unavailable', async () => {
+    const sessionIds = Array.from({ length: SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS + 1 }, (_, index) => `session-${index}`);
+    const get = vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 200, data: { snapshot: {
+      schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
+    } } } as never).mockResolvedValueOnce({ status: 403, data: { error: 'forbidden' } } as never);
+    try {
+      const assignments = await readCliSessionListTagAssignmentsV1({ credentials, serverId: 'home', sessionIds,
+        filters: [normalizeSessionListFilterV1({ tagIds: [{ serverId: 'home', tagId: 'tag-1' }] })],
+        resolveAuthorizationHeaders: () => ({ 'signed-assignment': 'requester' }),
+      });
+      expect(assignments?.get('session-0')).toEqual([]);
+      expect(assignments?.has(sessionIds.at(-1)!)).toBe(false);
+      expect(assignments?.size).toBe(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS);
     } finally { get.mockRestore(); }
   });
 

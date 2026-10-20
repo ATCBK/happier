@@ -143,4 +143,18 @@ describe('getOrCreateSessionByTag creation placement transport', () => {
     for (const sessionId of sessionIds) expect(placements.get(sessionId)?.tagIds).toEqual([`tag-${sessionId}`]);
     expect(get).toHaveBeenCalledTimes(2);
   });
+  it('stops the remaining assignment batches when the caller cancels', async () => {
+    const { fetchSessionOrganizationPlacements } = await import('./sessionsHttp');
+    const { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } = await import('@happier-dev/protocol/sessions/organization/constants');
+    const controller = new AbortController();
+    const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+      controller.abort();
+      return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [],
+        folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] } } } as never;
+    });
+    await expect(fetchSessionOrganizationPlacements({ token: 'token-1', signal: controller.signal,
+      sessionIds: Array.from({ length: SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS + 1 }, (_, index) => `session-${index}`),
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(get).toHaveBeenCalledOnce();
+  });
 });

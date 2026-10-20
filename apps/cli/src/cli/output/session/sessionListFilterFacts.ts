@@ -1,4 +1,3 @@
-import axios from 'axios';
 import type { SessionListFilterFactsV1, SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { readSessionListStartedByV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
@@ -7,12 +6,9 @@ import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/session
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { tryDecryptSessionOwnerMetadataView, tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { projectCliSessionAwarenessV1, type CliSessionAwarenessParams } from './sessionAwareness';
-import { buildSessionOrganizationAssignmentSnapshotHttpRequestV1, SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
-import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
+import { fetchSessionOrganizationPlacementBatches } from '@/session/transport/http/sessionsHttp';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
 import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
@@ -26,23 +22,12 @@ export async function readCliSessionListTagAssignmentsV1(input: Readonly<{
 }>): Promise<ReadonlyMap<string, readonly string[]> | undefined> {
   const homes = [...new Set(input.filters.flatMap(filter => filter.tagIds.map(tag => tag.serverId)))];
   if (!(await Promise.all(homes.map(home => isServerProfileHomeIdentity(input.serverId, home)))).some(admitted => admitted)) return undefined;
-  const ids = [...new Set(input.sessionIds)];
   const assignments = new Map<string, readonly string[]>();
-  for (let offset = 0; offset < ids.length; offset += SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS) {
-    const chunk = ids.slice(offset, offset + SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS);
-    const request = buildSessionOrganizationAssignmentSnapshotHttpRequestV1(chunk);
-    const headers = input.resolveAuthorizationHeaders
-      ? input.resolveAuthorizationHeaders(request) : { Authorization: `Bearer ${input.credentials.token}` };
-    if (!headers) continue;
-    try {
-      const response = await axios.get<unknown>(`${input.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()}${request.path}`, {
-        headers, signal: input.signal, timeout: configuration.sessionControlHttpTimeoutMs, validateStatus: () => true,
-      });
-      const parsed = response.status === 200 ? SessionOrganizationSnapshotResponseSchema.safeParse(response.data) : null;
-      if (!parsed?.success) continue;
-      const rows = new Map(parsed.data.snapshot.tagAssignments.map(row => [row.sessionId, row.tagIds]));
-      for (const id of chunk) assignments.set(id, rows.get(id) ?? []);
-    } catch { input.signal?.throwIfAborted(); }
+  for await (const batch of fetchSessionOrganizationPlacementBatches({
+    ...input, token: input.credentials.token,
+  })) {
+    if (!batch.ok) continue;
+    for (const [sessionId, placement] of batch.placements) assignments.set(sessionId, placement.tagIds);
   }
   return assignments;
 }
