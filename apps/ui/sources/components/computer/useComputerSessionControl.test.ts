@@ -111,7 +111,7 @@ async function renderControl(machine: ComputerMachineRpc) {
 }
 
 describe('useComputerSessionControl', () => {
-    it.each(['computer.target.get', 'computer.targets.list', 'computer.control.status'] as const)(
+    it.each(['computer.target.get', 'computer.control.status'] as const)(
         'keeps a known share available for release after a failed %s read', async failedAction => {
             let failing = false;
             let shared = true;
@@ -185,14 +185,13 @@ describe('useComputerSessionControl', () => {
         expect(await client.stopSharing()).toEqual({ ok: false, code: 'MACHINE_RPC_TIMEOUT' });
     });
 
-    it('reads control status while grants are pending and admits the picture only after capture permission', async () => {
-        const targets = createDeferred<typeof targetList>();
+    it('does not request picker thumbnails while refreshing control and waits for current grants before admitting the picture', async () => {
         const controller = createDeferred<ComputerControlStatusResponseV1>();
         const calls: string[] = [];
         const machine: ComputerMachineRpc = async ({ actionId }) => {
             calls.push(actionId);
             if (actionId === 'computer.target.get') return selection;
-            if (actionId === 'computer.targets.list') return await targets.promise;
+            if (actionId === 'computer.targets.list') throw new Error('Picker thumbnails are unavailable');
             if (actionId === 'computer.control.status') return await controller.promise;
             throw new Error(`Unexpected Computer RPC: ${actionId}`);
         };
@@ -200,13 +199,12 @@ describe('useComputerSessionControl', () => {
         try {
             expect(hook.getCurrent().canRead).toBe(false);
             expect(calls).toContain('computer.control.status');
-            await act(async () => { targets.resolve(targetList); });
-            expect(hook.getCurrent().canRead).toBe(true);
-            expect(hook.getCurrent().presence.kind).toBe('idle');
+            expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
             await act(async () => { controller.resolve(status('human')); });
+            expect(hook.getCurrent().canRead).toBe(true);
             expect(hook.getCurrent().presence.kind).toBe('human');
+            expect(calls).not.toContain('computer.targets.list');
         } finally {
-            targets.resolve(targetList);
             controller.resolve(status('human'));
             await hook.unmount();
         }
@@ -336,7 +334,7 @@ describe('useComputerSessionControl', () => {
         }
     });
 
-    it.each(['stale_capture', 'human_input_interruption_uncertain'] as const)('retains the exact source but blocks input after %s until capture is confirmed', async code => {
+    it.each(['stale_capture', 'capture_expired', 'capture_generation_mismatch', 'capture_frame_mismatch', 'capture_coordinate_invalid', 'human_input_interruption_uncertain'] as const)('retains the exact source but blocks input after %s until capture is confirmed', async code => {
         const { machine, calls } = createMachine();
         const scope = { sessionId: 'input-refusal', machineId: 'machine_1' };
         const executor = executorWith(machine);
@@ -460,7 +458,7 @@ describe('useComputerSessionControl', () => {
         grants = { capture: 'denied', input: 'granted' };
         await act(async () => { hook.getCurrent().picker.retry(); });
         expect(hook.getCurrent().control.canRead).toBe(false);
-        expect(hook.getCurrent().control.selection?.sourceId).toBeUndefined();
+        expect(hook.getCurrent().control.selection?.sourceId).toBe(selection.sourceId);
     });
 
     it('keeps a refreshing list visible, then removes a lost choice and refuses unknown OS grants', async () => {
@@ -489,7 +487,7 @@ describe('useComputerSessionControl', () => {
         expect(hook.getCurrent().recovery).toMatchObject({ cause: 'permission_unknown', action: 'refresh' });
     });
 
-    it('rechecks OS grants on viewer refresh and restores only a fresh owner-confirmed source', async () => {
+    it('rechecks OS grants on viewer refresh while retaining the owner-confirmed share for release', async () => {
         let grants: ComputerTargetsListResponseV1['grants'] = { capture: 'granted', input: 'granted' };
         const machine: ComputerMachineRpc = async ({ actionId }) => actionId === 'computer.targets.list'
             ? { targets: [{ target }], grants } : actionId === 'computer.target.get' ? selection : status('human');
@@ -498,7 +496,7 @@ describe('useComputerSessionControl', () => {
         grants = { capture: 'denied', input: 'granted' };
         await act(async () => { hook.getCurrent().refresh(); });
         expect(hook.getCurrent().canRead).toBe(false);
-        expect(hook.getCurrent().selection?.sourceId).toBeUndefined();
+        expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
         grants = { capture: 'granted', input: 'denied' };
         expect(hook.getCurrent().canRead).toBe(false);
         await act(async () => { hook.getCurrent().refresh(); });

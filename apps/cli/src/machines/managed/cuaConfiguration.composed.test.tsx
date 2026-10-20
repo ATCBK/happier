@@ -19,7 +19,6 @@ import { createCuaNativeClient } from '../../../../../packages/plugins/machine-c
 import { createCuaLocalProvisioner } from '../../../../../packages/plugins/machine-cua/src/machine/localProvisioner';
 import { createCuaByoc } from '../../../../../packages/plugins/machine-cua/src/machine/byoc';
 import { ByocOptionsQueryV1Schema } from '../../../../../packages/plugins/machine-cua/src/machine/remoteSchemas';
-import { createCuaFleet } from '../../../../../packages/plugins/machine-cua/src/machine/fleet';
 import { MachineProvisionerOptionsResultV1Schema } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { ManagedMachinePresetV1Schema } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import type { PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
@@ -52,7 +51,7 @@ function processResult(value: unknown): PluginProcessResult {
     return { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
         stdout: new TextEncoder().encode(JSON.stringify(value)), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
 }
-// Only native processes and HTTP are substituted. The actual declared query,
+// Only native processes are substituted. The actual declared query,
 // native option parsing, shared form and strict launch owner execute together.
 function nativeOptions(id: string, query: unknown) {
     const cloud = id === 'byoc' ? ByocOptionsQueryV1Schema.parse(query).cloud : 'aws';
@@ -66,16 +65,8 @@ function nativeOptions(id: string, query: unknown) {
         if (args.includes('status')) return processResult({ providers: [{ name: cloud, connected: true, region: 'us-west-2', ttl_hours: cloud === 'modal' ? 2 : 0,
             kinds: [{ image: 'linux', supported: true, machine_type: 't3.medium', usd_per_hour: 0.0416 }] }], resources: [] });
         throw new Error('Configuration must not allocate a resource');
-    } }, fleet: { origin: 'https://fleet.example/', http: { async request(request) {
-        if (request.method !== 'GET') throw new Error('Configuration must not mutate native capacity');
-        const value = request.url.includes('osgymsandboxwarmpools')
-            ? { metadata: { name: 'reviewed-pool', namespace: 'reviewed-pool' }, spec: { sandboxTemplateRef: { name: 'template-one' } } }
-            : { metadata: { name: 'template-one', namespace: 'reviewed-pool' }, spec: { vmTemplate: { containerDiskImage: imageId,
-                runtime: 'kubevirt', cpuCores: 4, memory: '8Gi', services: [{ name: 'env', targetPort: 3211 }] } } };
-        return { status: 200, finalUrl: request.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(value)) };
-    } } } });
+    } } });
     if (id === 'byoc') return createCuaByoc(native).options(cloud, 10);
-    if (id === 'fleet') return createCuaFleet(native).options(query);
     return createCuaLocalProvisioner(native, id === 'local-space' ? 'local-space' : 'local-sandbox', 10).options(query);
 }
 
@@ -85,7 +76,6 @@ describe('fresh Cua declarations through the mounted shared configurator', () =>
         { id: 'local-space', fields: [['runtimeId', 'qemu'], ['imageId', imageId], ['size.cpu', '4'], ['size.memoryBytes', String(size.memoryBytes)], ['size.diskBytes', String(size.diskBytes)]] },
         { id: 'byoc', fields: [['cloud', 'aws']] },
         { id: 'byoc', fields: [['cloud', 'modal']] },
-        { id: 'fleet', fields: [['namespace', 'reviewed-pool'], ['nativeLease.durationSeconds', '7200']] },
         { id: 'byoc', fields: [], savedCloud: 'modal' },
         { id: 'byoc', fields: [], savedCloud: 'aws' },
         { id: 'byoc', fields: [], savedCloud: 'gcp' },

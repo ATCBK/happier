@@ -42,7 +42,7 @@ const desktopStateSchema = z.object({ display: z.literal('primary'), capture_id:
   screen_width: z.number().check(z.int(), z.positive()), screen_height: z.number().check(z.int(), z.positive()),
   scale_factor: z.optional(finite.check(z.positive())), frame_scale: z.optional(finite.check(z.positive())) });
 
-/** Native 0.31.0 exposes one logical primary desktop, not a physical-monitor catalog. */
+/** The pinned native driver exposes one logical primary desktop, not a physical-monitor catalog. */
 export function resolveComputerDisplayId(displayId?: string, defaultDisplayId?: string): string | undefined {
   // Explicit source identities remain exact. macOS's native primary desktop
   // is independent of the daemon's inherited X11 DISPLAY.

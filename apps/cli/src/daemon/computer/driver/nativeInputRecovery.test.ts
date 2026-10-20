@@ -18,8 +18,63 @@ const { renderHook } = await import('../../../../../ui/sources/dev/testkit/hooks
 const { createComputerRuntimeActionExecutor } = await import('../../../../../ui/sources/sync/domains/computer/actions/runtimeActionExecutor');
 const { getComputerSessionProjection, publishComputerStreamInputFailure } = await import('../../../../../ui/sources/sync/domains/computer/computerControlClient');
 
+function controlExecutor(routes: ReturnType<typeof createComputerRoutes>, actions: string[] = []) {
+  const unavailablePort = async (): Promise<never> => { throw new Error('Unexpected non-computer transport'); };
+  return createActionExecutor({
+    executionRunStart: unavailablePort, executionRunList: unavailablePort, executionRunGet: unavailablePort,
+    detachedExecutionRunSend: unavailablePort, executionRunStop: unavailablePort, executionRunAction: unavailablePort,
+    executionRunWait: unavailablePort, sessionOpen: unavailablePort, sessionFork: unavailablePort,
+    sessionRollback: unavailablePort, sessionSpawnNew: unavailablePort, pathsListRecent: unavailablePort,
+    machinesList: unavailablePort, serversList: unavailablePort, reviewEnginesList: unavailablePort,
+    agentsBackendsList: unavailablePort, agentsModelsList: unavailablePort, sessionSendMessage: unavailablePort,
+    sessionModeSet: unavailablePort, sessionModesList: unavailablePort, sessionList: unavailablePort,
+    sessionActivityGet: unavailablePort, sessionRecentMessagesGet: unavailablePort, resetGlobalVoiceAgent: unavailablePort,
+    daemonMemorySearch: unavailablePort, daemonMemoryGetWindow: unavailablePort, daemonMemoryEnsureUpToDate: unavailablePort,
+    runtimeActionExecute: createComputerRuntimeActionExecutor({
+      fallback: createUnavailableRuntimeActionExecutor(),
+      executeOnMachine: async ({ actionId, input, sessionId, signal }) => {
+        actions.push(actionId);
+        return routes.dispatch(RuntimeActionIdV1Schema.parse(actionId), input, { authority: 'present_user', defaultSessionId: sessionId, signal });
+      },
+    }),
+  } satisfies ActionExecutorDeps);
+}
+
 // Keep lifecycle/admission real beneath the shared stdio process boundary.
 describe.skipIf(process.platform !== 'linux')('native input settlement and recovery', () => {
+  it.each([false, undefined])('retires the daemon share from the mounted UI while capture permission is %s', async captureGrant => {
+    let capture: boolean | undefined = true;
+    native.call.mockImplementation(async ({ name }) => name === 'check_permissions'
+      ? { structuredContent: { x11: capture, xsend_event: true } }
+      : name === 'list_windows' ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
+        : captureResult());
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/cua-driver' });
+    const scope = { sessionId: 'permission-release', machineId: 'machine' };
+    await routes.dispatch('computer.target.select', { machineId: 'machine', target }, { authority: 'present_user', defaultSessionId: scope.sessionId });
+    const source = registry.list()[0]!.computer!;
+    source.grantConsent();
+    const executor = controlExecutor(routes);
+    const hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+    try {
+      await act(async () => { await getComputerSessionProjection(scope, executor.execute).refresh(); });
+      expect(hook.getCurrent().canInput).toBe(true);
+      capture = captureGrant;
+      await act(async () => { await getComputerSessionProjection(scope, executor.execute).refresh(); });
+      expect(source.consentGranted()).toBe(true);
+      expect(hook.getCurrent().selection?.sourceId).toBe(source.sourceId);
+      expect(hook.getCurrent().canRead).toBe(false);
+      expect(hook.getCurrent().canInput).toBe(false);
+      await act(async () => { hook.getCurrent().stopSharing(); });
+      await vi.waitFor(() => expect(registry.list()).toHaveLength(0));
+      expect(source.isClosed()).toBe(true);
+      expect(native.instances.every(transport => transport.close.mock.calls.length > 0)).toBe(true);
+      capture = true;
+      await act(async () => { await getComputerSessionProjection(scope, executor.execute).refresh(); });
+      expect(hook.getCurrent().selection?.sourceId).toBeUndefined();
+    } finally { await hook.unmount(); await routes.dispose(); }
+  });
+
   it.each([false, true])('recovers a mounted uncertain source through retirement and fresh capture without replaying physical input (reopened: %s)', async reopened => {
     let physicalInputs = 0;
     let nextCapture = 0;
@@ -42,28 +97,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
     const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/cua-driver', defaultDisplayId: ':73' });
     const scope = { sessionId: 'mounted-session', machineId: 'machine' };
     const actions: string[] = [];
-    const runtimeActionExecute = createComputerRuntimeActionExecutor({
-      fallback: createUnavailableRuntimeActionExecutor(),
-      executeOnMachine: async ({ actionId, input, sessionId, signal }) => {
-        actions.push(actionId);
-        return routes.dispatch(RuntimeActionIdV1Schema.parse(actionId), input, { authority: 'present_user', defaultSessionId: sessionId, signal });
-      },
-    });
-    // Unrelated host transports are unavailable; the Action front door, native
-    // source, control and process settlement beneath this boundary stay real.
-    const unavailablePort = async (): Promise<never> => { throw new Error('Unexpected non-computer transport'); };
-    const executor = createActionExecutor({
-      executionRunStart: unavailablePort, executionRunList: unavailablePort, executionRunGet: unavailablePort,
-      detachedExecutionRunSend: unavailablePort, executionRunStop: unavailablePort, executionRunAction: unavailablePort,
-      executionRunWait: unavailablePort, sessionOpen: unavailablePort, sessionFork: unavailablePort,
-      sessionRollback: unavailablePort, sessionSpawnNew: unavailablePort, pathsListRecent: unavailablePort,
-      machinesList: unavailablePort, serversList: unavailablePort, reviewEnginesList: unavailablePort,
-      agentsBackendsList: unavailablePort, agentsModelsList: unavailablePort, sessionSendMessage: unavailablePort,
-      sessionModeSet: unavailablePort, sessionModesList: unavailablePort, sessionList: unavailablePort,
-      sessionActivityGet: unavailablePort, sessionRecentMessagesGet: unavailablePort, resetGlobalVoiceAgent: unavailablePort,
-      daemonMemorySearch: unavailablePort, daemonMemoryGetWindow: unavailablePort, daemonMemoryEnsureUpToDate: unavailablePort,
-      runtimeActionExecute,
-    } satisfies ActionExecutorDeps);
+    const executor = controlExecutor(routes, actions);
     let hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
     try {
       // Mount starts real native enumeration and permission reads. Await that
@@ -124,16 +158,18 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
       await routes.dispose();
     }
   });
-  it('keeps a proven capture target refusal known and allows a fresh observation', async () => {
+  it.each(['capture_target_mismatch', 'capture_expired', 'capture_generation_mismatch', 'capture_frame_mismatch', 'capture_coordinate_invalid', 'browser_field_needs_keystrokes'])(
+    'keeps the proven native %s refusal known and allows a fresh observation', async code => {
     let refused = true;
     native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? captureResult()
-      : refused ? { isError: true, structuredContent: { effect: 'refused', error: { code: 'capture_target_mismatch' } } }
+      : refused ? { isError: true, structuredContent: { effect: 'refused', error: { code } } }
         : { structuredContent: { effect: 'unverifiable' } });
     const driver = await createManagedComputerDriver({ displayId: ':73', executablePath: '/managed/cua-driver' });
     try {
       const capture = await driver.capture(target);
-      expect(await driver.input(target, capture.captureId, { kind: 'click', x: 1, y: 1 }))
-        .toEqual({ status: 'failed', code: 'capture_target_mismatch' });
+      const operation = code === 'browser_field_needs_keystrokes' ? { kind: 'type' as const, text: 'query\n' }
+        : { kind: 'click' as const, x: 1, y: 1 };
+      expect(await driver.input(target, capture.captureId, operation)).toEqual({ status: 'failed', code });
       refused = false;
       const fresh = await driver.capture(target);
       expect(await driver.input(target, fresh.captureId, { kind: 'click', x: 1, y: 1 })).toEqual({ status: 'dispatched' });

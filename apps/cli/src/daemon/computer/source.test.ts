@@ -18,6 +18,42 @@ function deferred<T>() {
 }
 
 describe.skipIf(process.platform !== 'linux')('computer source status projection', () => {
+  it('delivers admitted viewer keys and text without screenshot or accessibility work and still requires a fresh agent observation after hand-back', async () => {
+    native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? observation()
+      : name === 'check_permissions' ? { structuredContent: { x11: true, xsend_event: true } }
+        : { structuredContent: { effect: 'unverifiable' } });
+    const source = createComputerCaptureSource({ sessionId: 'interactive-keyboard', target, executablePath: '/managed/cua-driver' });
+    const failures: string[] = [];
+    const stream = await source.adapter.start({ streamId: 'keyboard-viewer', streamFamily: 'screen',
+      sourceMachineId: 'machine', targetMachineId: 'machine', caps: {},
+      startRequest: { v: 1, streamId: 'keyboard-viewer', streamFamily: 'screen', sourceId: source.sourceId, codecId: 'image.frame.v1',
+        routeKind: 'loopback_direct', sourceMachineId: 'machine', targetMachineId: 'machine' },
+      startedAtMs: 0, expiresAtMs: 60_000, nowMs: () => 0,
+      offerFrame: () => ({ ok: true }), applyControl: () => ({ ok: true }),
+      emitReceipt(receipt) { if (receipt.reasonCode) failures.push(receipt.reasonCode); },
+    });
+    if (!stream.ok) throw new Error(stream.reasonCode);
+    try {
+      const capture = await source.observe();
+      const start = native.tools.length;
+      for (const event of [{ kind: 'keyboard_text', text: 'hello' }, { kind: 'keyboard_key', key: 'Return' }] as const) {
+        expect(stream.session.applySidebandControl?.({ v: 1, streamId: 'keyboard-viewer', sourceId: source.sourceId,
+          eventId: event.kind, ...event })).toEqual({ ok: true });
+      }
+      await vi.waitFor(() => expect(native.tools.some(tool => tool.name === 'press_key')).toBe(true));
+      expect(failures).toEqual([]);
+      const keyboardWork = native.tools.slice(start);
+      expect(keyboardWork.filter(tool => tool.name === 'get_window_state')).toEqual([]);
+      expect(keyboardWork.find(tool => tool.name === 'type_text')?.arguments).toMatchObject({ pid: target.pid, window_id: target.windowId, text: 'hello', delivery_mode: 'background' });
+      expect(source.status()).toMatchObject({ controller: 'human', uncertain: false });
+      await vi.waitFor(() => expect(source.handBack()).toBe(true));
+      expect(await source.input(capture.captureId, { kind: 'press', key: 'Return' }, 'agent'))
+        .toMatchObject({ status: 'failed', code: 'observation_required' });
+      const fresh = await source.observe();
+      expect(await source.input(fresh.captureId, { kind: 'press', key: 'Return' }, 'agent')).toMatchObject({ status: 'dispatched' });
+    } finally { await stream.session.stop(); await source.close(); }
+  });
+
   it.each(['unknown', 'stale'] as const)('reports the actual %s native viewer input failure without replaying physical input', async kind => {
     let physicalInputs = 0;
     native.call.mockImplementation(async ({ name, arguments: args }) => {

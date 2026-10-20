@@ -150,6 +150,99 @@ describe('native primary-display and macOS contract', () => {
 });
 
 describe.skipIf(process.platform !== 'linux')('managed native computer driver (X11)', () => {
+  it('preserves a model capture binding across targeted ungrounded keyboard input but never admits an ungrounded click', async () => {
+    native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? captureResult()
+      : { structuredContent: { effect: 'unverifiable' } });
+    const driver = await createManagedComputerDriver({ displayId: ':73', executablePath: '/managed/native-driver' });
+    try {
+      const capture = await driver.capture(target);
+      expect(await driver.input(target, null, { kind: 'press', key: 'Return' })).toEqual({ status: 'dispatched' });
+      expect(await driver.input(target, null, { kind: 'click', x: 1, y: 1 })).toEqual({ status: 'failed', code: 'stale_capture' });
+      expect(await driver.input(target, capture.captureId, { kind: 'click', x: 1, y: 1 })).toEqual({ status: 'dispatched' });
+      expect(native.tools.filter(tool => tool.name === 'get_window_state' && tool.arguments.include_screenshot === true)).toHaveLength(1);
+    } finally { await driver.close(); }
+  });
+
+  it.each([false, true])('excludes display/window overlap through the registry in either selection order (display first: %s)', async displayFirst => {
+    native.call.mockImplementation(async ({ name }) => name === 'list_windows'
+      ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
+      : name === 'get_screen_size' ? { structuredContent: { width: 200, height: 100, scale_factor: 1 } }
+        : captureResult());
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
+    const display = { kind: 'display', displayId: target.displayId } as const;
+    const first = displayFirst ? display : target;
+    const second = displayFirst ? target : display;
+    const context = (sessionId: string) => ({ authority: 'account_automation' as const, defaultSessionId: sessionId, bypassApprovals: true });
+    try {
+      expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: first }, context('a')))
+        .toMatchObject({ selectedTarget: first });
+      expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: second }, context('b')))
+        .toMatchObject({ ok: false, errorCode: 'computer_target_in_use' });
+      expect(registry.list()).toHaveLength(1);
+      expect(await routes.dispatch('computer.control.interrupt', { machineId: 'machine' }, context('a')))
+        .toMatchObject({ status: 'interrupted', completion: 'known' });
+      expect(registry.list()[0]?.computer?.status()).toMatchObject({ controller: 'human' });
+      expect(await routes.dispatch('computer.target.close', { machineId: 'machine' }, context('a')))
+        .toMatchObject({ status: 'dispatched' });
+      expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: second }, context('b')))
+        .toMatchObject({ selectedTarget: second });
+    } finally { await routes.dispose(); }
+  });
+
+  it('keeps independent background windows available to separate controllers', async () => {
+    const neighbor = { ...target, windowId: target.windowId + 1 };
+    native.call.mockImplementation(async ({ name }) => name === 'list_windows'
+      ? { structuredContent: { windows: [target, neighbor].map(window => ({ pid: window.pid, window_id: window.windowId, title: 'Editor' })) } }
+      : captureResult());
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
+    try {
+      for (const [index, selected] of [target, neighbor].entries()) {
+        expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: selected },
+          { authority: 'present_user', defaultSessionId: `independent-${index}` })).toMatchObject({ selectedTarget: selected });
+      }
+      expect(registry.list()).toHaveLength(2);
+    } finally { await routes.dispose(); }
+  });
+
+  it('rechecks overlapping native input scope after concurrent selection discovery', async () => {
+    native.call.mockImplementation(async ({ name }) => name === 'list_windows'
+      ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
+      : { structuredContent: { width: 200, height: 100, scale_factor: 1 } });
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
+    try {
+      const results = await Promise.all([target, { kind: 'display' as const, displayId: target.displayId }].map((selected, index) =>
+        routes.dispatch('computer.target.select', { machineId: 'machine', target: selected },
+          { authority: 'present_user', defaultSessionId: `overlap-${index}` })));
+      expect(results.filter(result => result && typeof result === 'object' && 'selectedTarget' in result)).toHaveLength(1);
+      expect(results).toContainEqual(expect.objectContaining({ ok: false, errorCode: 'computer_target_in_use' }));
+      expect(registry.list()).toHaveLength(1);
+    } finally { await routes.dispose(); }
+  });
+
+  it('reads current selected-source grants without picker thumbnails through the status Action', async () => {
+    let captureGranted = true;
+    native.call.mockImplementation(async ({ name }) => name === 'list_windows'
+      ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
+      : name === 'check_permissions' ? { structuredContent: { x11: captureGranted, xsend_event: true } }
+        : (() => { throw new Error('Status must not capture thumbnails'); })());
+    const registry = createMachineLiveStreamCaptureRegistry();
+    const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
+    const context = { authority: 'account_automation' as const, defaultSessionId: 'status-grants', bypassApprovals: true };
+    try {
+      expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target }, context)).toMatchObject({ selectedTarget: target });
+      expect(await routes.dispatch('computer.control.status', { machineId: 'machine' }, context))
+        .toMatchObject({ grants: { capture: 'granted', input: 'granted' } });
+      captureGranted = false;
+      expect(await routes.dispatch('computer.control.status', { machineId: 'machine' }, context))
+        .toMatchObject({ grants: { capture: 'denied', input: 'granted' } });
+      expect(native.instances).toHaveLength(2); // Selection discovery plus the retained source, never a frame transport.
+      expect(native.tools.some(tool => tool.name === 'get_window_state')).toBe(false);
+    } finally { await routes.dispose(); }
+  });
+
   it('lists native app names with person-only preview pixels and an honest display refusal', async () => {
     native.call.mockImplementation(async ({ name }) => name === 'list_windows' ? { structuredContent: {
       windows: [{ pid: target.pid, window_id: target.windowId, title: 'Document', app_name: 'Editor' }],
@@ -171,6 +264,19 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
       expect(JSON.stringify(agent)).not.toContain('thumbnail');
       expect(native.tools.filter(tool => tool.name === 'get_window_state')).toHaveLength(captures);
     } finally { await routes.dispose(); }
+  });
+
+  it('requests the full structured accessibility response on every tree read', async () => {
+    native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? captureResult() : { structuredContent: { effect: 'unverifiable' } });
+    const driver = await createManagedComputerDriver({ displayId: ':73', executablePath: '/managed/cua-driver' });
+    try {
+      const capture = await driver.capture(target);
+      await driver.input(target, capture.captureId, { kind: 'click', x: 1, y: 1 });
+      const treeReads = native.tools.filter(tool => tool.name === 'get_window_state' && tool.arguments.include_accessibility_tree === true);
+      expect(treeReads).toHaveLength(2);
+      // Newer drivers default to a trimmed markdown tree; the structured elements and walk limits need full_output.
+      for (const read of treeReads) expect(read.arguments).toMatchObject({ full_output: true });
+    } finally { await driver.close(); }
   });
 
 
