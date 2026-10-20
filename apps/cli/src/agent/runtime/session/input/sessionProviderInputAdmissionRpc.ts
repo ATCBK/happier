@@ -83,6 +83,8 @@ export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerMan
     preparing.attached = true;
     const retirement = new AbortController();
     const holdSignal = AbortSignal.any([signal, retirement.signal]);
+    let resolveReleased!: () => void;
+    const released = new Promise<void>(resolve => { resolveReleased = resolve; });
     let release = () => {};
     preparing.revalidate = async callerSignal => {
       const signal = AbortSignal.any([callerSignal, holdSignal]);
@@ -104,6 +106,12 @@ export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerMan
       release = rpc.pauseRequestAdmission(RUN_CREATION_METHODS, {
         details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
         revalidate: preparing.revalidate,
+        wait: async callerSignal => {
+          await preparing.revalidate?.(callerSignal);
+          if (held === preparing && !callerSignal.aborted) {
+            await waitForPreparation(released, callerSignal);
+          }
+        },
       });
       await rpc.waitForIdle(holdSignal, RUN_CREATION_METHODS);
       holdSignal.throwIfAborted();
@@ -118,6 +126,7 @@ export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerMan
       preparing.reject(holdSignal.reason ?? new Error('Restart preparation retired'));
       release();
       if (held === preparing) held = null;
+      resolveReleased();
     }
   };
 }

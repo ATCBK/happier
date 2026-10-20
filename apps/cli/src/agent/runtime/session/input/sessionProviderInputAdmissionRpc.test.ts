@@ -18,7 +18,40 @@ import {
   prepareSessionRunnerRestartAdmission,
 } from './sessionProviderInputAdmissionRpc';
 
+async function cancelHeldCreation(rpc: RpcHandlerManager, method: string = SESSION_RPC_METHODS.EXECUTION_RUN_START) {
+  const caller = new AbortController();
+  const result = rpc.invokeLocal(method, {}, { signal: caller.signal });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  caller.abort();
+  return await result;
+}
+
 describe('session provider-input admission RPC composition', () => {
+  it.each(['local', 'transport'] as const)('waits on a live restart hold without blocking its drain (%s)', async kind => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    const handler = vi.fn(async () => ({ admitted: true }));
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+    const admission = createSessionRunnerRestartAdmission(() => rpc, { readHoldCurrent: async () => true });
+    const owner = new AbortController();
+    const request = { requestId: 'live-replacement', expectedPid: process.pid };
+    const held = admission({ ...request, action: 'restart_hold' }, owner.signal);
+    let creating: Promise<unknown> | undefined;
+    try {
+      await admission({ ...request, action: 'restart_prepare' }, owner.signal);
+      let settled = false;
+      creating = (kind === 'local' ? rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})
+        : rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {}, requestId: 'held-creation' }))
+        .then(result => { settled = true; return result; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
+      await rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]);
+      owner.abort();
+      await held;
+      expect(await creating).toEqual({ admitted: true });
+    } finally { owner.abort(); await held; await creating; }
+  });
+
   it.each(['local cancel', 'relayed cancel', 'target disconnect'] as const)(
     'settles creation with noRunCreated on %s during a stalled daemon read', async kind => {
       let readEntered!: () => void;
@@ -199,7 +232,7 @@ describe('session provider-input admission RPC composition', () => {
       finishRead(false);
       const refused = await creation as { details?: unknown };
       expect(readExecutionRunStartRunCreation(refused.details)).toBe('noRunCreated');
-      const stillClosed = await rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}) as { details?: unknown };
+      const stillClosed = await cancelHeldCreation(rpc) as { details?: unknown };
       expect(readExecutionRunStartRunCreation(stillClosed.details)).toBe('noRunCreated');
     } finally {
       finishRead(false);
@@ -224,9 +257,9 @@ describe('session provider-input admission RPC composition', () => {
     try {
       await expect(admission({ ...request, action: 'restart_prepare' }, receiver.signal)).resolves.toEqual({ status: 'ready' });
       expect(readHoldCurrent).not.toHaveBeenCalled();
-      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+      await expect(cancelHeldCreation(rpc)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
       current = null;
-      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+      await expect(cancelHeldCreation(rpc)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
       current = false;
       await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
       await expect(held).resolves.toEqual({ status: 'released' });
@@ -259,7 +292,7 @@ describe('session provider-input admission RPC composition', () => {
     const release = await prepareSessionRunnerRestartAdmission({ expectedPid: process.pid, signal: new AbortController().signal,
       callRpc: (request, signal) => admission(request, signal) });
     try {
-      const result = await rpc.invokeLocal(method, {}) as { details?: unknown };
+      const result = await cancelHeldCreation(rpc, method) as { details?: unknown };
       expect(handler).not.toHaveBeenCalled();
       expect(readExecutionRunStartRunCreation(result.details)).toBe('noRunCreated');
     } finally { await release?.(); }
@@ -293,7 +326,7 @@ describe('session provider-input admission RPC composition', () => {
       callRpc: (request, signal) => admission(request, signal) });
     try {
       await expect(admission({ ...request, action: 'restart_prepare' }, new AbortController().signal)).resolves.toEqual({ status: 'unavailable' });
-      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+      await expect(cancelHeldCreation(rpc)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
     } finally { await next?.(); }
     await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
   });
@@ -307,7 +340,7 @@ describe('session provider-input admission RPC composition', () => {
     const hold = admission({ ...request, action: 'restart_hold' }, lifetime.signal);
     await expect(admission({ ...request, action: 'restart_prepare' }, lifetime.signal)).resolves.toEqual({ status: 'ready' });
     await expect(admission({ ...request, requestId: 'old-attempt', action: 'restart_prepare' }, lifetime.signal)).resolves.toEqual({ status: 'unavailable' });
-    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    await expect(cancelHeldCreation(rpc)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
     lifetime.abort();
     await expect(hold).resolves.toEqual({ status: 'released' });
     await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
@@ -332,13 +365,13 @@ describe('session provider-input admission RPC composition', () => {
       callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
     let release: (() => Promise<void>) | null = null;
     try {
-      await expect(rpc.invokeLocal(method, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+      await expect(cancelHeldCreation(rpc, method)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
       finish();
       await creation;
       release = await preparing;
       expect(release).not.toBeNull();
       expect(rpc.getInFlightRequestCount()).toBe(2); // reader and the live restart request
-      await expect(rpc.invokeLocal(method, {})).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+      await expect(cancelHeldCreation(rpc, method)).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
       await release?.();
       await expect(rpc.invokeLocal(method, {})).resolves.toEqual({ admitted: true });
     } finally { finish(); finishReader(); await creation; await reader; await release?.(); }

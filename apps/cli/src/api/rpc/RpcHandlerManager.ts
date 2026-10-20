@@ -58,7 +58,11 @@ type OwnedHandlerRegistrationContext = {
     nextMethods: Set<string>;
 };
 
-type PausedRequestAdmission = Readonly<{ details?: unknown; revalidate?: (signal: AbortSignal) => Promise<void> }>;
+type PausedRequestAdmission = Readonly<{
+    details?: unknown;
+    revalidate?: (signal: AbortSignal) => Promise<void>;
+    wait?: (signal: AbortSignal) => Promise<void>;
+}>;
 
 export type RpcHandlerRegistrationReadiness =
     | Readonly<{ status: 'ready' }>
@@ -585,7 +589,9 @@ export class RpcHandlerManager {
                 errorCode: RPC_ERROR_CODES.FORBIDDEN,
             });
         }
-        this.beginInFlightRequest(this.readUnprefixedMethod(request.method));
+        const receivingMethod = this.readUnprefixedMethod(request.method);
+        let countedInFlight = !this.pausedRequestAdmission.has(receivingMethod);
+        if (countedInFlight) this.beginInFlightRequest(receivingMethod);
         const controller = new AbortController();
         this.activeTransportRequestControllers.add(controller);
         if (requestId) {
@@ -622,6 +628,10 @@ export class RpcHandlerManager {
             const pausedAtArrival = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method));
             const admissionRevalidation = this.revalidatePausedRequestAdmission(this.readUnprefixedMethod(request.method), controller.signal);
             if (admissionRevalidation) await admissionRevalidation;
+            if (!this.pausedRequestAdmission.has(receivingMethod) && !countedInFlight && !controller.signal.aborted) {
+                this.beginInFlightRequest(receivingMethod);
+                countedInFlight = true;
+            }
             const pausedAdmission = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method))
                 ?? (controller.signal.aborted ? pausedAtArrival : undefined);
             if (pausedAdmission) {
@@ -1000,7 +1010,7 @@ export class RpcHandlerManager {
             if (requestId && this.activeTransportRequestControllersByRequestId.get(requestId) === controller) {
                 this.activeTransportRequestControllersByRequestId.delete(requestId);
             }
-            this.finishInFlightRequest(this.readUnprefixedMethod(request.method));
+            if (countedInFlight) this.finishInFlightRequest(receivingMethod);
         }
     }
 
@@ -1029,12 +1039,17 @@ export class RpcHandlerManager {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }
             const signal = options?.signal ?? new AbortController().signal;
-            this.beginInFlightRequest(method);
+            let countedInFlight = !this.pausedRequestAdmission.has(method);
+            if (countedInFlight) this.beginInFlightRequest(method);
             let handlerExecutionId: number | null = null;
             try {
                 const pausedAtArrival = this.pausedRequestAdmission.get(method);
                 const admissionRevalidation = this.revalidatePausedRequestAdmission(method, signal);
                 if (admissionRevalidation) await admissionRevalidation;
+                if (!this.pausedRequestAdmission.has(method) && !countedInFlight && !signal.aborted) {
+                    this.beginInFlightRequest(method);
+                    countedInFlight = true;
+                }
                 const pausedAdmission = this.pausedRequestAdmission.get(method)
                     ?? (signal.aborted ? pausedAtArrival : undefined);
                 if (pausedAdmission) {
@@ -1064,7 +1079,7 @@ export class RpcHandlerManager {
                 }));
             } finally {
                 if (handlerExecutionId !== null) this.activeHandlerExecutions.delete(handlerExecutionId);
-                this.finishInFlightRequest(method);
+                if (countedInFlight) this.finishInFlightRequest(method);
             }
         }, true);
     }
@@ -1261,7 +1276,8 @@ export class RpcHandlerManager {
     private revalidatePausedRequestAdmission(method: string, signal: AbortSignal): Promise<void> | undefined {
         // An unreadable owner cannot reopen admission. The callback releases only
         // its own pause after observing definitive retirement at that owner.
-        return this.pausedRequestAdmission.get(method)?.revalidate?.(signal).catch(() => undefined);
+        const pause = this.pausedRequestAdmission.get(method);
+        return pause && (pause.wait ?? pause.revalidate)?.(signal).catch(() => undefined);
     }
 
     /** Includes receiving authorization and cleanup, before/after handler execution. */

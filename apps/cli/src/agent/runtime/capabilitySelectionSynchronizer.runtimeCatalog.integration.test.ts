@@ -75,8 +75,12 @@ describe('capability refresh during real Run admission', () => {
                 return true;
               },
               captureRunnerRemainder: async () => {
-                const late = await rpc.invokeLocal(providerSafe ? SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1
-                  : SESSION_RPC_METHODS.EXECUTION_RUN_START, {}) as { details?: unknown };
+                const caller = new AbortController();
+                const waiting = rpc.invokeLocal(providerSafe ? SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1
+                  : SESSION_RPC_METHODS.EXECUTION_RUN_START, {}, { signal: caller.signal });
+                await new Promise<void>(resolve => setImmediate(resolve));
+                caller.abort();
+                const late = await waiting as { details?: unknown };
                 expect(late).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
                 expect(readExecutionRunStartRunCreation(late.details)).toBe('noRunCreated');
                 return { scope: 'subtree', roots: [], ownership: [] };
@@ -96,7 +100,10 @@ describe('capability refresh during real Run admission', () => {
             const admitted = await creating;
             await restarting;
             expect(inFlightAtSignal).toBe(1);
-            await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}))
+            const caller = new AbortController();
+            const waiting = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}, { signal: caller.signal });
+            caller.abort();
+            await expect(waiting)
               .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
             const after = ExecutionRunListResponseSchema.parse(await rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {},
               { verifiedPeerAuthority: 'present_user' }));
