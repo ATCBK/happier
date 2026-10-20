@@ -24,8 +24,8 @@ vi.mock('@/components/ui/layout/layout', () => ({
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 
 // The list-density preference is device-local storage: the one boundary this test controls.
-vi.mock('@/sync/store/hooks', async importOriginal => ({
-    ...await importOriginal<typeof import('@/sync/store/hooks')>(),
+vi.mock('@/sync/store/settingsReadHooks', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
     useLocalSetting: (key: string) => (key === 'uiItemDensity' ? densityState.preferred : key === 'uiFontScale' ? densityState.fontScale : null),
 }));
 

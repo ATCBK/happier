@@ -109,7 +109,9 @@ describe('SelectionList (orchestrator)', () => {
         expect(highlighted).toEqual(['first', 'second']);
     });
     beforeEach(() => {
-        vi.stubGlobal('window', { matchMedia: () => ({ matches: true }) });
+        // A hover-capable fine pointer. The reduced-motion preference is watched once per realm from the
+        // first query, so a blanket `matches: true` would turn reduced motion on for every later case.
+        vi.stubGlobal('window', { matchMedia: (query: string) => ({ matches: query !== '(prefers-reduced-motion: reduce)' }) });
         vi.stubGlobal('navigator', { maxTouchPoints: 0 });
     });
 

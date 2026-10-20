@@ -46,6 +46,8 @@ describe('NewSessionWizardAdaptiveSelection', () => {
         expect(screen.getTextContent()).toContain('Select Thing');
         expect(screen.findByType(DropdownMenu).props.open).toBe(false);
         await screen.pressByTestIdAsync('trigger');
+        // The dropdown opens on the next frame, after the press that asked for it has finished.
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
         expect(screen.findByType(DropdownMenu).props.open).toBe(true);
     });
 

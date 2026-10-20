@@ -51,6 +51,14 @@ export function isTodoStoredContentUnavailableError(
         && (error as { code?: unknown }).code === 'todo_stored_content_unavailable';
 }
 
+/** A stored row the Account cipher refused, whichever module instance of its error class raised it. */
+export function isAccountStoredContentFailure(error: unknown): boolean {
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    return code === 'account_stored_json_mode_mismatch'
+        || code === 'account_stored_json_encryption_material_unavailable'
+        || code === 'account_kv_content_unreadable';
+}
+
 export function toTodoStoredContentUnavailableError(key: string, error: unknown): TodoStoredContentUnavailableError {
     if (isTodoStoredContentUnavailableError(error)) return error;
     const code = error instanceof Error && 'code' in error ? error.code : undefined;

@@ -69,7 +69,7 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
     useLocalSetting: (key: string) => {
         if (key === 'uiItemDensity') return uiItemDensitySetting;
         if (key === 'uiFontScale') return 1;

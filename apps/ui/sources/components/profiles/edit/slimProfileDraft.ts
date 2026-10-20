@@ -98,7 +98,13 @@ export function buildSlimProfileSave(
             };
         }
     }
-    const issue = parsed.error.issues[0];
+    // The opened-profile schema is a union of the historical and V2 shapes. A V2 draft
+    // fails the historical branch at the object root, so the actionable issue is the
+    // nested one that points at a field.
+    const [first] = parsed.error.issues;
+    const issue = first?.code === 'invalid_union'
+        ? first.errors.flat().find((nested) => nested.path.length > 0) ?? first
+        : first;
     const root = issue?.path[0];
     const field = root === 'envVarRequirements' ? 'extraEnvironmentVariables'
         : root === 'description' || root === 'extraEnvironmentVariables' ? root : 'name';

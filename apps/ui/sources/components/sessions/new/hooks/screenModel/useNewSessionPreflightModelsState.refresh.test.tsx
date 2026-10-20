@@ -538,7 +538,7 @@ describe('useNewSessionPreflightModelsState (refresh)', () => {
         vi.useRealTimers();
     });
 
-    it('keeps static Default options when the model probe reports unavailable', async () => {
+    it('does not turn an unavailable model probe into a placeholder Default catalog', async () => {
         capabilityRpc.mockReset();
         resetDynamicModelProbeCacheForTests();
 
@@ -570,7 +570,8 @@ describe('useNewSessionPreflightModelsState (refresh)', () => {
                 unavailable: true,
             });
         });
-        expect(hook.getCurrent().modelOptions.some((option) => option.value === 'default')).toBe(true);
+        // The compatibility Default is not evidence that discovery found a selectable model.
+        expect(hook.getCurrent().modelOptions).toEqual([]);
 
         await hook.unmount();
     });

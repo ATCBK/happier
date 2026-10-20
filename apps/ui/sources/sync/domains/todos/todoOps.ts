@@ -5,12 +5,13 @@ import { applyInternalTaskReorder, InternalTaskReorderError } from '@happier-dev
 import { storage } from '@/sync/domains/state/storage';
 import { kvList } from '@/sync/api/account/apiKv';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
-import { createAccountKvJsonTransport, openUiAccountKvJsonRow } from '@/sync/ops/account/accountKvJsonTransport';
+import { createAccountKvJsonTransport, openUiAccountKvJsonRow, type AccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { AsyncLock } from '@/utils/system/lock';
 import {
     parseTodoStoredContent,
+    isAccountStoredContentFailure,
     toTodoStoredContentUnavailableError,
     TodoStoredContentUnavailableError,
     TODO_INDEX_KEY,
@@ -166,6 +167,17 @@ export type TodoSessionLinkIntent = Readonly<{
 
 export { TodoSessionLinkError };
 
+/** A stored row the Account cipher refuses is the same typed Todo failure the list read reports. */
+function withTodoStoredContentFailures(key: string, transport: AccountKvJsonTransport): AccountKvJsonTransport {
+    const typed = (error: unknown): never => {
+        throw isAccountStoredContentFailure(error) ? toTodoStoredContentUnavailableError(key, error) : error;
+    };
+    return {
+        read: () => transport.read().catch(typed),
+        compareAndSet: (value, version) => transport.compareAndSet(value, version).catch(typed),
+    };
+}
+
 /** Apply one accepted Session to the current task, never a captured replacement map. */
 export async function applyTodoSessionLinkIntent(credentials: AuthCredentials, intent: TodoSessionLinkIntent,
     options: Readonly<{ signal?: AbortSignal; request?: ServerFetch }> = {}): Promise<void> {
@@ -200,7 +212,7 @@ export async function applyTodoSessionLinkIntent(credentials: AuthCredentials, i
             const key = getTodoKey(intent.source.taskId);
             await applyTodoSessionLinkV1({ scope: intent.source.scope, taskId: intent.source.taskId,
                 session: { ...intent.session.scope, sessionId: intent.session.sessionId }, ...(intent.linked === undefined ? {} : { linked: intent.linked }) },
-                createAccountKvJsonTransport({ credentials, key, request, shouldContinue: () => { requireCurrent(); return true; } }),
+                withTodoStoredContentFailures(key, createAccountKvJsonTransport({ credentials, key, request, shouldContinue: () => { requireCurrent(); return true; } })),
                 { requireCurrent, title: intent.source.title,
                 publish: (item, version) => {
                     requireCurrent();
