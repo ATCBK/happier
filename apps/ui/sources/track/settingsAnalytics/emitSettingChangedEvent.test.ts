@@ -332,7 +332,7 @@ describe('emitLocalSettingChangedEvents', () => {
 
     it('captures bucketed pane size and acknowledged CLI count changes through canonical local analytics serializers', () => {
         emitLocalSettingChangedEvents({
-            previousSettings: localSettingsDefaults,
+            previousSettings: { ...localSettingsDefaults, sidebarWidthPx: 420 },
             nextSettings: {
                 ...localSettingsDefaults,
                 sidebarWidthPx: 220,
