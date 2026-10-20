@@ -42,7 +42,7 @@ describe('encodeSentryInstanceConfiguration', () => {
       configuration: {
         v: 1,
         organizationId: '7701',
-        projectScope: { kind: 'allAccessible' },
+        projectScope: { kind: 'all' },
         environmentScope: { kind: 'all' },
       },
     });
@@ -70,7 +70,7 @@ describe('encodeSentryInstanceConfiguration', () => {
     const configuration = {
       v: 1,
       organizationId: '7701',
-      projectScope: { kind: 'allAccessible' },
+      projectScope: { kind: 'all' },
       environmentScope: { kind: 'all' },
     };
     expect(decodeSentryInstanceConfiguration(JSON.stringify({

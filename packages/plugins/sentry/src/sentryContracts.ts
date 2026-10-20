@@ -49,6 +49,7 @@ export const SENTRY_TRIAGE_SETTINGS_ARTIFACT_ID = 'sentry-triage-sources-native'
 
 export const SENTRY_ACTION_IDS = Object.freeze({
   listInstances: 'sentry/list-instances',
+  listScopeUnits: 'sentry/list-projects',
   scan: 'sentry/scan-issues',
   get: 'sentry/get-issue',
   resolve: 'sentry/resolve-issue',
@@ -85,6 +86,8 @@ export function isSentryCloudRegion(value: unknown): value is SentryCloudRegionV
 export const SENTRY_MAX_NATIVE_ISSUE_PAGE_LIMIT = 100;
 /** `[SCHEMA]` `per_page` maximum on the organization listing. */
 export const SENTRY_ORGANIZATIONS_PAGE_SIZE = 100;
+/** Organization projects API documents a maximum `per_page` of 100. */
+export const SENTRY_PROJECTS_PAGE_SIZE = 100;
 /** `[SOURCE]` `api/utils.py` `MAX_STATS_PERIOD = timedelta(days=90)`. */
 export const SENTRY_SCAN_STATS_PERIOD = '90d';
 
@@ -150,6 +153,7 @@ export const SENTRY_FAILURE_CODES = Object.freeze({
    */
   eventUnreadable: 'sentry-event-unreadable',
   malformedOrganizationRow: 'sentry-malformed-organization-row',
+  malformedProjectRow: 'sentry-malformed-project-row',
   accountListTruncated: 'sentry-account-list-truncated',
   regionOriginUndeclared: 'sentry-region-origin-undeclared',
   invokedOriginMismatch: 'sentry-invoked-origin-mismatch',
@@ -169,6 +173,7 @@ export type SentryFailureCodeV1 =
  */
 export const SENTRY_SELF_HOSTED_UNSUPPORTED_CODES = Object.freeze({
   organizations: 'sentry-self-hosted-organizations-unsupported',
+  projects: 'sentry-self-hosted-projects-unsupported',
   issuesList: 'sentry-self-hosted-issues-list-unsupported',
   issue: 'sentry-self-hosted-issue-unsupported',
   issueEvents: 'sentry-self-hosted-issue-events-unsupported',

@@ -54,6 +54,7 @@ describe('Sentry plugin manifest', () => {
     expect(contribution?.target).toEqual({ pluginId: 'happier.triage', pointId: 'sources' });
     expect(contribution?.operations).toEqual({
       listInstances: SENTRY_ACTION_IDS.listInstances,
+      listScopeUnits: SENTRY_ACTION_IDS.listScopeUnits,
       scan: SENTRY_ACTION_IDS.scan,
       get: SENTRY_ACTION_IDS.get,
     });
