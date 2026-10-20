@@ -57,7 +57,8 @@ import { useWebUiFontScale } from '@/components/ui/text/useWebUiFontScale';
 import { GlassMaterialRuntime } from '@/components/ui/glass/GlassMaterialRuntime';
 import { SurfaceFinishRuntime } from '@/theme/SurfaceFinishRuntime';
 import { useWebRootCanvasPresentation } from '@/theme/useWebRootCanvasPresentation';
-import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
+import { glassNavigationBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
+import { useGlassRuntimeEnvironment } from '@/components/ui/glass/glassRuntimeEnvironment';
 import { initializeSentryOnce, wrapWithSentryIfEnabled } from '@/utils/system/sentry';
 import { t } from '@/text';
 import { preloadTranslations } from '@/text/i18n';
@@ -675,28 +676,7 @@ function FullAppRootLayout() {
             return installTauriExternalLinkClicks();
         }
     }, []);
-    const { theme } = useUnistyles();
-    const isDesktopOverlayWindow = isDesktopOverlayWindowContext();
     useWebUiFontScale();
-    const navigationTheme = React.useMemo(() => {
-        const background = isDesktopOverlayWindow ? 'transparent' : glassSurfaceBackgroundColor(theme.colors.background.canvas, 'chrome', true);
-        if (theme.dark) {
-            return {
-                ...DarkTheme,
-                colors: {
-                    ...DarkTheme.colors,
-                    background,
-                }
-            }
-        }
-        return {
-            ...DefaultTheme,
-            colors: {
-                ...DefaultTheme.colors,
-                background,
-            }
-        };
-    }, [isDesktopOverlayWindow, theme.colors.background.canvas, theme.dark]);
 
     const onRestart = React.useCallback(() => {
         if (Platform.OS === 'web') {
@@ -729,9 +709,7 @@ function FullAppRootLayout() {
                         }
                     }}
                 >
-                    <AppBoot
-                        navigationTheme={navigationTheme}
-                    />
+                    <AppBoot />
                 </AppCrashRecoveryBoundary>
             </WebCryptoStartupGate>
             </GlassMaterialRuntime>
@@ -740,9 +718,20 @@ function FullAppRootLayout() {
     );
 }
 
-function AppBoot(props: {
-    navigationTheme: any;
-}) {
+/** Inside the glass runtime, so the stack background clears only while the atmosphere paints behind the active route. */
+function useNavigationTheme() {
+    const { theme } = useUnistyles();
+    const isDesktopOverlayWindow = isDesktopOverlayWindowContext();
+    const environment = useGlassRuntimeEnvironment();
+    const background = glassNavigationBackgroundColor(theme.colors.background.canvas, environment, isDesktopOverlayWindow);
+    return React.useMemo(() => {
+        const base = theme.dark ? DarkTheme : DefaultTheme;
+        return { ...base, colors: { ...base.colors, background } };
+    }, [background, theme.dark]);
+}
+
+function AppBoot() {
+    const navigationTheme = useNavigationTheme();
     //
     // Init sequence
     //
@@ -883,7 +872,7 @@ function AppBoot(props: {
                       * instead of the user silently appearing signed out.
                       */}
                     <AuthProvider initialCredentials={initState.credentials}>
-                        <ThemeProvider value={props.navigationTheme}>
+                        <ThemeProvider value={navigationTheme}>
                             <StatusBarProvider />
                             <AppPaneModalProvider>
                                 <WebServerOverrideGate>
