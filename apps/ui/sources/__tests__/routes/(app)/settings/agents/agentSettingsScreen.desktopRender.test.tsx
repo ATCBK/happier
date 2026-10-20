@@ -102,8 +102,8 @@ describe('PluginAgentSettingsScreen desktop render', () => {
         await account.selectMachine(account.serverId, 'm1', MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents);
         credentials = await TokenStorage.getCredentials();
         storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: true, sidebarCollapsed: false,
-            sidebarWidthPx: 320, sidebarWidthBasisPx: 1440, rightPaneWidthPx: 360, rightPaneWidthBasisPx: 1200,
-            detailsPaneWidthPx: 420, detailsPaneWidthBasisPx: 1200, bottomPaneHeightPx: 320, bottomPaneHeightBasisPx: 900 });
+            sidebarWidthPx: 320, rightPaneWidthPx: 360,
+            detailsPaneWidthPx: 420, bottomPaneHeightPx: 320 });
     });
 
     afterEach(async () => {

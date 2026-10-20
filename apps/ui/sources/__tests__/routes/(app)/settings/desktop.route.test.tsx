@@ -97,7 +97,6 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         values: {
             settingsNavSidebarEnabled: true,
             settingsNavSidebarWidthPx: 240,
-            settingsNavSidebarWidthBasisPx: 1440,
             devModeEnabled: false,
             uiFontScale: 1,
         },

@@ -1395,9 +1395,7 @@ describe('SessionView (direct sessions)', () => {
       uiMultiPanePanelsEnabled: true,
       detailsPaneTabsBehavior: 'preview',
       rightPaneWidthPx: 360,
-      rightPaneWidthBasisPx: 1200,
       detailsPaneWidthPx: 520,
-      detailsPaneWidthBasisPx: 1200,
     }, { persist: false });
     const sessions = Object.fromEntries(Object.entries(storageState.sessions).map(([id, session]) => [
       id,
