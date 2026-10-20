@@ -37,6 +37,8 @@ A Session selection wins over these defaults. You can add a skill to one Session
 
 Happier normally delivers selected skills through a private Session folder. It does not install them into your own Agent skill folders by default. Agents with no Session-folder integration may receive an index and read a skill through Happier's `skills.read` Action. Agents without a usable Action channel cannot use that fallback. The Session's availability notice reports the selected Agent and launch path's actual skill delivery; the [Agent capability reference](/agents/capabilities) lists resume support for changes that need a restart.
 
+In the development Auggie integration, native plugin catalogue names have a `happier:` prefix. This does not rename the item in your library. Native skill folders remain unchanged.
+
 The built-in **happier** skill points the Agent to the installed CLI's current help. It starts Everywhere when the Account's skill-rules collection is created, follows Happier's version and has read-only content. You can turn it Off or make an editable copy. Removing its places does not seed it again.
 
 ## Found on your machines

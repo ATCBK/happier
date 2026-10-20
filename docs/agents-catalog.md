@@ -53,11 +53,32 @@ The lazy Agent declaration projects `capabilities.skills`; the host's single
 runner resolver selects native session-directory delivery or the existing
 Action-backed index. A documented mechanism alone does not enable injection.
 Pi's probed `--skill` path supports session-directory delivery but not native
-disables or live reload. OpenCode stays index-only: configured custom native
-roots can evade static masking, and existing wildcard permissions can override
-a per-skill deny. Gemini, Kilo, Cursor, Grok and Oh My Pi remain index-only until
-their native probes pass. Native roots are read-only discovery inputs, not proof
-that an unprobed launch loads an injected directory.
+disables or live reload. Gemini 0.64.0's no-login discovery supports its private
+home: session items join `.agents/skills`, existing native children remain linked,
+and `skills.disabled` merges into the copied settings. Sessions and Runs share
+that owner; Windows copies the delivered items into the private home. A failed
+optional delivery preserves Session startup and reports refusal.
+OpenCode 1.19.3 and Kilo 7.8.15 stay index-only: configured custom native roots
+evade static masking and the injected same-name copy wins. OpenCode's inherited
+wildcard permission can also override a specific deny. Oh My Pi 18.12.3 keeps
+the native bare name but exposes the injected collision under a renamed alias,
+so it also stays index-only. Cursor and Grok use a session-only plugin directory
+after isolated no-login probes of their documented launch arguments.
+Auggie 0.36.0 uses its existing custom ACP argv owner with `--plugin-dir`.
+Its released marketplace scanner rejects linked plugin files, so the declaration
+requests `materialization: 'copy'`; the runner passes that requirement to the
+daemon's existing Windows copy branch on every platform. The daemon's single
+Session tree carries both the Claude plugin manifest and a local Auggie
+marketplace manifest pointing at that same tree. No plugin stages another copy
+or writes a native skill folder. Auggie prefixes catalogue entries with
+`happier:`; native disables and live reload remain unsupported.
+Kimi Code 2.2.0 stays index-only: an additive `extra_skill_dirs` probe passed,
+but placing injection in a private user-tier home overrides a same-name native
+skill from a configured extra root. That layout is not a safe substitute for
+the additive TOML mechanism.
+Native roots are read-only discovery inputs, not proof that an unprobed launch
+loads an injected directory. Authenticated model invocation and physical platform
+confirmation remain release checks for these development-source contracts.
 
 The Agent's optional `preflightSessionControls.resolveNativeSkillDirectories`
 projects extra launch directories from its exact non-secret Settings and runtime
@@ -1506,19 +1527,11 @@ Checklist ids are treated as stable API between daemon and app:
 
 ### ACP resume (no runtime probes)
 
-In 0.3 development source, Agent manifests may declare `capabilities.skills`:
-`delivery` (`session_dir` or `none`), `nativeDisable`, `liveReload`, optional
-`usageEvidence`, and optional native root segment arrays (`user`, `project`,
-`plugin`). The current catalog projects that declaration; an absent declaration
-resolves to no delivery, native disable or live reload. Claude and Codex now
-declare `session_dir` in development source. Claude consumes a session-private
-plugin directory; Codex app-server consumes the session skills root, while its
-daemon-proxy and ACP launches report `skillsDelivered: false`. The generic ACP
-Session composer preserves MCP and refuses supplied skills visibly until native ACP
-delivery is implemented. Other Agents retain `none`
-until their native delivery vertical is implemented and tested. An Agent with
-a declared Action channel can instead receive a metadata-only skill index and
-read the selected content through `skills_read`.
+Agent manifests declare skills through `capabilities.skills`; the current
+mechanisms and support are described under [Session skills](#session-skills-03-development).
+The catalog projects the declared delivery, native-disable, live-reload and usage
+facts. Missing delivery remains unsupported, with the Action-backed index where
+available. Codex daemon-proxy and ACP launches report `skillsDelivered: false`.
 
 The bundled first-party `happier` skill contains a thin guide to the installed
 CLI's help. Its deterministic Everywhere rule is initial content of the
@@ -1532,8 +1545,8 @@ first-party Skills surface integration, including reads by index Agents.
 Declarative ACP Session directory delivery requires both `delivery: 'session_dir'`
 and `definition.skills.sessionDelivery`. The closed declaration supports
 `env_path_list`, `defaults_file_env`, or `native_config_skills_dir`; the last
-requires `mcp.nativeSessionConfig`. These are declaration contracts for the later
-delivery implementation, not a claim that all native knobs are already applied.
+requires `mcp.nativeSessionConfig`. The composer applies the declared knob and
+owns its private launch files; a refused optional delivery remains visible.
 Resolved MCP servers and skills have one carrier into Agents: the Session or Run
 open request. ACP reads MCP from that request for both `session/new` and native
 config preparation; its composer dependencies carry no second MCP binding.
