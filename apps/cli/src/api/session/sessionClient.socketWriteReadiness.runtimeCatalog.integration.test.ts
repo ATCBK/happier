@@ -37,6 +37,15 @@ import { createCodexAgentRuntime } from '../../../../../packages/plugins/codex/s
 import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
 import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
 import type { AgentSessionGoalControlContext, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import { createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
+import { runSessionLoopLifecycle } from '@/agent/runtime/session/loop/lifecycle';
+import { createLifecycleParams } from '@/agent/runtime/session/loop/lifecycle.testkit';
+import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/runnerTerminationHandlers';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -170,6 +179,140 @@ describe('ApiSessionClient socket write readiness', () => {
     await Promise.all(clients.splice(0).map(client => client.close()));
     vi.unstubAllGlobals();
     clearActiveAccountSettingsSnapshot();
+  });
+
+  it.each(['foreground', 'sidechain', 'ordinary', 'explicit-local-custody'] as const)(
+    'retains native foreground transcript custody until Home acknowledges the final sequence (%s)', async scope => {
+    const session = createPlainSessionFixture({ id: 's-native-final-anchor' });
+    serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });
+    const transcript = createSessionTranscriptHomeStub();
+    const appendGate = createDeferred();
+    const attempted = createDeferred();
+    let firstAppend = true;
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        SessionTranscriptObservationInputSchema.parse(payload);
+        if (firstAppend) {
+          firstAppend = false;
+          throw new Error('Home append receipt temporarily unavailable');
+        }
+        attempted.resolve();
+        await appendGate.promise;
+      }
+      return activity.answer(event, payload) ?? transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(session, [socket]);
+    client.getTurnAssistantTextSnapshotStore().beginTurn({ turnToken: 'native-turn', startSeqExclusive: null, startedAtMs: 1 });
+    let settled = false;
+    const commit = client.enqueueAgentMessageCommitted('codex', { type: 'message', message: 'Exact native answer',
+      ...(scope === 'sidechain' ? { sidechainId: 'native-child' } : {}) }, {
+      localId: 'native-final', ...(scope === 'ordinary' ? {} : { meta: { runtimeTurnId: 'native-turn' } }),
+      provenance: { kind: 'non_dependent', source: 'background' },
+      ...(scope === 'explicit-local-custody' ? { admission: { signal: new AbortController().signal, requireDelivery: false } } : {}),
+    }).then(result => { settled = true; return result; });
+    try {
+      await vi.waitFor(() => expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toContain(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1));
+      await attempted.promise;
+      expect(settled).toBe(scope !== 'foreground');
+      appendGate.resolve();
+      const result = await commit;
+      if (scope === 'foreground') {
+        expect(result).toMatchObject({ persisted: true, delivered: true, committedSequence: expect.any(Number) });
+        expect(client.getTurnAssistantTextSnapshotStore().getCurrentTurnSnapshot()).toMatchObject({
+          normalizedText: 'Exact native answer', seq: result.committedSequence, source: 'committed',
+        });
+      } else expect(result).toMatchObject({ persisted: true, delivered: false });
+    } finally {
+      appendGate.resolve();
+      await commit;
+    }
+  });
+
+  it.each(['offline', 'connected', 'disconnect-during-drain'] as const)(
+    'retires an offline native transcript ACK before runner cleanup drains the Session (%s)', async closeState => {
+    const session = createPlainSessionFixture({ id: 's-native-offline-close' });
+    serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });
+    const transcript = createSessionTranscriptHomeStub();
+    const appendGate = createDeferred();
+    const attempted = createDeferred();
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === 'session-turn-mutation') {
+        return createSessionTurnMutationAppliedSocketAck(SessionTurnMutationV1Schema.parse(payload));
+      }
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        attempted.resolve();
+        await appendGate.promise;
+      }
+      return activity.answer(event, payload) ?? transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(session, [socket]);
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let disposed = false;
+    const provider: AgentSessionRuntime = {
+      async send() { throw new Error('Provider-owned turn has no host prompt'); },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      dispose() { disposed = true; },
+    };
+    const runtime = createNativeAgentSessionOperations(provider, session.id, undefined, undefined, undefined, undefined, undefined, {
+      context: {} as AgentSessionRuntimeContext, cwd: '/tmp/native-offline-close', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false }, cancellation: { declared: false },
+      configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => mode.permissionMode, { batcher: combinePermissionModeQueuedPrompts });
+    let finished = false;
+    const run = runSessionLoopLifecycle({ ...base, session: client, runtime, hookRuntime: runtime,
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue }, deps: { ...base.deps,
+        registerRunnerTerminationHandlersFn: options => registerRunnerTerminationHandlers({ ...options,
+          processLifecycleOwnership: 'caller', sessionExitReport: null, exit() {} }),
+      } }).then(() => { finished = true; });
+    void run.catch(() => undefined);
+    let sequence = 0;
+    const emit = (event: Readonly<Record<string, unknown>>) => listener?.(AgentSessionRuntimeEventV1Schema.parse({
+      ...event, sessionId: session.id, emittedAtMs: ++sequence, sequence,
+    }));
+    try {
+      await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
+      emit({ kind: 'turn-start', turnId: 'offline-native-turn', startedBy: 'provider' });
+      emit({ kind: 'transcript-message-committed', turnId: 'offline-native-turn', role: 'assistant',
+        messageId: 'offline-final', text: 'Retained while offline' });
+      await vi.waitFor(() => expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toContain(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1));
+      await attempted.promise;
+      emit({ kind: 'turn-complete', turnId: 'offline-native-turn' });
+      if (closeState === 'offline') {
+        socket.connected = false;
+        socket.trigger('disconnect', 'transport close');
+      }
+      emit({ kind: 'runtime-ended', cause: 'providerEnded', retryable: false });
+      await vi.waitFor(() => expect(disposed).toBe(true));
+      if (closeState !== 'offline') {
+        expect(finished).toBe(false);
+        if (closeState === 'connected') appendGate.resolve();
+        else {
+          socket.connected = false;
+          socket.trigger('disconnect', 'transport close');
+        }
+      }
+      await vi.waitFor(() => expect(finished).toBe(true));
+      await run;
+      if (closeState === 'connected') {
+        const turns = socket.emitWithAck.mock.calls.filter(([event]) => event === 'session-turn-mutation')
+          .map(([, payload]) => SessionTurnMutationV1Schema.parse(payload));
+        expect(turns).toContainEqual(expect.objectContaining({ action: 'complete', turnId: 'offline-native-turn' }));
+        expect(turns).not.toContainEqual(expect.objectContaining({ action: 'fail', turnId: 'offline-native-turn' }));
+      }
+    } finally {
+      appendGate.resolve();
+      emit({ kind: 'turn-complete', turnId: 'offline-native-turn' });
+      emit({ kind: 'runtime-ended', cause: 'providerEnded', retryable: false });
+      await client.close();
+      await run.catch(() => undefined);
+    }
   });
 
   it.each(['unavailable', 'accepted', 'accepted_no_channels', 'failure_unavailable', 'failure_accepted', 'person_wrote_unavailable', 'person_wrote_owner', 'person_wrote_collaborator', 'unaccepted', 'unaccepted_rule_only', 'other_original', 'retired_account', 'missing_settings', 'wrong_account', 'other_home', 'retired_publisher'] as const)(

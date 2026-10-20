@@ -158,6 +158,7 @@ import {
 } from './committedUserMessageSeqTracker';
 import { fetchCommittedTranscriptIdentitySnapshot, fetchCommittedTranscriptLocalIdBaseline } from './transcriptQueries';
 import { getSessionCommittedTranscriptLocalIds } from './client/transcript/committedTranscriptLocalIdBaseline';
+import { readSidechainId } from './outbound/shared';
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { findTranscriptEncryptedMessageByLocalIdV2 } from './transcriptMessageLookup';
@@ -2895,10 +2896,18 @@ export class ApiSessionClient extends EventEmitter {
         const facts = this.readSessionFollowRuleSourceFacts();
         const evidence = facts ? captureSessionFollowRuleSourceEvidence({ ...facts, body }) : null;
         const { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: _authoredEvidence, ...metadata } = opts.meta ?? {};
+        const nativeForegroundAssistant = body.type === 'message'
+            && readSidechainId(body.sidechainId) === null
+            && typeof metadata.runtimeTurnId === 'string' && metadata.runtimeTurnId.trim().length > 0;
         const sourceOptions = { ...opts, meta: { ...metadata,
             ...(evidence ? { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: projectSessionFollowRuleSharedSourceEvidenceV1(evidence) } : {}) },
+            // Terminal Turn anchors need Home's sequence, not journal-only
+            // custody. Reuse this Session's delivery/cancellation lifetime.
+            ...(nativeForegroundAssistant && opts.admission === undefined ? { admission: {
+                signal: this.socketAckAbortController.signal, requireDelivery: true,
+            } } : {}),
             ...(body.type === 'task_complete' && evidence?.event.kind === 'finished'
-                ? { observeCommitSignal: this.acceptedPendingSettlementOperationAbortController.signal } : {}),
+                ? { observeCommitSignal: this.terminalPendingSettlementOperationAbortController.signal } : {}),
         };
         const update = this.transcriptApi.enqueueAgentMessageCommitted(provider, body, sourceOptions).then((result) => {
             if (

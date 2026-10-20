@@ -13,6 +13,8 @@ import type { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RuntimeSessionTurnMutationV1 } from '@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { TurnAssistantTextSnapshot } from '@/api/session/turns/assistantTextSnapshot';
+import type { RegisterProviderAcceptedEffect } from '@/agent/runtime/session/input/providerInputOutcome';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { isTerminalSessionTurnMutationAction } from '@/api/session/sessionTurnStatusSnapshot';
 import type { Metadata, PermissionMode } from '@/api/types';
@@ -223,10 +225,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
   capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   terminalRemoteModeLoop?: HostSessionTerminalRemoteModeLoop | null;
   messageBuffer: MessageBuffer;
   permissionHandler: PromptLoopPermissionHandler;
@@ -407,7 +406,26 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const runtimeTranscriptStateByTurnId = new Map<string, {
     failure?: RuntimeTranscriptRequiredAdmissionError;
     userLocalIds: Set<string>;
+    hasAssistantText?: true;
+    terminalAssistantSnapshot?: TurnAssistantTextSnapshot | null;
   }>();
+  const pendingInputSettlementsByLocalId = new Map<string, Promise<void>>();
+  const retireTurnTranscriptState = (turnId: string): void => {
+    for (const localId of runtimeTranscriptStateByTurnId.get(turnId)?.userLocalIds ?? []) {
+      pendingInputSettlementsByLocalId.delete(localId);
+    }
+    runtimeTranscriptStateByTurnId.delete(turnId);
+    if (activeRuntimeTranscriptTurnId === turnId) activeRuntimeTranscriptTurnId = null;
+  };
+  const registerProviderAcceptedEffect: RegisterProviderAcceptedEffect = (localId, onAccepted, representedInputs) => {
+    // This prompt-loop registration also owns anchor ordering when the prompt
+    // has no optional accepted effect. Canonical rejection retires its entry.
+    if (!onAccepted) params.registerProviderAcceptedEffect(localId, null, representedInputs);
+    params.registerProviderAcceptedEffect(localId, pendingSettlement => {
+      if (pendingSettlement) pendingInputSettlementsByLocalId.set(localId, pendingSettlement);
+      onAccepted?.(pendingSettlement);
+    }, representedInputs);
+  };
   const readTurnTranscriptState = (turnId: string) => {
     let state = runtimeTranscriptStateByTurnId.get(turnId);
     if (!state) {
@@ -480,15 +498,17 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           },
         };
         await enqueueTerminalMutation(failureMutation);
-        runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-        if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-          activeRuntimeTranscriptTurnId = null;
-        }
+        retireTurnTranscriptState(mutation.turnId);
         return { terminalStatusOverride: 'failed' as const };
       }
       if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
 
       try {
+        const turnState = 'turnId' in mutation ? readTurnTranscriptState(mutation.turnId) : null;
+        // Join the existing Pending write before reading its acknowledged-row
+        // projection. A settled attempt is ordering, not invented commit evidence.
+        await Promise.all([...turnState?.userLocalIds ?? []]
+          .map(localId => pendingInputSettlementsByLocalId.get(localId)));
         // Resolve only acknowledged rows after prior transcript projections.
         // Native acceptance can precede both begin-marker admission and HTTP ACKs.
         const userMessageSeqs = 'turnId' in mutation
@@ -498,7 +518,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               .sort((left, right) => left - right)
           : [];
         const startUserMessageSeq = userMessageSeqs[0];
-        const snapshot = params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot();
+        const snapshot = turnState?.terminalAssistantSnapshot;
         const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
           && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
           ? snapshot.seq : null;
@@ -539,10 +559,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             : mutation;
         await enqueueTerminalMutation(settledMutation);
         if ('turnId' in mutation) {
-          runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-          if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-            activeRuntimeTranscriptTurnId = null;
-          }
+          retireTurnTranscriptState(mutation.turnId);
         }
       } catch (error) {
         logger.debug(`${params.config.uiLogPrefix} Runtime terminal turn mutation failed`, {
@@ -689,6 +706,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : typeof parsedProjectionTurnId === 'string'
         ? parsedProjectionTurnId
         : activeRuntimeTranscriptTurnId;
+    if (parsedRuntimeEvent.success && projectionTurnId
+      && isForegroundTurnRuntimeTranscriptEvent(parsedRuntimeEvent.data)
+      && ((parsedRuntimeEvent.data.kind === 'message-delta' && parsedRuntimeEvent.data.channel === 'assistant')
+        || (parsedRuntimeEvent.data.kind === 'transcript-message-committed' && parsedRuntimeEvent.data.role === 'assistant'))
+      && parsedRuntimeEvent.data.text.trim().length > 0) {
+      readTurnTranscriptState(projectionTurnId).hasAssistantText = true;
+    }
     if (parsedRuntimeEvent.success && params.config.publishHostRuntimeEvent) {
       try {
         params.config.publishHostRuntimeEvent(parsedRuntimeEvent.data);
@@ -731,6 +755,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         }
       } catch (error) {
         transcriptProjectionError ??= error;
+      }
+      if (
+        parsedRuntimeEvent.success && projectionTurnId
+        && (parsedRuntimeEvent.data.kind === 'turn-complete' || parsedRuntimeEvent.data.kind === 'turn-failed'
+          || parsedRuntimeEvent.data.kind === 'turn-cancelled')
+      ) {
+        const state = readTurnTranscriptState(projectionTurnId);
+        state.terminalAssistantSnapshot = transcriptProjectionError || !state.hasAssistantText ? null
+          : params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot() ?? null;
       }
       if (
         readyCapture && readyCapture.context === undefined && parsedRuntimeEvent.success
@@ -1339,7 +1372,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       currentPermissionModeUpdatedAt: params.permissionModeState.getCurrentPermissionModeUpdatedAt(),
       setCurrentPermissionMode: params.permissionModeState.setCurrentPermissionMode,
       setCurrentPermissionModeUpdatedAt: params.permissionModeState.setCurrentPermissionModeUpdatedAt,
-      registerProviderAcceptedEffect: params.registerProviderAcceptedEffect,
+      registerProviderAcceptedEffect,
       onBeforeTurnBegin: (input, snapshotScope) => {
         const capture: HostReadyCapture = { turnId: null, snapshotScope };
         hostReadyCapture = capture;
