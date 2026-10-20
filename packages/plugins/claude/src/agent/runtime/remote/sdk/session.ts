@@ -1890,7 +1890,7 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 const completedBackgroundTasks = observeProviderTaskActivity(message, undefined, turnQuery)
                     && sawResult
-                    && !providerActivityLedger.hasActiveProviderTasks(turnQuery);
+                    && !providerActivityLedger.hasUnsettledProviderTasks(turnQuery);
                 const isSuccessfulResultMessage = isSdkResultMessage(message)
                     && message.subtype === 'success'
                     && message.is_error !== true;
@@ -2027,7 +2027,7 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 if (isSuccessfulResultMessage) {
                     sawResult = true;
-                    const shouldContinueForBackgroundTasks = providerActivityLedger.hasActiveProviderTasks(turnQuery);
+                    const shouldContinueForBackgroundTasks = providerActivityLedger.hasUnsettledProviderTasks(turnQuery);
                     if (!shouldContinueForBackgroundTasks) providerActivityLedger.completeQueryObservation(turnQuery);
                     if (foregroundTurnId
                         && Object.keys(params.mcpServers ?? {}).length > 0) {
@@ -2100,7 +2100,7 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 return;
             }
-            if (!sawResult || providerActivityLedger.hasActiveProviderTasks(turnQuery)) {
+            if (!sawResult || providerActivityLedger.hasUnsettledProviderTasks(turnQuery)) {
                 providerActivityLedger.noteObservationLost(turnQuery);
                 reconcileProviderTaskRuntimeActivityForCurrentQuery('query-observation-lost');
             }

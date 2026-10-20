@@ -9,8 +9,14 @@ export type ClaudeProviderTaskActivity =
     type: 'started';
     admission?: 'launch' | 'resume' | 'known-resume';
     confirmsActivity?: false;
+    /** The Agent that owns this task, from the typed SDK `task_started` row. */
+    parentTaskId?: string;
   }>)
-  | (ClaudeProviderTaskIdentity & Readonly<{ type: 'progress'; confirmsActivity?: false }>)
+  | (ClaudeProviderTaskIdentity & Readonly<{
+    type: 'progress';
+    confirmsActivity?: false;
+    source?: 'system-task-progress';
+  }>)
   | (ClaudeProviderTaskIdentity & Readonly<{
     type: 'terminal';
     terminalStatus?: 'completed' | 'failed' | 'stopped';
@@ -222,9 +228,10 @@ function readStrictClaudeProviderTaskActivity(
   if (row.subtype === 'task_started') {
     if (row.task_type !== 'local_workflow' && row.task_type !== 'local_bash'
       && !(row.task_type === 'local_agent' && row.is_backgrounded === true)) return null;
-    return { type: 'started', admission: 'launch', sessionId, taskId };
+    const parentTaskId = normalizeClaudeAgentSdkProviderTaskId(row.parent_task_id);
+    return { type: 'started', admission: 'launch', sessionId, taskId, ...withParent(parentTaskId ?? undefined) };
   }
-  if (row.subtype === 'task_progress') return { type: 'progress', sessionId, taskId };
+  if (row.subtype === 'task_progress') return { type: 'progress', sessionId, taskId, source: 'system-task-progress' };
   if (row.subtype === 'task_notification') {
     const status = taskNotificationTerminalStatus(row.status);
     if (status) return { type: 'terminal', terminalStatus: status, sessionId, taskId };
@@ -313,6 +320,10 @@ function keyOf(identity: ClaudeProviderTaskIdentity): string {
   return JSON.stringify([identity.sessionId, identity.taskId]);
 }
 
+function withParent(parentTaskId: string | undefined): { parentTaskId?: string } {
+  return parentTaskId ? { parentTaskId } : {};
+}
+
 export function createClaudeProviderActivityLedger(options?: ClaudeProviderActivityLedgerOptions) {
   type LedgerEntry = ClaudeProviderTaskIdentity & Readonly<{
     phase: 'active' | 'terminal_before_confirmation';
@@ -320,6 +331,14 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     backgroundConfirmed: boolean;
     ownerScope?: object;
     requiresOwnerConfirmation?: true;
+    parentTaskId?: string;
+    /**
+     * Claude reports an Agent `completed` each time it stops, including when it stops to wait on
+     * background children it still owns; it wakes when they settle. Such an Agent is not active,
+     * but its query keeps observing so the wake is read, and only its own typed progress may
+     * reactivate it.
+     */
+    awaitingChildren?: true;
   }>;
   const entries = new Map<string, LedgerEntry>();
   let observationPhase: 'observing' | 'lost' | 'stopped' = 'observing';
@@ -334,6 +353,14 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
   const activeEntries = (ownerScope?: object): LedgerEntry[] => [...entries.values()]
     .filter((entry) => entry.phase === 'active'
       && (ownerScope === undefined || entry.ownerScope === undefined || entry.ownerScope === ownerScope));
+  const unsettledEntries = (ownerScope?: object): LedgerEntry[] => [...entries.values()]
+    .filter((entry) => (entry.phase === 'active' || entry.awaitingChildren === true)
+      && (ownerScope === undefined || entry.ownerScope === undefined || entry.ownerScope === ownerScope));
+  /** A child still owns live work while active or while it waits on its own children. */
+  const hasLiveChild = (identity: ClaudeProviderTaskIdentity): boolean => [...entries.values()].some((entry) =>
+    entry.parentTaskId === identity.taskId
+    && entry.sessionId === identity.sessionId
+    && (entry.phase === 'active' || entry.awaitingChildren === true));
 
   const getSnapshot = (): ClaudeProviderActivitySnapshot => {
     const activeCount = activeEntries().filter((entry) => entry.observed).length;
@@ -356,7 +383,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     completeQueryObservation(ownerScope: object): void {
       // A final native result closes observation, but physical custody remains until process exit.
       const owner = ownerObservations.get(ownerScope);
-      if (owner?.kind !== 'query' || !owner.observed || activeEntries(ownerScope).length > 0) return;
+      if (owner?.kind !== 'query' || !owner.observed || unsettledEntries(ownerScope).length > 0) return;
       const previous = getSnapshot();
       ownerObservations.set(ownerScope, { kind: 'completed-query' });
       notifyIfChanged(previous);
@@ -419,6 +446,8 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
         const current = entries.get(key);
         if (current?.phase === 'active') {
           if (current.ownerScope !== undefined && current.ownerScope !== ownerScope) return false;
+          // Only a completed stop can be interim; a failed or stopped Agent never wakes.
+          const awaitsChildren = activity.terminalStatus === 'completed' && hasLiveChild(activity);
           entries.set(key, {
             sessionId: activity.sessionId,
             taskId: activity.taskId,
@@ -426,6 +455,10 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
             observed: false,
             backgroundConfirmed: true,
             ...(current.ownerScope ? { requiresOwnerConfirmation: true as const } : {}),
+            ...(awaitsChildren
+              ? { awaitingChildren: true as const, ...(current.ownerScope ? { ownerScope: current.ownerScope } : {}) }
+              : {}),
+            ...withParent(current.parentTaskId),
           });
         } else {
           if (!current) {
@@ -443,6 +476,24 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
       } else if (activity.type === 'progress') {
         if (activity.confirmsActivity === false) return false;
         const current = entries.get(key);
+        if (
+          current?.phase === 'terminal_before_confirmation'
+          && current.awaitingChildren === true
+          && activity.source === 'system-task-progress'
+          && (current.ownerScope === undefined || current.ownerScope === ownerScope)
+        ) {
+          entries.set(key, {
+            sessionId: current.sessionId,
+            taskId: current.taskId,
+            phase: 'active',
+            observed: true,
+            backgroundConfirmed: true,
+            ...(current.ownerScope ? { ownerScope: current.ownerScope } : {}),
+            ...withParent(current.parentTaskId),
+          });
+          notifyIfChanged(previous);
+          return true;
+        }
         if (current?.phase !== 'active') return false;
         if (current.ownerScope !== undefined && current.ownerScope !== ownerScope) return false;
         if (current.observed && (ownerScope === undefined || current.ownerScope !== undefined)) return false;
@@ -453,11 +504,16 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
         if (ownerScope === undefined && (current?.ownerScope !== undefined || current?.requiresOwnerConfirmation)) return false;
         if (current?.phase === 'active' && ownerScope !== undefined && current.ownerScope !== undefined
           && current.ownerScope !== ownerScope && activity.admission !== 'resume' && activity.admission !== 'known-resume') return false;
+        // Hook and typed launches race; only the typed row carries the owning Agent.
+        const parentLink = withParent(current?.parentTaskId ?? activity.parentTaskId);
         if (current?.phase === 'active' && current.observed) {
           const confirmsOwner = ownerScope !== undefined && (current.ownerScope === undefined
             || activity.admission === 'resume' || activity.admission === 'known-resume');
-          if (!confirmsOwner || current.ownerScope === ownerScope) return false;
-          entries.set(key, { ...current, ownerScope });
+          if (!confirmsOwner || current.ownerScope === ownerScope) {
+            if (parentLink.parentTaskId !== current.parentTaskId) entries.set(key, { ...current, ...parentLink });
+            return false;
+          }
+          entries.set(key, { ...current, ...parentLink, ownerScope });
           return true;
         }
         if (current?.phase === 'terminal_before_confirmation' && activity.admission !== 'resume' && activity.admission !== 'known-resume') {
@@ -472,6 +528,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
           observed: activity.confirmsActivity !== false,
           backgroundConfirmed: true,
           ...(ownerScope ? { ownerScope } : current?.ownerScope ? { ownerScope: current.ownerScope } : {}),
+          ...parentLink,
         });
       }
       notifyIfChanged(previous);
@@ -486,6 +543,10 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     },
     hasActiveProviderTasks(ownerScope?: object): boolean {
       return activeEntries(ownerScope).length > 0;
+    },
+    /** Active tasks plus Agents awaiting their own children: the query must keep observing them. */
+    hasUnsettledProviderTasks(ownerScope?: object): boolean {
+      return unsettledEntries(ownerScope).length > 0;
     },
     hasProviderTask(identity: ClaudeProviderTaskIdentity): boolean {
       return entries.get(keyOf(identity))?.phase === 'active';
@@ -515,6 +576,12 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
       const previous = getSnapshot();
       if (ownerScope !== undefined) ownerObservations.delete(ownerScope);
       for (const [key, entry] of entries) {
+        if (entry.awaitingChildren === true && (ownerScope === undefined || entry.ownerScope === ownerScope)) {
+          // A stopped provider cannot wake an Agent that was waiting on its children.
+          const { awaitingChildren: _released, ownerScope: _owner, ...settled } = entry;
+          entries.set(key, settled);
+          continue;
+        }
         if (entry.phase !== 'active') continue;
         if (ownerScope !== undefined && entry.ownerScope !== ownerScope) continue;
         entries.set(key, {

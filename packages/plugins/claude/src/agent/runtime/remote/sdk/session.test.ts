@@ -3154,6 +3154,54 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
+  it('keeps reading an Agent that stopped to wait on its own background shell until it settles', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+    });
+    const runtime = expectRuntimeEnvelope(createClaudeAgentSdkTurnOperations({
+      ctx,
+      directory: '/tmp/claude-project',
+      launchEnv: {},
+      permissionMode: 'default',
+      happierSessionId: 'happy-session-1',
+      publishSdkMessages: true,
+    })).operations;
+    const runtimeActivityEvents: AgentSessionRuntimeEvent[] = [];
+    runtime.subscribeCanonicalAgentSessionEvents((event) => runtimeActivityEvents.push(event));
+    const lastSnapshot = () => runtimeActivityEvents.filter((event) => event.kind === 'runtime-activity-snapshot').at(-1);
+    const row = (fields: Record<string, unknown>) => exec.emit({
+      type: 'system', session_id: 'claude-provider-session-1', ...fields,
+    });
+
+    try {
+      runtime.beginTurnLifecycle();
+      await runtime.sendTurnPrompt('launch a background agent');
+      await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledTimes(1));
+
+      // Claude Code 2.1.302: the Agent reports `completed` when it stops to wait on its own shell.
+      await row({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
+      await exec.emit({
+        type: 'result', subtype: 'success', is_error: false, session_id: 'claude-provider-session-1',
+        result: 'launched', num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8,
+      });
+      await expect(runtime.waitForTurnCompletion({ timeoutMs: 1_000 })).resolves.toBeUndefined();
+      await row({ subtype: 'task_started', task_id: 'bash-1', task_type: 'local_bash', is_backgrounded: true,
+        owned_by_subagent: true, parent_task_id: 'agent-1' });
+      await row({ subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'completed' } });
+      await row({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
+      await row({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+
+      await row({ subtype: 'task_progress', task_id: 'agent-1' });
+      await vi.waitFor(() => expect(lastSnapshot()).toEqual(expect.objectContaining({ state: 'active', activeCount: 1 })));
+
+      await row({ subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'completed' } });
+      await vi.waitFor(() => expect(lastSnapshot()).toEqual(expect.objectContaining({ state: 'idle', activeCount: 0 })));
+    } finally {
+      await runtime.resetOrDisposeRuntime().catch(() => undefined);
+    }
+  });
+
   it('retires only the exited SDK query while a newer query owns live background work', async () => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
