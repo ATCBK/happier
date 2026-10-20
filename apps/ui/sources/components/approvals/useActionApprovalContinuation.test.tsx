@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -79,6 +80,12 @@ async function addApprovalHome(): Promise<string> {
     });
     const home = harness.findByServerUrl('https://approval-continuation.example');
     if (!home?.token) throw new Error('Expected the saved Home credential');
+    // Account restoration performs these real bootstrap reads. A missing list
+    // is a Home-health error, not a healthy baseline for the later offline step.
+    harness.answer(serverId, '/v2/sessions', { body: V2SessionListResponseSchema.parse({
+        sessions: [], nextCursor: null, hasNext: false,
+    }) });
+    harness.answer(serverId, '/v1/machines?includeRevoked=true', { body: [] });
     connection = await restoreServerAccountForTest({
         serverUrl: home.serverUrl,
         accountId: ACCOUNT_ID,
@@ -147,6 +154,51 @@ describe('useActionApprovalContinuation', () => {
         expect(controller.signal.aborted).toBe(false);
         expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"open"');
         added.mockRestore(); removed.mockRestore();
+    });
+
+    it('continues an approved Action after both its requesting view and deciding view unmount', async () => {
+        const serverId = await addApprovalHome();
+        answerRename(serverId);
+        const artifactId = await openRenameApproval(serverId, 'unmounted-approval');
+        const request = ApprovalRequestV2Schema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(artifactId)!));
+        const { useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
+        const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const requester = await renderContinuation(serverId);
+        await act(async () => requester.getCurrent().requestApproval(artifactId));
+        const decider = await renderHook(() => useApprovalDecisionHandler({ id: artifactId,
+            header: buildApprovalRequestArtifactHeaderV1(request) }, request, '', serverId));
+        let releaseApproved!: () => void;
+        const approvedReply = new Promise<void>(resolve => { releaseApproved = resolve; });
+        let approvedWritten = false;
+        const path = `/v1/artifacts/${artifactId}`;
+        // Home HTTP is the boundary: commit the real CAS, then delay only its acknowledgement.
+        harness.answer(serverId, `POST ${path}`, { select: async input => {
+            const wire = input && typeof input === 'object' && 'body' in input ? input.body : null;
+            const content = typeof wire === 'string' ? decodePlainArtifactStoredContent(wire) : null;
+            const body = content && typeof content === 'object' && 'body' in content ? content.body : null;
+            const update = ApprovalRequestV2Schema.safeParse(typeof body === 'string' ? JSON.parse(body) : null);
+            const pendingResponse = harness.artifacts(serverId).handle(path, { method: 'POST', body: JSON.stringify(input) });
+            if (!pendingResponse) throw new Error('Approval Artifact update route unavailable');
+            const response = await pendingResponse;
+            const responseBody = await response.json();
+            if (update.success && update.data.status === 'approved') {
+                approvedWritten = true;
+                await approvedReply;
+            }
+            return { status: response.status, body: responseBody };
+        } });
+        let deciding: Promise<boolean> | undefined;
+        try {
+            act(() => { deciding = decider.getCurrent()('approve'); });
+            await waitForHomeGovernance(() => expect(approvedWritten).toBe(true));
+            expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"approved"');
+            await requester.unmount();
+            await decider.unmount();
+            releaseApproved();
+            await expect(deciding).resolves.toBe(true);
+            expect(harness.artifacts(serverId).readPlainBody(artifactId)).toContain('"status":"executed"');
+            expect(harness.requestsFor(TEAM_UPDATE_PATH).map(entry => entry.input)).toContainEqual({ v: 1, teamId: 'team-1', name: 'Renamed' });
+        } finally { releaseApproved(); await deciding; }
     });
 
     it.each([
@@ -307,7 +359,10 @@ describe('useActionApprovalContinuation', () => {
         const screen = await renderScreen(<ApprovalDetailScreen artifactId={artifactId} serverId={serverId} />);
         let decision!: Promise<void>;
         try {
-            await waitForHomeGovernance(() => expect(screen.findAllByType(ApprovalDecisionBar)).toHaveLength(1));
+            await waitForHomeGovernance(() => {
+                expect(screen.findAllByType(ApprovalDecisionBar)).toHaveLength(1);
+                expect(screen.findAllByType(ApprovalDecisionBar)[0]?.props.approve?.disabled).toBe(false);
+            });
             await act(async () => { decision = screen.pressByTestIdAsync('approvals.approve'); });
             await waitForHomeGovernance(() => expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(1));
             await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
