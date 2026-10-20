@@ -182,6 +182,14 @@ Agent plugins, which also supply the copyable installation guidance.
 
 ## Installer state home
 
+In current 0.3 development source, managed runtime custody accepts filesystem
+aliases of the same install parent, including symlinked homes, Windows junctions
+and macOS `/var` → `/private/var` aliases. The shared version-root identity owner
+resolves parent aliases before layout membership checks. `current` and `previous`
+still require their canonical `.version` markers, and the selected physical root
+must remain an exact immutable child of the physical `versions` directory. A
+version symlink that escapes that directory is rejected.
+
 Both shell installers resolve the data home from an explicit `HAPPIER_HOME_DIR`,
 otherwise following `HAPPIER_INSTALL_DIR` or the default `.happier` directory.
 In current development source, the POSIX installer uses that same resolved home
