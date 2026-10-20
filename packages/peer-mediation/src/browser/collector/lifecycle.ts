@@ -361,8 +361,8 @@ export const INJECTED_LIFECYCLE_FOOTER = `
 
   var automationModule = {
     teardown: function () {
-      automationTimers.forEach(function (timer) {
-        clearTimeout(timer);
+      automationTimers.slice().forEach(function (wait) {
+        wait.cancel();
       });
       automationTimers = [];
     },

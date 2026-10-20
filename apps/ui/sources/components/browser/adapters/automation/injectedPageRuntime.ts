@@ -232,32 +232,28 @@ export function createInjectedPageAutomationOwner(
         supportedActions: input.supportedActions,
         executeAction(request: BrowserAutomationRequest, context: Parameters<BrowserAutomationOwner['executeAction']>[1]) {
             const startedAtMs = input.nowMs();
+            const payload = { ...request.payload, deadlineMs: context.deadlineMs ?? startedAtMs + request.timeoutMs };
             const command = buildInjectedBrowserAutomationCommandMessage({
                 ...expected,
                 commandId: request.automationRequestId,
                 commandName: request.actionKind,
-                payload: request.payload ?? {},
+                payload,
             });
             const script = buildInjectedBrowserAutomationCommandScript({
                 ...expected,
                 commandId: request.automationRequestId,
                 commandName: request.actionKind,
-                payload: request.payload ?? {},
+                payload,
             });
 
             return new Promise<BrowserAutomationResult>((resolve) => {
                 let settled = false;
                 let unsubscribe: (() => void) | null = null;
-                let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
                 const settle = (result: BrowserAutomationResult): void => {
                     if (settled) return;
                     settled = true;
                     context.signal.removeEventListener('abort', handleAbort);
-                    if (timeoutId) {
-                        clearTimeout(timeoutId);
-                        timeoutId = null;
-                    }
                     unsubscribe?.();
                     unsubscribe = null;
                     resolve({
@@ -272,10 +268,21 @@ export function createInjectedPageAutomationOwner(
                         status: 'canceled',
                         errorCode: readAbortReason(context.signal),
                     });
+                    // Only waitFor retains page timers. Its nonce-bound command retires that exact
+                    // wait; physical input still has the existing uncertain-cancellation contract.
+                    if (request.actionKind === 'waitFor') {
+                        const cancel = { ...expected, commandId: request.automationRequestId, commandName: 'cancel' };
+                        try {
+                            void Promise.resolve(input.transport.sendCommand(
+                                buildInjectedBrowserAutomationCommandMessage(cancel),
+                                buildInjectedBrowserAutomationCommandScript(cancel),
+                            )).catch(() => undefined);
+                        } catch { /* A disconnected page cannot acknowledge timer cleanup. */ }
+                    }
                 };
 
                 if (context.signal.aborted) {
-                    handleAbort();
+                    settle({ status: 'canceled', errorCode: readAbortReason(context.signal) });
                     return;
                 }
 
@@ -302,14 +309,8 @@ export function createInjectedPageAutomationOwner(
                         });
                 });
 
-                timeoutId = setTimeout(() => {
-                    settle({
-                        status: 'timed_out',
-                        errorCode: 'timed_out',
-                    });
-                }, Math.max(1, request.timeoutMs));
-
                 const sendCommand = async () => {
+                    if (settled) return;
                     await input.transport.sendCommand(command, script);
                 };
                 void sendCommand().catch((error: unknown) => {

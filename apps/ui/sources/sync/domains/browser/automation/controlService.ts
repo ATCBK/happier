@@ -55,7 +55,7 @@ export type BrowserAutomationOwner = Readonly<{
     supportedActions: readonly string[];
     executeAction: (
         request: BrowserAutomationRequest,
-        context: Readonly<{ signal: AbortSignal; onActiveTarget?: (target: BrowserActiveTargetV1) => void }>,
+        context: Readonly<{ signal: AbortSignal; deadlineMs?: number; onActiveTarget?: (target: BrowserActiveTargetV1) => void }>,
     ) => Promise<BrowserAutomationResult>;
 }>;
 
@@ -540,7 +540,7 @@ export function createBrowserAutomationControlService(
                 }
             }
 
-            owner.executeAction(request, { signal: abortController.signal, onActiveTarget: target => {
+            owner.executeAction(request, { signal: abortController.signal, deadlineMs: active.startedAtMs + request.timeoutMs, onActiveTarget: target => {
                 if (active.settled || active.interruption || abortController.signal.aborted
                     || controller.activeAutomationRequestId !== request.automationRequestId) return;
                 const parsed = BrowserActiveTargetV1Schema.safeParse(target);
