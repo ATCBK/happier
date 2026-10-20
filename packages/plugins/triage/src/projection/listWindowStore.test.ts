@@ -571,6 +571,25 @@ function createHarness(options: Readonly<{
 }
 
 describe('the mounted PRs & Issues window store', () => {
+    it('changes the displayed instance lens while keeping every configured lane acquired', async () => {
+        const harness = createHarness({ sameSourceForB: true, scanA: async (input) => ({
+            kind: 'complete', evidence: { kind: 'walkFinished' },
+            observations: [presentObservation({ entryId: input.instance.instance.sourceInstanceId,
+                title: input.instance.instance.sourceInstanceId, sourceUpdatedAtMs: 100 })],
+        }) });
+        const store = createTriageListWindowStore({ readEntries: harness.readEntries, nowMs: () => harness.clock.nowMs });
+        try {
+            await store.refresh('view');
+            const lensFor = (sourceInstanceId: string) => ({ ...TRIAGE_LIST_DEFAULT_LENS_V1,
+                filters: { ...TRIAGE_LIST_DEFAULT_LENS_V1.filters, sources: [{ source: SOURCE_A, sourceInstanceId }] } });
+            store.setLens(lensFor(INSTANCE_A));
+            expect(store.getSnapshot().window?.rows.map((row) => row.entryRef.entryId)).toEqual([INSTANCE_A]);
+            store.setLens(lensFor(INSTANCE_B));
+            expect(store.getSnapshot().window?.rows.map((row) => row.entryRef.entryId)).toEqual([INSTANCE_B]);
+            expect(store.getSnapshot().window?.lanes).toHaveLength(2);
+        } finally { store.dispose(); }
+    });
+
     it('assembles one ordered bounded window from every configured source', async () => {
         const harness = createHarness();
         const store = createTriageListWindowStore({

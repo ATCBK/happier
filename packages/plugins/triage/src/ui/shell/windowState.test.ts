@@ -39,6 +39,13 @@ function snapshot(overrides: Partial<TriageListWindowSnapshotV1> = {}): TriageLi
 }
 
 describe('resolveTriageListShellState', () => {
+  it('translates source failures without disclosing diagnostic codes in the notice', () => {
+    const failure = { kind: 'sources' as const, sources: [{ sourceInstanceId: INSTANCE, displayName: 'Personal tasks',
+      reason: 'Could not be reached just now.', code: 'source_unavailable' }] };
+    const notice = readTriageListFailureNotice(failure, (key, fallback) => key.endsWith('.transient') ? 'Try again later' : fallback ?? key);
+    expect(notice.description).not.toContain('source_unavailable');
+    expect(failure.sources[0]!.code).toBe('source_unavailable');
+  });
   it('keeps age-only staleness truthful without a list read warning', () => {
     const aged = snapshot({
       window: window({ lanes: [{ sourceInstanceId: INSTANCE, source: SOURCE, health: { kind: 'walkFinished' }, exhausted: true }] }),

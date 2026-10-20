@@ -30,6 +30,16 @@ function facetOf(
 }
 
 describe('the filter rail facet plan', () => {
+  it('distinguishes identically named instances and keeps retired exact constraints removable', () => {
+    const plan = planTriageFilterFacetsV1({
+      configuredSources: [configured(GITHUB, 'instance-1', 'GitHub'), configured(GITHUB, 'instance-2', 'GitHub')],
+      filters: { ...TRIAGE_LIST_NO_FILTERS_V1, sources: [{ source: GITHUB, sourceInstanceId: 'retired' }] },
+    });
+    const options = facetOf(plan, 'sources').options;
+    expect(new Set(options.map((option) => option.label)).size).toBe(3);
+    expect(options.find((option) => option.selected)?.selection.value).toEqual({ source: GITHUB, sourceInstanceId: 'retired' });
+  });
+
   it('offers configured units and an all placeholder before any source items load', () => {
     const plan = planTriageFilterFacetsV1({
       configuredSources: [

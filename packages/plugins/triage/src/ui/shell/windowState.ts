@@ -240,9 +240,7 @@ export function readTriageListFailureNotice(
   failure: TriageListShellFailureV1,
   text: TriageTextResolverV1 = ENGLISH_TEXT,
 ): TriageListFailureNoticeV1 {
-  const describe = (source: TriageListSourceFailureV1) => (
-    [resolveSourceFailureReason(text, source.reason), source.code].filter(Boolean).join(' · ')
-  );
+  const describe = (source: TriageListSourceFailureV1) => resolveSourceFailureReason(text, source.reason);
   const only = failure.sources.length === 1 ? failure.sources[0] : undefined;
   if (only !== undefined) {
     return Object.freeze({
