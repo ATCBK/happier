@@ -519,7 +519,7 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createHarness() {
+function createHarness(sessionId = 'session-1') {
   let defaultReadyCalls = 0;
   let customReadyCalls = 0;
   let cleanupCalls = 0;
@@ -535,7 +535,7 @@ function createHarness() {
   let killHandler: (() => void | Promise<void>) | null = null;
   const killHandlersBySessionId = new Map<string, () => void | Promise<void>>();
 
-  const sessionFixture = createSessionFixture('session-1');
+  const sessionFixture = createSessionFixture(sessionId);
   const session = sessionFixture.session;
   const handlers = sessionFixture.handlers;
   const runtimeMessageSubscribers = new Set<(message: unknown) => void>();
@@ -7425,6 +7425,165 @@ describe('runHostSessionRuntime', () => {
     }
     expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
     expect(contextReadyObservations).toBe(0);
+  });
+
+  it.each(['external', 'opencode', 'missing_inventory'] as const)('settles a Workflow parent from a native-open refusal only with bound mode evidence (%s)', async source => {
+    const miswired = source === 'missing_inventory';
+    const [{ createNativeAgentRuntimeSessionPlan }, fixtures, { buildPluginSessionBindingInput },
+      { PluginError }, { createTestWorkflowCoordinator, createInMemoryWorkflowCoordinatorStore }] = await Promise.all([
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit'),
+      import('@/plugins/runtime/runtimeCore/plugin/sessionLaunch'),
+      import('@happier-dev/plugin-sdk'),
+      import('@/daemon/workflows/workflowCoordinator.testkit'),
+    ]);
+    const harness = createHarness('c' + 'd'.repeat(24));
+    const credentials = { token: 'startup-refusal-fixture', encryption: null };
+    harness.opts.credentials = credentials;
+    const agentId = 'acme-startup-refusal';
+    const contributions = fixtures.createExternalContributionFixtures(agentId);
+    const failure = new PluginError({ code: 'native_agent_session_mode_unavailable', retryable: false });
+    const plan = await createNativeAgentRuntimeSessionPlan({
+      ...contributions, lease: fixtures.createLease(agentId),
+      runtime: { sessions: { open: async (_request, context) => {
+        if (source === 'opencode') {
+          const [{ createOpenCodeServerRuntimeAssembly }, { createContextFixture }] = await Promise.all([
+            import('../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly'),
+            import('../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly.managedServices.testkit'),
+          ]);
+          const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213',
+            managedServerRequest: async input => {
+              const path = input.pathAndQuery.split('?')[0];
+              const body = path === '/session' ? { id: 'native-refusal-session' }
+                : path === '/agent' ? [{ name: 'build', mode: 'primary' }] : {};
+              return { ok: true, status: 200, headers: { 'content-type': 'application/json' },
+                body: new Response(JSON.stringify(body)).body };
+            } });
+          return (await createOpenCodeServerRuntimeAssembly({ ctx, directory: _request.cwd,
+            happierSessionId: _request.sessionId, request: _request, endpoint: { mode: 'managed-spawn' },
+            modes: context.session.services.modes, models: context.session.services.models })).runtime;
+        }
+        if (!miswired) context.session.services.modes.bind({
+          read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+          subscribe: () => ({ dispose() {} }),
+        });
+        // The external plugin applies configuration during open, before returning a Session.
+        throw failure;
+      } } },
+      createSessionHostServiceOwners: fixtures.createSessionHostServiceOwners,
+      sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/repo',
+        backendTarget: { kind: 'backend', backendId: agentId }, sessionModeId: 'default' }),
+    });
+    if (!plan.config.createSessionRuntime) throw new Error('Native Session factory missing');
+    setSessionRuntimeFactory(harness.config, plan.config.createSessionRuntime);
+    const startupFailed = createDeferred<void>();
+    const mutationSink = harness.session.enqueueSessionTurnMutation;
+    harness.session.enqueueSessionTurnMutation = vi.fn(async (input: unknown) => {
+      const mutation = SessionTurnMutationV1Schema.parse(input);
+      await mutationSink(input);
+      if (mutation.action === 'fail') {
+        expect(mutation.issue.code).toBe(miswired ? 'agent_session_error' : failure.code);
+        startupFailed.resolve();
+      }
+    });
+    let stop: (() => Promise<void>) | undefined;
+    harness.config.onRuntimeStopReady = value => { stop = value; };
+    const blocked = new Set<string>();
+    const delivered: string[] = [];
+    const custody = new ApiSessionClient(credentials.token, createPlainSessionFixture({ id: harness.session.sessionId }), {
+      metadataAuthority: { kind: 'owner', credentials },
+      transport: { serverId: 'startup-refusal-home', serverUrl: 'https://startup-refusal.example',
+        createSessionSocketTransport: () => { throw new Error('Socket supplied by the transport fixture'); } },
+    });
+    harness.session.hasPendingProviderInput = custody.hasPendingProviderInput.bind(custody);
+    harness.session.observeProviderInputSettlement = custody.observeProviderInputSettlement.bind(custody);
+    // Home is the boundary. Real native open, host failure service, Pending
+    // settlement/transport, exact-input reader, step executor and coordinator remain composed.
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, data) => {
+      const match = new URL(url).pathname.match(/\/pending\/([^/]+)\/delivery\/block$/);
+      if (!match || data.reason !== 'provider_rejected_before_acceptance') throw new Error(`Unexpected refusal write: ${url}`);
+      blocked.add(decodeURIComponent(match[1]!));
+      return { status: 200, data: { ok: true } };
+    });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      } };
+      if (url.endsWith('/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      const reply = new URL(url).pathname.match(/\/messages\/by-local-id\/([^/]+)\/reply$/);
+      if (reply) return { status: 200, data: blocked.has(decodeURIComponent(reply[1]!))
+        ? { v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing', outcome: { kind: 'failed' } } }
+        : { v: 1, status: 'none' } };
+      if (url.includes('/messages/by-local-id/')) throw Object.assign(new Error('Message not found'), {
+        isAxiosError: true, response: { status: 404, data: { error: 'Message not found' } },
+      });
+      if (url.endsWith(`/v2/sessions/${harness.session.sessionId}`)) return { status: 200, data: { session:
+        createSessionRecordFixture({ id: harness.session.sessionId, active: true, encryptionMode: 'plain',
+          machineId: 'machine-1', metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo' }) }) } };
+      if (url.endsWith('/pending')) return { status: 200, data: { pending: [] } };
+      if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId: harness.session.sessionId, updatedAt: 1, turns: [] } };
+      throw new Error(`Unexpected refusal read: ${url}`);
+    });
+    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    let finished = false;
+    const result = running.then(() => { finished = true; }, error => { finished = true; return error; });
+    try {
+      await Promise.race([startupFailed.promise, running]);
+      if (miswired) {
+        expect(await result).toMatchObject({ code: failure.code, retryable: false });
+        expect(harness.session.close).toHaveBeenCalledOnce();
+        expect(blocked.size).toBe(0);
+        return;
+      }
+      expect(finished).toBe(false);
+      const store = createInMemoryWorkflowCoordinatorStore();
+      const executionTarget = { kind: 'session' as const };
+      const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.agent-plugin', localId: agentId } };
+      const executeStep = createProductionWorkflowSessionStepExecutor({ credentials, machineId: 'machine-1',
+        machineAdmissionTransport: async request => {
+          delivered.push(request.localId);
+          // Model the Pending transport's materialization receipt, then let the
+          // real SessionClient own the terminal durable write and custody release.
+          const materialization = custody as unknown as {
+            materializationRuntime: { markPendingQueueMaterializedLocalId(localId: string): void };
+          };
+          materialization.materializationRuntime.markPendingQueueMaterializedLocalId(request.localId);
+          harness.queue.pushIsolate({ text: 'Must not execute', localId: request.localId }, { permissionMode: 'default' });
+          await vi.waitFor(() => expect(blocked.has(request.localId)).toBe(true));
+          return { status: 'accepted', localId: request.localId };
+        },
+        createFreshConversation: async () => ({ sessionId: harness.session.sessionId, machineId: 'machine-1', directory: '/repo' }),
+        resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+        resolveExistingSessionConversation: async () => null,
+      });
+      const coordinator = createTestWorkflowCoordinator({ store, executeStep,
+        resolveWorkspace: async () => ({ ok: true, workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } }),
+        isAcceptedAuthorizationCurrent: async () => true,
+      });
+      const run = { runId: 'startup-refused-workflow', inputs: {}, executionTarget,
+        authorization: { principal: { kind: 'host' as const }, admittedPermissionCeiling: 'default' as const },
+        definition: { version: 1 as const, inputs: [], defaults: { agentTarget }, blocks: [{
+          kind: 'step' as const, id: 'work', document: { text: 'Must not execute', references: [], attachments: [] },
+          input: [], result: { kind: 'text' as const }, execution: { conversation: { kind: 'fresh' as const } },
+        }] },
+      };
+      expect(await coordinator.run(run)).toMatchObject({ state: 'interrupted', reason: 'session_input_failed' });
+      expect(store.list()).toContainEqual(expect.objectContaining({ blockId: 'work', lifecycle: 'failed',
+        execution: expect.objectContaining({ sessionId: harness.session.sessionId, localInputId: delivered[0] }) }));
+      expect(delivered).toHaveLength(1);
+      expect(custody.hasPendingProviderInput(delivered[0])).toBe(false);
+      expect(await coordinator.run(run)).toMatchObject({ state: 'interrupted' });
+      expect(delivered).toHaveLength(1);
+      expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+      expect(harness.metrics.defaultReadyCalls).toBe(0);
+      expect(harness.metrics.onAfterStartCalls).toBe(0);
+    } finally {
+      if (!finished) await stop?.();
+      await result;
+      await custody.close();
+      post.mockRestore(); get.mockRestore();
+    }
   });
 
   it.each(['metadata', 'home-http'] as const)('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed (%s)', async source => {
