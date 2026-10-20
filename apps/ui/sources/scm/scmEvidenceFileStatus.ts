@@ -34,12 +34,11 @@ function countUnifiedDiffStats(diff: string | null | undefined): Pick<ScmFileSta
  * evidence's own statistics, then its diff; with neither the row says its counts are unknown
  * (`isComplete: false`) instead of claiming an empty change.
  */
-export function buildScmFileStatusFromChangeEvidence(file: FileChangeEvidence): ScmFileStatus {
+export function buildScmFileStatusFromChangeEvidence(file: FileChangeEvidence, diff = deriveFileChangeDiff(file)): ScmFileStatus {
     const fullPath = file.filePath;
     const segments = fullPath.split('/');
     const fileName = segments[segments.length - 1] || fullPath;
     const filePath = segments.slice(0, -1).join('/');
-    const diff = deriveFileChangeDiff(file);
     const stats = countUnifiedDiffStats(diff);
     return {
         fileName,
