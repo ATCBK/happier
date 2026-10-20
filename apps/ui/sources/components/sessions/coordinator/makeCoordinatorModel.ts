@@ -6,8 +6,11 @@ import {
     type SessionCoordinatorRuleCensusV1,
 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorSetupV1';
 import type { FollowRulePreviewResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
-import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { resolveCoordinatorKeepDefault } from '@happier-dev/protocol/account/settings/accountSettings';
+import { workspaceRefResolutionContextV1 } from '@/sync/domains/workspaces/workspaceRefs';
 
 type RuleSuggestion =
     SessionCoordinatorEnableInputV1['ruleSuggestions'][number];
@@ -20,6 +23,7 @@ export type MakeCoordinatorRuleDraft = Readonly<{
 }>;
 
 export type MakeCoordinatorDraft = Readonly<{
+    project: QualifiedProjectKeyV1 | null;
     roleId: string;
     keep: MakeCoordinatorKeep;
     /** True while the place is still the one the Settings default resolved to (the dialog says "From your setting"). */
@@ -39,23 +43,32 @@ export function buildMakeCoordinatorDraft(
     input: Readonly<{
         serverId: string;
         sessionId: string;
-        project: QualifiedProjectKeyV1 | null;
+        ownerMetadata: Readonly<Record<string, unknown>> | null;
+        workspaceRefs?: readonly WorkspaceRefV1[];
         settings: SessionCoordinatorCreationDefaultsV1;
         ruleIds: Readonly<{ project: string; home: string }>;
         ruleCensus: SessionCoordinatorRuleCensusV1 | null;
     }>,
 ): MakeCoordinatorDraft {
-    const scope = input.project ? 'project' : 'home';
+    // Enumerate accepted Project anchors, but leave membership (including path,
+    // checkout identity, ambiguity and Home aliases) to the filter's one owner.
+    const candidates = typeof input.ownerMetadata?.projectId === 'string'
+        ? [{ serverId: input.serverId, projectKey: input.ownerMetadata.projectId }]
+        : (input.workspaceRefs ?? []).map(projectWorkspaceRefV1);
+    const matched = candidates.find(project => matchSessionProjectFilterV1(input.ownerMetadata,
+        input.serverId, project, input.workspaceRefs, workspaceRefResolutionContextV1) === 'match');
+    const project = matched ? { serverId: input.serverId, projectKey: matched.projectKey } : null;
+    const scope = project ? 'project' : 'home';
     // Both suggestions are prepared so the person can turn either on; the Settings switches decide which appear.
     const setup = prepareSessionCoordinatorSetupV1({
         serverId: input.serverId,
         sessionId: input.sessionId,
         scope,
-        project: input.project,
+        project,
         settings: {
             ...input.settings,
             coordinationCoordinatorSuggestHomeRule: true,
-            coordinationCoordinatorSuggestProjectRule: input.project !== null,
+            coordinationCoordinatorSuggestProjectRule: project !== null,
         },
         ruleIds: input.ruleIds,
         ruleCensus: input.ruleCensus,
@@ -75,6 +88,7 @@ export function buildMakeCoordinatorDraft(
         },
     );
     return {
+        project,
         roleId: setup.roleId,
         keep: setup.keep,
         keepFromSetting: true,

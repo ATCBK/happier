@@ -7,6 +7,7 @@ import type { SessionCoordinatorRuleCensusV1 } from '@happier-dev/protocol/sessi
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { resolveCoordinatorKeepDefault } from '@happier-dev/protocol/account/settings/accountSettings';
 
 import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleMark } from '@/components/roles/catalog/useRoleMark';
@@ -33,6 +34,7 @@ import { leaveProjectToFollowRule, undoFollowRuleProjectExclusion } from '@/sync
 import { readSessionFollowRules } from '@/sync/api/session/sessionFollowRulesApi';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useSession, useSessionDisplayNameProjections, useSetting } from '@/sync/domains/state/storage';
+import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
 import { sessionCoordinatorActions } from '@/sync/ops/sessions/sessionCoordinatorActions';
 import { t } from '@/text';
 import { inferProjectTitleFromPath } from '@/utils/path/browseSegments';
@@ -83,20 +85,34 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
         coordinationCoordinatorSuggestHomeRule: useSetting('coordinationCoordinatorSuggestHomeRule'),
     };
     const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
-    const projectId = typeof ownerMetadata?.projectId === 'string' && ownerMetadata.projectId.trim() ? ownerMetadata.projectId : null;
-    const project = React.useMemo<QualifiedProjectKeyV1 | null>(() => (projectId ? { serverId, projectKey: projectId } : null), [projectId, serverId]);
+    const workspaceRefs = useProjectAccountWorkspaceRefs(true);
+    const ruleIds = React.useRef({ project: randomUUID(), home: randomUUID() }).current;
+    const initialSettings = React.useRef(settings).current;
+    const preparedDraft = React.useMemo(() => buildMakeCoordinatorDraft({ serverId, sessionId, ownerMetadata,
+        workspaceRefs, settings: initialSettings, ruleIds, ruleCensus: null }),
+    [serverId, sessionId, ownerMetadata, workspaceRefs, initialSettings, ruleIds]);
+    const [draft, setDraft] = React.useState<MakeCoordinatorDraft>(preparedDraft);
+    const project = draft.project;
     // A name only from a readable path; never an id or a hash in its place.
     const projectName = project && typeof ownerMetadata?.path === 'string' && ownerMetadata.path.trim()
         ? inferProjectTitleFromPath(ownerMetadata.path) : null;
     const projectLabel = projectName ?? t('sessionCoordinator.make.thisProject');
     const currentManagerSessionId = readSessionManagerSessionIdV1(session);
-    const ruleIds = React.useRef({ project: randomUUID(), home: randomUUID() }).current;
     const name = session ? getSessionName(session, serverId) : '';
 
-    // The dialog opens complete. Only Managed by waits for the Home's rule census, in its own row, and takes
-    // the suggestion when it arrives unless the person already chose.
-    const [draft, setDraft] = React.useState<MakeCoordinatorDraft>(() =>
-        buildMakeCoordinatorDraft({ serverId, sessionId, project, settings, ruleIds, ruleCensus: null }));
+    // Capture setup choices for this open. Late Project hydration can supply the
+    // initial suggestion; a refresh cannot broaden a chosen Project into Home.
+    const rulesChosen = React.useRef(false);
+    React.useEffect(() => {
+        setDraft(current => {
+            if (current.project || !preparedDraft.project) return current;
+            const rules = rulesChosen.current ? preparedDraft.rules.map(rule => ({ ...rule,
+                enabled: current.rules.find(previous => previous.scope === rule.scope)?.enabled ?? false })) : preparedDraft.rules;
+            const homeWide = rules.some(rule => rule.scope === 'home' && rule.enabled);
+            return { ...current, project: preparedDraft.project, rules,
+                keep: current.keepFromSetting ? resolveCoordinatorKeepDefault(current.keepPreference, homeWide ? 'home' : 'project') : current.keep };
+        });
+    }, [preparedDraft]);
     const [census, setCensus] = React.useState<Census>('loading');
     const managedByChosen = React.useRef(false);
     React.useEffect(() => {
@@ -106,7 +122,7 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
             const next = snapshot.status === 'ready' ? { serverId, coverage: 'complete' as const, rules: snapshot.rules } : null;
             setCensus(next);
             if (managedByChosen.current) return;
-            const suggested = buildMakeCoordinatorDraft({ serverId, sessionId, project, settings, ruleIds, ruleCensus: next }).managedBySessionId;
+            const suggested = buildMakeCoordinatorDraft({ serverId, sessionId, ownerMetadata, workspaceRefs, settings, ruleIds, ruleCensus: next }).managedBySessionId;
             setDraft((current) => (current.managedBySessionId === suggested ? current : { ...current, managedBySessionId: suggested }));
         });
         return () => controller.abort();
@@ -205,7 +221,7 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
                         rightElement={<Switch
                             accessibilityLabel={ruleTitle(rule.scope)}
                             value={rule.enabled}
-                            onValueChange={(enabled) => setDraft(toggleMakeCoordinatorRule(draft, rule.scope, enabled))}
+                            onValueChange={(enabled) => { rulesChosen.current = true; setDraft(toggleMakeCoordinatorRule(draft, rule.scope, enabled)); }}
                         />}
                     />
                 ))}

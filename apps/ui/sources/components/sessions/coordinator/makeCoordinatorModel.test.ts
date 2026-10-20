@@ -18,6 +18,9 @@ const SETTINGS = {
     coordinationCoordinatorSuggestHomeRule: true,
 };
 
+const CHECKOUT = { id: 'checkout', projectKey: PROJECT.projectKey, serverId: SERVER,
+    machineId: 'machine', rootPath: '/work/payments', label: null, createdAtMs: 1, lastOpenedAtMs: null };
+
 function homeWideRule(
     ruleId: string,
     receiverSessionId: string,
@@ -45,7 +48,7 @@ describe('Make coordinator draft', () => {
         const draft = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            project: PROJECT,
+            ownerMetadata: { projectId: PROJECT.projectKey },
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: null,
@@ -62,7 +65,7 @@ describe('Make coordinator draft', () => {
         const draft = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            project: null,
+            ownerMetadata: null,
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: null,
@@ -77,7 +80,7 @@ describe('Make coordinator draft', () => {
         const one = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            project: PROJECT,
+            ownerMetadata: { projectId: PROJECT.projectKey },
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: {
@@ -90,7 +93,7 @@ describe('Make coordinator draft', () => {
         const two = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            project: PROJECT,
+            ownerMetadata: { projectId: PROJECT.projectKey },
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: {
@@ -104,6 +107,19 @@ describe('Make coordinator draft', () => {
         });
         expect(two.managedBySessionId).toBeNull();
     });
+
+    it('offers the accepted Project for path-only membership, and withholds ambiguous or unreadable membership', () => {
+        const input = { serverId: SERVER, sessionId: 'path-only',
+            ownerMetadata: { machineId: CHECKOUT.machineId, path: CHECKOUT.rootPath }, workspaceRefs: [CHECKOUT],
+            settings: SETTINGS, ruleIds: { project: 'project-rule', home: 'home-rule' }, ruleCensus: null };
+        const draft = buildMakeCoordinatorDraft(input);
+        expect(draft.rules[0]).toMatchObject({ scope: 'project', enabled: true,
+            suggestion: { ruleDefinition: { filter: { projects: { include: [PROJECT] } } } } });
+        expect(draft.project).toEqual(PROJECT);
+        expect(buildMakeCoordinatorDraft({ ...input, workspaceRefs: undefined }).project).toBeNull();
+        expect(buildMakeCoordinatorDraft({ ...input, ownerMetadata: null }).project).toBeNull();
+        expect(buildMakeCoordinatorDraft({ ...input, workspaceRefs: [CHECKOUT, { ...CHECKOUT, id: 'other', projectKey: 'other' }] }).project).toBeNull();
+    });
 });
 
 describe('Make coordinator enable input', () => {
@@ -111,7 +127,7 @@ describe('Make coordinator enable input', () => {
         const draft = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            project: PROJECT,
+            ownerMetadata: { projectId: PROJECT.projectKey },
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: {
