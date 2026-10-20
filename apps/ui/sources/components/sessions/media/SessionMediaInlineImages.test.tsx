@@ -30,7 +30,7 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+    return createModalModuleMock({ confirmResult: true }).module;
 });
 
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
@@ -255,6 +255,8 @@ describe('SessionMediaInlineImages', () => {
             />,
         );
 
+        await vi.waitFor(() => expect(screen.findByTestId('message-session-media-inline-image-preview:.happier/uploads/generated/session-1/message-1/first.png')).not.toBeNull());
+        vi.mocked(Modal.show).mockClear();
         screen.pressByTestId('message-session-media-inline-image:.happier/uploads/generated/session-1/message-1/first.png');
 
         expect(Modal.show).toHaveBeenCalledTimes(1);

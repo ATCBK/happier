@@ -10,6 +10,7 @@ import { createSessionFileNativeTransferBoundary } from '@/components/sessions/f
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
 installSessionAttachmentCommonModuleMocks({
+    modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module,
     reactNative: installReactNativeWebMock({ Platform: { OS: 'ios', select: (values: { ios?: unknown; default?: unknown }) => values.ios ?? values.default } }),
     unistyles: installUnistylesMock({
         theme: { colors: { textSecondary: '#bbb', divider: '#222', surfaceHighest: '#111' } },
