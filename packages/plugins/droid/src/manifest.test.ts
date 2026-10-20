@@ -34,11 +34,13 @@ describe('Factory Droid plugin manifest', () => {
 
   it('projects capabilities from the agent definition through the canonical owner', () => {
     const [agent] = PLUGIN_MANIFEST.contributes.agents;
+    const { skills, ...coreCapabilities } = agent.capabilities;
     // The manifest must equal the canonical projection of its own definition:
     // hand-copied capability blocks (and a session-primary `executionRuns`
     // restatement) drift from the definition and fail manifest ingest.
-    expect(agent.capabilities).toEqual(
+    expect(coreCapabilities).toEqual(
       projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+        surfaces: ['externalSessions'],
         sessions: {
           open: ['create', 'resume'],
           delivery: ['newTurn', 'followUp'],
@@ -48,10 +50,13 @@ describe('Factory Droid plugin manifest', () => {
         },
       }),
     );
+    expect(skills).toMatchObject({
+      delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+    });
     // Terminal hosting is derived from `localControl.attachStrategy`, and tool
     // delivery from the definition's tool facts — never restated by hand.
     expect(agent.capabilities).toMatchObject({
-      surfaces: ['terminal'],
+      surfaces: expect.arrayContaining(['terminal', 'externalSessions']),
       tools: { delivery: 'native_mcp' },
     });
     expect(agent.capabilities).not.toHaveProperty('executionRuns');

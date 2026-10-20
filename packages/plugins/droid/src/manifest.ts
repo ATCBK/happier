@@ -4,6 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { DROID_ACP_COMMAND } from './agent/preflight.js';
 import { DROID_TERMINAL_CONTRIBUTION } from './agent/terminal/contribution.js';
+import { droidExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 import { DROID_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 export const DROID_PLUGIN = definePlugin({
@@ -53,6 +54,7 @@ export const DROID_PLUGIN = definePlugin({
       // The host keeps Session V1 canonical and exposes the separately
       // versioned detached Run context through the same declarative ACP core.
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+        surfaces: ['externalSessions'],
         skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
           nativeRoots: { user: [['.factory', 'skills'], ['.agents', 'skills'], ['.agent', 'skills']], project: [['.factory', 'skills'], ['.agents', 'skills'], ['.agent', 'skills']] } },
         sessions: {
@@ -63,8 +65,21 @@ export const DROID_PLUGIN = definePlugin({
           executionRunContext: { versions: [1] },
         },
       }),
+      surfaces: { externalSession: {
+        externalLinkedTakeover: { writerSafety: 'unsupported' },
+        sources: [{ sourceKind: 'droidFactoryDir', contentSearch: true,
+          schema: { fields: [
+            { kind: 'literal', name: 'kind', value: 'droidFactoryDir' },
+            { kind: 'string', name: 'factoryDir', min: 1, max: 10_000, nullish: true },
+            { kind: 'string', name: 'sessionFilePath', min: 1, max: 10_000, nullish: true },
+          ] },
+          key: { segments: [{ kind: 'literal', value: 'droidFactoryDir' }, { kind: 'field', field: 'factoryDir' }] },
+          instances: [{ kind: 'default', constants: {} }],
+        }],
+      } },
     } satisfies PluginHostOwnedAgentDeclaration,
     terminal: DROID_TERMINAL_CONTRIBUTION,
+    externalSessions: droidExternalSessionsContribution,
   } },
   systemTools: { 'droid-cli': { title: 'Factory Droid CLI', executableNames: ['droid'] } },
   ui: { translations: DROID_UI_TRANSLATION_BUNDLES },
