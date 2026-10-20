@@ -47,6 +47,14 @@ export type WorkspaceLayoutActionInputById = {
         anchorSource?: 'file' | 'diff' | undefined;
         view?: 'view' | 'changes' | 'edit' | undefined;
         blame?: boolean | undefined;
+        changesScope?: {
+            kind: 'turn';
+            turnId: string;
+        } | {
+            kind: 'session';
+        } | {
+            kind: 'workingTree';
+        } | undefined;
     };
     readonly "workspace.tabs.list": Record<string, never>;
     readonly "workspace.tabs.open": {
@@ -96,6 +104,14 @@ export type WorkspaceLayoutActionInputById = {
             anchorSource?: 'file' | 'diff' | undefined;
             view?: 'view' | 'changes' | 'edit' | undefined;
             blame?: boolean | undefined;
+            changesScope?: {
+                kind: 'turn';
+                turnId: string;
+            } | {
+                kind: 'session';
+            } | {
+                kind: 'workingTree';
+            } | undefined;
         } | undefined;
         find?: {
             query: string;

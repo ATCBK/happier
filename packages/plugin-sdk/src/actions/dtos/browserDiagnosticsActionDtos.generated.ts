@@ -143,6 +143,7 @@ export type BrowserDiagnosticsActionResultById = {
             objectId?: string | undefined;
             className?: string | undefined;
             description?: string | undefined;
+            previewTruncated?: boolean | undefined;
         } | undefined;
         errorCode?: 'feature_disabled' | 'adapter_unavailable' | 'policy_denied' | 'collector_denied' | 'collector_unavailable' | 'collector_degraded' | 'navigation_stale' | 'target_detached' | 'page_crashed' | 'unsupported_fidelity' | undefined;
     };
@@ -168,6 +169,7 @@ export type BrowserDiagnosticsActionResultById = {
                 objectId?: string | undefined;
                 className?: string | undefined;
                 description?: string | undefined;
+                previewTruncated?: boolean | undefined;
             };
             enumerable: boolean;
         }[];
