@@ -144,7 +144,7 @@ export const APP_SHELL_ACTION_SPECS = [
     id: 'session.work.get', approval: {result: 'required'}, title: 'Read Session Work',
     description: 'Read the answering client’s mounted canonical Work projection for one exact Session. Unavailable without its mounted owner; never loads a second projection.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
-    placements: [], bindings: { mcpToolName: 'session_work_get' },
+    placements: [], bindings: { mcpToolName: 'session_work_get', voiceClientToolName: 'session_work_get' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'work', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },

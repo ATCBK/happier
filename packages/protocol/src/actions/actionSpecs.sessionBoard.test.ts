@@ -50,12 +50,12 @@ describe('Session Board Action catalog rows', () => {
     }
   });
 
-  it('advertises only the surfaces whose Board authority and policy path this lane declares', () => {
+  it('advertises the shared Board authority and policy path to Voice and the other supported surfaces', () => {
     for (const actionId of SESSION_BOARD_ACTION_IDS_V1) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces, actionId).toEqual({
         ui: true,
-        voice: false,
+        voice: true,
         agent: true,
         mcp: true,
         cli: true,

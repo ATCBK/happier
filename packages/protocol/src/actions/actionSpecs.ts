@@ -4950,6 +4950,8 @@ const WORKFLOW_READ_ACTION_IDS: ReadonlySet<WorkflowActionIdV1> = new Set([
 
 const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_ACTION_IDS_V1.map((actionId): PreNormalizedActionSpec => {
   const directMcp = WORKFLOW_DIRECT_MCP_ACTION_IDS.has(actionId);
+  // Voice reaches the ordinary Action owner but cannot complete a person's review.
+  const voice = actionId !== 'workflow.run.invocations.complete_review';
   const voiceArgsExample = WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES[actionId];
   const sideEffectClass = WORKFLOW_DANGER_ACTION_IDS.has(actionId)
     ? 'danger' as const
@@ -4969,13 +4971,12 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
       // Trusted clients reach the same daemon-owned Workflow Action port. The
       // method is the Action id, so there is no second transport vocabulary.
       rpcMethod: actionId,
-      ...(actionId === 'workflow.run.start' || actionId === 'workflow.run.list'
-        || actionId === 'workflow.trigger.list' || actionId === 'session.trigger.list'
+      ...(voice
         ? { voiceClientToolName: actionId.replaceAll('.', '_') } : {}),
     },
     surfaces: {
       ui: true,
-      voice: actionId === 'workflow.run.list' || actionId === 'workflow.run.start' || actionId.startsWith('workflow.trigger.') || actionId.startsWith('session.trigger.'),
+      voice,
       agent: true,
       mcp: true,
       cli: true,
@@ -5099,8 +5100,8 @@ const WORK_BOARD_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORK_BOAR
   sideEffectClass: id === 'boards.list' ? 'read' : 'danger',
   executionPlacement: 'account', requiredAuthority: 'account_automation',
   placements: [],
-  bindings: { mcpToolName: id.replaceAll('.', '_'), rpcMethod: id },
-  surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+  bindings: { mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_'), rpcMethod: id },
+  surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
   toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
   inputSchema: WorkBoardActionInputSchemasV1[id],
   outputSchema: WorkBoardActionOutputSchemasV1[id],
@@ -5126,8 +5127,8 @@ const ARTIFACT_ACCESS_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly
   // present user pressing Add or Remove in the share sheet is the confirmation, as for Session grants.
   ...(id === 'artifact.access.grants.list' ? {} : { approvalPolicy: { uiConfirmation: 'direct' as const } }),
   requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
-  bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
-  surfaces: { ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false },
+  bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_') },
+  surfaces: { ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: true },
   inputSchema: ArtifactAccessActionInputSchemasV1[id], outputSchema: ArtifactAccessActionOutputSchemasV1[id],
   inputHints: { title: 'Document sharing', fields: [] },
   cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
@@ -5164,6 +5165,7 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
   requiredAuthority: 'account_automation';
 }>)[] = ARTIFACT_ACTION_IDS_V1.map((id) => {
   const read = id === 'artifact.get' || id === 'artifact.list' || id === 'artifact.revisions.list' || id === 'artifact.storage.usage' || id === 'artifact.public_link.audit';
+  const voice = id !== 'artifact.export';
   return {
     id, approval: { result: 'required' },
     ...(id === 'artifact.public_link.audit' ? { approvalPolicy: { agentDefault: 'egress' as const } } : {}),
@@ -5178,9 +5180,9 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
     placements: [], bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_'),
-      ...(id === 'artifact.get' || id === 'artifact.update' ? { voiceClientToolName: id.replaceAll('.', '_') } : {}) },
+      ...(voice ? { voiceClientToolName: id.replaceAll('.', '_') } : {}) },
     surfaces: { ui: id !== 'artifact.export', cli: true, rpc: true, agent: true, mcp: true,
-      voice: id === 'artifact.get' || id === 'artifact.update' },
+      voice },
     inputSchema: ArtifactActionInputSchemasV1[id], outputSchema: ArtifactActionOutputSchemasV1[id],
     ...(['artifact.public_link.create', 'artifact.create', 'artifact.update', 'artifact.publish_from_file', 'artifact.get', 'artifact.revisions.restore'].includes(id)
       ? { projectObservationOutput: projectPublicLinkCreationObservation } : {}),
@@ -8802,8 +8804,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
-    bindings: { mcpToolName: 'session_turn_cancel', rpcMethod: 'abort' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    bindings: { voiceClientToolName: 'session_turn_cancel', mcpToolName: 'session_turn_cancel', rpcMethod: 'abort' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     inputHints: {
       title: 'Stop current turn',
       fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
@@ -8840,13 +8842,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     description: 'Request that the local daemon stops the specified session.',
     safety: 'safe',
     placements: [],
-    bindings: { mcpToolName: 'session_stop', rpcMethod: 'stop-session' },
+    bindings: { voiceClientToolName: 'session_stop', mcpToolName: 'session_stop', rpcMethod: 'stop-session' },
     examples: {
       mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9098,13 +9100,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
-    bindings: { mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.get'] },
+    bindings: { voiceClientToolName: 'session_board_get', mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.get'] },
     examples: {
       mcp: { argsExample: '{"sessionId":"{{sessionId}}","itemIds":["release-checklist"],"limit":100}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9141,7 +9143,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     safety: 'danger',
     sideEffectClass: 'write',
     placements: [],
-    bindings: { mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.item.upsert'] },
+    bindings: { voiceClientToolName: 'session_board_item_upsert', mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.item.upsert'] },
     serverTransport: SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1,
     examples: {
       mcp: {
@@ -9150,7 +9152,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9179,7 +9181,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     safety: 'danger',
     sideEffectClass: 'danger',
     placements: [],
-    bindings: { mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.item.remove'] },
+    bindings: { voiceClientToolName: 'session_board_item_remove', mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.item.remove'] },
     serverTransport: SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1,
     examples: {
       mcp: {
@@ -9188,7 +9190,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9214,7 +9216,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     safety: 'danger',
     sideEffectClass: 'write',
     placements: [],
-    bindings: { mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.layout.update'] },
+    bindings: { voiceClientToolName: 'session_board_layout_update', mcpToolName: SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1['session.board.layout.update'] },
     serverTransport: SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1,
     examples: {
       mcp: {
@@ -9223,7 +9225,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defin
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -10027,7 +10029,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
     description: 'Get summary status for a session, optionally refreshing live agent state or inspecting current execution prerequisites.',
     safety: 'safe',
     placements: [],
-    bindings: { mcpToolName: 'session_status_get' },
+    bindings: { voiceClientToolName: 'session_status_get', mcpToolName: 'session_status_get' },
     examples: {
       mcp: { argsExample: '{"sessionId":"{{sessionId}}","live":true}' },
       voice: { argsExample: '{"sessionId":"session_123","readiness":true}' },
@@ -10941,13 +10943,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
-    bindings: { mcpToolName: 'session_wait_idle' },
+    bindings: { voiceClientToolName: 'session_wait_idle', mcpToolName: 'session_wait_idle' },
     examples: {
       mcp: { argsExample: '{"sessionId":"{{sessionId}}","timeoutSeconds":300}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -11571,7 +11573,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -11836,8 +11838,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     id: 'memory.status', approval: {result: 'required'}, title: 'Read memory index status',
     description: 'Read readiness, indexing progress and coverage from the machine memory owner.',
     sideEffectClass: 'read', safety: 'safe', executionPlacement: 'machine', placements: [],
-    bindings: { mcpToolName: 'memory_status' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { voiceClientToolName: 'memory_status', mcpToolName: 'memory_status' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputSchema: MemoryMachineInputSchema, outputSchema: MemoryStatusV1Schema,
     inputHints: { title: 'Read memory index status', fields: [{ path: 'machineId', title: 'Machine id', widget: 'text', required: true }] },
   },
@@ -11845,8 +11847,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     id: 'memory.clear_index', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'none'}, title: 'Clear memory index',
     description: 'Clear the machine-local derived memory index. Agent calls require approval by default.',
     sideEffectClass: 'danger', safety: 'danger', executionPlacement: 'machine', placements: [],
-    bindings: { mcpToolName: 'memory_clear_index' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { voiceClientToolName: 'memory_clear_index', mcpToolName: 'memory_clear_index' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputSchema: MemoryMachineInputSchema, outputSchema: MemoryClearIndexOutputSchema,
     inputHints: { title: 'Clear memory index', fields: [{ path: 'machineId', title: 'Machine id', widget: 'text', required: true }] },
   },
@@ -12568,10 +12570,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'List approval queue entries from targeted approval artifact headers.',
     safety: 'safe',
     placements: [],
-    bindings: { mcpToolName: 'approval_request_list', rpcMethod: 'approval.request.list' },
+    bindings: { voiceClientToolName: 'approval_request_list', mcpToolName: 'approval_request_list', rpcMethod: 'approval.request.list' },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -12607,10 +12609,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Fetch one approval request by approval artifact id.',
     safety: 'safe',
     placements: [],
-    bindings: { mcpToolName: 'approval_request_get', rpcMethod: 'approval.request.get' },
+    bindings: { voiceClientToolName: 'approval_request_get', mcpToolName: 'approval_request_get', rpcMethod: 'approval.request.get' },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -12632,13 +12634,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     description: 'Create an approval request for another action to run.',
     safety: 'danger',
     placements: [],
-    bindings: { mcpToolName: 'approval_request_create', rpcMethod: 'approval.request.create' },
+    bindings: { voiceClientToolName: 'approval_request_create', mcpToolName: 'approval_request_create', rpcMethod: 'approval.request.create' },
     surfaceBindings: {
       plugin: { inputSchema: PluginSurfaceApprovalRequestCreateInputSchema },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,

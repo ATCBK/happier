@@ -3758,8 +3758,11 @@ client through its incumbent lifecycle, held-input, recovery and Inbox delivery
 owners. Read the current attempt with `ui.voice_global.get`; mutations carry the
 returned attempt identity, so later navigation cannot redirect a stop, mute or
 hold operation. Starting a microphone, unmuting it, recovery that may reopen it,
-and Brief request/retry use the existing configurable approval defaults for UI,
-Agent, MCP and plugin callers through the ordinary Action policy. A validated
+and Brief request/retry use the existing configurable approval defaults through
+the ordinary Action policy. The person's drawn and keyboard controls carry
+present-user UI context through `useMountedActionExecution` and are direct by
+default; Agent, MCP and plugin callers retain their approval defaults. Explicit
+UI Ask-first preferences still require confirmation. A validated
 `set_muted` request with `muted: true` stays safe. UI transport, dismissal,
 turn controls and held-input gestures enter the same client-local executor;
 Action admission adds no remote Action dispatch.
@@ -3788,7 +3791,8 @@ Field Dictation has separate `ui.voice_global.dictation.start`, `.finish`,
 Dictation control, then read its opaque commands with `ui.current_context.read`.
 `ui.current_context.command.invoke` delegates each command to the same typed
 Dictation Action; direct calls use that command's `commandId`. Start requires
-approval by default and existing device microphone consent. Finish inserts
+approval by default for automated callers and existing device microphone consent.
+The person's own UI Start is direct unless Settings → Actions requires Ask first. Finish inserts
 editable words through the mounted field's insertion owner without Send;
 cancel inserts nothing. Retired, hidden, disabled or other-Account fields return
 typed unavailability rather than targeting another input. The one current-UI

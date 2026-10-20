@@ -5,7 +5,7 @@ import { WorkflowStartersListInputV1Schema, WorkflowStartersListResultV1Schema,
 
 const readMetadata = {
   safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
-  surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+  surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
   toolExposure: { mcp: 'discoverable_only' },
 } as const;
 
@@ -23,7 +23,7 @@ type WorkflowDiagnosticActionSpec = {
 export const WORKFLOW_DIAGNOSTIC_ACTION_SPECS: readonly WorkflowDiagnosticActionSpec[] = [{
   ...readMetadata, id: 'workflow.trigger.test', approval: {result: 'required'}, title: 'Test workflow trigger',
   description: 'Compare supplied Event facts with a trigger using the canonical source, age and filter evaluators. This diagnostic does not admit an Event or attest retained occurrence custody.',
-  bindings: { mcpToolName: 'workflow_trigger_test' },
+  bindings: { mcpToolName: 'workflow_trigger_test', voiceClientToolName: 'workflow_trigger_test' },
   inputSchema: AutomationEventTestInputV1Schema, outputSchema: AutomationEventTestResultV1Schema,
   inputHints: { fields: [{ path: 'trigger', title: 'Trigger diagnostic fields', widget: 'json', required: true },
     { path: 'observation', title: 'Supplied Event facts', widget: 'json', required: true }] },
@@ -31,14 +31,14 @@ export const WORKFLOW_DIAGNOSTIC_ACTION_SPECS: readonly WorkflowDiagnosticAction
 }, {
   ...readMetadata, id: 'workflow.starters.list', approval: {result: 'required'}, title: 'List starter workflow templates',
   description: 'List named starter workflow templates in examples, each with a key and an unsaved definition. Use workflow.starters.resolve with a returned key to prepare a template for a selected Session. Listing creates no saved definition, trigger or Run.',
-  bindings: { mcpToolName: 'workflow_starters_list' },
+  bindings: { mcpToolName: 'workflow_starters_list', voiceClientToolName: 'workflow_starters_list' },
   inputSchema: WorkflowStartersListInputV1Schema, outputSchema: WorkflowStartersListResultV1Schema,
   inputHints: { description: 'Execute this Action with {} to read actual templates. Workflow block kinds and runWhen values describe execution syntax, not starter templates or eligible trigger events.', fields: [] },
   cli: { commands: [{ path: ['workflow', 'starters', 'list'], visibility: 'canonical' }] },
 }, {
   ...readMetadata, id: 'workflow.starters.resolve', approval: {result: 'required'}, title: 'Resolve workflow starter',
   description: 'Materialize an unsaved starter with the explicitly selected Session and optional timezone. Session-bound seeds require a selection; this does not save or execute them.',
-  bindings: { mcpToolName: 'workflow_starters_resolve' },
+  bindings: { mcpToolName: 'workflow_starters_resolve', voiceClientToolName: 'workflow_starters_resolve' },
   inputSchema: WorkflowStartersResolveInputV1Schema, outputSchema: WorkflowStartersResolveResultV1Schema,
   inputHints: { fields: [{ path: 'key', title: 'Starter key', widget: 'text', required: true },
     { path: 'session', title: 'Selected Session and Machine', widget: 'json',

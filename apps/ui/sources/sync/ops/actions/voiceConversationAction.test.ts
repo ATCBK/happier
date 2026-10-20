@@ -54,6 +54,7 @@ import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/stora
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
@@ -248,10 +249,13 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
                 actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
                     'ui.voice_global.start': { approvalRequiredSurfaces: ['ui'] },
                 } }) } }));
-            expect(await executor.execute('ui.voice_global.start', input, person))
-                .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
-            expect(confirmation).toHaveBeenCalledOnce();
+            const asked = await executor.execute('ui.voice_global.start', input, person);
+            const request = ActionApprovalRequestCreatedResultSchema.parse(asked.ok ? asked.result : null);
+            expect(artifacts.list()).toHaveLength(2);
             expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            expect(await executor.execute('approval.request.decide', { artifactId: request.artifactId, decision: 'cancel' }, person))
+                .toMatchObject({ ok: true });
+            expect(confirmation).not.toHaveBeenCalled();
         } finally { cancellation.abort(); await pending; await lifecycle.dispose(); }
     });
     it('admits a composer hold through Action policy and cancels an early gesture without committing', async () => {

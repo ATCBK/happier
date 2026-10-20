@@ -9,6 +9,10 @@ import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/a
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { SessionTargetPreviewV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import {
   formatQualifiedPluginActionId,
@@ -26,6 +30,37 @@ const { createDefaultActionExecutor } = await import('@/sync/ops/actions/default
 describe('Voice Action reference catalog', () => {
   beforeEach(async () => { await home.reset(); });
   afterEach(async () => { await home.reset(); });
+  it('pauses an exact Workflow through generic Voice execution and the canonical Account storage owner', async () => {
+    const serverId = await home.addHome({ name: 'Workflow Voice Home', serverUrl: 'https://workflow-voice.test', accountId: 'alice', currentAccount: true });
+    const features = createRootLayoutFeaturesResponse();
+    expect(tryWriteServerEnabledBitInPlace(features, 'workflows', true)).toBe(true);
+    home.answer(serverId, '/v1/features', { body: features });
+    const input = { runId: 'run-voice', expectedRevision: 3 };
+    let revision = input.expectedRevision;
+    home.answer(serverId, 'POST /v3/automations/runs/workflow-storage', { select: operation => {
+      expect(operation).toEqual({ operation: 'pause', ...input });
+      revision += 1;
+      return { body: WorkflowActionOutputSchemasV1['workflow.run.pause'].parse({
+        run: createWorkflowRunSummaryFixture({ id: input.runId, ownerAccountId: 'alice', revision, state: 'paused' }),
+        intent: 'paused',
+      }) };
+    } });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    const result = JSON.parse(await handlers.action_execute!({ actionId: 'workflow.run.pause', input }, { serverId, effectId: 'pause-exact-run' }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { run: { id: input.runId, revision: 4, state: 'paused' }, intent: 'paused' } });
+    expect(WorkflowActionOutputSchemasV1['workflow.run.pause'].parse(result.result)).toEqual(result.result);
+    expect(revision).toBe(4);
+    for (const parameters of [
+      { actionId: 'workflow.run.invocations.complete_review', input: {
+        runId: input.runId, invocation: { recordId: 'invocation-1' }, expectedContentRevision: '0', mode: 'use_result',
+      } },
+      { actionId: 'approval.request.decide', input: { artifactId: 'approval-1', decision: 'approve' } },
+    ] as const) {
+      expect(getActionSpec(parameters.actionId)
+        .inputSchema.safeParse(parameters.input).success).toBe(true);
+      expect(resolveVoiceActionExecution(parameters)).toBeNull();
+    }
+  });
   it('projects the safe target-preview and existing notice Artifact read/write Actions into Voice', () => {
     const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
     for (const [actionId, effect] of [
