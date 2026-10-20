@@ -88,7 +88,7 @@ describe('synthesizeKokoroWav (native)', () => {
         return { ...handle, readBytes: (length: number) => handle.readBytes(Math.min(length, 2)) };
       }
     }
-    const fs = { ...memoryFs, File };
+    const fs = { ...memoryFs, File, Paths: { ...memoryFs.Paths, cache: 'file:///tmp/' } };
     const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
     const packId = 'kokoro-verification-progress';
     const manifest: ModelPackManifest = {
