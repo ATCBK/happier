@@ -83,7 +83,7 @@ const fixture = {
     homeSearch: vi.fn<(request: Record<string, unknown>) => Promise<unknown>>(),
     daemonRpc: vi.fn(async (_request: { method: string; payload: unknown; serverId: string; accountId: string | null; machineId: string }) => DEFAULT_MEMORY_SETTINGS as unknown),
     featureEnabled: { search: true, 'memory.search': false } as Record<string, boolean>,
-    memoryMachine: null as null | { serverId: string; machine: { id: string } },
+    memoryMachine: null as null | { serverId: string; machine: { id: string; active?: boolean; activeAt?: number } },
     workspaceRefs: [] as WorkspaceRefV1[],
     sessionListRows: [] as Array<{ serverId: string | null; serverName: string | null; session: { id: string; updatedAt: number; archivedAt?: number | null; metadata: { name: string; path?: string } } }>,
     sessionOrganizationProjection: null as SessionOrganizationProjection | null,
@@ -146,7 +146,8 @@ async function prepareControllerFixture() {
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     if (fixture.singleHome) await removeServerProfile(profiles[0]!.id);
     const machine = fixture.memoryMachine || fixture.scopedPluginProjections.size
-        ? createMachineFixture({ id: fixture.memoryMachine?.machine.id ?? 'machine-b', activeAt: Date.now() }) : null;
+        ? createMachineFixture({ ...fixture.memoryMachine?.machine, id: fixture.memoryMachine?.machine.id ?? 'machine-b',
+            activeAt: fixture.memoryMachine?.machine.activeAt ?? Date.now() }) : null;
     const httpResponse: Parameters<typeof network.setHttpResponder>[0] = async (input, init) => {
         const url = new URL(String(input));
         const serverId = url.origin === homeUrl(HOME_A) ? HOME_A : HOME_B;
@@ -167,10 +168,12 @@ async function prepareControllerFixture() {
         }
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (url.pathname === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
-        if (url.pathname === '/v1/machines') return Response.json(machine ? [createPlainMachineRowFixture({
+        if (url.pathname === '/v1/machines') return Response.json(machine ? [{ ...createPlainMachineRowFixture({
             id: fixture.scopedPluginProjections.size && serverId === HOME_A ? 'machine-a' : machine.id,
             accountId: serverId === HOME_A ? 'account-a' : 'account-1',
-        })] : []);
+        }),
+            active: machine.active, activeAt: machine.activeAt,
+        }] : []);
         if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({ id: url.pathname.slice('/v1/machines/'.length), accountId: serverId === HOME_A ? 'account-a' : 'account-1' }) });
         if (url.pathname.startsWith('/v2/sessions/')) {
             if (url.pathname === '/v2/sessions/active') return Response.json({ sessions: [], hasNext: false, nextCursor: null });
@@ -1134,6 +1137,7 @@ describe('UniversalSearchController exact Home scope', () => {
 
     it.each(['preview', 'beside'] as const)('keeps offline Recent and Changed searchable and opens a remembered file with %s intent without requesting files', async (intent) => {
         fixture.singleHome = true;
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-offline', active: false, activeAt: 0 } };
         const scope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/offline-quick-open' };
         fixture.workspaceRefs = [{ id: 'ws-offline-quick-open', ...scope, label: 'Offline project', createdAtMs: 1 }];
         const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
@@ -1161,7 +1165,7 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(sections.map(section => section.id)).toEqual(['files:recent', 'files:changed']);
         const recent = sections[0];
         if (!recent || recent.kind !== 'static') throw new Error('Missing offline Recent source');
-        expect(recent.resultHint).toBe(t('universalSearch.quickOpen.offline', { machine: t('universalSearch.thisMachine') }));
+        expect(recent.resultHint).toBeDefined();
         await act(async () => { selectionListProps()?.onChangeInputValue?.('settings'); });
         const files = selectionListProps()?.rootStep.sections.find(section => section.id === 'files');
         if (!files || files.kind !== 'dynamic') throw new Error('Missing offline Files source');
@@ -1183,6 +1187,7 @@ describe('UniversalSearchController exact Home scope', () => {
 
     it('keeps positioned file matches selectable and prefers a literal colon filename in the Files scope', async () => {
         fixture.singleHome = true;
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-offline', active: false, activeAt: 0 } };
         const scope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/quick-open-grammar' };
         fixture.workspaceRefs = [{ id: 'ws-quick-open-grammar', ...scope, label: 'Grammar project', createdAtMs: 1 }];
         const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');

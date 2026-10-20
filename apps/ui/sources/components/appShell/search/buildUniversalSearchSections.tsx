@@ -4,6 +4,7 @@ import { rankHappierQueryMatches } from '@happier-dev/plugin-ui/presentation';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { FileIcon } from '@/components/ui/media/FileIcon';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
+import { queryRanges } from '@/components/ui/text/queryRanges';
 import type {
     SelectionListDynamicSection,
     SelectionListOption,
@@ -463,6 +464,46 @@ function fileIcon(path: string): () => React.ReactElement {
     return () => <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />;
 }
 
+/** One outline level of indentation (lab LS3 `.lx-sym`: nesting by indentation, no tree chrome). */
+const SYMBOL_DEPTH_INDENT_PX = 20;
+
+/** Symbol kinds drawn in the app's one icon family (ink, no colour); kinds without their own glyph share one. */
+const SYMBOL_KIND_ICONS: Readonly<Record<string, IconName>> = {
+    function: 'code', method: 'code', constructor: 'code' satisfies IconName, operator: 'code', event: 'code',
+    class: 'cube', struct: 'cube', object: 'cube',
+    interface: 'diamond', type: 'diamond', typeParameter: 'diamond',
+    enum: 'list-bullets', enumMember: 'circle',
+    property: 'tag', field: 'tag', key: 'tag',
+    variable: 'circle', constant: 'circle', string: 'circle', number: 'circle', boolean: 'circle', array: 'circle', null: 'circle',
+    module: 'stack-simple', namespace: 'stack-simple', package: 'stack-simple', file: 'file',
+    heading: 'text-h',
+};
+
+type SymbolMetadata = NonNullable<UniversalSearchResult['symbol']> & Readonly<{ container?: string }>;
+
+/**
+ * An `@` row (lab LS3 S): kind glyph · name · where it sits, indented by its outline depth. The glyph
+ * lives in the label so it indents with the name; the line number is the row's right column.
+ */
+function SymbolRowLabel({ name, symbol, query }: Readonly<{ name: string; symbol: SymbolMetadata; query?: string }>) {
+    const { theme } = useUnistyles();
+    const ranges = query ? queryRanges(name, query) : undefined;
+    return <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 0, paddingLeft: symbol.depth * SYMBOL_DEPTH_INDENT_PX }}>
+        <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx, marginRight: MENU_ROW_METRICS.iconMarginRightPx, alignItems: 'center' }}>
+            <Icon name={SYMBOL_KIND_ICONS[symbol.kind] ?? 'code'} size={ICON_SIZE.md} color={theme.colors.text.secondary} />
+        </View>
+        <Text numberOfLines={1} style={[Typography.variant('label'), { flexShrink: 1, color: theme.colors.text.primary }]}>
+            {ranges?.length ? <FindHighlightedText text={name} ranges={ranges} /> : name}
+            {symbol.container ? <Text style={[Typography.variant('meta'), Typography.mono(), { color: theme.colors.text.tertiary }]}>{`  ${symbol.container}`}</Text> : null}
+        </Text>
+    </View>;
+}
+
+function SymbolLine({ line }: Readonly<{ line: number }>) {
+    const { theme } = useUnistyles();
+    return <Text style={[Typography.variant('meta'), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{line}</Text>;
+}
+
 function toOption(
     result: UniversalSearchResult,
     iconName: IconName,
@@ -491,6 +532,18 @@ function toOption(
             // Quick open's preview column (lab FB2): the file itself, at the line the query carries.
             return { detailContent: () => <QuickOpenFilePreview scope={target.scope} path={target.path} line={line} /> };
         })() : {}),
+        ...(result.symbol && result.target.kind === 'workspaceSymbol' ? (() => {
+            const target = result.target;
+            const symbol: SymbolMetadata = result.symbol;
+            return {
+                // The scope token already names the file; the row says what the symbol is and where it sits.
+                subtitle: undefined,
+                labelContent: () => <SymbolRowLabel name={result.title} symbol={symbol} query={titleQuery} />,
+                rightAccessory: () => <SymbolLine line={symbol.line} />,
+                accessibilityLabel: [result.title, symbol.container, t('universalSearch.content.atLine', { line: symbol.line })].filter(Boolean).join(', '),
+                detailContent: () => <QuickOpenFilePreview scope={target.scope} path={target.path} line={symbol.line} symbol={result.title} />,
+            };
+        })() : {}),
         ...(result.conversation ? {
             contentAlign: 'start' as const,
             labelHighlightQuery: result.conversation.query.trim() || undefined,
@@ -508,10 +561,11 @@ function toOption(
             ? { subtitleEllipsizeMode: 'head' as const }
             : {}),
         ...(result.fileChange ? { rightAccessory: () => <DiffStat added={result.fileChange!.added} removed={result.fileChange!.removed} /> } : {}),
-        icon: result.conversation?.agentId ? agentIcon(result.conversation.agentId)
+        // A symbol row draws its kind glyph in its label, where it indents with the name.
+        ...(result.symbol ? {} : { icon: result.conversation?.agentId ? agentIcon(result.conversation.agentId)
             : result.fileContent ? fileIcon(result.fileContent.path)
             : result.kind === 'workspaceFile' && result.target.kind === 'workspaceFile' ? fileIcon(result.target.path)
-            : icon(iconName),
+            : icon(iconName) }),
         onSelect: () => { onCommit(result); },
     };
 }
@@ -711,7 +765,7 @@ export function buildUniversalSearchSections(
     const sections: SelectionListSectionDescriptor[] = [];
     const scopedToContent = input.source === 'fileContent';
     if (input.source === 'symbols') return buildDynamicSection({ sourceId: 'symbols',
-        title: t('settingsKeyboard.commands.searchSymbols'), source: input.symbols ?? { status: 'absent' },
+        title: t('universalSearch.quickOpen.symbols'), source: input.symbols ?? { status: 'absent' },
         iconName: 'file', minQueryLength: 0, onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
     if (input.source === 'files') {
         const recentIds = new Set(input.recentFiles?.map(result => buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id)));

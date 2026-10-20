@@ -39,6 +39,13 @@ export function sameDestinationRef(a: DestinationRef, b: DestinationRef): boolea
         && Object.entries(a.params).every(([key, value]) => b.params[key] === value);
 }
 
+/** The Projects list's open: the Project at its overview with only its checkout selection. */
+const PROJECT_DEFAULT_OPEN_PARAMS = new Set(['workspaceRefId', 'serverId', 'accountId', 'pageId', 'activeRootPath', 'worktreeId']);
+function isProjectDefaultOpen(target: DestinationRef): boolean {
+    return (target.params.pageId ?? 'overview') === 'overview'
+        && Object.keys(target.params).every(key => PROJECT_DEFAULT_OPEN_PARAMS.has(key));
+}
+
 export function createWorkspaceNavigationAdapter(input: Readonly<{
     getState: () => WorkspaceState;
     getCatalog: () => readonly CompactAppDestination[];
@@ -80,6 +87,15 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             && (candidate.serverId === identity.serverId || areServerProfileIdentifiersEquivalent(candidate.serverId, identity.serverId))
             && candidate.accountId === identity.accountId;
     };
+    // A Project is one resource per Home: opening it again goes to its tab, like a Session.
+    const projectIdentity = (ref: DestinationRef) => ref.kind === 'project' && ref.params.workspaceRefId
+        ? { id: ref.params.workspaceRefId, serverId: ref.params.serverId ?? input.getScope?.()?.serverId } : null;
+    const sameProjectIdentity = (a: DestinationRef, b: DestinationRef) => {
+        const identity = projectIdentity(a);
+        const candidate = projectIdentity(b);
+        return identity !== null && candidate !== null && candidate.id === identity.id
+            && (candidate.serverId === identity.serverId || areServerProfileIdentifiersEquivalent(candidate.serverId, identity.serverId));
+    };
     const adoptSessionTarget = (retained: DestinationRef, target: DestinationRef): DestinationRef => {
         const params: Record<string, string> = { ...retained.params, ...target.params,
             ...(retained.params.serverId ? { serverId: retained.params.serverId } : {}),
@@ -114,8 +130,9 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             if (!normalized) return false;
             // SessionAddress owns resource identity; pane URL state and anchors belong
             // to the retained view, and must not turn Go to it into a duplicate tab.
-            if (!identity) return sameDestinationRef(normalized, target);
-            return sameSessionIdentity(normalized, target);
+            if (identity) return sameSessionIdentity(normalized, target);
+            if (projectIdentity(target)) return sameProjectIdentity(normalized, target);
+            return sameDestinationRef(normalized, target);
         });
         const group = tab ? Object.values(state.groups).find(group => group.tabIds.includes(tab.id)) : null;
         return tab && group ? { tabId: tab.id, groupId: group.id } : null;
@@ -214,6 +231,12 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 } else if (presentationPreview || (target.kind === 'session' && parseSessionPaneUrlState(target.params)?.details)) {
                     const adopted = adoptSessionTarget(retained, target);
                     if (!sameDestinationRef(retained, adopted)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: adopted });
+                } else if (target.kind === 'project') {
+                    // Opening the Project at its default page brings its tab forward as it was left;
+                    // an addressed resource (a file, a commit, another page's state) retargets it.
+                    if (!isProjectDefaultOpen(target) && !sameDestinationRef(retained, target)) {
+                        input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target });
+                    }
                 } else if (target.kind === 'session') {
                     const params = { ...retained.params,
                         ...(target.params.serverId ? { serverId: retained.params.serverId ?? target.params.serverId } : {}),

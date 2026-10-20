@@ -17,6 +17,8 @@ export function buildUniversalSearchSymbolResults(
         title: symbol.name,
         subtitle: `${target.path}:${symbol.line}`,
         searchText: symbol.name,
+        symbol: { kind: symbol.kind, line: symbol.line, depth: symbol.depth,
+            ...(symbol.container !== undefined ? { container: symbol.container } : {}) },
         target: {
             kind: 'workspaceSymbol',
             scope: target.scope,

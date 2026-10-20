@@ -34,6 +34,7 @@ describe('active file symbol source', () => {
         // The getter is read only after the existing editor's flush, never from disk.
         const page = await fixture('home', answer).source.resolve('constructor', new AbortController().signal);
         expect(page.results.map(row => row.title)).toEqual(['constructor']);
+        expect(page.results[0]).toMatchObject({ symbol: { kind: 'constructor', line: 2, depth: 1, container: 'Fresh' } });
         expect(page.results[0]?.target).toMatchObject({ anchor: { kind: 'fileLine', startLine: 2 } });
         expect((await fixture('home', { ...answer, symbols: [] }).source.resolve('', new AbortController().signal)).results).toEqual([]);
         expect((await fixture('home', { ...answer, loading: true, symbols: [] }).source.resolve('', new AbortController().signal)).results.map(row => row.title)).toEqual(['Fresh']);
@@ -43,6 +44,8 @@ describe('active file symbol source', () => {
         const f = fixture();
         const page = await f.source.resolve('fresh', new AbortController().signal);
         expect(page.results.map(row => row.title)).toEqual(['Fresh']);
+        expect(page.results[0]).toMatchObject({ symbol: { kind: 'class', line: 1, depth: 0 } });
+        expect(page.results[0]?.symbol).not.toHaveProperty('container');
         expect(page.results[0]?.target).toMatchObject({ kind: 'workspaceSymbol', path: 'src/box.ts', anchor: { kind: 'fileLine', startLine: 1 } });
     });
 

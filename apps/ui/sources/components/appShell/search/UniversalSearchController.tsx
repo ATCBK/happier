@@ -1312,8 +1312,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         : null;
     const bandSuffix = inputSuffix || phoneCancel ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>{inputSuffix}{phoneCancel}</View> : null;
     // Text in files and the conversation results show a detail column; everything else is the compact palette.
-    // Quick open previews the selected file beside the list as well (lab FB2).
-    const surfaceLayout: CommandSurfaceLayout = !terminalJump && (source === 'fileContent' || source === 'files' || externalConversationSearch !== null) ? 'detail' : 'compact';
+    // Quick open previews the selected file beside the list as well (lab FB2), and `@` the symbol in it (LS3).
+    const surfaceLayout: CommandSurfaceLayout = !terminalJump && (source === 'fileContent' || source === 'files' || source === 'symbols' || externalConversationSearch !== null) ? 'detail' : 'compact';
     const onSurfaceLayoutChange = props.onSurfaceLayoutChange;
     React.useEffect(() => { onSurfaceLayoutChange?.(surfaceLayout); }, [onSurfaceLayoutChange, surfaceLayout]);
     const activeSelect = terminalJump ? handleTerminalJumpSelect : handleSelect;
@@ -1341,7 +1341,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         <View style={styles.root} testID="universal-search-host">
             <SelectionList rootStep={activeRootStep} selectionMark="enter" optionPresentation="menu" inputValue={query} onChangeInputValue={changeQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : handleCommandSelect} onRequestClose={requestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={bandSuffix} inputAccessoryRow={replaceField} bodyHeader={replaceSummary} footerAction={replaceFooter} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} autoFocusInputOnWeb fillAvailableSpace dynamicSectionCache={dynamicSectionCache}
                 // Lab G1s: the code preview column belongs to the Text in files scope; inline hits open their context in the row (G1).
-                {...((source === 'fileContent' || source === 'files') && !terminalJump ? { detailPane: COMMAND_SURFACE_DETAIL_PANE } : {})} />
+                {...((source === 'fileContent' || source === 'files' || source === 'symbols') && !terminalJump ? { detailPane: COMMAND_SURFACE_DETAIL_PANE } : {})} />
         </View>
     );
 }

@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { AppPaneScopeLayoutState } from './hooks/useAppPaneScopeLayout';
 
@@ -71,7 +72,9 @@ describe('AppPaneScopeHost bottom height', () => {
         const before = columns().props.bottomDockMaxHeightPx;
         const host = screen.root.findAllByType(View).find(node => typeof node.props.onLayout === 'function');
         if (!host) throw new Error('Missing measured pane root');
-        await act(async () => host.props.onLayout({ nativeEvent: { layout: { width: 0, height: 500 } } }));
+        const onLayout = host.props.onLayout;
+        if (!onLayout) throw new Error('Missing pane layout callback');
+        await act(async () => onLayout(createLayoutChangeEvent({ x: 0, y: 0, width: 0, height: 500 })));
         expect(geometry()).toMatchObject({ containerHeightPx: 500, containerWidthPx: 1200, bottomPresentation: 'overlay', mainRegionHeightPx: 500 });
         expect(columns().props.bottomDockMaxHeightPx).not.toBe(before);
         expect(columns().props.bottomDockMaxHeightPx).toBe(500);

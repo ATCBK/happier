@@ -83,6 +83,17 @@ export type UniversalSearchTarget =
         accountId: string;
     }>;
 
+/** Outline facts for symbol rows; baseline depth is approximate, server depth is hierarchical. */
+export type UniversalSearchSymbolMetadata = Readonly<{
+    kind: string;
+    /** One-based file line, matching the activation anchor. */
+    line: number;
+    /** Zero-based nesting/heading depth supplied by the outline owner. */
+    depth: number;
+    /** Immediate enclosing server symbol; absent for top-level and baseline entries. */
+    container?: string;
+}>;
+
 export type UniversalSearchResult = Readonly<{
     /** Stable within its own source AND its own scope; never unique on its own. */
     id: string;
@@ -104,6 +115,8 @@ export type UniversalSearchResult = Readonly<{
     subtitle?: string;
     searchText?: string;
     exactSearchText?: string;
+    /** Semantic outline data, kept separate from file navigation and display strings. */
+    symbol?: UniversalSearchSymbolMetadata;
     fileContent?: Readonly<{ path: string; line: number; column16: number; length16: number; text: string; before: readonly string[]; after: readonly string[] }>;
     /**
      * A conversation hit: the matched text and where it was said. `agentId` is set for a conversation

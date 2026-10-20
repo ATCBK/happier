@@ -345,10 +345,16 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
             retireCurrentUiContextMountRecord(currentMountRecordRef.current);
             currentMountRecordRef.current = null;
             committedSnapshotRef.current = null;
-            notifyReaderListeners();
-            readerListenersRef.current.clear();
         };
     }, []);
+    React.useLayoutEffect(() => () => {
+        // Only a real insertion-lifetime retirement withdraws the reader.
+        // StrictMode/retained layout cleanup leaves authority and subscriptions intact.
+        if (providerCurrentRef.current) return;
+        // External-store listeners may schedule React work, so notify after insertion cleanup.
+        notifyReaderListeners();
+        readerListenersRef.current.clear();
+    }, [notifyReaderListeners]);
 
     React.useLayoutEffect(() => {
         if (!retiresCurrentUiContextMountWhenNotViewed() || hostActivelyViewed) return;

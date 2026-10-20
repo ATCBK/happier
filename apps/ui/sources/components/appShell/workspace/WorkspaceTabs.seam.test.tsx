@@ -346,7 +346,7 @@ describe('workspace tabs production composition', () => {
         applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'riverside', serverId: scope.serverId,
             machineId: 'studio', rootPath: '/repo', label: null, createdAtMs: 1 }] });
         const session = createSessionFixture({ id: 'search-session', serverId: scope.serverId });
-        storage.getState().applySessions([{ ...session, metadata: { ...session.metadata, path: '/repo', machineId: 'studio' } }]);
+        storage.getState().applySessions([{ ...session, metadata: { ...session.metadata, host: session.metadata?.host ?? 'studio', path: '/repo', machineId: 'studio' } }]);
         const [{ WorkspaceProvider }, , , , , , { AppPaneProvider }, , catalogModule] = production;
         const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
             externalSessions: false, inbox: false, workflows: false, friends: false } });

@@ -28,6 +28,8 @@ export function QuickOpenFilePreview(
     scope: WorkspaceScopeBase;
     path: string;
     line?: number | null;
+    /** `@` symbols: the header names the symbol the preview lands on ("formatRetryLabel, line 3"). */
+    symbol?: string;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -89,7 +91,7 @@ export function QuickOpenFilePreview(
                 Typography.tabular(),
                 { color: theme.colors.text.tertiary },
               ]}
-            >{`  · ${t('universalSearch.content.atLine', { line })}`}</Text>
+            >{`  · ${props.symbol ? t('universalSearch.quickOpen.symbolAtLine', { name: props.symbol, line }) : t('universalSearch.content.atLine', { line })}`}</Text>
           ) : null}
         </Text>
       </View>
