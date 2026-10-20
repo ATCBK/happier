@@ -42,7 +42,14 @@ The synchronizer waits for a settled turn and uses P3's `reapplySessionSkills` f
 live reload. Native-skill overlay changes and MCP changes use the daemon's existing
 restart-with-resume owner with reason `capability_selection_change` and
 `force_current_cli`; they never create a fresh conversation as a fallback.
-Turn/approval busy refusals wait for the next settled turn. Missing resume evidence
+Turn/approval busy refusals wait for the next settled turn.
+Automatic capability replacement first joins admitted Run Start and Ensure
+handlers through the Session RPC owner's cancellable idle observation, then
+rechecks the current rules, selection and foreground settlement. This covers
+Run preparation before a public Run exists. Unrelated long-lived read observers
+do not hold that admission wait; the daemon's existing active-child gate still
+governs the eventual physical signal.
+Missing resume evidence
 or a launch mode requiring a person's restart leaves the selection pending, with
 an apply-status projection rather than a queue or timer. Effective skill- and MCP-rule
 changes publish that same projection with `source: 'rules'` before waiting for
@@ -54,7 +61,10 @@ or native acknowledgement clears it, and restoring the effective baseline
 withdraws the refusal without reload. Attach preserves the applied baseline;
 actual startup application or live-reload acknowledgement
 clears the corresponding pending marker, as does restoring the known applied
-selection through Undo. Explicit current terminal/Windows-hosted launch facts
+selection through Undo. Positive skill or MCP launch resolution takes precedence
+over an earlier runner's retained rule-pending notice, preventing repeated
+replacement before the first input. An attach's current-rule read alone cannot
+acknowledge that notice. Explicit current terminal/Windows-hosted launch facts
 take precedence over a retained daemon projection when deciding manual restart.
 Host publication records the admitted
 Agent's resume/live-reload facts in `agentRuntimeCapabilitiesV1.capabilitySelection`
