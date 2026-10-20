@@ -90,14 +90,13 @@ function readDisplaySubtitle(inputObj: UnknownRecord): string | null {
 /**
  * The row's one line under its title. A Happier Action says what it does through the Action's own
  * presentation (the one confirmation and Inbox read), never as its raw `actionId=… input={…}`; when that
- * only repeats the title, the row has no second line.
+ * only repeats the title, the row has no second line. The recorded `_mcp.display.subtitle` is the CLI
+ * normalizer's generic key=value line for every MCP call, so it never speaks for an Action.
  */
 export function formatMCPToolSubtitle(toolName: string, input: unknown): string {
     const actionId = readHappierActionCallId(toolName, input);
     if (!actionId) return formatMCPSubtitle(input);
-    return readDisplaySubtitle(asRecord(maybeParseJson(input)) ?? {})
-        ?? presentActionApproval({ actionId, actionArgs: readHappierActionCallInput(toolName, input) }).summary
-        ?? '';
+    return presentActionApproval({ actionId, actionArgs: readHappierActionCallInput(toolName, input) }).summary ?? '';
 }
 
 export function formatMCPSubtitle(input: unknown): string {
@@ -183,20 +182,15 @@ export const MCPToolView = React.memo<ToolViewProps>(({ tool, detailLevel, messa
     const machineResourcesCall = projectCommandCall ? null : readTranscriptMachineResourcesCall(tool);
 
     if (detailLevel === 'summary' && !find.active) {
-        const summary = (
+        // The row header already says what the call is (title and line); the body adds only its outcome.
+        const outcome = actionFailure
+            ? <ActionFailureCode failure={actionFailure} />
+            : tool.state === 'completed' && resultText ? <CodeView code={truncate(resultText, 800)} /> : null;
+        const summary = outcome ? (
             <ToolSectionView>
-                <View style={styles.container}>
-                    {subtitle ? (
-                        <Text style={styles.subtitle} numberOfLines={2}>
-                            {subtitle}
-                        </Text>
-                    ) : null}
-                    {actionFailure ? <ActionFailureCode failure={actionFailure} /> : tool.state === 'completed' && resultText ? (
-                        <CodeView code={truncate(resultText, 800)} />
-                    ) : null}
-                </View>
+                <View style={styles.container}>{outcome}</View>
             </ToolSectionView>
-        );
+        ) : null;
         // An agent's finite Project command shows its run's output, not the acknowledgement JSON.
         if (machineResourcesCall) return <MachineResourcesToolBody call={machineResourcesCall} serverId={serverId} />;
         return projectCommandCall
