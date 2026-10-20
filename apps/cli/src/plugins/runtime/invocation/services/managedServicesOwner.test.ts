@@ -920,6 +920,66 @@ describe('managed-services SVC09 owner', () => {
             await rm(directory, { recursive: true, force: true });
         }
     });
+    it('G1 joins the current gateway census when idle stop overlaps replacement consumers', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-gateway-idle-rejoin-'));
+        const stopping = deferred<void>();
+        const stopped = deferred<void>();
+        const previous = createLifecycleProcess(4_521, async () => {
+            stopping.resolve();
+            await stopped.promise;
+        });
+        const replacement = createLifecycleProcess(4_522);
+        const harness = createLifecycleHarness([previous, replacement], 'daemon', {
+            sharedGatewayAccessDirectory: directory,
+            fetch: async () => new Response(null, { status: 200 }),
+        });
+        const spec: ManagedServiceSpec = { ...lifecycleSpec({ id: 'idle-rejoin-gateway', port: 4_354 }),
+            requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
+            clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' } };
+        const bind = (consumerId: string) => harness.owner.bindScope(
+            lifecycleScope({ occurrenceId: 'idle-rejoin-occurrence', operationId: consumerId }), harness.exec,
+            { managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true,
+                isPhysicalOccurrenceCurrent: () => true,
+                sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId } },
+            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, `${consumerId}.capability`),
+                isCurrent: () => true, ...gatewayRequestAuthUses() } },
+        );
+        let unsubscribe = () => {};
+        try {
+            const first = await bind('old-first').supervise(spec);
+            const second = await bind('old-second').supervise(spec);
+            await first.dispose();
+            const release = second.dispose();
+            await stopping.promise;
+            const waiting = Promise.allSettled([bind('new-first').supervise(spec)]);
+            const arriving = deferred<ManagedServiceHandle>();
+            // Schedule the other runner at the observable custody-removal
+            // boundary, before the admission waiting on Stop resumes.
+            unsubscribe = harness.owner.activity.subscribe(() => {
+                if (harness.owner.readRetainedSemanticCustodyCount() !== 0) return;
+                unsubscribe();
+                void bind('new-second').supervise(spec).then(arriving.resolve, arriving.reject);
+            });
+            stopped.resolve();
+            await release;
+            const joined = await arriving.promise;
+            const [result] = await waiting;
+            if (result.status === 'rejected') throw result.reason;
+            expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
+            await joined.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh second input') });
+            expect(result.value.snapshot().instanceId).toBe(joined.snapshot().instanceId);
+            await result.value.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh first input') });
+            await result.value.dispose();
+            expect(replacement.dispose).not.toHaveBeenCalled();
+            await joined.dispose();
+            expect(replacement.dispose).toHaveBeenCalledOnce();
+        } finally {
+            unsubscribe();
+            stopped.resolve();
+            await harness.owner.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
     it('G1 coalesces gateway custody while isolating consumer tokens and last-consumer stop/restart', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-gateway-consumers-'));
         const process = createLifecycleProcess(4_501);

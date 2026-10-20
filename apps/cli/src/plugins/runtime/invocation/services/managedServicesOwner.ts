@@ -3538,26 +3538,10 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     }
                     if (existing.terminal) {
                         await retireEntry(existing);
-                        removeSemanticEntry(existing);
-                        existing = semanticEntries.get(entryKey);
-                        if (
-                            existing
-                            && !isManagedServiceSemanticEntry(existing)
-                        ) {
-                            return fail(
-                                'plugin_managed_service_unavailable',
-                                'Managed-service semantic entry is unavailable',
-                            );
-                        }
-                        if (
-                            existing
-                            && existing.specIdentity !== specIdentity
-                        ) {
-                            return fail(
-                                'plugin_managed_service_spec_conflict',
-                                'A different managed-service specification already owns this exact lifecycle scope',
-                            );
-                        }
+                        // Stop yielded to other admissions. Re-resolve the
+                        // current shared census and its injected path before
+                        // comparing specifications or joining the new owner.
+                        return await services.supervise(spec, options);
                     }
                 }
                 if (existing) {

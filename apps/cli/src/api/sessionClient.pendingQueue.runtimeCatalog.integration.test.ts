@@ -14,6 +14,16 @@ import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@
 import { SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
+import { createAccountConnectionManagedConsumerSourceOpen } from '@/providers/broker/accountConnectionSource';
+import { startManagedProviderConsumerApplication } from '@/providers/broker/managedProviderConsumerApplication';
+import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
+import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
+import { waitForProcessExit } from '@/testkit/process/spawn';
 
 import { ApiSessionClient } from './session/sessionClient';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
@@ -1550,7 +1560,67 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(onUserMessage).toHaveBeenCalledTimes(1);
     });
 
-    it.each(['mcp', 'skills'] as const)('delivers queued input once after automatic replacement and Resume with a captured %s launch baseline', async kind => {
+    it.each(['mcp', 'skills'] as const)('delivers queued input once through one shared gateway after both consumers replace with a captured %s launch baseline', async kind => {
+      await withConfiguredDaemonTestHome({ prefix: 'pending-gateway-replacement-' }, async ({ homeDir }) => {
+        vi.unstubAllGlobals();
+        const nativeFetch = globalThis.fetch;
+        // Home feature discovery is the network boundary. Gateway HTTP must
+        // reach the real consumer application and its supervised OS process.
+        vi.stubGlobal('fetch', ((input, init) => String(input).endsWith('/features')
+            ? Promise.resolve(new Response(JSON.stringify(currentFeatures), { status: 200,
+                headers: { 'content-type': 'application/json' } }))
+            : nativeFetch(input, init)) satisfies typeof fetch);
+        const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'),
+            happyHomeDir: homeDir, physicalGateway: true });
+        const gateway = fixture.gateway!;
+        const identity = gateway.identity;
+        const declaration = fixture.contributes.providersByContributionKey.get(`${identity.pluginId}/${identity.localId}`)!.definition;
+        const signal = new AbortController().signal;
+        const models = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+            featureGate: { isEnabled: () => true }, registry: fixture.contributes, getAccountSettingsSnapshot: () => fixture.snapshot,
+            acquireRuntimeLease: async () => {
+                const lease = gateway.controller.tryAcquireRuntimeRegistry();
+                if (!lease) throw new Error('Expected serving gateway registry');
+                return lease;
+            }, resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+            modelSettingsMutation: async (): Promise<never> => { throw new Error('Unexpected model mutation'); } });
+        const open = createAccountConnectionManagedConsumerSourceOpen({ homeId: 'home', accountId: 'account', machineId: fixture.machineId,
+            expectedAccountSettingsScopeKey: fixture.snapshot.scopeKey!, getAccountSettingsSnapshot: () => fixture.snapshot,
+            custody: createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir,
+                controller: gateway.controller }), withRegistry: async read => await read(fixture.contributes),
+            resolveBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+            // Authenticated Home Session liveness is the external boundary.
+            admitConsumer: async () => true,
+            projectModels: request => models.projectModelsForAccount(request, { getAccountSettingsSnapshot: () => fixture.snapshot,
+                resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent, signal, isCurrent: () => true }) });
+        const applications: Awaited<ReturnType<typeof startManagedProviderConsumerApplication>>[] = [];
+        const sources: NonNullable<Awaited<ReturnType<typeof open>>>[] = [];
+        const nativeSessions: AgentSessionRuntime[] = [];
+        const attach = async (sessionId: string) => {
+            const source = await open({ signal, consumer: { kind: 'session', sessionId }, consumerMachineId: fixture.machineId,
+                source: { kind: 'account_connection', connectionId: fixture.record.connectionId,
+                    expectedConnectionSecurityFingerprint: fixture.record.connectionSecurityFingerprint,
+                    expectedManagedRuntimeBindingFingerprint: createProviderManagedRuntimeBindingFingerprintV1({ implementationIdentity: identity,
+                        managedRuntime: declaration.managedRuntime!, purposeBindings: gateway.purposeBindings }) },
+                application: { agentTargetKey: fixture.agentTargetKey, implementationIdentity: identity,
+                    endpointTemplateId: 'api', protocol: 'openai-responses' } });
+            if (!source) throw new Error('Expected admitted Session gateway consumer');
+            sources.push(source);
+            const application = await startManagedProviderConsumerApplication({ signal, endpointUrl: source.access.endpointUrl('api')!,
+                credentialTransport: declaration.credential!.transports[0]!,
+                request: async request => await source.revalidate(request.signal)
+                    ? { ok: true, response: await source.access.request(request) } : { ok: false, reasonCode: 'resource_forbidden' } });
+            applications.push(application);
+            return { source, application, async retire() { await application.cleanup(); await source.retire(); } };
+        };
+        try {
+        const registration = fixture.lease.registry.agentRuntimesByAgentId.get(fixture.agentId);
+        if (!registration?.hasPrimaryRuntime) throw new Error('Expected installed fixture Agent');
+        const nativeRuntime = await registration.createRuntime({ signal });
+        const originalConsumers = await Promise.all([attach(TEST_SESSION_ID), attach('second-session')]);
+        const processFile = join(gateway.directory, 'gateway-started');
+        const originalPid = Number(await readFile(processFile, 'utf8'));
+        expect((await readFile(join(gateway.directory, 'gateway-starts'), 'utf8')).trim().split('\n')).toEqual([String(originalPid)]);
         const localId = 'queued-across-capability-replacement';
         const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: false,
             servers: [{ id: 'inherited', name: 'inherited', transport: 'http',
@@ -1579,8 +1649,8 @@ describe('ApiSessionClient pending queue materialization', () => {
         bindTransport();
         const retired = createClient(session);
         await waitForPendingInputContract(retired);
-        const context = { machineId: 'test-machine', machinePlatform: 'posix' as const,
-            directory: '/repo', projectKey: null, agentId: 'fixture' };
+        const context = { machineId: fixture.machineId, machinePlatform: 'posix' as const,
+            directory: '/repo', projectKey: null, agentId: fixture.agentId };
         const skillRules = [{ id: 'skill-rule', skillId: 'library', target: { t: 'allMachines' as const },
             enabled: true, createdAt: 1, updatedAt: 1 }];
         let releaseRestart!: () => void;
@@ -1590,10 +1660,11 @@ describe('ApiSessionClient pending queue materialization', () => {
         let restartRequests = 0;
         const restart = vi.fn(async () => {
             restartRequests += 1;
-            if (restartRequests > 1) await restartCompletion;
+            if (restartRequests > 2) await restartCompletion;
+            await originalConsumers[0]!.retire();
             return { ok: true as const, status: 'restarted' as const, sessionId: retired.sessionId };
         });
-        const originalSync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:fixture', session: retired,
+        const originalSync = createRuntimeOverrideSynchronizers({ agentTargetKey: fixture.agentTargetKey, session: retired,
             runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
             isStarted: () => true,
             capabilitySelection: { session: retired, isStarted: () => true, isSettled: () => true,
@@ -1605,20 +1676,50 @@ describe('ApiSessionClient pending queue materialization', () => {
                     initialSkillRules: { context, rules: [] },
                     readSkillRules: () => ({ context, rules: skillRules }),
                 }), requestRestart: restart } });
+        bindTransport();
+        const secondRetired = createClient(createMockSession({ ...session, id: 'second-session', pendingCount: 0 }));
+        await waitForPendingInputContract(secondRetired);
+        const secondSync = createRuntimeOverrideSynchronizers({ agentTargetKey: fixture.agentTargetKey, session: secondRetired,
+            runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
+            isStarted: () => true,
+            capabilitySelection: { session: secondRetired, isStarted: () => true, isSettled: () => true,
+                agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+                ...(kind === 'mcp' ? {
+                    initialMcpRules: { context, settings: { ...settings, bindings: [] }, mcpPluginItems: [], selectedServerIds: [] },
+                    readMcpRules: () => ({ context, settings, mcpPluginItems: [] }),
+                } : { initialSkillRules: { context, rules: [] }, readSkillRules: () => ({ context, rules: skillRules }) }),
+                requestRestart: async () => { restartRequests += 1; await originalConsumers[1]!.retire();
+                    return { ok: true, status: 'restarted', sessionId: secondRetired.sessionId }; } } });
         try {
-            await originalSync.flushPendingAfterStart();
+            await Promise.all([originalSync.flushPendingAfterStart(), secondSync.flushPendingAfterStart()]);
             expect(restart).toHaveBeenCalledTimes(1);
+            expect(restartRequests).toBe(2);
             expect(claims).toBe(0);
         } finally {
             await originalSync.dispose?.();
+            await secondSync.dispose?.();
             await retired.close();
+            await secondRetired.close();
         }
+        expect(await waitForProcessExit(originalPid)).toBe(true);
+        const replacements = await Promise.all([attach(TEST_SESSION_ID), attach('second-session')]);
+        const replacementPid = Number(await readFile(processFile, 'utf8'));
+        expect(replacementPid).not.toBe(originalPid);
+        expect(replacements[0]!.source.access.endpointUrl('api')).toBe(replacements[1]!.source.access.endpointUrl('api'));
+        expect(replacements[0]!.application.renderedCredential).not.toBe(replacements[1]!.application.renderedCredential);
+        expect((await readFile(join(gateway.directory, 'gateway-starts'), 'utf8')).trim().split('\n')).toEqual([
+            String(originalPid), String(replacementPid),
+        ]);
         bindTransport();
         const client = createClient(session);
         await waitForPendingInputContract(client);
         const queue = new MessageQueue2<{ id: string }>(() => 'mode');
-        client.onUserMessage(message => queue.pushImmediate(message.content.text, { id: 'mode' }));
-        const sync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:fixture', session: client,
+        const pendingLocalIds: string[] = [];
+        client.onUserMessage(message => {
+            pendingLocalIds.push(message.localId!);
+            queue.pushImmediate(message.content.text, { id: 'mode' });
+        });
+        const sync = createRuntimeOverrideSynchronizers({ agentTargetKey: fixture.agentTargetKey, session: client,
             runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
             isStarted: () => true,
             capabilitySelection: { session: client, isStarted: () => true, isSettled: () => true,
@@ -1645,6 +1746,21 @@ describe('ApiSessionClient pending queue materialization', () => {
             expect(restart).toHaveBeenCalledTimes(1);
             expect(claims).toBe(1);
             expect(queue.size()).toBe(0);
+            const batch = await waiting;
+            if (!batch) throw new Error('Expected original Pending input');
+            const endpoint = replacements[0]!.application;
+            if (!nativeRuntime.sessions) throw new Error('Expected fixture Agent Session runtime');
+            const nativeSession = await nativeRuntime.sessions.open({ kind: 'create', sessionId: TEST_SESSION_ID, cwd: homeDir,
+                launchEnvironment: { values: { RUN_PROVIDER_TOKEN: endpoint.credential }, unset: [] },
+                providerBinding: { upstream: { protocol: 'openai-responses', normalizedUrl: endpoint.endpointUrl, credential: 'apiKey' },
+                    model: { id: 'example', name: 'Example' }, materialization: { v: 1, kind: 'spawnEnv' } } },
+                // This installed boundary fixture reads only the cancellation signal;
+                // no host domain service is replaced by the reduced context.
+                { signal } as AgentSessionRuntimeContext);
+            nativeSessions.push(nativeSession);
+            expect(pendingLocalIds).toEqual([localId]);
+            await expect(nativeSession.send({ inputIds: [pendingLocalIds[0]!], input: { text: batch.message },
+                delivery: { kind: 'newTurn', turnId: 'retained-pending-turn' } })).resolves.toEqual({ status: 'admitted' });
             // The HTTP boundary withholds advisory status writes. Reobserving
             // that retained status still cannot restart or redeliver the input.
             sync.syncFromMetadata();
@@ -1652,10 +1768,19 @@ describe('ApiSessionClient pending queue materialization', () => {
             expect(restart).toHaveBeenCalledTimes(1);
             expect(delivered).toHaveLength(1);
             expect(claims).toBe(1);
+            expect((await readFile(join(gateway.directory, 'gateway-inputs'), 'utf8')).trim().split('\n')).toEqual(['deliver once']);
+            expect(await readFile(processFile, 'utf8')).toBe(String(replacementPid));
         } finally {
             controller.abort(); releaseRestart(); await sync.dispose?.(); await waiting;
         }
-    });
+        } finally {
+            await Promise.all(nativeSessions.map(session => session.dispose()));
+            await Promise.all(applications.map(application => application.cleanup()));
+            await Promise.all(sources.map(source => source.retire()));
+            await fixture.cleanup();
+        }
+      });
+    }, 30_000);
 
     it.each(['recover', 'cancel'] as const)('rejoins the same Pending claim through repeated settlement uncertainty until %s', async (outcome) => {
         const localId = 'retained-first-input';
