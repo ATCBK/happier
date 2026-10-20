@@ -42,6 +42,6 @@ export function resolveHappierFreshnessText(input: HappierFreshnessTextInput & {
   const asOf = typeof input.asOf === 'number'
     ? input.formatAsOf(formatHappierAsOfTime(input.asOf, input.now, input.locale))
     : null;
-  const text = asOf ? (input.reason ? `${asOf} · ${input.reason}` : asOf) : input.reason;
+  const text = asOf !== null ? (input.reason ? `${asOf} · ${input.reason}` : asOf) : input.reason;
   return input.parts ? { text, asOf, reason: input.reason } : text;
 }
