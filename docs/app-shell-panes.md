@@ -25,14 +25,15 @@ The destination supplies its own name, mark and existing lifecycle presentation;
 not infer a Session or Workflow state from a scope id. A host without this descriptor offers no
 hide control. Session and Project headers supply their domain wording; app pages use their title.
 
-`PaneScopeState.mainHidden` is a persisted preference, changed by `setMainHidden` through the
-scoped pane API. `usePaneMainColumn()` exposes the host's effective `hidden`, `canHide`, `folded`,
+`PaneScopeState.mainHidden` is a persisted preference, changed by the `setMainHidden` reducer
+action. `usePaneMainColumn()` exposes the host's effective `hidden`, `canHide`, `folded`,
 labels, identity and `setHidden`/`toggle` controls to descendants. It returns null outside a host.
-The scoped pane API's `setMainHidden` changes the persisted preference. An active presentation
-outside the host's descendant context, such as Session presentation intents, receives the same
+An active presentation outside the host's descendant context, such as Session presentation intents, receives the same
 measured controls through `onMainColumnControlsChange` and calls their `setHidden`. This also opens
 a folded main drawer whose persisted flag may already be false; dispatching the persisted flag alone
-cannot reveal that drawer. An absent published control returns the presentation's unavailable result.
+cannot reveal that drawer. Explicit focus or return-to-Chat reports unavailable without published
+controls. Ordinary Board opening beside Chat and item reveal retain their scoped pane navigation
+when no main-column host is present, without creating a visibility fallback.
 
 `AppPaneScopeHost` only hides main when the layout supports neighbouring content and a side or
 details column is available. It clears stale hide state when the last neighbouring column closes,
@@ -45,6 +46,8 @@ column retains the destination's identity and current lifecycle presentation. Th
 pane focus mode and its details-header controls are retired. Protocol presentation vocabulary stays
 unchanged: `board.open` with `mode: 'focus'` hides main, `beside_chat` reveals it, and `chat.return`
 reveals it while preserving the person's open panes. Item reveal preserves visibility.
+The local-settings normalizer still removes the obsolete `editorFocusModeEnabled` input key;
+that cleanup-only reader has no visibility control or current writer.
 
 ## Arrangement and geometry
 
