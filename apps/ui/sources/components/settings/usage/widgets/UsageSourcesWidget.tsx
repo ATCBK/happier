@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { matchesUsageSourceAccountingScope, USAGE_SOURCE_CONSENT_DISCLOSURE, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
+import { isUsageSourceMissing, selectUsageSourceDiscoveryInventory, matchesUsageSourceAccountingScope, USAGE_SOURCE_CONSENT_DISCLOSURE, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
 import { UsageSourceInventoryScopeSchema, type UsageSourceInventoryScope } from '@happier-dev/protocol/inputs/usageQuery';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -233,9 +233,7 @@ export type UsageSourceRowStatus = Readonly<{
  */
 export function resolveUsageSourceRowStatus(source: Pick<UsageSourceV1, 'consent' | 'status' | 'coverage' | 'root' | 'pendingCount' | 'asOfMs'>): UsageSourceRowStatus {
   if (source.consent === 'disabled' && source.status === 'found') return { kind: 'found', label: '', tone: 'quiet' };
-  const retained = source.consent === 'enabled' || source.pendingCount > 0 || source.asOfMs !== null;
-  if (source.root.path === null && !retained && (source.status === 'unavailable' || source.status === 'unsupported' || source.status === 'error'))
-    return { kind: 'missing', label: '', tone: 'quiet' };
+  if (isUsageSourceMissing(source)) return { kind: 'missing', label: '', tone: 'quiet' };
   if (source.status === 'reading') return { kind: 'reading', tone: 'active', label: source.pendingCount > 0
     ? t('usage.board.sources.reading', { count: source.pendingCount }) : t('usage.board.sources.readingStarted') };
   if (source.status === 'error' || source.status === 'unavailable') return { kind: 'failed', tone: 'warning',
@@ -305,7 +303,7 @@ function MachineSources(
   React.useEffect(() => {
     if (controller && props.machine.online) void controller.discover();
   }, [controller, props.machine.online]);
-  const scoped = snapshot.sources.filter(source => matchesUsageSourceAccountingScope(source, props.accountingSources)
+  const scoped = selectUsageSourceDiscoveryInventory(snapshot.sources).filter(source => matchesUsageSourceAccountingScope(source, props.accountingSources)
     && (!props.agentIds.length || props.agentIds.some(agentId =>
     agentId === buildQualifiedPluginContributionKey(source.agent)
       || agentId === resolveBundledAgentIdFromContributionIdentity(source.agent))));

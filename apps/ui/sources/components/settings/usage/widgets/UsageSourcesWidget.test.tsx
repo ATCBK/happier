@@ -158,6 +158,29 @@ afterEach(() => {
 });
 
 describe('Usage Sources body', () => {
+  it('decides missing once per Agent and hides untouched Happier runtime homes without hiding captured history', async () => {
+    const codex = { ...found, sourceId: 'codex-user', agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
+      root: { kind: 'default', path: '/Users/ada/.codex' } } satisfies UsageSourceV1;
+    const absent = { ...codex, sourceId: 'codex-absent', root: { kind: 'configured', path: null },
+      status: 'unavailable' } satisfies UsageSourceV1;
+    const runtime = { ...codex, sourceId: 'codex-runtime', root: { kind: 'materialized', path: '/stack-state/cli/connected-services/codex-home' } } satisfies UsageSourceV1;
+    const stopped = { ...runtime, sourceId: 'codex-captured', status: 'stopped', asOfMs: 100 } satisfies UsageSourceV1;
+    const boundary = machineBoundary(codex, [codex, absent, runtime, stopped]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.codex-user.add')).toBeTruthy());
+    expect(Boolean(screen.findByTestId('sources.machine.mac.source.codex-runtime'))).toBe(false);
+    expect(screen.findByTestId('sources.machine.mac.source.codex-captured')).toBeTruthy();
+    expect(Boolean(screen.findByTestId('sources.machine.mac.missing'))).toBe(false);
+    await screen.update(<UsageSourcesMachines lifetime={lifetime} serverId="home" executor={boundary.executor}
+      testID="sources" machines={[]} input={{ agents: [], machines: [], sources: [] }} />);
+    boundary.setDiscovery([absent, { ...absent, sourceId: 'codex-absent-two' }]);
+    await screen.update(<UsageSourcesMachines lifetime={lifetime} serverId="home" executor={boundary.executor}
+      testID="sources" machines={[{ id: 'mac', name: 'Mac', online: true }]} input={{ agents: [], machines: [], sources: [] }} />);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.missing')).toBeTruthy());
+    await screen.pressByTestIdAsync('sources.machine.mac.missing.toggle');
+    expect(screen.findByTestId('sources.machine.mac.missing.codex-absent')).toBeTruthy();
+    expect(Boolean(screen.findByTestId('sources.machine.mac.missing.codex-absent-two'))).toBe(false);
+  });
   it('summarizes resolved empty machines and restores discovered content and retry after fresh demand', async () => {
     const boundary = machineBoundary(found, []);
     const props = { lifetime, serverId: 'home', executor: boundary.executor, testID: 'sources', input: { agents: [], machines: [], sources: [] } };
