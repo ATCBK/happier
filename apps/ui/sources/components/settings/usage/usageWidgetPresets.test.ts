@@ -58,12 +58,12 @@ describe('Usage host fragment presets', () => {
         const read = await owner.readState();
         expect(read.kind).toBe('missing');
         expect(read.layout.items).toEqual(presets[0]!.items);
-        // One Card · Lines group: the tall daily bars pack left of the period summary and capacity.
+        // One Card · Lines group: the period's figures lead as one band, then the tall daily bars beside capacity.
         const first = read.layout.items[0]!;
         expect(first).toMatchObject({ kind: 'group', width: 'full' });
         expect(first.kind === 'group' ? first.children.slice(0, 3) : []).toMatchObject([
+            { size: 'full', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'tall', instance: { definition: { id: 'usage_daily' } } },
-            { size: 'medium', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'medium', instance: { definition: { id: 'usage_capacity' } } }]);
         // Overview: the Projections list beside Efficiency over Rhythm, so neither column ends in a half-empty cell.
         // Costs: the daily cost bars beside Breakdowns over Efficiency, so the chart gets a real plot height (lab d2views-COST 2-up).
@@ -77,6 +77,9 @@ describe('Usage host fragment presets', () => {
             return packWidgetGroupBands(resolveWidgetGroupCells('corePage', kids.map(child => ({ id: child.instance.id, size: child.size }))), 2)
                 .map(band => band.kind === 'row' ? [[nameOf(band.cell.id)]] : band.kind === 'columns' ? band.columns.map(column => column.map(cell => nameOf(cell.id))) : []);
         };
+        // Overview: Daily shares its band with Capacity alone (lab d2views-OV), so the chart's cell is not
+        // held open by a two-widget column beside it.
+        expect(bandsOf('overview').slice(0, 2)).toEqual([[['usage_period_summary']], [['usage_daily'], ['usage_capacity']]]);
         expect(bandsOf('overview').slice(-1)).toEqual([[['usage_projections'], ['usage_efficiency', 'usage_rhythm']]]);
         expect(bandsOf('costs')).toEqual([[['usage_cost_facts']], [['usage_daily'], ['usage_breakdowns', 'usage_efficiency']],
             [['usage_plan_fit']], [['usage_outcomes']]]);

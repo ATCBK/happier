@@ -27,11 +27,12 @@ type Arrangement = Readonly<{ width: 'half' | 'full'; widgets: readonly PresetWi
 const w = (id: string, size: WidgetSizeV1, extra?: Omit<PresetWidget, 'id' | 'size'>): PresetWidget => ({ id, size, ...extra });
 /**
  * Each host view is one Card · Lines group (lab `d2views`, `wgusage-CD`): declared sizes pack into the
- * group's two columns — Overview's tall daily bars on the left beside the period and capacity — and a
- * phone stacks the same children in reading order.
+ * group's two columns — Overview's period figures lead as one band, then the tall daily bars beside
+ * capacity (lab d2views-OV) — and a phone stacks the same children in reading order.
  */
 const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>> = {
-    overview: [{ width: 'full', widgets: [w('usage_daily', 'tall'), w('usage_period_summary', 'medium'), w('usage_capacity', 'medium'),
+    // Daily shares its band with Capacity alone: beside a two-widget column its cell stood open under the legend.
+    overview: [{ width: 'full', widgets: [w('usage_period_summary', 'full'), w('usage_daily', 'tall'), w('usage_capacity', 'medium'),
         // Efficiency's four figures are the compact one: the group's column packing stacks it over Rhythm
         // beside the Projections list, so neither column ends in a half-empty cell (lab wgusage-CD).
         w('usage_coach', 'full'), w('usage_projections', 'medium'), w('usage_efficiency', 'small'),
