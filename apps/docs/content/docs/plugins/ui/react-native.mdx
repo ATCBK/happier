@@ -1085,11 +1085,22 @@ import { ListDetailLayout, SessionComposer, SessionProvider, SessionTranscript }
 <SessionProvider sessionId={leadSessionId}>
   <ListDetailLayout
     minListWidth={280} minDetailWidth={420} preferredListRatio={0.35}
+    resizeKey="lead-session"
     list={<LeadFacts />}
     detail={<><SessionTranscript /><SessionComposer /></>}
   />
 </SessionProvider>
 ```
+
+In 0.3 development source, `ListDetailLayout` and `Collection` share a resizable
+split rail. `resizeKey` remembers its width on this device in Happier, scoped to
+your plugin. Without the host sizing port the width lasts for the mounted
+component. For controlled geometry, pass `listWidthPx` and
+`onListWidthChange`; persist on release with `onListWidthCommit`. A double-click
+requests `onListWidthReset` and clears the remembered width. Resizing clamps to
+the existing pane minima and preserves the mounted detail. You can provide the
+handle's accessible name, hint and value text through `labels.resize`,
+`labels.resizeHint` and `labels.resizeValue`.
 
 - **Bounded region.** The parts fill a bounded flex column: the transcript takes
   the remaining height and the composer keeps its natural height. There is no

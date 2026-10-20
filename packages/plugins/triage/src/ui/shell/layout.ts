@@ -3,15 +3,15 @@
  *
  * `core/SURFACE.md` §2.1: Triage supplies scaled reading measures and one ratio
  * preference to the shared ListDetailLayout, which owns measurement and
- * split/stacked composition. V1 has no drag handle, separator role, pane-width
- * Settings value or restoration path, so nothing here is retained or persisted.
+ * split/stacked composition and the shared resize handle. The surface can give
+ * the Collection a stable resizeKey for device-local width restoration.
  */
 
 /**
  * The one static layout preference (`core/SURFACE.md` §2.1). Beside a detail the list is a scan column of
  * two-line rows (the lens toolbar sits above both panes), while the detail carries source-native content, so the
  * preference favours detail: the approved composition (`c7-merged.html`) gives the list about 440 of 1188 pt. It
- * is a starting point for the clamp below, not a stored or user-adjustable value.
+ * is the default before a person resizes the Collection rail.
  */
 export const TRIAGE_SPLIT_LIST_RATIO_PREFERENCE_V1 = 0.37;
 
