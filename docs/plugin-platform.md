@@ -2184,8 +2184,10 @@ File sources provide their existing decoder and source-scoped paths plus
 invocation `ripgrep`; the helper prefilters safe queries, then uses Protocol's
 decoded-text `contentSearchMatch` as the match/snippet authority. Unicode,
 escaped and NUL text retain decoded fallback. Client-backed sources can omit
-paths and ripgrep, as OpenCode does. Claude, Codex, Pi, OhMyPi and Antigravity
-use the file path; all six bundled Agents declare positive content search.
+paths and ripgrep, as OpenCode does. Kilo's characterized CLI 1.0.25 JSON
+reader also supplies decoded records without a prefilter, joining its native
+ordered parts. Claude, Codex, Pi, OhMyPi and Antigravity use the file path;
+these bundled sources and Kilo declare positive content search.
 The prefilter recognizes literal and mixed JSON-escaped spellings of an ASCII
 query, including JavaScript's ASCII-producing Unicode folds. Unicode fallback
 uses only escape codes from the query's case-folded alphabet, so unrelated
