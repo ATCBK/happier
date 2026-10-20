@@ -12,7 +12,7 @@ import {
   LINEAR_DETAIL_SECTIONS, LINEAR_DETAIL_TITLES, LINEAR_PERSONAL_KEY,
   LinearDetailInputSchema, LinearDetailResultSchema, LinearCommentInputSchema, LINEAR_CREATE_FIELDS, LINEAR_EDIT_FIELDS,
 } from './contracts.js';
-import { listLinearInstances, scanLinearSource, getLinearEntry, readLinearDetail } from './source.js';
+import { listLinearInstances, listLinearScopeUnits, scanLinearSource, getLinearEntry, readLinearDetail } from './source.js';
 import { createLinearIssue, editLinearIssue, transitionLinearIssue, commentLinearIssue } from './mutations.js';
 
 const sources = TriageSourcesContributionProtocolV1;
@@ -25,7 +25,7 @@ export const LINEAR_PLUGIN = definePlugin({
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [
-    { id: 'linear-graphql', capability: 'network', reason: 'Read and edit Linear issues in the selected team.',
+    { id: 'linear-graphql', capability: 'network', reason: 'Read and edit Linear issues in the included teams.',
       scope: { targets: [{ kind: 'fixedOrigin', origin: LINEAR_ORIGIN }], methods: ['POST'] } },
     { id: LINEAR_PURPOSE, capability: 'connectedAccounts', reason: 'Use the exact selected Linear account.',
       scope: { serviceRefs: [LINEAR_SERVICE_ID], operations: ['use'], materializationKinds: ['httpHeaders'] } },
@@ -44,11 +44,18 @@ export const LINEAR_PLUGIN = definePlugin({
   },
   actions: {
     [LINEAR_ACTIONS.listInstances]: {
-      title: 'Discover Linear teams', description: 'List teams available to each connected Linear account.', placementBindings: [],
+      title: 'Discover Linear workspaces', description: 'List the workspace for each connected Linear account.', placementBindings: [],
       surfaces: sources.operations.listInstances.declaration.surfaces, dangerLevel: 'safe',
       inputSchema: TriageSourceConnectedAccountInputsV1.listInstances.jsonSchema,
       resultSchema: sources.operations.listInstances.declaration.resultSchema.jsonSchema,
       hostAccess, run: listLinearInstances,
+    },
+    [LINEAR_ACTIONS.listScopeUnits]: {
+      title: 'List Linear teams', description: 'Search teams in this Linear workspace.', placementBindings: [],
+      surfaces: sources.operations.listScopeUnits.declaration.surfaces, dangerLevel: 'safe',
+      inputSchema: TriageSourceConnectedAccountInputsV1.listScopeUnits.jsonSchema,
+      resultSchema: sources.operations.listScopeUnits.declaration.resultSchema.jsonSchema,
+      hostAccess, connectedAccountPurposeBindings: [{ path: 'draft.binding.account', purpose: LINEAR_PURPOSE }], run: listLinearScopeUnits,
     },
     [LINEAR_ACTIONS.scan]: {
       title: 'Read Linear team issues', description: 'Read a page of live Linear issues.', placementBindings: [],
@@ -58,7 +65,7 @@ export const LINEAR_PLUGIN = definePlugin({
       hostAccess, connectedAccountPurposeBindings: bindings, run: scanLinearSource,
     },
     [LINEAR_ACTIONS.get]: {
-      title: 'Read a Linear issue', description: 'Read the current issue through its exact configured team.', placementBindings: [],
+      title: 'Read a Linear issue', description: 'Read the current issue through its configured workspace and team selection.', placementBindings: [],
       surfaces: sources.operations.get.declaration.surfaces, dangerLevel: 'safe',
       inputSchema: TriageSourceConnectedAccountInputsV1.get.jsonSchema,
       resultSchema: sources.operations.get.declaration.resultSchema.jsonSchema,
@@ -71,7 +78,7 @@ export const LINEAR_PLUGIN = definePlugin({
       hostAccess, connectedAccountPurposeBindings: bindings, run: readLinearDetail,
     },
     [LINEAR_ACTIONS.create]: {
-      title: 'Create a Linear issue', description: 'Create one issue in the configured Linear team.', placementBindings: [],
+      title: 'Create a Linear issue', description: 'Create one issue in an included Linear team.', placementBindings: [],
       surfaces: sources.operations.create.declaration.surfaces, dangerLevel: 'writesRemote',
       confirmation: { title: 'Create this Linear issue?', confirmLabel: 'Create issue' },
       inputSchema: TriageSourceConnectedAccountInputsV1.create.jsonSchema,
@@ -120,6 +127,7 @@ export const LINEAR_PLUGIN = definePlugin({
   contributesTo: { [TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1]: { [TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1]: {
     [LINEAR_SOURCE_ID]: sources.contribute({
       descriptor: { v: 1, purpose: LINEAR_PURPOSE, displayName: 'Linear', settingsPageId: 'triage-sources',
+        scopeUnit: { singularLabel: 'Team', pluralLabel: 'Teams' },
         kinds: [{ id: 'issue', workflowSubject: 'issue', displayName: 'Issue', pluralDisplayName: 'Issues', task: true,
           taskCapabilities: { createFields: LINEAR_CREATE_FIELDS, editFields: LINEAR_EDIT_FIELDS },
           detailTabs: [
@@ -131,6 +139,7 @@ export const LINEAR_PLUGIN = definePlugin({
         }] },
       operations: {
         listInstances: sources.operations.listInstances.bind(LINEAR_ACTIONS.listInstances),
+        listScopeUnits: sources.operations.listScopeUnits.bind(LINEAR_ACTIONS.listScopeUnits),
         scan: sources.operations.scan.bind(LINEAR_ACTIONS.scan), get: sources.operations.get.bind(LINEAR_ACTIONS.get),
         create: sources.operations.create.bind(LINEAR_ACTIONS.create), edit: sources.operations.edit.bind(LINEAR_ACTIONS.edit),
         transition: sources.operations.transition.bind(LINEAR_ACTIONS.transition),

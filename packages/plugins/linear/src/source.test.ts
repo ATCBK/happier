@@ -1,6 +1,6 @@
 import { TriageGetResultV1Schema, TriageListInstancesResultV1Schema, TriageScanResultV1Schema } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
-import { getLinearEntry, listLinearInstances, scanLinearSource, readLinearDetail } from './source.js';
+import { getLinearEntry, listLinearInstances, listLinearScopeUnits, scanLinearSource, readLinearDetail } from './source.js';
 
 import { account, instance, localRef, issue, page, host } from './fixtures.test-support.js';
 
@@ -8,6 +8,18 @@ const workspaceInstance = (teams: unknown) => ({ ...instance, localInstanceKey: 
   configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams, involvement: 'everyone' }) } });
 
 describe('Linear source through provider HTTP', () => {
+  it('projects a due date and provider completion time through the scan snapshot', async () => {
+    const h = host(({ operationName, query }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      expect(query).toContain('completedAt');
+      expect(query).toContain('dueDate');
+      return { issues: page([{ ...issue, state: { id: 'done', name: 'Done', type: 'completed' }, completedAt: '2026-10-20T09:00:00Z' }]) };
+    });
+    const result = TriageScanResultV1Schema.parse(await scanLinearSource({ v: 1, instance, page: { kind: 'initial', limit: 20 } }, h.context));
+    expect(result).toMatchObject({ kind: 'complete', observations: [{ snapshot: {
+      dueDate: issue.dueDate, completedAtMs: Date.parse('2026-10-20T09:00:00Z'),
+    } }] });
+  });
   it('loads complete editable values without putting bodies into scans', async () => {
     const body = 'Full Markdown\n\nPreserve whitespace.  \n';
     const h = host(({ operationName, query }) => {
@@ -59,7 +71,10 @@ describe('Linear source through provider HTTP', () => {
         return { issues: page([issue, { ...issue, id: 'issue-2', team: { id: 'team-2', key: 'OPS', name: 'Operations' } }]) };
       });
       expect(await scanLinearSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 20 } }, h.context))
-        .toMatchObject({ kind: 'complete', observations: [{ localRef: { entryId: 'issue-1' } }, { localRef: { entryId: 'issue-2' } }] });
+        .toMatchObject({ kind: 'complete', observations: [
+          { localRef: { collisionScope: 'linear', entryId: 'issue-1' }, snapshot: { scopeUnitId: 'team-1' } },
+          { localRef: { collisionScope: 'linear', entryId: 'issue-2' }, snapshot: { scopeUnitId: 'team-2' } },
+        ] });
     }
   });
 
@@ -71,6 +86,27 @@ describe('Linear source through provider HTTP', () => {
       .toMatchObject({ kind: 'failed', failure: { code: 'linear/teamMismatch' } });
     expect(await getLinearEntry({ v: 1, instance: configured, localRef }, h.context))
       .toMatchObject({ kind: 'unresolved', failure: { code: 'linear/entryMismatch' } });
+  });
+
+  it('keeps historical team keys usable with old tokens and newly written selections', async () => {
+    const h = host(({ operationName }) => operationName === 'LinearViewer' ? { viewer: { id: 'viewer-1' } } : { issues: page([issue]) });
+    for (const configured of [instance, { ...workspaceInstance({ kind: 'selected', unitIds: ['team-1'] }), localInstanceKey: instance.localInstanceKey }]) {
+      expect(await scanLinearSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 20 } }, h.context))
+        .toMatchObject({ kind: 'complete', observations: [{ localRef }] });
+    }
+    expect(await listLinearScopeUnits({ v: 1, mode: 'configured', draft: {
+      v: 1, binding: instance.binding, localInstanceKey: instance.localInstanceKey, configuration: instance.configuration,
+    } }, h.context)).toMatchObject({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['team-1'] }, units: [{ id: 'team-1' }] });
+  });
+
+  it('refuses empty, duplicate and unknown selections before provider authorization', async () => {
+    const h = host(() => ({}));
+    for (const teams of [{ kind: 'selected', unitIds: [] }, { kind: 'selected', unitIds: ['team-1', 'team-1'] }, { kind: 'future' }]) {
+      expect(await scanLinearSource({ v: 1, instance: workspaceInstance(teams), page: { kind: 'initial', limit: 20 } }, h.context))
+        .toMatchObject({ kind: 'failed', failure: { code: 'linear/configurationInvalid' } });
+    }
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.materializeListedAccount).not.toHaveBeenCalled();
   });
 
   it('reports GraphQL HTTP-400 RATELIMITED with the provider complexity reset and never retries', async () => {
@@ -126,17 +162,21 @@ describe('Linear source through provider HTTP', () => {
     });
   });
 
-  it('projects live parent/sub-issue/blocker facts and native transition capabilities into the shared snapshot', async () => {
+  it.each([1, 2])('projects native transitions and declares one-step completion only for an unambiguous done state (%s)', async (doneStates) => {
     const h = host(({ operationName, query }) => {
       if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
       if (operationName === 'LinearIssue') return { issue };
       if (query.includes('children(')) return { issue: { ...issue, children: page([{ id: 'child-1', identifier: 'ENG-124', title: 'Child' }]) } };
       if (query.includes('inverseRelations(')) return { issue: { ...issue, inverseRelations: page([{ type: 'blocks', issue: { id: 'blocker-1', identifier: 'OPS-7', title: 'Dependency' }, relatedIssue: issue }]) } };
-      return { issue: { ...issue, team: { ...issue.team, states: page([{ id: 'state-1', name: 'In Progress', type: 'started' }]) } } };
+      return { issue: { ...issue, team: { ...issue.team, states: page([{ id: 'state-1', name: 'In Progress', type: 'started' },
+        ...Array.from({ length: doneStates }, (_, index) => ({ id: `done-${index}`, name: 'Done', type: 'completed' }))]) } } };
     });
-    expect(await getLinearEntry({ v: 1, instance, localRef }, h.context)).toMatchObject({ kind: 'present', snapshot: {
+    const result = TriageGetResultV1Schema.parse(await getLinearEntry({ v: 1, instance, localRef }, h.context));
+    expect(result).toMatchObject({ kind: 'present', snapshot: {
       relations: { parent: { entryId: 'parent-1' }, children: { total: 1, complete: true, entries: [{ entryId: 'child-1' }] }, blockedBy: [{ entryId: 'blocker-1' }] },
-      taskCapabilities: { transitions: [{ id: 'state-1', state: { presentation: 'active', stage: 'started' } }] },
     } });
+    if (result.kind !== 'present') throw new Error('Expected a task');
+    expect(result.snapshot.taskCapabilities?.transitions?.[0]).toMatchObject({ id: 'state-1', state: { presentation: 'active', stage: 'started' } });
+    expect(result.snapshot.taskCapabilities?.completingTransitionId).toBe(doneStates === 1 ? 'done-0' : undefined);
   });
 });

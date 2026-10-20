@@ -5,7 +5,10 @@ import {
   TriageGetInputV1Schema, TriageListInstancesInputV1Schema, TriageScanInputV1Schema,
   TriageListInstancesResultV1Schema, TriageGetResultV1Schema, TriageScanResultV1Schema,
   TriageEntryLocatorV1Schema, MAX_TRIAGE_TEXT_UTF8_BYTES_V1, MAX_TRIAGE_ROW_FACT_VALUE_UTF8_BYTES_V1, MAX_TRIAGE_ROW_FACTS_V1,
+  TriageListScopeUnitsConnectedAccountInputV1Schema, TriageListScopeUnitsResultV1Schema,
+  type TriageListScopeUnitsResultV1, type TriageListScopeUnitsInputV1,
   projectTriageDisplayTextV1,
+  triageTaskTransitionCapabilitiesV1,
   type TriageGetResultV1, type TriageListInstancesResultV1, type TriageScanResultV1,
   type TriageConfiguredSourceInstanceV1, type TriageSourceEntryLocalRefV1, type TriageRowFactV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -15,23 +18,55 @@ import { fitActionResultTextV1 } from '@happier-dev/triage-sources/projection/ac
 import {
   LINEAR_PLUGIN_ID, LINEAR_SOURCE_ID, LINEAR_PURPOSE, LINEAR_SERVICE_ID, LinearTeamSchema,
   LINEAR_CREATE_FIELDS, LINEAR_EDIT_FIELDS,
-  LinearConfigurationSchema, LinearContinuationSchema, LinearIssueSchema,
+  readLinearConfiguration, linearIncludesTeam, linearConfiguredTeamUnits, LinearTeamCursorSchema, LinearContinuationSchema, LinearIssueSchema,
   LinearDetailInputSchema, LinearDetailResultSchema, LinearRelatedIssueSchema,
   type LinearConfiguration, type LinearIssue, type LinearDetailResult, type LinearDetailInput,
 } from './contracts.js';
 import { connection, record, linearFailure, LinearRequestError, failureFrom, requestLinearGraphql, LINEAR_ISSUE_FIELDS, LINEAR_PAGE_INFO, LINEAR_PAGE_SIZE } from './api.js';
 
 export function admitLinearInstance(instance: TriageConfiguredSourceInstanceV1, localRef?: TriageSourceEntryLocalRefV1): Readonly<{ account: ConnectedAccountRef; configuration: LinearConfiguration }> {
-  const binding = instance.binding;
-  if (binding.purpose !== LINEAR_PURPOSE || !('account' in binding)
-    || binding.account.service.pluginId !== LINEAR_PLUGIN_ID || binding.account.service.localId !== LINEAR_SERVICE_ID
-    || instance.instance.source.pluginId !== LINEAR_PLUGIN_ID || instance.instance.source.localId !== LINEAR_SOURCE_ID) throw linearFailure('instanceMismatch');
-  let configuration: LinearConfiguration;
-  try { configuration = LinearConfigurationSchema.parse(JSON.parse(instance.configuration.token)); }
-  catch { throw linearFailure('configurationInvalid'); }
-  if (instance.localInstanceKey !== `linear/${configuration.teamId}`) throw linearFailure('teamMismatch');
+  if (instance.instance.source.pluginId !== LINEAR_PLUGIN_ID || instance.instance.source.localId !== LINEAR_SOURCE_ID) throw linearFailure('instanceMismatch');
   if (localRef && (localRef.kindId !== 'issue' || localRef.collisionScope !== 'linear')) throw linearFailure('entryMismatch');
-  return { account: binding.account, configuration };
+  return admitLinearScopeDraft(instance);
+}
+
+function admitLinearScopeKey(key: string): void {
+  // Existing per-team keys remain valid identities for reconfiguration/restoration.
+  if (key !== 'linear' && !/^linear\/[^/]+$/u.test(key)) throw linearFailure('teamMismatch');
+}
+
+function admitLinearScopeDraft(draft: Pick<TriageListScopeUnitsInputV1['draft'], 'binding' | 'localInstanceKey' | 'configuration'>) {
+  const binding = draft.binding;
+  if (binding.purpose !== LINEAR_PURPOSE || !('account' in binding)
+    || binding.account.service.pluginId !== LINEAR_PLUGIN_ID || binding.account.service.localId !== LINEAR_SERVICE_ID) throw linearFailure('instanceMismatch');
+  admitLinearScopeKey(draft.localInstanceKey);
+  try { return { account: binding.account, configuration: readLinearConfiguration(draft.configuration.token) }; }
+  catch { throw linearFailure('configurationInvalid'); }
+}
+
+export async function listLinearScopeUnits(input: unknown, context: PluginInvocationContext): Promise<TriageListScopeUnitsResultV1> {
+  const parsed = TriageListScopeUnitsConnectedAccountInputV1Schema.parse(input);
+  try {
+    const { account, configuration } = admitLinearScopeDraft(parsed.draft);
+    if (parsed.mode === 'configured') return TriageListScopeUnitsResultV1Schema.parse({ kind: 'page', status: 'complete',
+      selection: configuration.teams, units: linearConfiguredTeamUnits(configuration) });
+    const query = parsed.query?.trim() ?? '';
+    const cursor = parsed.cursor === undefined ? undefined : LinearTeamCursorSchema.parse(JSON.parse(parsed.cursor.token));
+    if (cursor && cursor.query !== query) throw linearFailure('continuationChanged');
+    const data = await requestLinearGraphql({ context, account, operationName: 'LinearTeams',
+      query: `query LinearTeams($after: String, $filter: TeamFilter) { teams(first: ${LINEAR_PAGE_SIZE}, after: $after, filter: $filter) { nodes { id key name } ${LINEAR_PAGE_INFO} } }`,
+      variables: { after: cursor?.after, filter: query ? { or: [{ name: { containsIgnoreCase: query } }, { key: { containsIgnoreCase: query } }] } : {} } });
+    const page = connection(data.teams);
+    if (page.after !== undefined && page.after === cursor?.after) throw linearFailure('cursorNotAdvancing');
+    const units = page.nodes.map((raw) => {
+      const team = LinearTeamSchema.parse(raw);
+      return { id: team.id, label: projectTriageDisplayTextV1(team.name).value || team.id,
+        ...(team.key ? { secondaryText: projectTriageDisplayTextV1(team.key).value } : {}) };
+    });
+    return TriageListScopeUnitsResultV1Schema.parse({ kind: 'page', selection: configuration.teams, units,
+      ...(page.after === undefined ? { status: 'complete' } : { status: 'partial',
+        nextCursor: { v: 1, token: JSON.stringify({ v: 1, after: page.after, query }) } }) });
+  } catch (error) { return { kind: 'failed', failure: failureFrom(error, context.signal) }; }
 }
 
 async function viewerId(context: PluginInvocationContext, account: ConnectedAccountRef): Promise<string> {
@@ -50,27 +85,14 @@ export async function listLinearInstances(input: unknown, context: PluginInvocat
   const failures = [];
   for (const listed of listing.listing.accounts) {
     const binding = { purpose: LINEAR_PURPOSE, account: listed.account };
-    let after: string | undefined;
-    let walk: CursorCycleWalkV1 | null = null;
     try {
-      do {
-        const data = await requestLinearGraphql({ context, account: listed.account, operationName: 'LinearTeams',
-          query: `query LinearTeams($after: String) { teams(first: ${LINEAR_PAGE_SIZE}, after: $after) { nodes { id key name } ${LINEAR_PAGE_INFO} } }`, variables: { after } });
-        const page = connection(data.teams);
-        for (const raw of page.nodes) {
-          const team = LinearTeamSchema.parse(raw);
-          candidates.push({ v: 1 as const, binding, localInstanceKey: `linear/${team.id}`, keyStability: 'stable' as const,
-            configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teamId: team.id, involvement: 'mine' }) },
-            locator: { v: 1 as const, displayLabel: projectTriageDisplayTextV1(`${team.name} · ${team.key}`, MAX_TRIAGE_TEXT_UTF8_BYTES_V1).value },
-          });
-        }
-        after = page.after;
-        if (after !== undefined) {
-          const next = advanceCursorCycleWalkV1(walk, after);
-          if (next.kind === 'revisited') throw linearFailure('cursorNotAdvancing');
-          walk = next.walk;
-        }
-      } while (after !== undefined);
+      const data = await requestLinearGraphql({ context, account: listed.account, operationName: 'LinearWorkspace',
+        query: 'query LinearWorkspace { viewer { organization { id name } } }' });
+      const workspace = record(record(data.viewer).organization);
+      if (typeof workspace.id !== 'string' || !workspace.id || typeof workspace.name !== 'string') throw linearFailure('responseInvalid');
+      candidates.push({ v: 1 as const, binding, localInstanceKey: 'linear', keyStability: 'stable' as const,
+        configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams: { kind: 'all' }, involvement: 'mine' }) },
+        locator: { v: 1 as const, displayLabel: projectTriageDisplayTextV1(workspace.name).value || workspace.id } });
     } catch (error) { failures.push({ binding, failure: failureFrom(error, context.signal) }); }
   }
   return TriageListInstancesResultV1Schema.parse({
@@ -110,6 +132,8 @@ export function projectLinearIssue(issue: LinearIssue, currentViewer: string): E
   const locator = TriageEntryLocatorV1Schema.safeParse({ v: 1, displayPath: issue.identifier, webUrl: issue.url });
   if (!locator.success) truncated = true;
   const createdAtMs = Date.parse(issue.createdAt);
+  const dueAtMs = issue.dueDate === null ? NaN : Date.parse(issue.dueDate);
+  const completedAtMs = issue.completedAt == null ? NaN : Date.parse(issue.completedAt);
   const sourceUpdatedAtMs = Date.parse(issue.updatedAt);
   const observation = TriageGetResultV1Schema.parse({
     kind: 'present', localRef: { kindId: 'issue', collisionScope: 'linear', entryId: issue.id },
@@ -117,9 +141,11 @@ export function projectLinearIssue(issue: LinearIssue, currentViewer: string): E
     snapshot: {
       v: 1, title: text(issue.title) || text(issue.identifier) || issue.id,
       ...(text(issue.identifier) ? { designation: text(issue.identifier) } : {}),
-      scopeLabel: text(issue.team.name) || text(issue.team.key) || issue.team.id,
+      scopeLabel: text(issue.team.name) || text(issue.team.key) || issue.team.id, scopeUnitId: issue.team.id,
       ...(issue.creator?.name && text(issue.creator.name) ? { authorLabel: text(issue.creator.name) } : {}),
       ...(Number.isFinite(createdAtMs) ? { createdAtMs } : {}),
+      ...(Number.isFinite(dueAtMs) ? { dueDate: issue.dueDate } : {}),
+      ...(issue.state.type === 'completed' && Number.isFinite(completedAtMs) ? { completedAtMs } : {}),
       state: linearState(issue.state), facts,
       ...(issue.parent === null ? {} : { relations: { parent: linearEntryRef(issue.parent.id) } }),
       taskCapabilities: { createFields: LINEAR_CREATE_FIELDS, editFields: LINEAR_EDIT_FIELDS },
@@ -166,14 +192,16 @@ export async function scanLinearSource(input: unknown, context: PluginInvocation
     const data = await requestLinearGraphql({ context, account, operationName: 'LinearIssues',
       query: `query LinearIssues($filter: IssueFilter!, $after: String, $first: Int!, $viewerId: ID!) {
         issues(filter: $filter, first: $first, after: $after, orderBy: createdAt) { nodes { ${LINEAR_ISSUE_FIELDS} } ${LINEAR_PAGE_INFO} }
-      }`, variables: { filter: { team: { id: { eq: configuration.teamId } }, ...involvementFilter(configuration.involvement, viewer) }, after: continuation?.after, first: Math.min(limit, LINEAR_PAGE_SIZE), viewerId: viewer } });
+      }`, variables: { filter: { ...(configuration.teams.kind === 'all' ? {} : { team: { id: configuration.teams.unitIds.length === 1
+        ? { eq: configuration.teams.unitIds[0] } : { in: configuration.teams.unitIds } } }),
+        ...involvementFilter(configuration.involvement, viewer) }, after: continuation?.after, first: Math.min(limit, LINEAR_PAGE_SIZE), viewerId: viewer } });
     const page = connection(data.issues);
     const observations = [];
     let omitted = 0;
     for (const raw of page.nodes) {
       const issue = LinearIssueSchema.safeParse(raw);
       if (!issue.success) { omitted += 1; continue; }
-      if (issue.data.team.id !== configuration.teamId) throw linearFailure('teamMismatch');
+      if (!linearIncludesTeam(configuration, issue.data.team.id)) throw linearFailure('teamMismatch');
       observations.push(projectLinearIssue(issue.data, viewer));
     }
     const evidence = omitted > 0 ? { kind: 'partial', reason: 'linear/malformedIssue', omittedItemCount: omitted }
@@ -194,7 +222,7 @@ export async function readLinearIssue(input: Readonly<{ instance: TriageConfigur
   const decoded = LinearIssueSchema.safeParse(data.issue);
   if (!decoded.success) throw linearFailure('responseInvalid');
   const issue = decoded.data;
-  if (issue.id !== input.localRef.entryId || issue.team.id !== configuration.teamId) throw linearFailure('entryMismatch');
+  if (issue.id !== input.localRef.entryId || !linearIncludesTeam(configuration, issue.team.id)) throw linearFailure('entryMismatch');
   return { issue, viewer };
 }
 
@@ -221,10 +249,10 @@ export async function getLinearEntry(input: unknown, context: PluginInvocationCo
         ...(children === undefined ? {} : { children: { total: children.length, entries: children.map((entry) => linearEntryRef(entry.id)), complete: true as const } }),
         ...(blockedBy === undefined ? {} : { blockedBy: blockedBy.map((entry) => linearEntryRef(entry.id)) }),
       },
-      taskCapabilities: { ...observation.snapshot.taskCapabilities, ...(states === undefined ? {} : {
-        transitions: states.map((state) => ({ id: state.id, label: projectTriageDisplayTextV1(state.title).value || state.id,
+      taskCapabilities: { ...observation.snapshot.taskCapabilities, ...(states === undefined ? {} : triageTaskTransitionCapabilitiesV1(
+        states.map((state) => ({ id: state.id, label: projectTriageDisplayTextV1(state.title).value || state.id,
           state: linearState({ type: state.body ?? '', name: state.title }) })),
-      }) },
+      )) },
     } };
     context.signal.throwIfAborted();
     if (isExternalActionResultWithinResponseEnvelopeLimitV1(enriched)) return TriageGetResultV1Schema.parse(enriched);
@@ -272,7 +300,8 @@ export async function readLinearDetail(input: unknown, context: PluginInvocation
       : `${field}(first: ${LINEAR_PAGE_SIZE}, after: $after) { nodes { ${selections[parsed.section]} } ${LINEAR_PAGE_INFO} }`;
     const data = await requestLinearGraphql({ context, account, operationName: 'LinearDetail', query: `query LinearDetail($id: String!${parsed.section === 'overview' ? '' : ', $after: String'}) { issue(id: $id) { id team { id } ${selection} } }`, variables: { id: parsed.localRef.entryId, ...(parsed.section === 'overview' ? {} : { after: parsed.after }) } });
     const native = record(data.issue);
-    if (native.id !== parsed.localRef.entryId || record(native.team).id !== configuration.teamId) throw linearFailure('entryMismatch');
+    const teamId = record(native.team).id;
+    if (native.id !== parsed.localRef.entryId || typeof teamId !== 'string' || !linearIncludesTeam(configuration, teamId)) throw linearFailure('entryMismatch');
     if (parsed.section === 'overview') {
       if (native.description !== null && typeof native.description !== 'string') throw linearFailure('responseInvalid');
       const named = (value: unknown): string | undefined => {
