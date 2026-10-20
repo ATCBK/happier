@@ -7,6 +7,7 @@ import { AGENT_DEFINITION } from './agent/definition.js';
 import { DEVIN_TERMINAL_SURFACE } from './agent/terminal/contribution.js';
 import { DEVIN_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 import { DEVIN_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
+import { devinExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const {
   id: DEVIN_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -28,6 +29,11 @@ export const DEVIN_PLUGIN = definePlugin({
         executables: [{ kind: 'systemTool', id: 'devin-cli' }],
         envKeys: ['XDG_CONFIG_HOME', 'APPDATA'],
       },
+    }, {
+      id: 'devin-native-history',
+      capability: 'filesystem',
+      reason: 'Read native Devin history as bytes and query a private disposable copy.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
     }],
     optional: [],
   },
@@ -66,6 +72,7 @@ export const DEVIN_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: { user: [['.config', 'devin', 'skills'], ['.config', 'cognition', 'skills'], ['.agents', 'skills']], project: [['.devin', 'skills'], ['.cognition', 'skills'], ['.agents', 'skills'], ['.windsurf', 'skills']] } },
           sessions: {
@@ -76,7 +83,23 @@ export const DEVIN_PLUGIN = definePlugin({
             executionRunContext: { versions: [1] },
           },
         }),
+        surfaces: {
+          externalSession: {
+            externalLinkedTakeover: { writerSafety: 'unsupported' },
+            sources: [{
+              sourceKind: 'devinHome',
+              contentSearch: true,
+              schema: { fields: [
+                { kind: 'literal', name: 'kind', value: 'devinHome' },
+                { kind: 'string', name: 'devinHome', min: 1, nullish: true },
+              ] },
+              key: { segments: [{ kind: 'literal', value: 'devinHome' }, { kind: 'field', field: 'devinHome' }] },
+              instances: [{ kind: 'default', constants: {} }],
+            }],
+          },
+        },
       },
+      externalSessions: devinExternalSessionsContribution,
       cliAuth: {
         detectAuthStatus: async ({ runDeclaredSystemToolCommand }) =>
           await detectDevinCliAuthStatus({

@@ -19,6 +19,10 @@ describe('Devin plugin manifest', () => {
             executables: [{ kind: 'systemTool', id: 'devin-cli' }],
             envKeys: ['XDG_CONFIG_HOME', 'APPDATA'],
           },
+        }, {
+          id: 'devin-native-history',
+          capability: 'filesystem',
+          scope: { locations: [{ root: 'workspace' }], access: ['read'] },
         }],
         optional: [],
       },
@@ -26,6 +30,9 @@ describe('Devin plugin manifest', () => {
         agents: [{
           id: 'devin',
           primary: 'sessions',
+          surfaces: {
+            externalSession: { sources: [expect.objectContaining({ sourceKind: 'devinHome', contentSearch: true })] },
+          },
           runtime: {
             kind: 'acp',
             transport: {
@@ -43,7 +50,7 @@ describe('Devin plugin manifest', () => {
             },
           },
           capabilities: {
-            surfaces: ['terminal'],
+            surfaces: expect.arrayContaining(['terminal', 'externalSessions']),
             sessions: {
               open: ['create', 'resume'],
               delivery: ['newTurn', 'followUp'],
