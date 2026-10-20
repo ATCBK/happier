@@ -8,6 +8,7 @@ export async function listJiraIssueTypes(raw: unknown, context: PluginInvocation
     const input = JiraIssueTypesInputSchema.parse(raw);
     try {
         const { client, configuration } = await openJiraInstance(input, context);
+        if (!configuration.projectId) throw invalidJira('jira/createProjectRequired');
         const types = await readJiraCreateDirectory(client, `/rest/api/3/issue/createmeta/${configuration.projectId}/issuetypes`, 'issueTypes');
         const issueTypes = types.map((row) => {
             if (!numericId(row.id) || !string(row.name)) throw invalidJira('jira/issueTypeInvalid');

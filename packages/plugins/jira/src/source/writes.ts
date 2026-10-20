@@ -103,6 +103,7 @@ export async function createJiraIssue(raw: unknown, context: PluginInvocationCon
     try {
         if (input.kindId !== 'issue') refusal('jira/kindUnsupported');
         const { client, configuration } = await openJiraInstance(input.instance, context);
+        if (!configuration.projectId) refusal('jira/createProjectRequired');
         if (!configuration.issueTypeId) refusal('jira/issueTypeRequired');
         const fields = { ...nativeFields(input.fields, client.origin), project: { id: configuration.projectId }, issuetype: { id: configuration.issueTypeId } };
         const metadata = await readJiraCreateDirectory(client, `/rest/api/3/issue/createmeta/${configuration.projectId}/issuetypes/${configuration.issueTypeId}`, 'fields');
