@@ -7667,6 +7667,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     },
     staleRunner: {
       banner: {
+        stopAndResumeBody: 'Ce runner ne peut pas redémarrer en toute sécurité. Arrête la session, puis reprends-la pour utiliser le runtime actuel.',
         title: "Le runner de session est obsolète",
         body: "Cette session exécute encore du code runtime plus ancien. Redémarre le runner pour utiliser le runtime du daemon actuel.",
         pendingBody: "Redémarrage du runner de session sur le runtime du daemon actuel.",

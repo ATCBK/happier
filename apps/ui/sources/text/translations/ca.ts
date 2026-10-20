@@ -7087,6 +7087,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         },
         staleRunner: {
             banner: {
+                stopAndResumeBody: 'Aquest executor no es pot reiniciar de manera segura. Atura la sessió i reprèn-la per utilitzar el runtime actual.',
                 title: 'L’executor de la sessió no està actualitzat',
                 body: 'Aquesta sessió encara s’executa amb codi de runtime antic. Reinicia l’executor per utilitzar el runtime actual del daemon.',
                 pendingBody: 'S’està reiniciant l’executor de la sessió amb el runtime actual del daemon.',

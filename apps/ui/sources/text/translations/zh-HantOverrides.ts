@@ -6476,6 +6476,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
           },
           staleRunner: {
             banner: {
+              stopAndResumeBody: '此執行器無法安全重新啟動。請停止工作階段，然後繼續工作階段以使用目前的執行階段。',
               title: '工作階段執行器已過期',
               body: '此工作階段仍在舊版執行階段程式碼上執行。重新啟動執行器以使用目前的 daemon runtime。',
               pendingBody: '正在目前的 daemon runtime 上重新啟動工作階段執行器。',

@@ -8050,6 +8050,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },
     staleRunner: {
       banner: {
+        stopAndResumeBody: 'Questo runner non può riavviarsi in sicurezza. Arresta la sessione, poi riprendila per usare il runtime corrente.',
         title: "Il runner della sessione non è aggiornato",
         body: "Questa sessione usa ancora codice runtime meno recente. Riavvia il runner per usare il runtime daemon corrente.",
         pendingBody: "Riavvio del runner della sessione sul runtime daemon corrente.",

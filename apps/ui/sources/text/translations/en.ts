@@ -9344,6 +9344,7 @@ const enSession = {
   },
   staleRunner: {
     banner: {
+      stopAndResumeBody: 'This runner cannot restart safely. Stop the session, then Resume to use the current runtime.',
       title: 'Session runner is out of date',
       body: 'This session is still running older runtime code. Restart the runner to use the current daemon runtime.',
       pendingBody:

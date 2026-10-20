@@ -7663,6 +7663,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     },
     staleRunner: {
       banner: {
+        stopAndResumeBody: 'Tego runnera nie można bezpiecznie uruchomić ponownie. Zatrzymaj sesję, a następnie ją wznów, aby użyć bieżącego środowiska uruchomieniowego.',
         title: "Runner sesji jest nieaktualny",
         body: "Ta sesja nadal działa na starszym kodzie środowiska uruchomieniowego. Uruchom runner ponownie, aby użyć bieżącego runtime daemona.",
         pendingBody: "Ponowne uruchamianie runnera sesji na bieżącym runtime daemona.",

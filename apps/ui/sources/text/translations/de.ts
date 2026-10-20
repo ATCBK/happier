@@ -7809,6 +7809,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         },
         staleRunner: {
             banner: {
+                stopAndResumeBody: 'Dieser Runner kann nicht sicher neu starten. Stoppe die Session und setze sie dann fort, um die aktuelle Runtime zu nutzen.',
                 title: 'Der Session-Runner ist veraltet',
                 body: 'Diese Session läuft noch mit älterem Runtime-Code. Starte den Runner neu, um die aktuelle Daemon-Runtime zu nutzen.',
                 pendingBody: 'Der Session-Runner wird auf der aktuellen Daemon-Runtime neu gestartet.',

@@ -7825,6 +7825,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     },
     staleRunner: {
       banner: {
+        stopAndResumeBody: 'Este runner no puede reiniciarse de forma segura. Detén la sesión y luego reanúdala para usar el runtime actual.',
         title: "El runner de la sesión no está actualizado",
         body: "Esta sesión aún se ejecuta con código de runtime anterior. Reinicia el runner para usar el runtime actual del daemon.",
         pendingBody: "Reiniciando el runner de la sesión con el runtime actual del daemon.",

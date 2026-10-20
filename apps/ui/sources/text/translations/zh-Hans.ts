@@ -7513,6 +7513,7 @@ const zhHansValues = {
     },
     staleRunner: {
       banner: {
+        stopAndResumeBody: '此运行器无法安全重启。请停止会话，然后恢复会话以使用当前运行时。',
         title: "会话运行器已过期",
         body: "此会话仍在旧版运行时代码上运行。重启运行器以使用当前 daemon runtime。",
         pendingBody: "正在当前 daemon runtime 上重启会话运行器。",
