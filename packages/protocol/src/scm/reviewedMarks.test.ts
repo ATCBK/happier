@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyAccountJsonKvKey } from '../account/accountJsonKv.js';
-import type { ScmComparison } from './comparison.js';
+import { buildScmComparisonSourceKey, type ScmComparison } from './comparison.js';
 import { buildReviewUnits, buildScmChangeKeys, buildScmReviewScopeId } from './comparisonOccurrences.js';
 import { applyScmReviewedMarkIntent, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, isScmSelectionReviewed,
   ScmReviewedMarksRecordSchema, ScmReviewedMarkInputSchema, type ScmReviewedMarksJsonTransport } from './reviewedMarks.js';
@@ -33,6 +33,8 @@ describe('scope personal marks owner', () => {
       compareAndSet: async next => { value = next; return { success: true, version: 1 }; } };
     await createScmReviewedMarksRecordPort({ comparison: first, transport }).setReviewed(['first:0'], true);
     const refreshed = pullRequest('refresh');
+    expect(buildScmComparisonSourceKey({ cwd: '/repo', source: refreshed.source }))
+      .not.toBe(buildScmComparisonSourceKey({ cwd: '/repo', source: first.source }));
     const read = await createScmReviewedMarksRecordPort({ comparison: refreshed, transport }).read();
     expect(isScmSelectionReviewed(read.record, refreshed, ['refresh:0'])).toBe(true);
     const source = refreshed.source;

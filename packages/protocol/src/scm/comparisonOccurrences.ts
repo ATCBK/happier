@@ -1,4 +1,4 @@
-import { buildScmComparisonSourceKey, type ScmChangeOccurrence, type ScmComparison, type ScmComparisonFile, type ScmComparisonSource } from './comparison.js';
+import { buildScmComparisonIdentity, buildScmComparisonSourceKey, type ScmChangeOccurrence, type ScmComparison, type ScmComparisonFile, type ScmComparisonSource } from './comparison.js';
 import { formatHunk, parseUnifiedDiffHunks, type Hunk } from '../diff/hunks.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
@@ -109,6 +109,9 @@ export function buildScmChangeKeys(comparison: ScmComparison): ReadonlyMap<strin
 }
 
 export function buildScmReviewScopeId(input: Readonly<{ repositoryRootPath: string; source: ScmComparisonSource }>): string {
+  // PR request freshness includes endpoint/routing witnesses; personal content marks use
+  // the existing stable PR selector projection with no endpoint or evidence inputs.
+  if (input.source.kind === 'pullRequest') return buildScmComparisonIdentity({ source: input.source, repositoryRootPath: input.repositoryRootPath });
   return contentHash([input.repositoryRootPath, buildScmComparisonSourceKey({ cwd: input.repositoryRootPath, source: input.source })]);
 }
 export function locateComparisonOccurrences(comparison: ScmComparison): ComparisonOccurrences {
