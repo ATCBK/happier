@@ -239,6 +239,11 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settingsPlugins.discover.platform.web',
         'settingsPlugins.surfaces.listingSource',
         'settingsPlugins.surfaces.navigationTitle',
+        // "Signature" and "Provenance" are the French words too (install-review evidence labels);
+        // "Auto" is the French label for an automatically picked Machine.
+        'settingsPlugins.installReviewSections.evidenceLabel.signature',
+        'settingsPlugins.installReviewSections.evidenceLabel.provenance',
+        'settingsPlugins.surfaces.runOnAuto',
         // Source control and Keyboard: developer vocabulary and French cognates.
         'settingsKeyboard.groupSessions',
         'settingsSourceControl.page.commits.title',
