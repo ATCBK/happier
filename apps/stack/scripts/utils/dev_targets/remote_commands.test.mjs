@@ -2227,8 +2227,12 @@ test('remote Stack server receives the non-secret auth mail, email/password and 
   assert.doesNotMatch(command, /smtp-secret-do-not-forward|HAPPIER_AUTH_EMAIL_SMTP_PASSWORD/);
 });
 
-test('remote Stack server projects public-share isolation and fixed-window policy on POSIX and Windows', () => {
+test('remote Stack server projects feature configuration without secrets on POSIX and Windows', () => {
   const environment = {
+    HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: 'true',
+    HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+    HAPPIER_FEATURE_TEAMS__ENABLED: 'false',
+    HAPPIER_FEATURE_POLICY_ENV: 'preview',
     HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'qa.example.test',
     HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER: 'fixed_window',
     HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_MAX_REQUESTS: '120',
