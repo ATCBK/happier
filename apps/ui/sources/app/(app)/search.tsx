@@ -35,7 +35,7 @@ export default function UniversalSearchRoute(): React.ReactElement {
     const params = useGlobalSearchParams<{ q?: string | string[]; source?: string | string[]; sessionId?: string | string[]; accountId?: string | string[]; serverId?: string | string[]; machineId?: string | string[]; rootPath?: string | string[]; [TERMINAL_JUMP_ROUTE_PARAM]?: string | string[] }>();
     const runtime = useUniversalSearchRuntime();
     const initialQuery = typeof params.q === 'string' ? params.q : '';
-    const initialSource = params.source === 'fileContent' ? 'fileContent' : undefined;
+    const initialSource = params.source === 'fileContent' || params.source === 'files' || params.source === 'symbols' ? params.source : undefined;
     const activeSessionId = typeof params.sessionId === 'string' ? params.sessionId : null;
     const initialScope = React.useMemo(() => resolveUniversalSearchRouteInitialScope(params), [params]);
     const terminalScopeId = params[TERMINAL_JUMP_ROUTE_PARAM];

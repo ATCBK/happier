@@ -79,6 +79,12 @@ export type PetCommandControls = Readonly<{
   refreshCodexPets: () => void | Promise<void>;
 }>;
 
+export type PaneCommandControls = Readonly<{
+  readColumn(column: 'navigation' | 'main' | 'side'): Readonly<{ present: boolean; visible: boolean; available: boolean; label?: string }> | null;
+  toggleArrangement?: () => void;
+  focusRegion?: (direction: 'next' | 'previous') => void;
+}>;
+
 type BuildCommandPaletteCommandsBaseParams = Readonly<{
   sessionsById: Record<string, any>;
   isDev: boolean;
@@ -93,6 +99,7 @@ type BuildCommandPaletteCommandsBaseParams = Readonly<{
   }>;
   shortcutLabels?: Partial<Record<KeyboardCommandId, string>>;
   petControls?: PetCommandControls;
+  paneControls?: PaneCommandControls;
   askHappierRelease?: Readonly<ChangelogEntry>;
   nav: Readonly<{
     push: (path: string) => void;
@@ -101,6 +108,8 @@ type BuildCommandPaletteCommandsBaseParams = Readonly<{
     openWorkflowAgentAuthoring?: () => void;
     /** Reopens the canonical Search surface in its content source, retaining exact invocation scope. */
     openTextInFiles?: () => void;
+    openFiles?: () => void;
+    openSymbols?: () => void;
     /** Opens the shared device-pairing panel while retaining the current page. */
     openHomePairingModal?: () => void | Promise<void>;
     /** Supplied only when the ordinary guide draft owner can open the requested context. */
@@ -202,6 +211,37 @@ export function buildCommandPaletteCommands(
     },
   ];
 
+  for (const [column, id, titleKey] of [
+    ['navigation', 'shell.column.toggle', 'settingsKeyboard.commands.shellColumnToggle'],
+    ['main', 'panes.main.toggle', 'settingsKeyboard.commands.panesMainToggle'],
+    ['side', 'panes.side.toggle', 'settingsKeyboard.commands.panesSideToggle'],
+  ] as const) {
+    const control = params.paneControls?.readColumn(column);
+    if (!control?.present || !control.available) continue;
+    cmds.push({ id, actionSpecId: 'shell.column.set', title: control.label ?? t(titleKey),
+      category: t('settingsKeyboard.paneGroups.panes'), shortcut: params.shortcutLabels?.[id],
+      action: async () => {
+        const current = params.paneControls?.readColumn(column);
+        if (!current?.present || !current.available) return;
+        await actions.execute('shell.column.set', { column, visible: !current.visible }, { surface: 'ui' });
+      },
+    });
+  }
+  if (params.paneControls?.toggleArrangement) {
+    cmds.push({ id: 'panes.arrangement.toggle', actionSpecId: 'settings.set',
+      title: t('settingsKeyboard.commands.panesArrangementToggle'), category: t('settingsKeyboard.paneGroups.panes'),
+      shortcut: params.shortcutLabels?.['panes.arrangement.toggle'], action: params.paneControls.toggleArrangement,
+    });
+  }
+  if (params.paneControls?.focusRegion) {
+    const focusRegion = params.paneControls.focusRegion;
+    for (const [direction, id, titleKey] of [
+      ['next', 'panes.region.next', 'settingsKeyboard.commands.panesRegionNext'],
+      ['previous', 'panes.region.previous', 'settingsKeyboard.commands.panesRegionPrevious'],
+    ] as const) cmds.push({ id, title: t(titleKey), category: t('settingsKeyboard.paneGroups.panes'),
+      shortcut: params.shortcutLabels?.[id], action: () => focusRegion(direction) });
+  }
+
   if (nav.openAskHappier) {
     const openAskHappier = nav.openAskHappier;
     cmds.push({
@@ -236,6 +276,13 @@ export function buildCommandPaletteCommands(
       shortcut: params.shortcutLabels?.['search.textInFiles'],
       action: nav.openTextInFiles,
     });
+  }
+  for (const [id, title, open] of [
+    ['search.files', t('settingsKeyboard.commands.searchFiles'), nav.openFiles],
+    ['search.symbols', t('settingsKeyboard.commands.searchSymbols'), nav.openSymbols],
+  ] as const) {
+    if (open) cmds.push({ id, title, icon: 'file', category: t('commandPalette.commands.actionsCategory'),
+      shortcut: params.shortcutLabels?.[id], action: open });
   }
 
   if (nav.openHomePairingModal) {

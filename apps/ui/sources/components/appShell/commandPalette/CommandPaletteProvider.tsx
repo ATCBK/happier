@@ -72,6 +72,9 @@ import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPane
 import { TERMINAL_JUMP_ROUTE_PARAM } from '@/components/sessions/terminal/jump/terminalJumpTarget';
 import { NextPendingNavigationHost } from '@/components/sessions/pendingNavigation/NextPendingNavigationHost';
 import { t } from '@/text';
+import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
+import { readShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import { focusPaneRegion } from '@/components/appShell/panes/paneRegionFocus';
 import { useAskHappierStarter } from '@/components/sessions/bots/useAskHappierOffer';
 
 export function readActiveSessionIdFromRoute(
@@ -213,6 +216,7 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
 
 function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
+    const { toggle: togglePaneArrangement } = usePaneArrangement();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
     const resolveNewSessionOrdinaryEntryRoute = useResolveNewSessionOrdinaryEntryRoute();
     // Sessions are read when commands are built (`buildCommands`) and followed only while the palette
@@ -278,10 +282,18 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const keyboardPlatform = useMemo(resolveKeyboardPlatform, []);
     const labelHandlers = useMemo<KeyboardShortcutHandlers>(
         () => ({
+            'shell.column.toggle': () => undefined,
+            'panes.main.toggle': () => undefined,
+            'panes.side.toggle': () => undefined,
+            'panes.arrangement.toggle': () => undefined,
+            'panes.region.next': () => undefined,
+            'panes.region.previous': () => undefined,
             'session.new': () => undefined,
             ...(workflowsEnabled ? { 'workflow.new': () => undefined, 'workflow.createWithAgent': () => undefined } : {}),
             'settings.open': () => undefined,
             'search.textInFiles': () => undefined,
+            'search.files': () => undefined,
+            'search.symbols': () => undefined,
             ...(commandPaletteEnabled ? { 'commandPalette.open': () => undefined } : {}),
         }),
         [commandPaletteEnabled, workflowsEnabled],
@@ -361,6 +373,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     }, [resolveNewSessionOrdinaryEntryRoute, router]);
 
     const textSearchOpener = React.useRef<(scope?: UniversalSearchScopeSeed) => void>(() => undefined);
+    const fileSearchOpener = React.useRef<(source: 'files' | 'symbols', scope?: UniversalSearchScopeSeed) => void>(() => undefined);
     const buildCommands = useCallback((requestedActiveSessionId: string | null = commandContextSessionId, requestedScope?: UniversalSearchScopeSeed) => {
         // The contributed Action presentation is captured for the rendered
         // route's exact Session. An imperative opener may target another Home
@@ -389,6 +402,13 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             features: { executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled },
             shortcutLabels,
             petControls,
+            paneControls: {
+                readColumn: readShellColumnActionOwner,
+                focusRegion: direction => { focusPaneRegion(direction); },
+                ...(readShellColumnActionOwner('main')?.arrangementAvailable ? { toggleArrangement: () => {
+                    if (readShellColumnActionOwner('main')?.arrangementAvailable) togglePaneArrangement();
+                } } : {}),
+            },
             ...(scopedPluginActionPresentation ? { pluginActionPresentation: scopedPluginActionPresentation } : {}),
             compactAppDestinations: paletteDestinations,
             onActivateCompactAppDestination: activateCompactAppDestination,
@@ -404,6 +424,8 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                     await startAskHappier({ lifetime: askHappierLifetime, context, currentUiContext: askHappierCurrentContext });
                 },
                 openTextInFiles: () => textSearchOpener.current(requestedScope),
+                openFiles: () => fileSearchOpener.current('files', requestedScope),
+                openSymbols: () => fileSearchOpener.current('symbols', requestedScope),
                 openHomePairingModal: async () => {
                     const { showHomePairingModal } = await import('@/components/auth/pairing/HomePairingModal');
                     showHomePairingModal('phone');
@@ -417,7 +439,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 await Modal.alertAsync(title, message);
             },
         });
-    }, [commandContextSessionId, commandContextServerId, currentUiContextReader, executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled, paletteDestinations, activateCompactAppDestination, shortcutLabels, petControls, pluginActionPresentation, router, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, navigateToSession, actionExecutor, startAskHappier]);
+    }, [commandContextSessionId, commandContextServerId, currentUiContextReader, executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled, paletteDestinations, activateCompactAppDestination, shortcutLabels, petControls, pluginActionPresentation, router, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, navigateToSession, actionExecutor, startAskHappier, togglePaneArrangement]);
 
     const actionCommandBuilder = React.useRef(buildCommands);
     actionCommandBuilder.current = buildCommands;
@@ -523,20 +545,28 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         buildCommands,
     }), [buildCommands, showCommandPalette]);
     textSearchOpener.current = (requestedScope) => showCommandPalette(undefined, requestedScope, { source: 'fileContent' });
+    fileSearchOpener.current = (source, requestedScope) => showCommandPalette(undefined, requestedScope, { source });
 
     const toggleTheme = useToggleThemeMode();
     const keyboardHandlers = useMemo<KeyboardShortcutHandlers>(
         () => ({
             ...(commandPaletteEnabled ? { 'commandPalette.open': showCommandPalette } : {}),
             'appearance.theme.toggle': toggleTheme,
+            'panes.arrangement.toggle': () => {
+                if (!readShellColumnActionOwner('main')?.arrangementAvailable) return 'pass';
+                togglePaneArrangement();
+                return 'handled';
+            },
             'session.new': openNewSession,
             ...(workflowsEnabled ? { 'workflow.new': openNewWorkflow, 'workflow.createWithAgent': openWorkflowAgentAuthoring } : {}),
             'search.textInFiles': () => showCommandPalette(undefined, undefined, { source: 'fileContent' }),
+            'search.files': () => showCommandPalette(undefined, undefined, { source: 'files' }),
+            'search.symbols': () => showCommandPalette(undefined, undefined, { source: 'symbols' }),
             'settings.open': () => {
                 router.push('/settings' as any);
             },
         }),
-        [commandPaletteEnabled, workflowsEnabled, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, router, showCommandPalette, toggleTheme],
+        [commandPaletteEnabled, workflowsEnabled, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, router, showCommandPalette, toggleTheme, togglePaneArrangement],
     );
     const keyboardEnabledWhenDisabledCommandIds = useMemo(
         () => commandPaletteEnabled ? ['commandPalette.open'] as const : [],

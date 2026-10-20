@@ -68,6 +68,19 @@ function staticOptionIds(
 }
 
 describe('buildUniversalSearchSections', () => {
+    it('keeps Files focused and makes every file in a supplied page selectable', async () => {
+        const results: UniversalSearchResult[] = Array.from({ length: 35 }, (_, i) => ({
+            id: `${i}.ts`, scopeKey: 'workspace', sourceId: 'files', kind: 'workspaceFile', title: `${i}.ts`,
+            target: { kind: 'workspaceFile', scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
+                path: `${i}.ts`, workspaceRefId: 'workspace-a', sessionId: null, serverId: 'home-a', accountId: 'account-a' },
+        }));
+        const sections = buildUniversalSearchSections(input({ query: 'file', source: 'files',
+            sessions: [sessionEntity('elsewhere', 1)],
+            files: { status: 'ready', resolverKey: 'workspace', resolve: async () => results } }));
+        expect(sections.map(section => section.id)).toEqual(['files']);
+        const page = await dynamicSections(sections)[0]!.resolve('file', new AbortController().signal);
+        expect(page.options).toHaveLength(35);
+    });
     it.each(['cedar', 'A cedar', 'A cedar choice'])('puts content title matches ahead of settings and commands for %s', (query) => {
         const sections = buildUniversalSearchSections(input({ query,
             sessions: [{ ...sessionEntity('cedar', 1), title: 'A cedar choice' }],

@@ -5,6 +5,9 @@ import type { ChatFindSeed, FileFindSeed as FindSeed } from '@/components/appShe
 import type { MemoryDocumentSearchHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { ExternalSessionCandidateV1, ExternalSessionsSource } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 
+/** Initial request/display page; subsequent pages remain available from the same source. */
+export const UNIVERSAL_SEARCH_PAGE_SIZE = 20;
+
 /**
  * The small UI-internal normalized boundary for built-in Universal Search rows.
  *
@@ -58,6 +61,16 @@ export type UniversalSearchTarget =
         workspaceRefId: string | null;
         sessionId: string | null;
         serverId: string | null;
+        accountId: string;
+    }>
+    | Readonly<{
+        kind: 'workspaceSymbol';
+        scope: WorkspaceScopeBase;
+        path: string;
+        anchor: FileTargetAnchor;
+        workspaceRefId: string | null;
+        sessionId: string | null;
+        serverId: string;
         accountId: string;
     }>
     | Readonly<{
@@ -148,5 +161,6 @@ export const UNIVERSAL_SEARCH_SOURCE_IDS = Object.freeze({
     transcript: 'transcript',
     files: 'files',
     fileContent: 'fileContent',
+    symbols: 'symbols',
     commits: 'commits',
 } as const);

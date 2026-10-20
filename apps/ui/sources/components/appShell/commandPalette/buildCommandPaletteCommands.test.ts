@@ -53,6 +53,30 @@ function commandTitles(cmds: readonly Command[]): string[] {
   return cmds.map((c) => c.title);
 }
 
+it('exposes mounted column controls with the host label and routes them through the existing column Action', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const toggleArrangement = vi.fn();
+    let mainVisible = true;
+    const commands = buildCommandPaletteCommands({
+        sessionsById: {}, isDev: false, activeSessionId: null,
+        features: { executionRunsEnabled: false, voiceEnabled: false },
+        nav: { push: () => {}, openNewSession: () => {}, navigateToSession: () => {} },
+        actions: { execute }, alert: () => {},
+        paneControls: { readColumn: column => column === 'main' ? { present: true, available: true, visible: mainVisible, label: 'Hide project' }
+            : { present: true, available: column === 'navigation', visible: column === 'navigation' }, toggleArrangement },
+    });
+    const main = commands.find(command => command.id === 'panes.main.toggle');
+    expect(main?.title).toBe('Hide project');
+    await main!.action();
+    expect(execute).toHaveBeenLastCalledWith('shell.column.set', { column: 'main', visible: false }, { surface: 'ui' });
+    mainVisible = false;
+    await main!.action();
+    expect(execute).toHaveBeenLastCalledWith('shell.column.set', { column: 'main', visible: true }, { surface: 'ui' });
+    expect(commands.find(command => command.id === 'panes.side.toggle')).toBeUndefined();
+    await commands.find(command => command.id === 'panes.arrangement.toggle')!.action();
+    expect(toggleArrangement).toHaveBeenCalledOnce();
+});
+
 it('does not advertise unavailable host destinations as invokable UI commands while retaining plugin tombstones', () => {
     const destinations = [
         ...SUGGESTED_BUILTIN_DESTINATIONS,
@@ -115,18 +139,24 @@ it('keeps Ask Happier manual commands and captures the selected release without 
     expect(openNewSession).not.toHaveBeenCalled();
 });
 
-it('exposes the text-in-files entry through the command catalog used by UI Actions', async () => {
+it('exposes focused file sources through the command catalog used by UI Actions', async () => {
     const openTextInFiles = vi.fn();
+    const openFiles = vi.fn();
+    const openSymbols = vi.fn();
     const commands = buildCommandPaletteCommands({
         sessionsById: {}, isDev: false, activeSessionId: null,
         features: { executionRunsEnabled: false, voiceEnabled: false },
-        nav: { push: () => {}, openNewSession: () => {}, navigateToSession: () => {}, openTextInFiles },
+        nav: { push: () => {}, openNewSession: () => {}, navigateToSession: () => {}, openTextInFiles, openFiles, openSymbols },
         actions: { execute: async () => ({ ok: true, result: {} }) }, alert: () => {},
     });
     const command = commands.find((entry) => entry.id === 'search.textInFiles');
     expect(command).toBeDefined();
     await command!.action();
     expect(openTextInFiles).toHaveBeenCalled();
+    await commands.find(entry => entry.id === 'search.files')!.action();
+    await commands.find(entry => entry.id === 'search.symbols')!.action();
+    expect(openFiles).toHaveBeenCalledOnce();
+    expect(openSymbols).toHaveBeenCalledOnce();
 });
 
 function buildSettingsWithExecutionRunsEnabled() {

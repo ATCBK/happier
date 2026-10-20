@@ -24,6 +24,7 @@ import { SelectionListOptionStateContext } from '@/components/ui/selectionList/S
 import { SelectionListDetailPaneContext } from '@/components/ui/selectionList';
 import { useCodeTextFile } from '@/components/projects/files/code/useCodeTextFile';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import type { UniversalSearchSourceFocus } from './UniversalSearchRuntimeContext';
 import { boundedReplyHints } from './searchBoundedReplyHints';
 
 const EMPTY_WORKSPACE_SCOPE: WorkspaceScopeBase = { serverId: '', machineId: '', rootPath: '' };
@@ -36,6 +37,7 @@ import {
 
 import {
     UNIVERSAL_SEARCH_SOURCE_IDS,
+    UNIVERSAL_SEARCH_PAGE_SIZE,
     buildUniversalSearchOptionId,
     buildUniversalSearchScopeKey,
     type UniversalSearchResult,
@@ -67,11 +69,11 @@ import {
 
 /** Bounded empty-query recents. Not a ranking service — just "what you had open". */
 const EMPTY_QUERY_RECENT_LIMIT = 5;
-const DEFAULT_ROW_LIMIT = 20;
 /** Lines the inline Text in files group shows before its "All N matches" row (lab G1: "the best few"). */
 const INLINE_FILE_CONTENT_LINES = 3;
 export const EXTERNAL_CONVERSATION_SEARCH_OPTION_ID = 'external-conversations:search';
 export const ALL_FILE_MATCHES_OPTION_ID = 'fileContent:all-matches';
+export const MORE_FILES_OPTION_ID = 'files:more';
 
 export type UniversalSearchSessionEntity = Readonly<{
     sessionId: string;
@@ -112,6 +114,7 @@ export type UniversalSearchSettingsPageEntity = Readonly<{
  */
 export type UniversalSearchDynamicSource = Readonly<{
     resolverKey: string;
+    loadMore?(): void;
     /** Calm source-owned coverage/truncation context rendered by SelectionList. */
     resultHint?: string;
     resolve: (query: string, signal: AbortSignal, onProgress?: (page: Readonly<{
@@ -192,7 +195,11 @@ export type BuildUniversalSearchSectionsInput = Readonly<{
      */
     fileContentFolders?: ReadonlyArray<UniversalSearchFolderSuggestion>;
     onShowAllFileMatches?: () => void;
-    source?: 'fileContent';
+    source?: UniversalSearchSourceFocus;
+    symbols?: UniversalSearchSource;
+    recentFiles?: readonly UniversalSearchResult[];
+    changedFiles?: readonly UniversalSearchResult[];
+    filesStatusHint?: string;
     commits: UniversalSearchSource;
     /** Already-built plugin provider sections; this module adds no plugin policy. */
     pluginSections: readonly SelectionListDynamicSection[];
@@ -605,6 +612,9 @@ function buildDynamicSection(
                         onSelect: input.onShowAll,
                     });
                 }
+                if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.files && page.hasMore && source.loadMore) {
+                    options.push({ id: MORE_FILES_OPTION_ID, label: t('universalSearch.quickOpen.showMore'), onSelect: source.loadMore });
+                }
                 if (input.groupByFile && lines.length > 0) {
                     // The scope's status line (lab G1s): how much was found; the Text in files token says where.
                     options.unshift({
@@ -649,10 +659,32 @@ export function buildUniversalSearchSections(
     input: BuildUniversalSearchSectionsInput,
 ): ReadonlyArray<SelectionListSectionDescriptor> {
     const query = input.query.trim();
-    const rowLimit = input.rowLimit ?? DEFAULT_ROW_LIMIT;
+    const rowLimit = input.rowLimit ?? UNIVERSAL_SEARCH_PAGE_SIZE;
     const onCommit = input.onCommitResult;
     const sections: SelectionListSectionDescriptor[] = [];
     const scopedToContent = input.source === 'fileContent';
+    if (input.source === 'symbols') return buildDynamicSection({ sourceId: 'symbols',
+        title: t('settingsKeyboard.commands.searchSymbols'), source: input.symbols ?? { status: 'absent' },
+        iconName: 'file', minQueryLength: 0, onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
+    if (input.source === 'files') {
+        const recentIds = new Set(input.recentFiles?.map(result => buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id)));
+        if (!query) {
+            const groups = [
+                { id: 'files:recent', title: t('universalSearch.quickOpen.recent'), results: input.recentFiles },
+                { id: 'files:changed', title: t('universalSearch.quickOpen.changed'), results: input.changedFiles?.filter(result => !recentIds.has(buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id))) },
+            ].flatMap(({ id, title, results }): SelectionListSectionDescriptor[] => results?.length ? [{
+                kind: 'static', id, title, options: results.map(result => toOption(result, 'file', onCommit)),
+            }] : []);
+            if (input.filesStatusHint && groups.length > 0) return groups.map((group, index) => index === 0 ? { ...group, resultHint: input.filesStatusHint } : group);
+            if (input.filesStatusHint) return buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files,
+                title: t('universalSearch.sections.files'), source: { status: 'unavailable',
+                    resolverKey: input.files.status === 'absent' ? input.filesStatusHint : input.files.resolverKey, hint: input.filesStatusHint },
+                iconName: 'file', minQueryLength: 0, onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
+            return groups;
+        }
+        return buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files, title: t('universalSearch.sections.files'),
+            source: input.files, iconName: 'file', onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
+    }
     const folders = input.fileContentFolders ?? [];
     const contentSections = (input.fileContent ?? { status: 'absent' }).status === 'absent' && folders.length > 0 && !scopedToContent
         ? [{
@@ -832,7 +864,6 @@ export function buildUniversalSearchSections(
         title: t('universalSearch.sections.files'),
         source: input.files,
         iconName: 'file',
-        rowLimit,
         onCommit,
     })) {
         sections.push({ kind: 'dynamic', ...section });

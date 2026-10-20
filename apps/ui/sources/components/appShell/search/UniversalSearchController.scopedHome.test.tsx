@@ -1064,6 +1064,24 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(selectionListProps()?.inputValue).toBe('routeKey');
     });
 
+    it('opens the Files scope and reserves @ for Symbols, with Backspace returning through Files to everything', async () => {
+        fixture.singleHome = true;
+        fixture.workspaceRefs = [{ id: 'ws-files', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo/happier', label: 'happier', createdAtMs: 1 }];
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        await renderScreen(<UniversalSearchController commands={[]} initialSource="files"
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo/happier' }}
+            presentation="modal" onRequestClose={vi.fn()} />);
+        expect(selectionListProps()?.filters?.find(filter => filter.id === 'source')?.valueLabel).toContain('happier');
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('@hello'); });
+        expect(selectionListProps()?.inputValue).toBe('hello');
+        expect(selectionListProps()?.rootStep.sections.every(section => section.id === 'symbols')).toBe(true);
+        await act(async () => { selectionListProps()?.onChangeInputValue?.(''); });
+        await act(async () => { selectionListProps()?.inputBehavior?.onBackspaceAtEnd?.(''); });
+        expect(selectionListProps()?.filters?.find(filter => filter.id === 'source')?.valueLabel).toContain('happier');
+        await act(async () => { selectionListProps()?.inputBehavior?.onBackspaceAtEnd?.(''); });
+        expect(selectionListProps()?.filters?.some(filter => filter.id === 'source')).toBe(false);
+    });
+
     it('preserves a missing folder outcome in both file search sections', async () => {
         fixture.singleHome = true;
         fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };

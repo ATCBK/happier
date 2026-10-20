@@ -16,7 +16,7 @@ import {
 import { OverlayScrim } from '@/components/ui/overlays/OverlayScrim';
 import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOverlayPointerEvents';
 import { SelectionList } from '@/components/ui/selectionList';
-import type { SelectionListDynamicSectionCache, SelectionListFilter, SelectionListOption, SelectionListStep } from '@/components/ui/selectionList';
+import type { SelectionListDynamicSectionCache, SelectionListFilter, SelectionListInputBehavior, SelectionListOption, SelectionListStep } from '@/components/ui/selectionList';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
@@ -74,6 +74,7 @@ export type UniversalSearchNativeHostProps = Readonly<{
     /** The controller's scope filters (the Home chip), shown the same way as on the web palette. */
     filters?: ReadonlyArray<SelectionListFilter>;
     inputSuffix?: React.ReactNode;
+    inputBehavior?: SelectionListInputBehavior;
     testID?: string;
     dynamicSectionCache: SelectionListDynamicSectionCache;
 }>;
@@ -220,6 +221,7 @@ export function UniversalSearchNativeHost(props: UniversalSearchNativeHostProps)
                         onRequestClose={requestClose}
                         dynamicSectionCache={props.dynamicSectionCache}
                         filters={props.filters}
+                        inputBehavior={props.inputBehavior}
                         inputSuffix={<View style={{ flexDirection: 'row' }}>{props.inputSuffix}{props.query.length > 0 ? (
                             <IconButton
                                 testID={`${testID}:clear`}

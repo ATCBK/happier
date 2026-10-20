@@ -6,13 +6,13 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import type { Command } from '@/components/appShell/commandPalette/types';
 import { t } from '@/text';
 import { UniversalSearchController } from './UniversalSearchController';
-import type { UniversalSearchScopeSeed } from './UniversalSearchRuntimeContext';
+import type { UniversalSearchScopeSeed, UniversalSearchSourceFocus } from './UniversalSearchRuntimeContext';
 import type { TerminalJumpTarget } from '@/components/sessions/terminal/jump/terminalJumpTarget';
 
 export type UniversalSearchModalProps = CustomModalInjectedProps & Readonly<{
     commands: readonly Command[];
     initialQuery?: string;
-    initialSource?: 'fileContent';
+    initialSource?: UniversalSearchSourceFocus;
     activeSessionId?: string | null;
     initialScope?: UniversalSearchScopeSeed;
     /** Open in the Terminals scope of this session pane (Jump to a terminal). */
