@@ -5165,11 +5165,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         && (
           (ctx.surface === 'api' && ctx.actionCaller?.kind === 'host')
           || (
-            (ctx.surface === 'ui' || ctx.surface === 'agent' || ctx.surface === 'mcp')
+            (ctx.surface === 'ui' || ctx.surface === 'agent' || ctx.surface === 'mcp' || ctx.surface === 'cli')
             && ctx.actionCaller?.kind !== 'plugin'
             && (actionId === 'sessions.external.candidates.list'
               || actionId === 'sessions.external.candidate.delete'
               || actionId === 'sessions.external.link.ensure'
+              || actionId === 'sessions.external.transcript.page'
               || actionId === 'sessions.external.materialize.start'
               || actionId === 'sessions.external.operation.status.get'
               || actionId === 'sessions.external.operation.cancel'

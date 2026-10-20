@@ -13180,13 +13180,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       rpcMethod: RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE,
       rpcMethodAliases: [RPC_METHODS.DAEMON_DIRECT_SESSION_TRANSCRIPT_PAGE_LEGACY],
       sdkMethod: 'sessions.external.pageTranscript',
+      mcpToolName: 'sessions_external_transcript_page',
     },
     surfaces: {
       ui: false,
       voice: false,
-      agent: false,
-      mcp: false,
-      cli: false,
+      agent: true,
+      mcp: true,
+      cli: true,
       rpc: true,
     },
     sideEffectClass: 'read',
@@ -13617,7 +13618,6 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     'sessions.external.unfollow',
     'sessions.external.backgroundFollow.set',
     'sessions.external.status.get',
-    'sessions.external.transcript.page',
     'sessions.external.transcript.readAfter',
   ]);
 
@@ -13659,6 +13659,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     'sessions.external.candidates.list',
     'sessions.external.candidate.delete',
     'sessions.external.link.ensure',
+    'sessions.external.transcript.page',
     'sessions.external.takeover',
     'sessions.external.materialize.start',
     'sessions.external.takeover.start',
