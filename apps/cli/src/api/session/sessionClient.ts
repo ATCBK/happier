@@ -4720,21 +4720,30 @@ export class ApiSessionClient extends EventEmitter {
         await this.sessionHandlersRegistration.disposeExecutionRuns();
     }
 
+    /**
+     * Fence the native effect boundary the moment retirement begins. A claim not yet dispatched is
+     * handed back as definitely not delivered; the retiring runner can no longer cross the boundary
+     * while its runtime disposes. Idempotent, and it leaves settlement of already-dispatched inputs
+     * to the normal close path.
+     */
+    retireUndispatchedProviderInput(): void {
+        if (this.providerInputClosing) return;
+        this.providerInputClosing = true;
+        // Claiming Pending is host custody, not native dispatch. Preserve the
+        // exact pre-effect fact before a successor inherits these claims.
+        for (const localId of this.materializationRuntime.pendingQueueMaterializedLocalIds) {
+            if (this.executionRunPendingCustody.has(localId)
+                || this.dispatchedPendingProviderInputLocalIds.has(localId)
+                || this.terminalPendingSettlementLocalIds.has(localId)) continue;
+            void this.observeProviderInputSettlement({ kind: 'rejected_before_effect', localId,
+                userMessageSeq: null, reason: 'host_retired_before_dispatch',
+                diagnostic: { code: 'host_retired_before_dispatch', severity: 'warning' }, retryable: true });
+        }
+    }
+
     /** Begin close-time write retirement before host lifecycle projections drain. */
     prepareForClose(): void {
-        if (!this.providerInputClosing) {
-            this.providerInputClosing = true;
-            // Claiming Pending is host custody, not native dispatch. Preserve the
-            // exact pre-effect fact before a successor inherits these claims.
-            for (const localId of this.materializationRuntime.pendingQueueMaterializedLocalIds) {
-                if (this.executionRunPendingCustody.has(localId)
-                    || this.dispatchedPendingProviderInputLocalIds.has(localId)
-                    || this.terminalPendingSettlementLocalIds.has(localId)) continue;
-                void this.observeProviderInputSettlement({ kind: 'rejected_before_effect', localId,
-                    userMessageSeq: null, reason: 'host_retired_before_dispatch',
-                    diagnostic: { code: 'host_retired_before_dispatch', severity: 'warning' }, retryable: true });
-            }
-        }
+        this.retireUndispatchedProviderInput();
         this.terminalPendingSettlementOperationAbortController.abort();
         this.socket.off('disconnect', this.cancelDisconnectedCloseWrites);
         this.socket.on('disconnect', this.cancelDisconnectedCloseWrites);
