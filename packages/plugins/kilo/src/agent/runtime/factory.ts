@@ -12,6 +12,7 @@ import { KILO_PERMISSION_ENV } from '../permissions/kiloPermissionPolicy.js';
 import { buildKiloAcpEnv, buildKiloAcpToolNameResolver } from '../acp/callbacks.js';
 import { KILO_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import { KILO_ACP_COMMAND } from '../acp/command.js';
+export { kiloExternalSessionsContribution } from '../externalSessions/contribution.js';
 
 function createKiloAcpOptions(
   request: Pick<AgentSessionOpenRequest, 'launchEnvironment' | 'mcpServers' | 'mcpToolPolicy'> & Readonly<{

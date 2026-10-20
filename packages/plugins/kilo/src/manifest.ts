@@ -6,6 +6,7 @@ import { KILO_ACP_COMMAND } from './agent/acp/command.js';
 import { KILO_PERMISSION_ENV } from './agent/permissions/kiloPermissionPolicy.js';
 import { createKiloAgentRuntime } from './agent/runtime/factory.js';
 import { KILO_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
+import { kiloExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const {
   id: KILO_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -20,6 +21,11 @@ export const KILO_PLUGIN = definePlugin({
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {
     required: [{
+      id: 'kilo-workspace',
+      capability: 'filesystem',
+      reason: 'Use the admitted Agent workspace as the Kilo process working directory.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+    }, {
       id: 'kilo-process',
       capability: 'process',
       reason: 'Run the declared Kilo CLI executable.',
@@ -63,6 +69,7 @@ export const KILO_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: {
             delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: {
@@ -77,6 +84,19 @@ export const KILO_PLUGIN = definePlugin({
             executionRunContext: { versions: [1] },
           },
         }),
+        surfaces: {
+          externalSession: {
+            externalLinkedTakeover: { writerSafety: 'unsupported' },
+            sources: [{ sourceKind: 'kiloStorage', contentSearch: true,
+              schema: { fields: [
+                { kind: 'literal', name: 'kind', value: 'kiloStorage' },
+                { kind: 'string', name: 'storageRoot', min: 1, max: 10_000, nullish: true },
+              ] },
+              key: { segments: [{ kind: 'literal', value: 'kiloStorage' }, { kind: 'field', field: 'storageRoot' }] },
+              instances: [{ kind: 'default', constants: {} }],
+            }],
+          },
+        },
       },
       factory: createKiloAgentRuntime,
       preflightSessionControls: {
@@ -92,7 +112,9 @@ export const KILO_PLUGIN = definePlugin({
         module: './agent/runtime/factory',
         export: 'createKiloAgentRuntime',
         runtimeApiVersion: 1,
+        externalSessionsExport: 'kiloExternalSessionsContribution',
       },
+      externalSessions: kiloExternalSessionsContribution,
     },
   },
   systemTools: {

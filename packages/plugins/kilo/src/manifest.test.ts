@@ -15,6 +15,9 @@ describe('Kilo plugin manifest', () => {
     expect(PLUGIN_MANIFEST).toMatchObject({
       hostAccess: {
         required: [{
+          id: 'kilo-workspace', capability: 'filesystem',
+          scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+        }, {
           id: 'kilo-process',
           capability: 'process',
           scope: {
@@ -28,6 +31,7 @@ describe('Kilo plugin manifest', () => {
         agents: [{
           id: 'kilo', title: 'Kilo', primary: 'sessions',
           runtime: { kind: 'custom' },
+          surfaces: { externalSession: { sources: [{ sourceKind: 'kiloStorage', contentSearch: true }] } },
           capabilities: {
             skills: {
               delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',

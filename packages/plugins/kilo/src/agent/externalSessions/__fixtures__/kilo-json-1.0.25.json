@@ -1,0 +1,14 @@
+{
+  "provenance": "Sanitized schema vector from Kilo-Org/kilo@6f08110d4dcc36200c084a7b4134ec040cedfd61 packages/opencode (1.0.25): session/index.ts Info, message-v2.ts User/Assistant/TextPart/ToolPart. Not an installed CLI capture.",
+  "session": {"id":"ses_fixture","slug":"quiet-note","projectID":"project","directory":"/repo","title":"Ordinary title","version":"1.0.25","time":{"created":1792490400000,"updated":1792490401000}},
+  "messages": [
+    {"id":"msg_01","sessionID":"ses_fixture","role":"user","time":{"created":1792490400000},"agent":"build","model":{"providerID":"example","modelID":"fixture"}},
+    {"id":"msg_02","sessionID":"ses_fixture","role":"assistant","parentID":"msg_01","time":{"created":1792490401000},"modelID":"fixture","providerID":"example","mode":"build","agent":"build","path":{"cwd":"/repo","root":"/repo"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}
+  ],
+  "parts": [
+    {"id":"prt_01","sessionID":"ses_fixture","messageID":"msg_01","type":"text","text":"quartz initial native message"},
+    {"id":"prt_03","sessionID":"ses_fixture","messageID":"msg_02","type":"text","text":"body-only phrase with \"quotes\"\n東京 café"},
+    {"id":"prt_02","sessionID":"ses_fixture","messageID":"msg_02","type":"text","text":"ordered earlier part"},
+    {"id":"prt_04","sessionID":"ses_fixture","messageID":"msg_02","type":"tool","callID":"call_fixture","tool":"bash","state":{"status":"completed","input":{"command":"metadata-only phrase"},"output":"visible tool result","title":"metadata-only phrase","metadata":{"secret":"metadata-only phrase"},"time":{"start":1792490401000,"end":1792490401001}}}
+  ]
+}
