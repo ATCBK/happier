@@ -23,11 +23,13 @@ describe('retained editor DOM focus', () => {
         const root = createRoot(container);
         cleanups.push(async () => { await act(async () => root.unmount()); container.remove(); });
         let mounts = 0;
+        const mainReturn: React.MutableRefObject<FocusReturnTarget> = { current: null };
         function Main() { React.useEffect(() => { mounts += 1; }, []); return <input data-testid="main-draft" defaultValue="Draft" />; }
-        const render = async (mirrored: boolean, hideMain = false) => {
+        const render = async (mirrored: boolean, hideMain = false, drawer = false) => {
             await act(async () => root.render(<MultiPaneHost main={<Main />} hideMain={hideMain} mirrored={mirrored}
                 rightPane={null} detailsPane={<><input data-testid="editor-draft" defaultValue="Code" /><iframe data-testid="hosted-page" src="about:blank" /></>}
-                layout={{ main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' }} detailsClosable={!mirrored}
+                layout={{ main: drawer ? 'overlay' : 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' }} detailsClosable={!mirrored}
+                mainDrawerOpen={drawer} mainOverlayFocusReturnRef={mainReturn}
                 rightDockWidthPx={340} detailsDockWidthPx={600} mainDockWidthPx={440}
                 onCloseRight={() => {}} onCloseDetails={() => {}} onCommitRightDockWidthPx={() => {}} onCommitDetailsDockWidthPx={() => {}} />));
         };
@@ -49,6 +51,11 @@ describe('retained editor DOM focus', () => {
         await render(true);
         expect(container.querySelector('[data-testid="main-draft"]')).toBe(main);
         expect(main.value).toBe('Draft'); expect(mounts).toBe(1);
+        editor.focus(); mainReturn.current = editor;
+        await render(true, false, true);
+        expect(container.querySelector('[data-testid="main-draft"]')).toBe(main);
+        await render(true, true);
+        expect(document.activeElement).toBe(editor);
     });
     it.each(['details', 'right'] as const)('retains the %s caret through dock, overlay, and dock but restores the opener on real close', async (kind) => {
         // The OS reduced-motion preference is a browser boundary; pane motion/resizing remain real.
