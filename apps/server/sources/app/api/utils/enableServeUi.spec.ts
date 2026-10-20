@@ -109,6 +109,8 @@ describe('enableServeUi (mountRoot)', () => {
   it.each([true, false])('serves PDF support assets as bytes with mountRoot=%s', async mountRoot => {
     await withTempDir('happier-ui-pdf-assets-', async dir => {
       await writeFile(join(dir, 'index.html'), '<html>app</html>');
+      const pdfAssets = join(dir, 'pdfjs', '6.4.299');
+      await mkdir(pdfAssets, { recursive: true });
       const assets = [
         ['map.bcmap', 'application/octet-stream'],
         ['font.pfb', 'application/x-font-type1'],
@@ -116,12 +118,12 @@ describe('enableServeUi (mountRoot)', () => {
         ['worker.js', 'text/javascript; charset=utf-8'],
       ] as const;
       const bytes = Buffer.from([0x00, 0xff, 0x41, 0x80]);
-      for (const [name] of assets) await writeFile(join(dir, name), bytes);
+      for (const [name] of assets) await writeFile(join(pdfAssets, name), bytes);
       await withApp(async app => {
         enableServeUi(app, { dir, prefix: '/ui', mountRoot, required: false });
         await app.ready();
         for (const [name, mime] of assets) {
-          const response = await app.inject({ method: 'GET', url: `${mountRoot ? '' : '/ui'}/${name}` });
+          const response = await app.inject({ method: 'GET', url: `/pdfjs/6.4.299/${name}` });
           expect(response.statusCode).toBe(200);
           expect(response.headers['content-type']).toBe(mime);
           expect(response.rawPayload).toEqual(bytes);

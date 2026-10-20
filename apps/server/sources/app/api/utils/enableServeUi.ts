@@ -113,9 +113,6 @@ function setUiFileHeaders(reply: any, ext: string): void {
     } else if (ext === '.icc') {
         reply.header('content-type', 'application/vnd.iccprofile');
         reply.header('cache-control', 'public, max-age=31536000, immutable');
-    } else if (ext === '.bcmap') {
-        reply.header('content-type', 'application/octet-stream');
-        reply.header('cache-control', 'public, max-age=31536000, immutable');
     } else if (ext === '.ttf') {
         reply.header('content-type', 'font/ttf');
         reply.header('cache-control', 'public, max-age=31536000, immutable');
@@ -345,6 +342,16 @@ export function enableServeUi(app: AnyFastifyInstance, ui: UiConfig) {
             const raw = (request.params as { '*': string | undefined })['*'] || '';
             const decoded = decodeURIComponent(raw).replace(/^\/+/, '');
             return await sendUiFile(`assets/${decoded}`, request, reply);
+        } catch {
+            return reply.code(404).send({ error: 'Not found' });
+        }
+    });
+    // pdf.js uses versioned origin-relative URLs even when the UI is hosted at /ui.
+    app.get('/pdfjs/*', async (request, reply) => {
+        try {
+            const raw = (request.params as { '*': string | undefined })['*'] || '';
+            const decoded = decodeURIComponent(raw).replace(/^\/+/, '');
+            return await sendUiFile(`pdfjs/${decoded}`, request, reply);
         } catch {
             return reply.code(404).send({ error: 'Not found' });
         }
