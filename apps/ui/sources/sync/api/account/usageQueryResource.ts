@@ -708,7 +708,10 @@ type HowYouWorkEvidenceSnapshot = Readonly<{
     sessions: readonly SessionInputEvidence['session'][];
     sessionCoverage: NonNullable<UsageHowYouWorkSourceSnapshot['sessionCoverage']>;
     detail: ReturnType<typeof projectUsageQueryWorkEvidence>;
+    errorCode?: string;
 }>;
+type HowYouWorkReadSnapshot = HowYouWorkEvidenceSnapshot
+    | Readonly<{ query: UsageQuery; errorCode: string; detail?: undefined; sessions?: undefined }>;
 
 type SessionWorkSourceResult = import('@happier-dev/protocol/usage/usageWorkSources').SessionWorkSourceResult;
 
@@ -797,8 +800,8 @@ export async function readUiUsageQueryBatch(
                 return source;
             });
     };
-    let howYouWork: Awaited<ReturnType<typeof readHowYouWorkEvidence>> | undefined;
-    const howYouWorkByQuery = new Map<string, Awaited<ReturnType<typeof readHowYouWorkEvidence>>[number]>();
+    let howYouWork: readonly HowYouWorkReadSnapshot[] | undefined;
+    const howYouWorkByQuery = new Map<string, HowYouWorkReadSnapshot>();
     const howYouWorkSourcesByQuery = new Map<string, readonly UsageQuerySourceState[]>();
     const settledHowYouWorkQueries = new Set<string>();
     let mcpCatalog: McpServerCatalogSnapshotV1 | undefined;
@@ -943,18 +946,35 @@ export async function readUiUsageQueryBatch(
             // comparison or sibling query must not delay this slice's detail.
             await accountingTasks.get(getUsageQueryKey(query));
             requireCurrent(context, signal);
-            const snapshots = await readHowYouWorkEvidence(context, [query], [...accounting.values()], sessionInputReader, readSessionCurrentness, signal,
-                (snapshots, sources) => {
-                    requireCurrent(context, signal);
-                    const key = getUsageQueryKey(query);
-                    if (!snapshots[0] && sameStrictJsonValue(howYouWorkSourcesByQuery.get(key), sources)) return;
-                    howYouWorkSourcesByQuery.set(key, sources);
-                    if (snapshots[0]) {
-                        howYouWorkByQuery.set(key, snapshots[0]);
-                        howYouWork = [...howYouWorkByQuery.values()];
-                    }
-                    publish();
-                });
+            let snapshots: Awaited<ReturnType<typeof readHowYouWorkEvidence>>;
+            try {
+                snapshots = await readHowYouWorkEvidence(context, [query], [...accounting.values()], sessionInputReader, readSessionCurrentness, signal,
+                    (snapshots, sources) => {
+                        requireCurrent(context, signal);
+                        const key = getUsageQueryKey(query);
+                        if (!snapshots[0] && sameStrictJsonValue(howYouWorkSourcesByQuery.get(key), sources)) return;
+                        howYouWorkSourcesByQuery.set(key, sources);
+                        if (snapshots[0]) {
+                            howYouWorkByQuery.set(key, snapshots[0]);
+                            howYouWork = [...howYouWorkByQuery.values()];
+                        }
+                        publish();
+                    });
+            } catch (error) {
+                requireCurrent(context, signal);
+                if (!isTransientConnectivityError(error)) throw error;
+                const key = getUsageQueryKey(query);
+                const errorCode = 'usage_session_evidence_read_failed';
+                // Keep any actual partial admission/refusal already published.
+                // Otherwise the shared aggregation owner retains the prior facts.
+                howYouWorkByQuery.set(key, { ...(howYouWorkByQuery.get(key) ?? { query }), errorCode });
+                howYouWork = [...howYouWorkByQuery.values()];
+                howYouWorkSourcesByQuery.set(key, (howYouWorkSourcesByQuery.get(key) ?? []).map(source =>
+                    source.status === 'pending' ? { ...source, status: 'error', errorCode } : source));
+                settledHowYouWorkQueries.add(key);
+                publish();
+                return;
+            }
             // Binding advice and its catalog admission are one private-evidence
             // result. Unrelated quota/history reads must not hold them back.
             if (snapshots[0]!.detail.coach?.detail?.mcpUsage?.length) {
@@ -980,7 +1000,7 @@ export async function readUiUsageQueryBatch(
         await sessionCurrentness?.then(source => source.dispose(), () => undefined);
     }
 
-    function applyCoachPreferences(batch: UsageQueryBatchResult, howYouWork: Awaited<ReturnType<typeof readHowYouWorkEvidence>>): UsageQueryBatchResult {
+    function applyCoachPreferences(batch: UsageQueryBatchResult, howYouWork: readonly HowYouWorkReadSnapshot[]): UsageQueryBatchResult {
         const openedByQuery = new Map(howYouWork.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot]));
         const settingsState = readRegisteredStorageState();
         const preferences = readAccountSettingsForScope({ scope: context.accountLifetime.scope,
@@ -989,12 +1009,12 @@ export async function readUiUsageQueryBatch(
         const results = batch.results.map(slice => {
             const opened = openedByQuery.get(slice.key);
             if (!slice.coach) return slice;
-            const proposals = !opened || opened.detail.status === 'unknown' ? [] : buildUsageCoachRemedies({ findings: slice.coach.findings.filter(finding => finding.remedy === null),
+            const proposals = !opened?.detail || opened.detail.status === 'unknown' ? [] : buildUsageCoachRemedies({ findings: slice.coach.findings.filter(finding => finding.remedy === null),
                 composition: opened.detail.coach?.composition ?? [], sessions: opened.sessions,
                 mcpUsage: opened.detail.coach?.detail?.mcpUsage ?? [], ...(mcpCatalog ? { mcpCatalog } : {}),
                 serverId: context.accountLifetime.scope.serverId, accountId: context.accountLifetime.scope.accountId });
             const coach = proposals.length === 0 ? slice.coach : admitUsageCoachRemedies(slice.coach,
-                [...(opened?.detail.coach?.admittedRemedies ?? []), ...proposals]);
+                [...(opened?.detail?.coach?.admittedRemedies ?? []), ...proposals]);
             const preferred = applyUsageCoachPreferences(coach, preferences, nowMs);
             return preferred === slice.coach ? slice : { ...slice, coach: preferred };
         });

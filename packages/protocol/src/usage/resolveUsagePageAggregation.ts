@@ -136,7 +136,7 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
     || (witnessedPeriod?.endMs !== undefined && intervals.period.endMs !== witnessedPeriod.endMs))) {
     context.addIssue({ code: 'custom', path: ['howYouWork'], message: 'Intervals must identify the shown period and calendar' });
   }
-  if (intervals && !slice.sources.some(source => source.source === 'how_you_work' && ['available', 'partial', 'pending'].includes(source.status))) {
+  if (intervals && !slice.sources.some(isUsageDetailSourceReadable)) {
     context.addIssue({ code: 'custom', path: ['howYouWork'], message: 'Unavailable detail cannot disclose private intervals' });
   }
   if (slice.coach && (slice.coach.queryKey !== slice.key
@@ -145,7 +145,7 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
     context.addIssue({ code: 'custom', path: ['coach'], message: 'Coach must identify the exact admitted query period' });
   }
   if (slice.coach?.findings.some(finding => finding.evidence.some(evidence => evidence.kind !== 'accounting'))
-    && !slice.sources.some(source => source.source === 'how_you_work' && ['available', 'partial', 'stale', 'pending'].includes(source.status))) {
+    && !slice.sources.some(isUsageDetailSourceReadable)) {
     context.addIssue({ code: 'custom', path: ['coach'], message: 'Unavailable detail cannot disclose private Coach evidence' });
   }
 })));
@@ -281,7 +281,8 @@ export type UsageWorkSourceSnapshot = Readonly<{
 
 export type UsageHowYouWorkSourceSnapshot = Readonly<{
   query: UsageQuery;
-  detail: UsageHowYouWorkDetailInput;
+  detail?: UsageHowYouWorkDetailInput;
+  errorCode?: string;
   sessionCoverage?: UsageSessionEvidenceCoverage;
   asOfMs?: number;
   nightHours?: UsageWorkIntervalsInput['nightHours'];
@@ -314,11 +315,20 @@ export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[
   return resolveUsagePageAccountingReads(queries, nowMs).map(read => read.query);
 }
 
+function canRetainUsageReadFailure(errorCode?: string): boolean {
+  return !['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled'].includes(errorCode ?? '');
+}
+
+function isUsageDetailSourceReadable(source: UsageQuerySourceState): boolean {
+  return source.source === 'how_you_work' && ['available', 'partial', 'stale', 'pending'].includes(source.status)
+    && canRetainUsageReadFailure(source.errorCode);
+}
+
 export function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
   value: UsageAnalyticsQueryResponse | undefined, asOfMs: number | undefined): UsageAccountingSourceSnapshot | undefined {
   // Authority loss/cancellation never revives previously disclosed facts.
   if (!observed || observed.value !== undefined || value === undefined || observed.status !== 'error'
-    || ['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled'].includes(observed.errorCode ?? '')) return observed;
+    || !canRetainUsageReadFailure(observed.errorCode)) return observed;
   return { ...observed, value, ...(asOfMs === undefined ? {} : { asOfMs }) };
 }
 
@@ -440,8 +450,13 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
       ...(comparisonSnapshot?.errorCode === undefined ? {} : { errorCode: comparisonSnapshot.errorCode }) };
     const workSnapshot = work.get(key);
     const detailSnapshot = howYouWork.get(key);
+    const detailAuthorized = canRetainUsageReadFailure(detailSnapshot?.errorCode);
+    const observedDetail = detailAuthorized ? detailSnapshot?.detail : undefined;
     const pendingDetail = !detailSnapshot && input.sources?.some(source => source.source === 'how_you_work' && source.status === 'pending');
-    const retainedDetail = pendingDetail ? prior : undefined;
+    // A failed replacement has no new admission. A supplied detail (including
+    // an unknown/refused result) supersedes old facts even if another read failed.
+    const failedDetail = detailSnapshot?.errorCode !== undefined && !detailSnapshot.detail && detailAuthorized;
+    const retainedDetail = pendingDetail || failedDetail ? prior : undefined;
     const retainedNightHours = retainedDetail?.howYouWork?.nightShift;
     // Retained evidence remains attached to this exact query while its owner
     // rereads it. Allocation always recomputes over the current contributions;
@@ -456,14 +471,14 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const endMs = period.endMs ?? detailSnapshot?.asOfMs;
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
-      accounting: snapshot?.value, detail: detailSnapshot?.detail,
-      sessionCoverage: detailSnapshot?.sessionCoverage,
+      accounting: snapshot?.value, detail: observedDetail,
+      sessionCoverage: detailAuthorized ? detailSnapshot?.sessionCoverage : undefined,
       retained: retainedDetail?.howYouWork,
       nowMs: input.nowMs ?? detailSnapshot?.asOfMs,
       nightHours: input.nightHours === undefined ? detailSnapshot?.nightHours ?? (retainedNightHours
         ? { startHour: retainedNightHours.startHour, endHour: retainedNightHours.endHour } : undefined) : input.nightHours ?? undefined,
     });
-    const admittedDetail = detailSnapshot?.detail.status === 'unknown' ? undefined : detailSnapshot?.detail;
+    const admittedDetail = observedDetail?.status === 'unknown' ? undefined : observedDetail;
     const coachEvidence = admittedDetail?.coach;
     const coachAsOfMs = (admittedDetail ? detailSnapshot?.asOfMs : undefined) ?? snapshot?.asOfMs ?? retainedDetail?.coach?.asOfMs ?? null;
     const coachEndMs = endMs ?? coachAsOfMs;
@@ -474,7 +489,7 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
         ...(admittedDetail.permissions === undefined ? {} : { permissions: admittedDetail.permissions }),
       } } : {}),
       queryKey: key, period: { startMs, endMs: coachEndMs }, asOfMs: coachAsOfMs,
-      currentness: coachAsOfMs === null ? 'unknown' : snapshot?.status === 'error' || snapshot?.status === 'stale' ? 'stale'
+      currentness: coachAsOfMs === null ? 'unknown' : detailSnapshot?.errorCode || snapshot?.status === 'error' || snapshot?.status === 'stale' ? 'stale'
         : snapshot?.status === 'available' || admittedDetail ? 'current' : 'unknown',
       accounting: snapshot?.value,
       pricingOverrides: input.pricingOverrides,
@@ -494,6 +509,9 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const coachProjection = retainedCoach && retainedEvaluations ? { ...retainedCoach, currentness: 'stale' as const,
       evaluations: retainedEvaluations, findings: retainedEvaluations.flatMap(evaluation => evaluation.status === 'finding' ? [evaluation.finding] : []) } : coach;
     const digestSuggestion = coachProjection && createUsageCoachDigestSuggestion(query, coachProjection.period);
+    const detailSourceStatus: UsageQuerySourceState['status'] = !detailSnapshot?.errorCode ? detailProjection?.detailStatus ?? 'unknown'
+      : detailAuthorized && (retainedDetail?.howYouWork || observedDetail && observedDetail.status !== 'unknown') ? 'stale' : 'error';
+    const detailAsOfMs = detailSnapshot?.asOfMs ?? retainedDetail?.sources.find(source => source.source === 'how_you_work')?.asOfMs;
     const sources: UsageQuerySourceState[] = [
       { source: 'accounting', status: snapshot?.status ?? 'not_loaded',
         ...(snapshot?.asOfMs === undefined ? {} : { asOfMs: snapshot.asOfMs }),
@@ -511,8 +529,9 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
         ...(input.sources ?? []).filter(source => source.source !== 'how_you_work'),
         { source: 'how_you_work', status: 'not_loaded' as const },
       ]),
-      ...(detailSnapshot ? [{ source: 'how_you_work', status: detailProjection?.detailStatus ?? 'unknown',
-        ...(detailSnapshot.asOfMs === undefined ? {} : { asOfMs: detailSnapshot.asOfMs }) }] : []),
+      ...(detailSnapshot ? [{ source: 'how_you_work', status: detailSourceStatus,
+        ...(detailSnapshot.errorCode === undefined ? {} : { errorCode: detailSnapshot.errorCode }),
+        ...(detailAsOfMs === undefined ? {} : { asOfMs: detailAsOfMs }) }] : []),
     ];
     // Inputs are admitted owner snapshots; this projection is not a wire boundary.
     // Parsing here clones the same full history for every widget on every source

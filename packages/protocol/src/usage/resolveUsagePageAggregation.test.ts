@@ -598,6 +598,23 @@ describe('resolveUsagePageAggregation', () => {
     ] });
     expect(pending.results[1]).toHaveProperty('coach.findings', []);
     expect(UsageQueryBatchResultSchema.safeParse(pending).success).toBe(true);
+    const failed = resolveUsagePageAggregation({ queries: [query, other], previous: result,
+      howYouWork: [{ query, errorCode: 'usage_session_evidence_read_failed' }] });
+    expect(failed.results[0]?.sources).toContainEqual({ source: 'how_you_work', status: 'stale', asOfMs: 200, errorCode: 'usage_session_evidence_read_failed' });
+    expect(failed.results[0]?.coach?.findings[0]?.evidenceKey).toBe(result.results[0]?.coach?.findings[0]?.evidenceKey);
+    expect(failed.results[0]?.coach?.findings[0]).toMatchObject({ currentness: 'stale', remedy: null, action: null });
+    expect(failed.results[1]).toHaveProperty('coach.findings', []);
+    expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+    for (const errorCode of ['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled']) {
+      const refused = resolveUsagePageAggregation({ queries: [query], previous: result, howYouWork: [{ query, errorCode }] });
+      expect(refused.results[0]).toHaveProperty('coach.findings', []);
+      expect(refused.results[0]?.howYouWork?.intervals).toBeNull();
+      expect(UsageQueryBatchResultSchema.safeParse(refused).success).toBe(true);
+    }
+    const refusedBeforeFailure = resolveUsagePageAggregation({ queries: [query], previous: result,
+      howYouWork: [{ query, detail: { status: 'unknown' }, errorCode: 'usage_session_evidence_read_failed' }] });
+    expect(refusedBeforeFailure.results[0]).toHaveProperty('coach.findings', []);
+    expect(UsageQueryBatchResultSchema.safeParse(refusedBeforeFailure).success).toBe(true);
     const denied = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query,
       detail: { ...detail, status: 'unknown' }, asOfMs: 200 }], previous: result });
     expect(denied.results[0]).toHaveProperty('coach.findings', []);

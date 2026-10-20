@@ -1070,19 +1070,26 @@ describe('usage query captured Resource adapter', () => {
       profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }) });
     const digestGate = createDeferred<void>();
     const originalDigest = platformDigest.digest;
-    const digest = vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
-      if (digest.mock.calls.length === 1) await digestGate.promise;
+    const submitted: string[] = [];
+    vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
+      const text = new TextDecoder().decode(bytes);
+      // Bootstrap shares the crypto boundary; only this Resource's revisions
+      // belong to the coalescing contract (as in the adjacent digest test).
+      if (text.startsWith('{"v":1,"results":[')) {
+        submitted.push(text);
+        if (submitted.length === 1) await digestGate.promise;
+      }
       return await originalDigest(algorithm, bytes);
     });
     const entry = getUsageQueryResourceStore(captured)
       .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
-      await expect.poll(() => digest.mock.calls.length).toBe(1);
+      await expect.poll(() => submitted.length).toBe(1);
       await flushHookEffects();
       digestGate.resolve();
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
-      expect(digest).toHaveBeenCalledTimes(2);
+      expect(submitted).toHaveLength(2);
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting).toMatchObject(value);
     } finally { digestGate.resolve(); release(); }
   });
@@ -3097,7 +3104,10 @@ describe('usage query captured Resource adapter', () => {
       expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
       const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
       if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
-      else expect(broad.getSnapshot().error).toBeDefined();
+      else {
+        expect.soft(failed.results[0]!.pending, 'failed evidence has settled, rather than reading forever').toBe(false);
+        expect.soft(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }));
+      }
       expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
       if (failureSource === 'sessions') {
         await broad.refresh();
