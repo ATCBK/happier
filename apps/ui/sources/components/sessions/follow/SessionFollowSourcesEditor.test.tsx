@@ -18,6 +18,8 @@ const api = vi.hoisted(() => ({
     set: vi.fn(),
 }));
 const preparation = vi.hoisted(() => ({ run: vi.fn() }));
+// The Follow Action transport is the boundary for rule writes and live counts.
+const followAction = vi.hoisted(() => ({ execute: vi.fn() }));
 const picker = vi.hoisted(() => ({ open: vi.fn() }));
 const connectivity = vi.hoisted(() => ({ online: true }));
 const useServerScopedMachine = vi.hoisted(() => vi.fn());
@@ -33,6 +35,10 @@ vi.mock('@/sync/api/session/sessionFollowSourcesApi', () => ({
     listSessionFollowSources: api.list,
     removeSessionFollowSource: api.remove,
     setSessionFollowSource: api.set,
+}));
+vi.mock('@/sync/api/session/sessionFollowApi', async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    executeSessionFollowAction: followAction.execute,
 }));
 vi.mock('./prepareSessionFollowSourceKey', () => ({ prepareSessionFollowSourceKey: preparation.run }));
 vi.mock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => ({
@@ -111,6 +117,8 @@ describe('SessionFollowSourcesEditor', () => {
         api.list.mockReset();
         api.remove.mockReset();
         api.set.mockReset();
+        followAction.execute.mockReset();
+        followAction.execute.mockResolvedValue({ kind: 'failed', error: 'unavailable' });
         preparation.run.mockReset();
         picker.open.mockReset();
         preparation.run.mockResolvedValue({ kind: 'waiting', reason: 'runner_unreachable' });
@@ -815,6 +823,45 @@ describe('SessionFollowSourcesEditor', () => {
         }));
         // Non-Session sources have no encrypted source key to prepare.
         expect(preparation.run).not.toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'disc-1' }));
+        await screen.unmount();
+    });
+
+    it('shows a rule-only Following as rule rows with a live count, and edits or stops that rule in the same panel', async () => {
+        const filter = { show: 'sessions', startedBy: ['you', 'triggers', 'agents'], scope: 'all_accessible', attention: 'any',
+            homeServerIds: ['home-a'], audiences: [], tagIds: [], source: 'all',
+            projects: { include: [{ serverId: 'home-a', projectKey: 'payments' }], exclude: [] }, statuses: ['failed'] };
+        const rule = { ruleId: 'rule-1', receiver: { kind: 'session', sessionId: 'destination-a' }, version: 3,
+            sources: [], inception: {}, definition: { v: 1, enabled: true, filter, policy: { preset: 'important' } } };
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [], rules: [rule], coverage: 'complete' } });
+        api.remove.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        followAction.execute.mockImplementation(async (actionId: string, input: Record<string, unknown>) => actionId === 'follow.preview'
+            ? { kind: 'ok', value: { coverage: 'complete', matchCount: 4, matches: [], unavailable: [], overlaps: [] } }
+            : actionId === 'follow.set'
+                ? { kind: 'ok', value: { rule: { ...rule, version: 4, definition: { ...rule.definition, policy: input.policy } } } }
+                : { kind: 'failed', error: 'unavailable' });
+        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+        />);
+        // Not an empty Following: the rule is the row, counted by the canonical preview for this receiver.
+        await vi.waitFor(() => expect(findSourceRow(screen, 'rule:rule-1')?.props.subtitle).toBe('sessionCoordinator.make.count'));
+        expect(screen.findAllByTestId('session-follow-sources-empty')).toHaveLength(0);
+        expect(findSourceRow(screen, 'rule:rule-1')?.props.title).toBe('session.follow.sources.ruleMatching');
+        expect(followAction.execute).toHaveBeenCalledWith('follow.preview',
+            { receiver: { kind: 'session', sessionId: 'destination-a' }, filter }, 'home-a', expect.anything());
+
+        await openSource(screen, 'rule:rule-1');
+        expect(screen.findByTestId('session-follow-source-rule:rule-1-panel')).not.toBeNull();
+        await act(async () => { sourcePresetSegment(screen, 'rule:rule-1', 'quiet')?.props.onPress?.(); await Promise.resolve(); });
+        // The rule's whole definition is written at the version this list read; its filter is untouched.
+        await vi.waitFor(() => expect(followAction.execute).toHaveBeenCalledWith('follow.set', {
+            receiver: { kind: 'session', sessionId: 'destination-a' }, source: { kind: 'rule', ruleId: 'rule-1' },
+            ruleDefinition: { v: 1, enabled: true, filter }, policy: expect.objectContaining({ preset: 'quiet' }), expectedVersion: 3,
+        }, 'home-a', undefined));
+        expect(api.set).not.toHaveBeenCalled();
+        await act(async () => { screen.findByTestId('session-follow-source-rule:rule-1-remove')?.props.onPress?.(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(api.remove).toHaveBeenCalledWith({
+            serverId: 'home-a', destinationSessionId: 'destination-a', source: { kind: 'rule', ruleId: 'rule-1' },
+        }));
         await screen.unmount();
     });
 

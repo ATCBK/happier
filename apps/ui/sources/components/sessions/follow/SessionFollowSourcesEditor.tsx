@@ -27,6 +27,9 @@ import {
     removeSessionFollowSource,
     setSessionFollowSource,
 } from '@/sync/api/session/sessionFollowSourcesApi';
+import { writeSessionFollowRuleDefinition } from '@/sync/api/session/sessionFollowRuleEdits';
+import { describeSessionListFilterFacts } from '@/components/sessions/shell/search/sessionListFilterSummary';
+import { useSessionListFilterProjectOptions } from '@/components/sessions/shell/search/useSessionListFilterProjectOptions';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { useActiveServerAccountScope, useServerScopedMachine, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
@@ -51,7 +54,8 @@ import { FollowEditorPanel } from './FollowEditorPanel';
 import { FollowPolicyEditorBinding, FollowPolicySection } from './FollowPolicyEditorBinding';
 import { FollowSessionMark } from './FollowSessionMark';
 import { describeSessionFollowLevel } from './sessionFollowLevelCopy';
-import { useSessionFollowing } from './useSessionFollowing';
+import { describeFollowRuleMatchCount, useFollowRuleMatchCounts } from './followRuleMatchCounts';
+import { useSessionFollowing, type SessionFollowingProjection } from './useSessionFollowing';
 import { openSessionFollowSourcePicker } from './openSessionFollowDestinationPicker';
 import {
     prepareSessionFollowSourceKey,
@@ -73,6 +77,12 @@ type SessionFollowSourceMutationRequest = Readonly<{
 }>;
 
 const EMPTY_SOURCES: readonly FollowSourceRelationV1[] = Object.freeze([]);
+type FollowingRule = SessionFollowingProjection['rules'][number];
+const EMPTY_RULES: readonly FollowingRule[] = Object.freeze([]);
+
+function ruleKey(rule: FollowingRule): string {
+    return followSourceKey({ kind: 'rule', ruleId: rule.ruleId });
+}
 
 /**
  * One row's identity across every source kind: a Session source keeps its id (the phone route's `source` and the
@@ -185,6 +195,11 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const reachabilityRevision = useMachineReachabilityRevision();
     const following = useSessionFollowing(props.serverId ? { serverId: props.serverId, sessionId: props.destination.id } : null, enabled);
     const sources = following.projection?.sources ?? EMPTY_SOURCES;
+    // A rule follows whatever matches it when each event happens; it is a row like a source, never enrolled sessions.
+    const rules = following.projection?.rules ?? EMPTY_RULES;
+    const projects = useSessionListFilterProjectOptions();
+    const ruleCountInputs = React.useMemo(() => rules.map((rule) => ({ key: ruleKey(rule), filter: rule.definition.filter })), [rules]);
+    const ruleCounts = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, ruleCountInputs);
     const { loading, refresh } = following;
     const [savingId, setSavingId] = React.useState<string | null>(null);
     const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
@@ -321,12 +336,16 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         activeMutationRequestRef.current = request;
         setSavingId(request.sourceKey);
         dispatchMutation({ kind: 'started', intent: { kind: 'policy', source, policy } });
-        const result = await setSessionFollowSource({
-            serverId: props.serverId,
-            destinationSessionId: props.destination.id,
-            ...sourcePair(source),
-            policy,
-        });
+        // A rule's policy is part of its definition, written whole at the version this list read.
+        const rule = source.kind === 'rule' ? rules.find((candidate) => candidate.ruleId === source.ruleId) : undefined;
+        const result = rule
+            ? await writeSessionFollowRuleDefinition(props.serverId, { ...rule, definition: { ...rule.definition, policy } }, rule.version)
+            : await setSessionFollowSource({
+                serverId: props.serverId,
+                destinationSessionId: props.destination.id,
+                ...sourcePair(source),
+                policy,
+            });
         if (
             preparationTargetKeyRef.current !== request.targetKey
             || activeMutationRequestRef.current !== request
@@ -342,7 +361,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         else dispatchMutation({ kind: 'failed', error: true });
         activeMutationRequestRef.current = null;
         setSavingId(null);
-    }, [online, preparationTargetKey, props.destination.id, props.serverId, refresh, savingId]);
+    }, [online, preparationTargetKey, props.destination.id, props.serverId, refresh, rules, savingId]);
 
     const serverId = props.serverId;
     const homeSessions = Object.values(readSessionListRowsForServerId(rowsByServerId, serverId ?? '') ?? {});
@@ -519,12 +538,19 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                     sourceTitle: run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata)) : t('session.follow.sources.kindWorkflowRun') };
             }
             case 'rule':
-                return { key, ref, session: undefined, icon: 'stack', mark: glyph('stack'), sourceTitle: ref.ruleId };
+                return { key, ref, session: undefined, icon: 'funnel-simple', mark: glyph('funnel-simple'), sourceTitle: ref.ruleId };
         }
+    };
+    const ruleTitle = (rule: FollowingRule) => {
+        const facts = describeSessionListFilterFacts(rule.definition.filter, projects);
+        return facts.length > 0
+            ? t('session.follow.sources.ruleMatching', { facts: facts.join(' · ') })
+            : t('session.follow.sources.ruleEvery');
     };
     const policyDisabled = !online || savingId !== null;
     // A panel is open while its source is still listed; a mutation error belongs to that panel then, not to the list.
-    const panelOpen = anchored && sources.some((source) => followSourceKey(readFollowSourceRef(source)) === openSourceId);
+    const panelOpen = anchored && (sources.some((source) => followSourceKey(readFollowSourceRef(source)) === openSourceId)
+        || rules.some((rule) => ruleKey(rule) === openSourceId));
     const closePanel = () => {
         setOpenSourceId(null);
         props.page?.onClose();
@@ -548,11 +574,23 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     // One source's panel (lab P2-S): who it hears from and how much, Stop updates quiet at the left, Done.
     const panelPartsFor = (source: FollowSourceRelationV1): FollowSourcePanelParts => {
         const { key, ref, sourceTitle, mark } = sourceIdentity(source);
+        return panelParts({ key, ref, sourceTitle, mark, title: t('session.follow.sources.row', { title: sourceTitle }), policy: source.policy });
+    };
+    // A rule's panel is the same one: what it matches, how much it hears, Stop updates · Done.
+    const rulePanelParts = (rule: FollowingRule): FollowSourcePanelParts => {
+        const title = ruleTitle(rule);
+        return panelParts({ key: ruleKey(rule), ref: { kind: 'rule', ruleId: rule.ruleId }, sourceTitle: title, title,
+            mark: <Icon name="funnel-simple" size={18} color={theme.colors.text.secondary} />, policy: rule.definition.policy });
+    };
+    function panelParts(input: Readonly<{
+        key: string; ref: FollowSourceRefV1; sourceTitle: string; title: string; mark: React.ReactNode; policy: FollowPolicyV1;
+    }>): FollowSourcePanelParts {
+        const { key, ref, sourceTitle, mark } = input;
         const draft = mutation.pending ?? mutation.failed;
         const policy = draft?.kind === 'policy' && followSourceKey(draft.source) === key
-            ? draft.policy : source.policy;
+            ? draft.policy : input.policy;
         return {
-            title: t('session.follow.sources.row', { title: sourceTitle }),
+            title: input.title,
             subtitle: t('session.follow.sources.panelSubtitle'),
             mark,
             body: <>
@@ -580,7 +618,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 />
             </SectionButtonRow>,
         };
-    };
+    }
 
     // A wide window anchors the panel to the row; a phone pushes the page, which mounts this editor for that source.
     const openSource = (sourceKey: string) => {
@@ -597,6 +635,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         // A pair can carry a manager relation beside the ordinary follow; the panel edits the ordinary one.
         const matching = sources.filter((candidate) => followSourceKey(readFollowSourceRef(candidate)) === props.page?.sourceKey);
         const source = matching.find((candidate) => candidate.relation !== 'manager') ?? matching[0];
+        const pageRule = source ? undefined : rules.find((rule) => ruleKey(rule) === props.page?.sourceKey);
+        if (pageRule) return <>{props.page.frame(rulePanelParts(pageRule))}</>;
         // While the list loads, the frame already stands (its header, a loading line, Done) so nothing jumps in later.
         if (!source) return loading ? <>{props.page.frame({
             title: t('session.follow.sources.title'),
@@ -652,8 +692,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 showChevron={false}
                 mode="info"
             /> : null}
-            {loading && sources.length === 0 ? <Item {...rowLook} title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
-            {!loading && sources.length === 0 && !failed ? (pane
+            {loading && sources.length === 0 && rules.length === 0 ? <Item {...rowLook} title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
+            {!loading && sources.length === 0 && rules.length === 0 && !failed ? (pane
                 ? <View style={styles.paneEmpty}><EmptyState testID="session-follow-sources-empty" layout="line" title={t('session.follow.sources.empty')} /></View>
                 : <Item {...rowLook} testID="session-follow-sources-empty" title={t('session.follow.sources.empty')} showChevron={false} mode="info" />) : null}
             {sources.map((source) => {
@@ -707,6 +747,36 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                     } : null}
                 />;
             })}
+            {rules.map((rule) => {
+                const key = ruleKey(rule);
+                const title = ruleTitle(rule);
+                const status = describeFollowRuleMatchCount(ruleCounts[key], levelText(rule.definition.policy.preset));
+                const open = panelOpen && openSourceId === key;
+                return <SourceRowAnchor
+                    key={key}
+                    row={(triggerRef) => <Item
+                        {...rowLook}
+                        {...(pane ? { icon: <Icon name="funnel-simple" size={18} color={theme.colors.text.secondary} /> } : {})}
+                        pressableRef={triggerRef}
+                        testID={`session-follow-source-${key}`}
+                        accessibilityLabel={`${title}. ${status}`}
+                        title={title}
+                        titleLines={0}
+                        subtitle={status}
+                        subtitleLines={0}
+                        onPress={() => openSource(key)}
+                    />}
+                    panel={open ? ({ anchorRef, triggerRef }) => {
+                        const parts = rulePanelParts(rule);
+                        return <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={closePanel}
+                            testID={`session-follow-source-${key}-panel`}
+                            accessibilityLabel={parts.title}
+                            title={parts.title} subtitle={parts.subtitle} mark={parts.mark} footer={parts.footer}>
+                            {parts.body}
+                        </FollowEditorPanel>;
+                    } : null}
+                />;
+            })}
             {failed || (mutation.error !== null && !panelOpen) ? errorRow(rowLook) : null}
     </>;
 
@@ -714,7 +784,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         return <View testID="session-follow-sources-pane" style={styles.paneSection}>
             <PaneSectionHeader
                 title={t('session.follow.sources.title')}
-                count={!failed && sources.length > 0 ? sources.length : undefined}
+                count={!failed && sources.length + rules.length > 0 ? sources.length + rules.length : undefined}
                 action={<IconButton
                     controlRef={(node) => { paneAddRef.current = node; }}
                     testID="session-follow-source-add"
