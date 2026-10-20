@@ -1,6 +1,9 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
@@ -183,6 +186,7 @@ import { detailsChromeTranslations as feature_detailsChromeTranslations } from '
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/en';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/en';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/en';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/en';
 
@@ -487,6 +491,7 @@ const { detailsChromeTranslations } = feature_detailsChromeTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -10166,6 +10171,57 @@ const enSession = {
 
 const enUniversalSearch = {
   content: fileContentSearchTranslations['en'],
+  replace: {
+      field: "Replace with",
+      show: "Replace",
+      hide: "Hide replace",
+      matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'match' : 'matches'} in ${files} ${files === 1 ? 'file' : 'files'}`,
+      selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${selected} of ${total} matches in ${files} ${files === 1 ? 'file' : 'files'}`,
+      selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} of ${total}`,
+      fileNamesNotRenamed: "File names are not renamed",
+      includeFile: ({ file }: { file: string }) => `Include ${file}`,
+      includeMatch: ({ line, text }: { line: number; text: string }) => `Include line ${line}: ${text}`,
+      unsavedSection: "Unsaved in the editor, skipped",
+      saveFirst: "Save it first",
+      notText: ({ count }: { count: number }) => `${count} ${count === 1 ? 'file' : 'files'} skipped: not text`,
+      partial: "Some files couldn’t be searched; only the files shown are replaced.",
+      showMore: "Show more",
+      whatYouSee: "What you see is what is written. The file is checked again right before it is written.",
+      invalidPattern: "This pattern can’t be used for replace. Edit it and try again.",
+      noMatches: ({ query, scope }: { query: string; scope: string }) => `No text in ${scope} matches “${query}”`,
+      offline: ({ machine }: { machine: string }) => `${machine} is offline. Replace runs on it.`,
+      updateRequired: ({ machine }: { machine: string }) => `Update Happier on ${machine} to replace text in files.`,
+      failed: ({ machine }: { machine: string }) => `Couldn’t preview the replace on ${machine}.`,
+      retry: "Retry",
+      updating: "Updating preview…",
+      applying: ({ files }: { files: number }) => `Replacing in ${files} ${files === 1 ? 'file' : 'files'}…`,
+      stop: "Stop",
+      apply: ({ files }: { files: number }) => `Replace in ${files} ${files === 1 ? 'file' : 'files'}`,
+      done: "Done",
+      undo: "Undo",
+      undoAll: "Undo all",
+      reviewAgain: "Review again",
+      includeHint: "Include",
+      undoNote: "Undo restores exactly these edits, as long as nobody changed the file since.",
+      resultReplaced: ({ count }: { count: number }) => `Replaced ${count} ${count === 1 ? 'match' : 'matches'}`,
+      resultRestored: "Undone",
+      resultChanged: "Changed since the preview, not touched",
+      resultUndoChanged: "Changed since the replace; Undo left it alone",
+      resultCancelled: "Not attempted: stopped",
+      resultUnsaved: "Unsaved in the editor",
+      resultSkipped: "Skipped",
+      resultFailed: ({ machine }: { machine: string }) => `Couldn’t be written on ${machine}`,
+      skippedSection: "Skipped",
+      replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Replaced ${matches} ${matches === 1 ? 'match' : 'matches'} in ${files} ${files === 1 ? 'file' : 'files'}`,
+      undoneTitle: "Undone. The files are back as they were.",
+      nothingReplaced: "Nothing was replaced",
+      summaryChanged: ({ count }: { count: number }) => `${count === 1 ? '1 file' : `${count} files`} changed after the preview and ${count === 1 ? 'was' : 'were'} left alone.`,
+      summaryFailed: ({ count }: { count: number }) => `${count === 1 ? '1 file' : `${count} files`} couldn’t be written.`,
+      summarySkipped: ({ count }: { count: number }) => `${count === 1 ? '1 file was' : `${count} files were`} skipped.`,
+      summaryCancelled: ({ count }: { count: number }) => `Stopped before ${count === 1 ? '1 file' : `${count} files`}.`,
+      outcomeUnknown: ({ machine }: { machine: string }) => `Couldn’t confirm the replace on ${machine}. Check the files before trying again.`,
+      applyFailed: ({ machine }: { machine: string }) => `The replace didn’t run on ${machine}. Nothing was written.`,
+  },
     quickOpen: quickOpenTranslations["en"].search,
   scopeFilterLabel: 'Home',
   commitsUpdateRequired: 'Update Happier on this machine to search commits.',
@@ -11650,6 +11706,28 @@ const enTools = {
 
 const enFiles = {
   pane: filesPaneTranslations.en,
+  blame: {
+      uncommitted: "Uncommitted",
+      turn: ({ number }: { number: number }) => `turn ${number}`,
+      turnUnknown: "a turn",
+      agentFallback: "Agent",
+      line: ({ line }: { line: number }) => `Line ${line}`,
+      lines: ({ start, end }: { start: number; end: number }) => `Lines ${start}–${end}`,
+      openCommit: "Open commit",
+      copySha: "Copy SHA",
+      openTurn: "Open turn",
+      writtenIn: ({ title, time }: { title: string; time: string }) => `Not committed yet. Written in ${title} at ${time}.`,
+      askedBy: ({ name }: { name: string }) => `Asked by ${name}.`,
+      uncommittedBody: "Not committed yet. No turn of this session wrote these lines as they are now.",
+      newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Not committed yet. Every line is new; ${agent} wrote it in ${turn}.`,
+      noHistory: "No history yet. This file isn’t committed.",
+      failed: "Couldn’t read this file’s history.",
+      previousRun: "Previous run",
+      nextRun: "Next run",
+      runOf: ({ index, total }: { index: number; total: number }) => `Run ${index} of ${total}`,
+  },
+  viewer: fileViewerTranslations.en.viewer,
+  kind: fileViewerTranslations.en.kind,
   agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} is writing this file`,
   revealInFiles: 'Reveal in Files',
   openChanges: 'Open Changes',
@@ -11951,6 +12029,8 @@ const enFiles = {
     'This file changed on disk while you were editing. Your draft was kept unchanged; review the latest file before saving.',
   selectionFailed: 'Failed to update selection',
   askSelection: fileSelectionAskTranslations["en"],
+  track: fileTrackTranslations["en"],
+  editing: fileEditingTranslations["en"],
   openReviewCommentsFailed: 'Failed to open review comments',
   reviewPreviousFile: 'Previous file',
   reviewNextFile: 'Next file',
@@ -21812,6 +21892,7 @@ const enConversationSearch = {
 
 export const en: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.en,
+    hunkReview: hunkReviewTranslations['en'],
   panes: { mainColumn: paneMainColumnTranslations['en'], emptyEditor: paneEmptyEditorTranslations['en'], shortcutsSheet: paneShortcutsSheetTranslations['en'] },
     sessionCoordinator: {
         make: {
@@ -22921,7 +23002,7 @@ type EnglishNamespaces29 = TranslationOverlay<
   typeof projectWorkers
 >;
 
-export type TranslationsEn = EnglishNamespaces29 & Readonly<{ fileReviewNote: typeof fileReviewNoteTranslations.en }>;
+export type TranslationsEn = EnglishNamespaces29 & Readonly<{ fileReviewNote: typeof fileReviewNoteTranslations.en; hunkReview: typeof hunkReviewTranslations.en }>;
 
 // Shape contract for all locales: enforce identical key structure without requiring English literal
 // string values. Functions are preserved so parameter lists remain typechecked.

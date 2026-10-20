@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { de as actionTitlesDe } from './actionTitles/de';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -269,6 +272,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/de';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/de';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/de';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/de';
 
@@ -554,6 +558,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1071,6 +1076,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  */
 export const de: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.de,
+    hunkReview: hunkReviewTranslations['de'],
   panes: { mainColumn: paneMainColumnTranslations['de'], emptyEditor: paneEmptyEditorTranslations['de'], shortcutsSheet: paneShortcutsSheetTranslations['de'] },
   sessionCoordinator: {
     make: {
@@ -8532,6 +8538,57 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
     },
 
     universalSearch: {
+        replace: {
+            field: "Ersetzen durch",
+            show: "Ersetzen",
+            hide: "Ersetzen ausblenden",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'Treffer' : 'Treffer'} in ${files} ${files === 1 ? 'Datei' : 'Dateien'}`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${selected} von ${total} Treffern in ${files} ${files === 1 ? 'Datei' : 'Dateien'}`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} von ${total}`,
+            fileNamesNotRenamed: "Dateinamen werden nicht umbenannt",
+            includeFile: ({ file }: { file: string }) => `${file} einbeziehen`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `Zeile ${line} einbeziehen: ${text}`,
+            unsavedSection: "Im Editor nicht gespeichert, übersprungen",
+            saveFirst: "Erst speichern",
+            notText: ({ count }: { count: number }) => `${count} ${count === 1 ? 'Datei' : 'Dateien'} übersprungen: kein Text`,
+            partial: "Einige Dateien konnten nicht durchsucht werden; ersetzt werden nur die angezeigten.",
+            showMore: "Mehr anzeigen",
+            whatYouSee: "Was du siehst, wird geschrieben. Die Datei wird direkt vor dem Schreiben erneut geprüft.",
+            invalidPattern: "Dieses Muster kann nicht zum Ersetzen verwendet werden. Bearbeite es und versuche es erneut.",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `Kein Text in ${scope} passt zu „${query}“`,
+            offline: ({ machine }: { machine: string }) => `${machine} ist offline. Das Ersetzen läuft dort.`,
+            updateRequired: ({ machine }: { machine: string }) => `Aktualisiere Happier auf ${machine}, um Text in Dateien zu ersetzen.`,
+            failed: ({ machine }: { machine: string }) => `Die Vorschau auf ${machine} ist fehlgeschlagen.`,
+            retry: "Erneut versuchen",
+            updating: "Vorschau wird aktualisiert…",
+            applying: ({ files }: { files: number }) => `Ersetze in ${files} ${files === 1 ? 'Datei' : 'Dateien'}…`,
+            stop: "Stopp",
+            apply: ({ files }: { files: number }) => `In ${files} ${files === 1 ? 'Datei' : 'Dateien'} ersetzen`,
+            done: "Fertig",
+            undo: "Rückgängig",
+            undoAll: "Alles rückgängig",
+            reviewAgain: "Erneut prüfen",
+            includeHint: "Einbeziehen",
+            undoNote: "Rückgängig stellt genau diese Änderungen wieder her, solange niemand die Datei inzwischen geändert hat.",
+            resultReplaced: ({ count }: { count: number }) => `${count} ${count === 1 ? 'Treffer' : 'Treffer'} ersetzt`,
+            resultRestored: "Rückgängig gemacht",
+            resultChanged: "Seit der Vorschau geändert, nicht angefasst",
+            resultUndoChanged: "Seit dem Ersetzen geändert; Rückgängig hat sie nicht angefasst",
+            resultCancelled: "Nicht versucht: gestoppt",
+            resultUnsaved: "Im Editor nicht gespeichert",
+            resultSkipped: "Übersprungen",
+            resultFailed: ({ machine }: { machine: string }) => `Konnte auf ${machine} nicht geschrieben werden`,
+            skippedSection: "Übersprungen",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'Treffer' : 'Treffer'} in ${files} ${files === 1 ? 'Datei' : 'Dateien'} ersetzt`,
+            undoneTitle: "Rückgängig gemacht. Die Dateien sind wieder wie vorher.",
+            nothingReplaced: "Nichts wurde ersetzt",
+            summaryChanged: ({ count }: { count: number }) => `${count === 1 ? '1 Datei wurde' : `${count} Dateien wurden`} nach der Vorschau geändert und nicht angefasst.`,
+            summaryFailed: ({ count }: { count: number }) => `${count === 1 ? '1 Datei konnte' : `${count} Dateien konnten`} nicht geschrieben werden.`,
+            summarySkipped: ({ count }: { count: number }) => `${count === 1 ? '1 Datei wurde' : `${count} Dateien wurden`} übersprungen.`,
+            summaryCancelled: ({ count }: { count: number }) => `Gestoppt vor ${count === 1 ? '1 Datei' : `${count} Dateien`}.`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `Das Ersetzen auf ${machine} konnte nicht bestätigt werden. Prüfe die Dateien, bevor du es erneut versuchst.`,
+            applyFailed: ({ machine }: { machine: string }) => `Das Ersetzen lief nicht auf ${machine}. Nichts wurde geschrieben.`,
+        },
         content: fileContentSearchTranslations["de"],
     quickOpen: quickOpenTranslations["de"].search,
         scopeFilterLabel: 'Home',
@@ -9783,6 +9840,28 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
 
         files: {
             pane: filesPaneTranslations.de,
+            blame: {
+                uncommitted: "Nicht committet",
+                turn: ({ number }: { number: number }) => `Runde ${number}`,
+                turnUnknown: "eine Runde",
+                agentFallback: "Agent",
+                line: ({ line }: { line: number }) => `Zeile ${line}`,
+                lines: ({ start, end }: { start: number; end: number }) => `Zeilen ${start}–${end}`,
+                openCommit: "Commit öffnen",
+                copySha: "SHA kopieren",
+                openTurn: "Runde öffnen",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `Noch nicht committet. Geschrieben in ${title} um ${time}.`,
+                askedBy: ({ name }: { name: string }) => `Angefragt von ${name}.`,
+                uncommittedBody: "Noch nicht committet. Keine Runde dieser Sitzung hat diese Zeilen so geschrieben, wie sie jetzt sind.",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Noch nicht committet. Jede Zeile ist neu; ${agent} hat sie in ${turn} geschrieben.`,
+                noHistory: "Noch keine Historie. Diese Datei ist nicht committet.",
+                failed: "Die Historie dieser Datei konnte nicht gelesen werden.",
+                previousRun: "Vorheriger Abschnitt",
+                nextRun: "Nächster Abschnitt",
+                runOf: ({ index, total }: { index: number; total: number }) => `Abschnitt ${index} von ${total}`,
+            },
+            viewer: fileViewerTranslations.de.viewer,
+            kind: fileViewerTranslations.de.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} schreibt gerade diese Datei`,
             revealInFiles: "In Dateien anzeigen",
             openChanges: "Änderungen öffnen",
@@ -10047,6 +10126,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
               'Diese Datei hat sich auf der Festplatte geändert, während du bearbeitet hast. Dein Entwurf blieb unverändert; sieh dir die aktuelle Datei an, bevor du speicherst.',
           selectionFailed: 'Die Auswahl ließ sich nicht aktualisieren',
           askSelection: fileSelectionAskTranslations["de"],
+          track: fileTrackTranslations["de"],
+          editing: fileEditingTranslations["de"],
           openReviewCommentsFailed: 'Die Review-Kommentare ließen sich nicht öffnen',
               reviewPreviousFile: "Vorherige Datei",
                   reviewNextFile: "Nächste Datei",

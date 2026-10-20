@@ -39,6 +39,7 @@ import * as Shared_eventAutomationComposerTranslations from '../eventAutomationC
 import * as Shared_externalSessionOperationTranslations from '../externalSessionOperationTranslations.shared';
 import * as Shared_externalSessionSettingsTranslations from '../externalSessionSettingsTranslations.shared';
 import * as Shared_filesPaneTranslations from '../filesPaneTranslations.shared';
+import * as Shared_fileViewerTranslations from '../fileViewerTranslations.shared';
 import * as Shared_findTranslations from '../findTranslations.shared';
 import * as Shared_folderlessSessionTranslations from '../folderlessSessionTranslations.shared';
 import * as Shared_glassAppearanceTranslations from '../glassAppearanceTranslations.shared';
@@ -522,6 +523,14 @@ type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 const filesPaneTranslations = Shared_filesPaneTranslations.filesPaneTranslationsEnglish;
 
 return { filesPaneTranslations };
+})();
+
+const Domain_fileViewerTranslations = (() => {
+type FileViewerTranslations = Shared_fileViewerTranslations.FileViewerTranslations;
+
+const fileViewerTranslations = Shared_fileViewerTranslations.fileViewerTranslationsEnglish;
+
+return { fileViewerTranslations };
 })();
 
 const Domain_findTranslations = (() => {
@@ -1776,6 +1785,7 @@ export {
     Domain_externalSessionOperationTranslations as externalSessionOperationTranslations,
     Domain_externalSessionSettingsTranslations as externalSessionSettingsTranslations,
     Domain_filesPaneTranslations as filesPaneTranslations,
+    Domain_fileViewerTranslations as fileViewerTranslations,
     Domain_findTranslations as findTranslations,
     Domain_folderlessSessionTranslations as folderlessSessionTranslations,
     Domain_glassAppearanceTranslations as glassAppearanceTranslations,

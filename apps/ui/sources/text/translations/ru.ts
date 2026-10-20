@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ru as actionTitlesRu } from './actionTitles/ru';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/ru';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/ru';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/ru';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/ru';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1293,6 +1298,7 @@ function plural({
  */
 const ruValues = {
     fileReviewNote: fileReviewNoteTranslations['ru'],
+    hunkReview: hunkReviewTranslations['ru'],
   panes: { mainColumn: paneMainColumnTranslations['ru'], emptyEditor: paneEmptyEditorTranslations['ru'], shortcutsSheet: paneShortcutsSheetTranslations['ru'] },
   sessionCoordinator: {
     make: {
@@ -8928,6 +8934,57 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
   },
 
     universalSearch: {
+        replace: {
+            field: "Заменить на",
+            show: "Заменить",
+            hide: "Скрыть замену",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `Совпадений: ${matches} · файлов: ${files}`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `Совпадений: ${selected} из ${total} · файлов: ${files}`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} из ${total}`,
+            fileNamesNotRenamed: "Имена файлов не меняются",
+            includeFile: ({ file }: { file: string }) => `Включить ${file}`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `Включить строку ${line}: ${text}`,
+            unsavedSection: "Не сохранены в редакторе, пропущены",
+            saveFirst: "Сначала сохраните",
+            notText: ({ count }: { count: number }) => `Пропущено файлов (не текст): ${count}`,
+            partial: "Некоторые файлы не удалось просмотреть; заменяются только показанные файлы.",
+            showMore: "Показать ещё",
+            whatYouSee: "Будет записано то, что вы видите. Файл проверяется ещё раз прямо перед записью.",
+            invalidPattern: "Этот шаблон нельзя использовать для замены. Измените его и попробуйте снова.",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `В ${scope} нет текста, совпадающего с «${query}»`,
+            offline: ({ machine }: { machine: string }) => `${machine} не в сети. Замена выполняется на нём.`,
+            updateRequired: ({ machine }: { machine: string }) => `Обновите Happier на ${machine}, чтобы заменять текст в файлах.`,
+            failed: ({ machine }: { machine: string }) => `Не удалось показать предпросмотр замены на ${machine}.`,
+            retry: "Повторить",
+            updating: "Обновление предпросмотра…",
+            applying: ({ files }: { files: number }) => `Замена в файлах: ${files}…`,
+            stop: "Остановить",
+            apply: ({ files }: { files: number }) => `Заменить в файлах: ${files}`,
+            done: "Готово",
+            undo: "Отменить",
+            undoAll: "Отменить всё",
+            reviewAgain: "Проверить снова",
+            includeHint: "Включить",
+            undoNote: "Отмена восстанавливает именно эти правки, если с тех пор файл никто не менял.",
+            resultReplaced: ({ count }: { count: number }) => `Заменено совпадений: ${count}`,
+            resultRestored: "Отменено",
+            resultChanged: "Изменён после предпросмотра, не тронут",
+            resultUndoChanged: "Изменён после замены; отмена его не тронула",
+            resultCancelled: "Не выполнялось: остановлено",
+            resultUnsaved: "Не сохранён в редакторе",
+            resultSkipped: "Пропущен",
+            resultFailed: ({ machine }: { machine: string }) => `Не удалось записать на ${machine}`,
+            skippedSection: "Пропущены",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Заменено совпадений: ${matches} · файлов: ${files}`,
+            undoneTitle: "Отменено. Файлы снова такие, как были.",
+            nothingReplaced: "Ничего не заменено",
+            summaryChanged: ({ count }: { count: number }) => `Файлов изменено после предпросмотра и не тронуто: ${count}.`,
+            summaryFailed: ({ count }: { count: number }) => `Не удалось записать файлов: ${count}.`,
+            summarySkipped: ({ count }: { count: number }) => `Пропущено файлов: ${count}.`,
+            summaryCancelled: ({ count }: { count: number }) => `Остановлено, не обработано файлов: ${count}.`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `Не удалось подтвердить замену на ${machine}. Проверьте файлы, прежде чем повторять.`,
+            applyFailed: ({ machine }: { machine: string }) => `Замена не выполнялась на ${machine}. Ничего не записано.`,
+        },
         sessionInventoryLoading: 'Загрузка дополнительных сессий…',
         searchingGroup: 'Поиск…',
         groupFailed: ({ group }: { group: string }) => `Не удалось выполнить поиск в «${group}».`,
@@ -9730,6 +9787,28 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
 
   files: {
             pane: filesPaneTranslations.ru,
+            blame: {
+                uncommitted: "Без коммита",
+                turn: ({ number }: { number: number }) => `ход ${number}`,
+                turnUnknown: "ход",
+                agentFallback: "Агент",
+                line: ({ line }: { line: number }) => `Строка ${line}`,
+                lines: ({ start, end }: { start: number; end: number }) => `Строки ${start}–${end}`,
+                openCommit: "Открыть коммит",
+                copySha: "Копировать SHA",
+                openTurn: "Открыть ход",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `Ещё не в коммите. Написано в ${title} в ${time}.`,
+                askedBy: ({ name }: { name: string }) => `Попросил(а): ${name}.`,
+                uncommittedBody: "Ещё не в коммите. Ни один ход этой сессии не писал эти строки в нынешнем виде.",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Ещё не в коммите. Все строки новые; ${agent} написал их: ${turn}.`,
+                noHistory: "Истории пока нет. Этот файл не в коммите.",
+                failed: "Не удалось прочитать историю этого файла.",
+                previousRun: "Предыдущий блок",
+                nextRun: "Следующий блок",
+                runOf: ({ index, total }: { index: number; total: number }) => `Блок ${index} из ${total}`,
+            },
+            viewer: fileViewerTranslations.ru.viewer,
+            kind: fileViewerTranslations.ru.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} записывает этот файл`,
             revealInFiles: "Показать в файлах",
             openChanges: "Открыть изменения",
@@ -10021,6 +10100,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         "Этот файл изменился на диске, пока вы его редактировали. Черновик оставлен без изменений; проверьте последнюю версию файла перед сохранением.",
       selectionFailed: "Не удалось обновить выбор",
       askSelection: fileSelectionAskTranslations["ru"],
+      track: fileTrackTranslations["ru"],
+      editing: fileEditingTranslations["ru"],
       openReviewCommentsFailed: "Не удалось открыть комментарии к ревью",
         reviewPreviousFile: "Предыдущий файл",
                   reviewNextFile: "Следующий файл",

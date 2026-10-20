@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHans as actionTitlesZhHans } from './actionTitles/zh-Hans';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/zh-Hans';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/zh-Hans';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/zh-Hans';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/zh-Hans';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1279,6 +1284,7 @@ function plural({
 
 const zhHansValues = {
     fileReviewNote: fileReviewNoteTranslations['zh-Hans'],
+    hunkReview: hunkReviewTranslations['zh-Hans'],
   panes: { mainColumn: paneMainColumnTranslations['zh-Hans'], emptyEditor: paneEmptyEditorTranslations['zh-Hans'], shortcutsSheet: paneShortcutsSheetTranslations['zh-Hans'] },
   sessionCoordinator: {
     make: {
@@ -8218,6 +8224,57 @@ const zhHansValues = {
   },
 
     universalSearch: {
+        replace: {
+            field: "替换为",
+            show: "替换",
+            hide: "隐藏替换",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${files} 个文件中 ${matches} 处匹配`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${files} 个文件中 ${total} 处匹配的 ${selected} 处`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} / ${total}`,
+            fileNamesNotRenamed: "文件名不会被重命名",
+            includeFile: ({ file }: { file: string }) => `包含 ${file}`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `包含第 ${line} 行：${text}`,
+            unsavedSection: "编辑器中未保存，已跳过",
+            saveFirst: "请先保存",
+            notText: ({ count }: { count: number }) => `跳过 ${count} 个文件：不是文本`,
+            partial: "部分文件无法搜索；只会替换显示的文件。",
+            showMore: "显示更多",
+            whatYouSee: "所见即所写。写入前会再次检查文件。",
+            invalidPattern: "此模式无法用于替换。请修改后重试。",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} 中没有与“${query}”匹配的文本`,
+            offline: ({ machine }: { machine: string }) => `${machine} 已离线。替换在这台机器上运行。`,
+            updateRequired: ({ machine }: { machine: string }) => `请在 ${machine} 上更新 Happier 以替换文件中的文本。`,
+            failed: ({ machine }: { machine: string }) => `无法在 ${machine} 上预览替换。`,
+            retry: "重试",
+            updating: "正在更新预览…",
+            applying: ({ files }: { files: number }) => `正在 ${files} 个文件中替换…`,
+            stop: "停止",
+            apply: ({ files }: { files: number }) => `在 ${files} 个文件中替换`,
+            done: "完成",
+            undo: "撤销",
+            undoAll: "全部撤销",
+            reviewAgain: "重新检查",
+            includeHint: "包含",
+            undoNote: "只要此后没有人修改文件，撤销会精确恢复这些编辑。",
+            resultReplaced: ({ count }: { count: number }) => `已替换 ${count} 处`,
+            resultRestored: "已撤销",
+            resultChanged: "预览后已更改，未改动",
+            resultUndoChanged: "替换后已更改；撤销未改动它",
+            resultCancelled: "未尝试：已停止",
+            resultUnsaved: "编辑器中未保存",
+            resultSkipped: "已跳过",
+            resultFailed: ({ machine }: { machine: string }) => `无法写入 ${machine}`,
+            skippedSection: "已跳过",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `已在 ${files} 个文件中替换 ${matches} 处`,
+            undoneTitle: "已撤销。文件已恢复原样。",
+            nothingReplaced: "没有替换任何内容",
+            summaryChanged: ({ count }: { count: number }) => `${count} 个文件在预览后已更改，未改动。`,
+            summaryFailed: ({ count }: { count: number }) => `${count} 个文件无法写入。`,
+            summarySkipped: ({ count }: { count: number }) => `已跳过 ${count} 个文件。`,
+            summaryCancelled: ({ count }: { count: number }) => `在 ${count} 个文件之前停止。`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `无法确认 ${machine} 上的替换。重试前请检查文件。`,
+            applyFailed: ({ machine }: { machine: string }) => `替换未在 ${machine} 上运行。没有写入任何内容。`,
+        },
         sessionInventoryLoading: '正在加载更多会话…',
         searchingGroup: '正在搜索…',
         groupFailed: ({ group }: { group: string }) => `无法搜索${group}。`,
@@ -9525,6 +9582,28 @@ const zhHansValues = {
 
   files: {
             pane: filesPaneTranslations['zh-Hans'],
+            blame: {
+                uncommitted: "未提交",
+                turn: ({ number }: { number: number }) => `第 ${number} 轮`,
+                turnUnknown: "某一轮",
+                agentFallback: "智能体",
+                line: ({ line }: { line: number }) => `第 ${line} 行`,
+                lines: ({ start, end }: { start: number; end: number }) => `第 ${start}–${end} 行`,
+                openCommit: "打开提交",
+                copySha: "复制 SHA",
+                openTurn: "打开这一轮",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `尚未提交。${time} 写于 ${title}。`,
+                askedBy: ({ name }: { name: string }) => `由 ${name} 发起。`,
+                uncommittedBody: "尚未提交。本会话中没有哪一轮写出了这些行的当前内容。",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `尚未提交。每一行都是新的；${agent} 在${turn}写下。`,
+                noHistory: "还没有历史。此文件尚未提交。",
+                failed: "无法读取此文件的历史。",
+                previousRun: "上一段",
+                nextRun: "下一段",
+                runOf: ({ index, total }: { index: number; total: number }) => `第 ${index} 段，共 ${total} 段`,
+            },
+            viewer: fileViewerTranslations['zh-Hans'].viewer,
+            kind: fileViewerTranslations['zh-Hans'].kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} 正在写入此文件`,
             revealInFiles: "在文件中显示",
             openChanges: "打开更改",
@@ -9809,6 +9888,8 @@ const zhHansValues = {
         "你编辑时，此文件已在磁盘上更改。草稿已保持不变；保存前请查看最新文件。",
       selectionFailed: "更新选择失败",
       askSelection: fileSelectionAskTranslations["zh-Hans"],
+      track: fileTrackTranslations["zh-Hans"],
+      editing: fileEditingTranslations["zh-Hans"],
       openReviewCommentsFailed: "打开审阅评论失败",
         reviewPreviousFile: "上一个文件",
                   reviewNextFile: "下一个文件",

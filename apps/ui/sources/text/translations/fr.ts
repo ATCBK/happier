@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { fr as actionTitlesFr } from './actionTitles/fr';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/fr';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/fr';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/fr';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/fr';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1236,6 +1241,7 @@ function plural({
  */
 const frValues = {
     fileReviewNote: fileReviewNoteTranslations['fr'],
+    hunkReview: hunkReviewTranslations['fr'],
   panes: { mainColumn: paneMainColumnTranslations['fr'], emptyEditor: paneEmptyEditorTranslations['fr'], shortcutsSheet: paneShortcutsSheetTranslations['fr'] },
   sessionCoordinator: {
     make: {
@@ -8392,6 +8398,57 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
   },
 
   universalSearch: {
+    replace: {
+        field: "Remplacer par",
+        show: "Remplacer",
+        hide: "Masquer le remplacement",
+        matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'occurrence' : 'occurrences'} dans ${files} ${files === 1 ? 'fichier' : 'fichiers'}`,
+        selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${selected} sur ${total} occurrences dans ${files} ${files === 1 ? 'fichier' : 'fichiers'}`,
+        selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} sur ${total}`,
+        fileNamesNotRenamed: "Les noms de fichiers ne sont pas renommés",
+        includeFile: ({ file }: { file: string }) => `Inclure ${file}`,
+        includeMatch: ({ line, text }: { line: number; text: string }) => `Inclure la ligne ${line} : ${text}`,
+        unsavedSection: "Non enregistrés dans l’éditeur, ignorés",
+        saveFirst: "Enregistrez d’abord",
+        notText: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fichier ignoré' : 'fichiers ignorés'} : pas du texte`,
+        partial: "Certains fichiers n’ont pas pu être parcourus ; seuls les fichiers affichés sont remplacés.",
+        showMore: "Afficher plus",
+        whatYouSee: "Ce que vous voyez est ce qui est écrit. Le fichier est vérifié à nouveau juste avant l’écriture.",
+        invalidPattern: "Ce motif ne peut pas servir au remplacement. Modifiez-le et réessayez.",
+        noMatches: ({ query, scope }: { query: string; scope: string }) => `Aucun texte dans ${scope} ne correspond à « ${query} »`,
+        offline: ({ machine }: { machine: string }) => `${machine} est hors ligne. Le remplacement s’exécute dessus.`,
+        updateRequired: ({ machine }: { machine: string }) => `Mettez à jour Happier sur ${machine} pour remplacer du texte dans les fichiers.`,
+        failed: ({ machine }: { machine: string }) => `Impossible de prévisualiser le remplacement sur ${machine}.`,
+        retry: "Réessayer",
+        updating: "Mise à jour de l’aperçu…",
+        applying: ({ files }: { files: number }) => `Remplacement dans ${files} ${files === 1 ? 'fichier' : 'fichiers'}…`,
+        stop: "Arrêter",
+        apply: ({ files }: { files: number }) => `Remplacer dans ${files} ${files === 1 ? 'fichier' : 'fichiers'}`,
+        done: "Terminé",
+        undo: "Annuler",
+        undoAll: "Tout annuler",
+        reviewAgain: "Revoir",
+        includeHint: "Inclure",
+        undoNote: "Annuler rétablit exactement ces modifications, tant que personne n’a modifié le fichier depuis.",
+        resultReplaced: ({ count }: { count: number }) => `${count} ${count === 1 ? 'occurrence remplacée' : 'occurrences remplacées'}`,
+        resultRestored: "Annulé",
+        resultChanged: "Modifié depuis l’aperçu, laissé tel quel",
+        resultUndoChanged: "Modifié depuis le remplacement ; l’annulation l’a laissé tel quel",
+        resultCancelled: "Non tenté : arrêté",
+        resultUnsaved: "Non enregistré dans l’éditeur",
+        resultSkipped: "Ignoré",
+        resultFailed: ({ machine }: { machine: string }) => `Impossible d’écrire sur ${machine}`,
+        skippedSection: "Ignorés",
+        replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'occurrence remplacée' : 'occurrences remplacées'} dans ${files} ${files === 1 ? 'fichier' : 'fichiers'}`,
+        undoneTitle: "Annulé. Les fichiers sont revenus à leur état d’origine.",
+        nothingReplaced: "Rien n’a été remplacé",
+        summaryChanged: ({ count }: { count: number }) => `${count === 1 ? '1 fichier a été modifié' : `${count} fichiers ont été modifiés`} après l’aperçu et laissé${count === 1 ? '' : 's'} tel${count === 1 ? '' : 's'} quel${count === 1 ? '' : 's'}.`,
+        summaryFailed: ({ count }: { count: number }) => `${count === 1 ? '1 fichier n’a pas pu' : `${count} fichiers n’ont pas pu`} être écrit${count === 1 ? '' : 's'}.`,
+        summarySkipped: ({ count }: { count: number }) => `${count === 1 ? '1 fichier a été ignoré' : `${count} fichiers ont été ignorés`}.`,
+        summaryCancelled: ({ count }: { count: number }) => `Arrêté avant ${count === 1 ? '1 fichier' : `${count} fichiers`}.`,
+        outcomeUnknown: ({ machine }: { machine: string }) => `Impossible de confirmer le remplacement sur ${machine}. Vérifiez les fichiers avant de réessayer.`,
+        applyFailed: ({ machine }: { machine: string }) => `Le remplacement ne s’est pas exécuté sur ${machine}. Rien n’a été écrit.`,
+    },
     sessionInventoryLoading: 'Chargement d’autres sessions…',
     searchingGroup: 'Recherche…',
     groupFailed: ({ group }: { group: string }) => `Impossible de chercher dans ${group}.`,
@@ -9712,6 +9769,28 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
 
   files: {
             pane: filesPaneTranslations.fr,
+            blame: {
+                uncommitted: "Non commité",
+                turn: ({ number }: { number: number }) => `tour ${number}`,
+                turnUnknown: "un tour",
+                agentFallback: "Agent",
+                line: ({ line }: { line: number }) => `Ligne ${line}`,
+                lines: ({ start, end }: { start: number; end: number }) => `Lignes ${start}–${end}`,
+                openCommit: "Ouvrir le commit",
+                copySha: "Copier le SHA",
+                openTurn: "Ouvrir le tour",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `Pas encore commité. Écrit dans ${title} à ${time}.`,
+                askedBy: ({ name }: { name: string }) => `Demandé par ${name}.`,
+                uncommittedBody: "Pas encore commité. Aucun tour de cette session n’a écrit ces lignes telles qu’elles sont.",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Pas encore commité. Chaque ligne est nouvelle ; ${agent} l’a écrite au ${turn}.`,
+                noHistory: "Pas encore d’historique. Ce fichier n’est pas commité.",
+                failed: "Impossible de lire l’historique de ce fichier.",
+                previousRun: "Bloc précédent",
+                nextRun: "Bloc suivant",
+                runOf: ({ index, total }: { index: number; total: number }) => `Bloc ${index} sur ${total}`,
+            },
+            viewer: fileViewerTranslations.fr.viewer,
+            kind: fileViewerTranslations.fr.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} écrit dans ce fichier`,
             revealInFiles: "Afficher dans Fichiers",
             openChanges: "Ouvrir les modifications",
@@ -10007,6 +10086,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
         "Ce fichier a changé sur le disque pendant ton édition. Ton brouillon est resté inchangé ; relis la dernière version avant d’enregistrer.",
       selectionFailed: "Échec de la mise à jour de la sélection",
       askSelection: fileSelectionAskTranslations["fr"],
+      track: fileTrackTranslations["fr"],
+      editing: fileEditingTranslations["fr"],
       openReviewCommentsFailed: "Échec de l’ouverture des commentaires de revue",
           reviewPreviousFile: "Fichier précédent",
                   reviewNextFile: "Fichier suivant",

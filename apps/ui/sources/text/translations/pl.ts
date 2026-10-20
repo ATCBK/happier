@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { pl as actionTitlesPl } from './actionTitles/pl';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/pl';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/pl';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/pl';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/pl';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1292,6 +1297,7 @@ function plural({
  */
 const plValues = {
     fileReviewNote: fileReviewNoteTranslations['pl'],
+    hunkReview: hunkReviewTranslations['pl'],
   panes: { mainColumn: paneMainColumnTranslations['pl'], emptyEditor: paneEmptyEditorTranslations['pl'], shortcutsSheet: paneShortcutsSheetTranslations['pl'] },
   sessionCoordinator: {
     make: {
@@ -8387,6 +8393,57 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
   },
 
     universalSearch: {
+        replace: {
+            field: "Zastąp przez",
+            show: "Zastąp",
+            hide: "Ukryj zastępowanie",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `Dopasowania: ${matches} · pliki: ${files}`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `Dopasowania: ${selected} z ${total} · pliki: ${files}`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} z ${total}`,
+            fileNamesNotRenamed: "Nazwy plików nie są zmieniane",
+            includeFile: ({ file }: { file: string }) => `Uwzględnij ${file}`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `Uwzględnij wiersz ${line}: ${text}`,
+            unsavedSection: "Niezapisane w edytorze, pominięte",
+            saveFirst: "Najpierw zapisz",
+            notText: ({ count }: { count: number }) => `Pominięte pliki (to nie tekst): ${count}`,
+            partial: "Nie udało się przeszukać niektórych plików; zastępowane są tylko pokazane pliki.",
+            showMore: "Pokaż więcej",
+            whatYouSee: "To, co widzisz, zostanie zapisane. Plik jest sprawdzany ponownie tuż przed zapisem.",
+            invalidPattern: "Tego wzorca nie można użyć do zastępowania. Popraw go i spróbuj ponownie.",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `Żaden tekst w ${scope} nie pasuje do „${query}”`,
+            offline: ({ machine }: { machine: string }) => `${machine} jest offline. Zastępowanie działa na tej maszynie.`,
+            updateRequired: ({ machine }: { machine: string }) => `Zaktualizuj Happier na ${machine}, aby zastępować tekst w plikach.`,
+            failed: ({ machine }: { machine: string }) => `Nie udało się wyświetlić podglądu zastępowania na ${machine}.`,
+            retry: "Spróbuj ponownie",
+            updating: "Aktualizowanie podglądu…",
+            applying: ({ files }: { files: number }) => `Zastępowanie w plikach: ${files}…`,
+            stop: "Zatrzymaj",
+            apply: ({ files }: { files: number }) => `Zastąp w plikach: ${files}`,
+            done: "Gotowe",
+            undo: "Cofnij",
+            undoAll: "Cofnij wszystko",
+            reviewAgain: "Przejrzyj ponownie",
+            includeHint: "Uwzględnij",
+            undoNote: "Cofnięcie przywraca dokładnie te zmiany, o ile nikt w międzyczasie nie zmienił pliku.",
+            resultReplaced: ({ count }: { count: number }) => `Zastąpione dopasowania: ${count}`,
+            resultRestored: "Cofnięto",
+            resultChanged: "Zmieniony od podglądu, nietknięty",
+            resultUndoChanged: "Zmieniony od zastąpienia; cofnięcie go nie dotknęło",
+            resultCancelled: "Nie podjęto: zatrzymano",
+            resultUnsaved: "Niezapisany w edytorze",
+            resultSkipped: "Pominięty",
+            resultFailed: ({ machine }: { machine: string }) => `Nie udało się zapisać na ${machine}`,
+            skippedSection: "Pominięte",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Zastąpiono dopasowania: ${matches} · pliki: ${files}`,
+            undoneTitle: "Cofnięto. Pliki są takie jak wcześniej.",
+            nothingReplaced: "Nic nie zostało zastąpione",
+            summaryChanged: ({ count }: { count: number }) => `Pliki zmienione po podglądzie i pozostawione bez zmian: ${count}.`,
+            summaryFailed: ({ count }: { count: number }) => `Pliki, których nie udało się zapisać: ${count}.`,
+            summarySkipped: ({ count }: { count: number }) => `Pominięte pliki: ${count}.`,
+            summaryCancelled: ({ count }: { count: number }) => `Zatrzymano przed plikami: ${count}.`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `Nie udało się potwierdzić zastąpienia na ${machine}. Sprawdź pliki, zanim spróbujesz ponownie.`,
+            applyFailed: ({ machine }: { machine: string }) => `Zastępowanie nie zostało uruchomione na ${machine}. Nic nie zapisano.`,
+        },
       sessionInventoryLoading: 'Wczytywanie kolejnych sesji…',
       searchingGroup: 'Wyszukiwanie…',
       groupFailed: ({ group }: { group: string }) => `Nie udało się przeszukać: ${group}.`,
@@ -9710,6 +9767,28 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
 
   files: {
             pane: filesPaneTranslations.pl,
+            blame: {
+                uncommitted: "Bez commita",
+                turn: ({ number }: { number: number }) => `tura ${number}`,
+                turnUnknown: "tura",
+                agentFallback: "Agent",
+                line: ({ line }: { line: number }) => `Wiersz ${line}`,
+                lines: ({ start, end }: { start: number; end: number }) => `Wiersze ${start}–${end}`,
+                openCommit: "Otwórz commit",
+                copySha: "Kopiuj SHA",
+                openTurn: "Otwórz turę",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `Jeszcze bez commita. Napisane w ${title} o ${time}.`,
+                askedBy: ({ name }: { name: string }) => `Na prośbę: ${name}.`,
+                uncommittedBody: "Jeszcze bez commita. Żadna tura tej sesji nie napisała tych wierszy w obecnej postaci.",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Jeszcze bez commita. Każdy wiersz jest nowy; ${agent} napisał go w: ${turn}.`,
+                noHistory: "Brak historii. Ten plik nie ma commita.",
+                failed: "Nie udało się odczytać historii tego pliku.",
+                previousRun: "Poprzedni blok",
+                nextRun: "Następny blok",
+                runOf: ({ index, total }: { index: number; total: number }) => `Blok ${index} z ${total}`,
+            },
+            viewer: fileViewerTranslations.pl.viewer,
+            kind: fileViewerTranslations.pl.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} zapisuje ten plik`,
             revealInFiles: "Pokaż w plikach",
             openChanges: "Otwórz zmiany",
@@ -10002,6 +10081,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         "Ten plik zmienił się na dysku podczas edycji. Szkic pozostał bez zmian; sprawdź najnowszą wersję pliku przed zapisaniem.",
       selectionFailed: "Nie udało się zaktualizować wyboru",
       askSelection: fileSelectionAskTranslations["pl"],
+      track: fileTrackTranslations["pl"],
+      editing: fileEditingTranslations["pl"],
       openReviewCommentsFailed: "Nie udało się otworzyć komentarzy do przeglądu",
         reviewPreviousFile: "Poprzedni plik",
                   reviewNextFile: "Następny plik",

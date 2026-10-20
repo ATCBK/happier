@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHant as actionTitlesZhHant } from './actionTitles/zh-Hant';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/zh-Hant';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/zh-Hant';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/zh-Hant';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/zh-Hant';
 
@@ -537,6 +541,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -7095,6 +7100,57 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     },
 
     universalSearch: {
+        replace: {
+            field: "取代為",
+            show: "取代",
+            hide: "隱藏取代",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${files} 個檔案中 ${matches} 處符合`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${files} 個檔案中 ${total} 處符合的 ${selected} 處`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} / ${total}`,
+            fileNamesNotRenamed: "檔案名稱不會被重新命名",
+            includeFile: ({ file }: { file: string }) => `包含 ${file}`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `包含第 ${line} 行：${text}`,
+            unsavedSection: "編輯器中未儲存，已略過",
+            saveFirst: "請先儲存",
+            notText: ({ count }: { count: number }) => `略過 ${count} 個檔案：不是文字`,
+            partial: "部分檔案無法搜尋；只會取代顯示的檔案。",
+            showMore: "顯示更多",
+            whatYouSee: "所見即所寫。寫入前會再次檢查檔案。",
+            invalidPattern: "此模式無法用於取代。請修改後再試一次。",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} 中沒有符合「${query}」的文字`,
+            offline: ({ machine }: { machine: string }) => `${machine} 已離線。取代在這台機器上執行。`,
+            updateRequired: ({ machine }: { machine: string }) => `請在 ${machine} 上更新 Happier 以取代檔案中的文字。`,
+            failed: ({ machine }: { machine: string }) => `無法在 ${machine} 上預覽取代。`,
+            retry: "重試",
+            updating: "正在更新預覽…",
+            applying: ({ files }: { files: number }) => `正在 ${files} 個檔案中取代…`,
+            stop: "停止",
+            apply: ({ files }: { files: number }) => `在 ${files} 個檔案中取代`,
+            done: "完成",
+            undo: "復原",
+            undoAll: "全部復原",
+            reviewAgain: "重新檢查",
+            includeHint: "包含",
+            undoNote: "只要之後沒有人修改檔案，復原會精確還原這些編輯。",
+            resultReplaced: ({ count }: { count: number }) => `已取代 ${count} 處`,
+            resultRestored: "已復原",
+            resultChanged: "預覽後已變更，未改動",
+            resultUndoChanged: "取代後已變更；復原未改動它",
+            resultCancelled: "未嘗試：已停止",
+            resultUnsaved: "編輯器中未儲存",
+            resultSkipped: "已略過",
+            resultFailed: ({ machine }: { machine: string }) => `無法寫入 ${machine}`,
+            skippedSection: "已略過",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `已在 ${files} 個檔案中取代 ${matches} 處`,
+            undoneTitle: "已復原。檔案已恢復原樣。",
+            nothingReplaced: "沒有取代任何內容",
+            summaryChanged: ({ count }: { count: number }) => `${count} 個檔案在預覽後已變更，未改動。`,
+            summaryFailed: ({ count }: { count: number }) => `${count} 個檔案無法寫入。`,
+            summarySkipped: ({ count }: { count: number }) => `已略過 ${count} 個檔案。`,
+            summaryCancelled: ({ count }: { count: number }) => `在 ${count} 個檔案之前停止。`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `無法確認 ${machine} 上的取代。重試前請檢查檔案。`,
+            applyFailed: ({ machine }: { machine: string }) => `取代未在 ${machine} 上執行。沒有寫入任何內容。`,
+        },
         content: fileContentSearchTranslations["zh-Hant"],
     quickOpen: quickOpenTranslations['zh-Hant'].search,
         scopeFilterLabel: 'Home',
@@ -7984,6 +8040,28 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
 
     files: {
             pane: filesPaneTranslations['zh-Hant'],
+            blame: {
+                uncommitted: "未提交",
+                turn: ({ number }: { number: number }) => `第 ${number} 輪`,
+                turnUnknown: "某一輪",
+                agentFallback: "智慧代理",
+                line: ({ line }: { line: number }) => `第 ${line} 行`,
+                lines: ({ start, end }: { start: number; end: number }) => `第 ${start}–${end} 行`,
+                openCommit: "開啟提交",
+                copySha: "複製 SHA",
+                openTurn: "開啟這一輪",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `尚未提交。${time} 寫於 ${title}。`,
+                askedBy: ({ name }: { name: string }) => `由 ${name} 發起。`,
+                uncommittedBody: "尚未提交。本工作階段中沒有哪一輪寫出這些行的目前內容。",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `尚未提交。每一行都是新的；${agent} 在${turn}寫下。`,
+                noHistory: "還沒有歷史。此檔案尚未提交。",
+                failed: "無法讀取此檔案的歷史。",
+                previousRun: "上一段",
+                nextRun: "下一段",
+                runOf: ({ index, total }: { index: number; total: number }) => `第 ${index} 段，共 ${total} 段`,
+            },
+            viewer: fileViewerTranslations['zh-Hant'].viewer,
+            kind: fileViewerTranslations['zh-Hant'].kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} 正在寫入此檔案`,
             revealInFiles: "在檔案中顯示",
             openChanges: "開啟變更",
@@ -8231,6 +8309,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         externalFileChange: '你編輯時，此檔案已在磁碟上變更。草稿已保持不變；儲存前請查看最新檔案。',
         selectionFailed: '更新選取失敗',
         askSelection: fileSelectionAskTranslations["zh-Hant"],
+        track: fileTrackTranslations["zh-Hant"],
+        editing: fileEditingTranslations["zh-Hant"],
         openReviewCommentsFailed: '無法開啟審閱評論',
         reviewPreviousFile: "上一個檔案",
                   reviewNextFile: "下一個檔案",
@@ -14135,5 +14215,5 @@ settingsSession: {
 
 
 export function createZhHant(base: typeof zhHans) {
-    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'] }));
+    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'] }));
 }

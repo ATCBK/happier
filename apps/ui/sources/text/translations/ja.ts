@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ja as actionTitlesJa } from './actionTitles/ja';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/ja';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/ja';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/ja';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/ja';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1263,6 +1268,7 @@ const settingsSessionHandoffTranslationExtensions = {
 
 const jaValues = {
     fileReviewNote: fileReviewNoteTranslations['ja'],
+    hunkReview: hunkReviewTranslations['ja'],
   panes: { mainColumn: paneMainColumnTranslations['ja'], emptyEditor: paneEmptyEditorTranslations['ja'], shortcutsSheet: paneShortcutsSheetTranslations['ja'] },
   sessionCoordinator: {
     make: {
@@ -8850,6 +8856,57 @@ localTailscale: {
   },
 
     universalSearch: {
+        replace: {
+            field: "置換後",
+            show: "置換",
+            hide: "置換を隠す",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${files} 個のファイルで ${matches} 件一致`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${files} 個のファイルで ${total} 件中 ${selected} 件`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${total} 件中 ${selected} 件`,
+            fileNamesNotRenamed: "ファイル名は変更されません",
+            includeFile: ({ file }: { file: string }) => `${file} を含める`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `${line} 行目を含める: ${text}`,
+            unsavedSection: "エディタで未保存のためスキップ",
+            saveFirst: "先に保存",
+            notText: ({ count }: { count: number }) => `${count} 個のファイルをスキップ: テキストではありません`,
+            partial: "一部のファイルを検索できませんでした。表示中のファイルだけが置換されます。",
+            showMore: "さらに表示",
+            whatYouSee: "表示どおりの内容が書き込まれます。書き込む直前にファイルを再確認します。",
+            invalidPattern: "このパターンは置換に使えません。編集してもう一度お試しください。",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} に「${query}」と一致するテキストはありません`,
+            offline: ({ machine }: { machine: string }) => `${machine} はオフラインです。置換はこのマシンで実行されます。`,
+            updateRequired: ({ machine }: { machine: string }) => `ファイル内のテキストを置換するには ${machine} の Happier を更新してください。`,
+            failed: ({ machine }: { machine: string }) => `${machine} で置換のプレビューを表示できませんでした。`,
+            retry: "再試行",
+            updating: "プレビューを更新中…",
+            applying: ({ files }: { files: number }) => `${files} 個のファイルで置換中…`,
+            stop: "停止",
+            apply: ({ files }: { files: number }) => `${files} 個のファイルで置換`,
+            done: "完了",
+            undo: "元に戻す",
+            undoAll: "すべて元に戻す",
+            reviewAgain: "もう一度確認",
+            includeHint: "含める",
+            undoNote: "その後ファイルが変更されていなければ、元に戻すとこれらの編集だけが正確に復元されます。",
+            resultReplaced: ({ count }: { count: number }) => `${count} 件を置換`,
+            resultRestored: "元に戻しました",
+            resultChanged: "プレビュー後に変更されたため触れていません",
+            resultUndoChanged: "置換後に変更されたため、元に戻す操作は触れていません",
+            resultCancelled: "未実行: 停止しました",
+            resultUnsaved: "エディタで未保存",
+            resultSkipped: "スキップ",
+            resultFailed: ({ machine }: { machine: string }) => `${machine} に書き込めませんでした`,
+            skippedSection: "スキップ",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${files} 個のファイルで ${matches} 件を置換しました`,
+            undoneTitle: "元に戻しました。ファイルは元の状態です。",
+            nothingReplaced: "何も置換されませんでした",
+            summaryChanged: ({ count }: { count: number }) => `${count} 個のファイルはプレビュー後に変更されたため、そのままにしました。`,
+            summaryFailed: ({ count }: { count: number }) => `${count} 個のファイルに書き込めませんでした。`,
+            summarySkipped: ({ count }: { count: number }) => `${count} 個のファイルをスキップしました。`,
+            summaryCancelled: ({ count }: { count: number }) => `${count} 個のファイルの前で停止しました。`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `${machine} での置換を確認できませんでした。再試行する前にファイルを確認してください。`,
+            applyFailed: ({ machine }: { machine: string }) => `${machine} で置換は実行されませんでした。何も書き込まれていません。`,
+        },
       sessionInventoryLoading: 'さらにセッションを読み込んでいます…',
       searchingGroup: '検索中…',
       groupFailed: ({ group }: { group: string }) => `${group} を検索できませんでした。`,
@@ -10176,6 +10233,28 @@ localTailscale: {
 
   files: {
             pane: filesPaneTranslations.ja,
+            blame: {
+                uncommitted: "未コミット",
+                turn: ({ number }: { number: number }) => `ターン ${number}`,
+                turnUnknown: "あるターン",
+                agentFallback: "エージェント",
+                line: ({ line }: { line: number }) => `${line} 行目`,
+                lines: ({ start, end }: { start: number; end: number }) => `${start}–${end} 行目`,
+                openCommit: "コミットを開く",
+                copySha: "SHA をコピー",
+                openTurn: "ターンを開く",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `まだコミットされていません。${time} に ${title} で書かれました。`,
+                askedBy: ({ name }: { name: string }) => `依頼: ${name}`,
+                uncommittedBody: "まだコミットされていません。このセッションのどのターンも、今の形ではこれらの行を書いていません。",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `まだコミットされていません。すべての行が新しく、${agent} が ${turn} で書きました。`,
+                noHistory: "まだ履歴がありません。このファイルはコミットされていません。",
+                failed: "このファイルの履歴を読み込めませんでした。",
+                previousRun: "前のまとまり",
+                nextRun: "次のまとまり",
+                runOf: ({ index, total }: { index: number; total: number }) => `${total} 件中 ${index} 件目`,
+            },
+            viewer: fileViewerTranslations.ja.viewer,
+            kind: fileViewerTranslations.ja.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} がこのファイルに書き込んでいます`,
             revealInFiles: "ファイルで表示",
             openChanges: "変更を開く",
@@ -10468,6 +10547,8 @@ localTailscale: {
         "編集中にこのファイルがディスク上で変更されました。下書きは変更していません。保存する前に最新のファイルを確認してください。",
       selectionFailed: "選択を更新できませんでした",
       askSelection: fileSelectionAskTranslations["ja"],
+      track: fileTrackTranslations["ja"],
+      editing: fileEditingTranslations["ja"],
       openReviewCommentsFailed: "レビューコメントを開けませんでした",
         reviewPreviousFile: "前のファイル",
                   reviewNextFile: "次のファイル",

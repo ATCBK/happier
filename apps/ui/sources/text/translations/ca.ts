@@ -1,7 +1,10 @@
+import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
+import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ca as actionTitlesCa } from './actionTitles/ca';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -232,6 +235,7 @@ import { browserToolTranslations as feature_browserToolTranslations } from './fe
 import { detailsFileTranslations as feature_detailsFileTranslations } from './features/ca';
 
 import { filesPaneTranslations as feature_filesPaneTranslations } from './features/ca';
+import { fileViewerTranslations as feature_fileViewerTranslations } from './features/ca';
 
 import { detailsHistoryTranslations as feature_detailsHistoryTranslations } from './features/ca';
 
@@ -529,6 +533,7 @@ const { browserToolTranslations } = feature_browserToolTranslations;
 const { detailsFileTranslations } = feature_detailsFileTranslations;
 
 const { filesPaneTranslations } = feature_filesPaneTranslations;
+const { fileViewerTranslations } = feature_fileViewerTranslations;
 
 const { detailsHistoryTranslations } = feature_detailsHistoryTranslations;
 
@@ -1246,6 +1251,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  */
 const caValues = {
     fileReviewNote: fileReviewNoteTranslations['ca'],
+    hunkReview: hunkReviewTranslations['ca'],
   panes: { mainColumn: paneMainColumnTranslations['ca'], emptyEditor: paneEmptyEditorTranslations['ca'], shortcutsSheet: paneShortcutsSheetTranslations['ca'] },
   sessionCoordinator: {
     make: {
@@ -7846,6 +7852,57 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
     },
 
     universalSearch: {
+        replace: {
+            field: "Substitueix per",
+            show: "Substitueix",
+            hide: "Amaga la substitució",
+            matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'coincidència' : 'coincidències'} en ${files} ${files === 1 ? 'fitxer' : 'fitxers'}`,
+            selectedOfMatches: ({ selected, total, files }: { selected: number; total: number; files: number }) => `${selected} de ${total} coincidències en ${files} ${files === 1 ? 'fitxer' : 'fitxers'}`,
+            selectedOf: ({ selected, total }: { selected: number; total: number }) => `${selected} de ${total}`,
+            fileNamesNotRenamed: "Els noms de fitxer no es reanomenen",
+            includeFile: ({ file }: { file: string }) => `Inclou ${file}`,
+            includeMatch: ({ line, text }: { line: number; text: string }) => `Inclou la línia ${line}: ${text}`,
+            unsavedSection: "Sense desar a l’editor, omesos",
+            saveFirst: "Desa’l primer",
+            notText: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fitxer omès' : 'fitxers omesos'}: no és text`,
+            partial: "No s’han pogut cercar alguns fitxers; només se substitueixen els que es mostren.",
+            showMore: "Mostra’n més",
+            whatYouSee: "El que veus és el que s’escriu. El fitxer es torna a comprovar just abans d’escriure’l.",
+            invalidPattern: "Aquest patró no es pot fer servir per substituir. Edita’l i torna-ho a provar.",
+            noMatches: ({ query, scope }: { query: string; scope: string }) => `Cap text a ${scope} coincideix amb «${query}»`,
+            offline: ({ machine }: { machine: string }) => `${machine} està fora de línia. La substitució s’hi executa.`,
+            updateRequired: ({ machine }: { machine: string }) => `Actualitza Happier a ${machine} per substituir text en fitxers.`,
+            failed: ({ machine }: { machine: string }) => `No s’ha pogut previsualitzar la substitució a ${machine}.`,
+            retry: "Torna-ho a provar",
+            updating: "S’està actualitzant la previsualització…",
+            applying: ({ files }: { files: number }) => `S’està substituint en ${files} ${files === 1 ? 'fitxer' : 'fitxers'}…`,
+            stop: "Atura",
+            apply: ({ files }: { files: number }) => `Substitueix en ${files} ${files === 1 ? 'fitxer' : 'fitxers'}`,
+            done: "Fet",
+            undo: "Desfés",
+            undoAll: "Desfés-ho tot",
+            reviewAgain: "Revisa de nou",
+            includeHint: "Inclou",
+            undoNote: "Desfés restaura exactament aquestes edicions, sempre que ningú no hagi canviat el fitxer des d’aleshores.",
+            resultReplaced: ({ count }: { count: number }) => `${count} ${count === 1 ? 'coincidència substituïda' : 'coincidències substituïdes'}`,
+            resultRestored: "Desfet",
+            resultChanged: "Ha canviat des de la previsualització, no s’ha tocat",
+            resultUndoChanged: "Ha canviat des de la substitució; Desfés no l’ha tocat",
+            resultCancelled: "No s’ha intentat: aturat",
+            resultUnsaved: "Sense desar a l’editor",
+            resultSkipped: "Omès",
+            resultFailed: ({ machine }: { machine: string }) => `No s’ha pogut escriure a ${machine}`,
+            skippedSection: "Omesos",
+            replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${matches} ${matches === 1 ? 'coincidència substituïda' : 'coincidències substituïdes'} en ${files} ${files === 1 ? 'fitxer' : 'fitxers'}`,
+            undoneTitle: "Desfet. Els fitxers tornen a ser com eren.",
+            nothingReplaced: "No s’ha substituït res",
+            summaryChanged: ({ count }: { count: number }) => `${count === 1 ? '1 fitxer ha canviat' : `${count} fitxers han canviat`} després de la previsualització i no s’${count === 1 ? 'ha' : 'han'} tocat.`,
+            summaryFailed: ({ count }: { count: number }) => `No s’${count === 1 ? 'ha pogut escriure 1 fitxer' : `han pogut escriure ${count} fitxers`}.`,
+            summarySkipped: ({ count }: { count: number }) => `S’${count === 1 ? 'ha omès 1 fitxer' : `han omès ${count} fitxers`}.`,
+            summaryCancelled: ({ count }: { count: number }) => `Aturat abans de ${count === 1 ? '1 fitxer' : `${count} fitxers`}.`,
+            outcomeUnknown: ({ machine }: { machine: string }) => `No s’ha pogut confirmar la substitució a ${machine}. Revisa els fitxers abans de tornar-ho a provar.`,
+            applyFailed: ({ machine }: { machine: string }) => `La substitució no s’ha executat a ${machine}. No s’ha escrit res.`,
+        },
         sessionInventoryLoading: 'S’estan carregant més sessions…', sessionInventoryIncomplete: 'No s’han pogut carregar algunes sessions. Esborra la cerca i torna-ho a provar.',
         searchingGroup: 'Cercant…',
         groupFailed: ({ group }: { group: string }) => `No s’ha pogut cercar a ${group}.`,
@@ -9084,6 +9141,28 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
 
       files: {
             pane: filesPaneTranslations.ca,
+            blame: {
+                uncommitted: "Sense commit",
+                turn: ({ number }: { number: number }) => `torn ${number}`,
+                turnUnknown: "un torn",
+                agentFallback: "Agent",
+                line: ({ line }: { line: number }) => `Línia ${line}`,
+                lines: ({ start, end }: { start: number; end: number }) => `Línies ${start}–${end}`,
+                openCommit: "Obre el commit",
+                copySha: "Copia el SHA",
+                openTurn: "Obre el torn",
+                writtenIn: ({ title, time }: { title: string; time: string }) => `Encara sense commit. Escrit a ${title} a les ${time}.`,
+                askedBy: ({ name }: { name: string }) => `Demanat per ${name}.`,
+                uncommittedBody: "Encara sense commit. Cap torn d’aquesta sessió no ha escrit aquestes línies tal com són ara.",
+                newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Encara sense commit. Cada línia és nova; ${agent} la va escriure al ${turn}.`,
+                noHistory: "Encara no hi ha historial. Aquest fitxer no té commit.",
+                failed: "No s’ha pogut llegir l’historial d’aquest fitxer.",
+                previousRun: "Bloc anterior",
+                nextRun: "Bloc següent",
+                runOf: ({ index, total }: { index: number; total: number }) => `Bloc ${index} de ${total}`,
+            },
+            viewer: fileViewerTranslations.ca.viewer,
+            kind: fileViewerTranslations.ca.kind,
             agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} està escrivint aquest fitxer`,
             revealInFiles: "Mostra a Fitxers",
             openChanges: "Obre els canvis",
@@ -9350,6 +9429,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                 "Aquest fitxer ha canviat al disc mentre l'editaves. L'esborrany s'ha mantingut sense canvis; revisa el fitxer més recent abans de desar.",
           selectionFailed: "No s'ha pogut actualitzar la selecció",
           askSelection: fileSelectionAskTranslations["ca"],
+          track: fileTrackTranslations["ca"],
+          editing: fileEditingTranslations["ca"],
           openReviewCommentsFailed: "No s'han pogut obrir els comentaris de revisió",
               reviewPreviousFile: "Fitxer anterior",
                   reviewNextFile: "Fitxer següent",
