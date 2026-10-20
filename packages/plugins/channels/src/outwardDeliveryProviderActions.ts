@@ -176,10 +176,12 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
   operation: 'deliver' | 'reconcile';
 }>): ConversationOutwardDeliveryProviderActionBoundary {
   let invocation: ConversationOutwardDeliveryProviderActionInvocation | undefined;
+  let record: ConversationOutwardDeliveryRecord | undefined;
   return {
     authority: {
       async checkCurrentness(check) {
         invocation = undefined;
+        record = check.record;
         const prepared = await prepareConversationOutwardDeliveryProviderActionInvocation({
           stateCollection: input.stateCollection,
           targetedContributions: input.targetedContributions,
@@ -193,12 +195,16 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
       },
     },
     async invoke(signal) {
-      const current = invocation;
-      if (current === undefined) return { kind: 'outcomeUnknown' };
-      const invoke = async (actionInput: typeof current.input): Promise<ConversationDeliveryResultV1> => {
+      let current = invocation;
+      const currentRecord = record;
+      if (current === undefined || currentRecord === undefined) return { kind: 'outcomeUnknown' };
+      const invoke = async (
+        target: ConversationOutwardDeliveryProviderActionInvocation,
+        actionInput: typeof target.input,
+      ): Promise<ConversationDeliveryResultV1> => {
         try {
           const execution = await input.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
-            current.action, actionInput, { signal, expectedExecutionRouting: current.expectedExecutionRouting },
+            target.action, actionInput, { signal, expectedExecutionRouting: target.expectedExecutionRouting },
           );
           // The host checks routing before the effect and exact invocation currentness afterward.
           const result = ConversationDeliveryResultV1Schema.safeParse(execution.result);
@@ -212,22 +218,34 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
       const limit = current.outboundTextLimit;
       if (!('content' in current.input) || limit === undefined
         || countConversationTextUnits(current.input.content.text, limit.unit) <= limit.maximum) {
-        return await invoke(current.input);
+        return await invoke(current, current.input);
       }
-      const chunks = splitConversationOutboundText(current.input.content.text, limit);
+      const content = current.input.content;
+      const chunks = splitConversationOutboundText(content.text, limit);
       if (chunks === null) return { kind: 'notDelivered', retry: 'never' };
       const providerMessageIds: string[] = [];
       for (const [index, text] of chunks.entries()) {
         if (signal.aborted) return index === 0
           ? { kind: 'suppressedBeforeProviderEffect', reason: 'cancelled' }
           : { kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false };
+        if (index > 0) {
+          // Each later native message is a new effect. Reuse the same Account
+          // and provider currentness owner, retaining any accepted evidence.
+          const prepared = await prepareConversationOutwardDeliveryProviderActionInvocation({
+            ...input, record: currentRecord, signal,
+          }).catch(() => null);
+          if (prepared === null || prepared.kind !== 'ready' || signal.aborted) {
+            return { kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false };
+          }
+          current = prepared.invocation;
+        }
         // Provider idempotency (such as Discord nonces) must distinguish chunks.
         // Hash the complete custody key so every allowed key remains bounded.
         const deliveryKey = `channels:chunk:v1:${encodeUnpaddedBase64Url(sha256(new TextEncoder().encode(
           JSON.stringify([current.input.deliveryKey, index]),
         )))}`;
-        const result = await invoke({ ...current.input,
-          content: { ...current.input.content, text }, deliveryKey, chunkIndex: index,
+        const result = await invoke(current, { ...current.input,
+          content: { ...content, text }, deliveryKey, chunkIndex: index,
         });
         if (result.kind === 'delivered') {
           providerMessageIds.push(...result.providerMessageIds);

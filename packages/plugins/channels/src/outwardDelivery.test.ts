@@ -92,7 +92,9 @@ const providerDeliveryAction = admittedProviderOperation('messageDeliver');
 const providerDeliveryReconcileAction = admittedProviderOperation('deliveryReconcile');
 
 /** The generic host has already admitted this provider contribution. */
-function targetedProviderDeliveryContributions(availability: 'current' | 'unavailable' | 'missing' = 'current'): TargetedContributionsService {
+function targetedProviderDeliveryContributions(
+  availability: 'current' | 'unavailable' | 'missing' | (() => 'current' | 'unavailable' | 'missing') = 'current',
+): TargetedContributionsService {
   return Object.freeze({
     observeForSelf<TContribution>(
       _point: TargetedContributionPointRef<TContribution>,
@@ -101,11 +103,12 @@ function targetedProviderDeliveryContributions(availability: 'current' | 'unavai
       return Object.freeze({
         dispose() {},
         async readCurrent(): Promise<TargetedContributionSnapshot<TContribution>> {
-          if (availability === 'unavailable') throw new Error('Provider snapshot transport disconnected');
+          const currentAvailability = typeof availability === 'function' ? availability() : availability;
+          if (currentAvailability === 'unavailable') throw new Error('Provider snapshot transport disconnected');
           return {
             occurrenceId: 'channels-test-occurrence',
             sourceCustody: { kind: 'development', registeredRootId: 'channels-test-root' },
-            contributions: (availability === 'missing' ? [] : [{
+            contributions: (currentAvailability === 'missing' ? [] : [{
               contributor: {
                 pluginId: providerTransportOrigin.materializationRef.pluginId,
                 contributionId: 'delivery-test-provider',
@@ -1091,6 +1094,80 @@ describe('Channels control-response outward custody', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin.mock.calls.map(([, input]) =>
       input.chunkIndex)).toEqual([0, 1]);
     expect(store.rows.size).toBe(1);
+  });
+
+  it.each(['paused', 'target changed', 'epoch changed', 'unavailable', 'provider retired', 'provider unavailable'] as const)(
+    'retains partial delivery attention when authority is %s between native chunks', async change => {
+    const state = new MemoryAccountCollection();
+    const deliveries = new MemoryAccountCollection();
+    const connection = providerConnectionRow();
+    await state.put({ ...connection, payload: { ...connection.payload,
+      outboundTextLimit: { maximum: 2, unit: 'unicodeCodePoints' },
+    } }, { expectedRevision: 'absent' });
+    const binding = await state.put({
+      id: 'binding-1', 'record-kind': 'binding', 'connection-id': 'connection-1', 'binding-id': 'binding-1',
+      payload: { authorityEpoch: 7, enabled: true, deletionState: 'none', endpoint,
+        target: sessionTarget, linkPreviewPolicy: 'suppress' },
+    }, { expectedRevision: 'absent' });
+    const signal = new AbortController().signal;
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never, deliveriesCollection: deliveries as never, signal, now: () => 100,
+    });
+    const request = { ...sessionProjectionRecord().obligation, content: { text: 'abcdef' } };
+    const created = await store.ensure(request);
+    if (created.kind !== 'created') throw new Error('Expected ready custody');
+    const comments: string[] = [];
+    const get = state.get.bind(state);
+    let unavailable = change === 'unavailable';
+    const read = vi.spyOn(state, 'get').mockImplementation(async rowId => {
+      if (unavailable && comments.length > 0) {
+        unavailable = false;
+        throw new Error('Account transport disconnected');
+      }
+      return await get(rowId);
+    });
+    // Provider Actions and Account transport are external boundaries; route
+    // decisions and custody stay real. Commit the binding change before the
+    // first accepted native message returns.
+    const executeAdmittedTargetedOperationWithExecutionOrigin = async (
+      _operation: unknown, value: unknown,
+    ) => {
+      const input = ConversationDeliveryInputV1Schema.parse(value);
+      comments.push(input.content.text);
+      if (comments.length === 1 && (change === 'paused' || change === 'target changed' || change === 'epoch changed')) {
+        await state.put({ ...binding.value, payload: {
+          authorityEpoch: change === 'epoch changed' ? 8 : 7,
+          enabled: change !== 'paused', deletionState: 'none', endpoint,
+          target: change === 'target changed' ? { ...sessionTarget, sessionId: 'session-2' } : sessionTarget,
+          linkPreviewPolicy: 'suppress',
+        } }, { expectedRevision: binding.revision });
+      }
+      return { result: { kind: 'delivered', providerMessageIds: [`comment-${comments.length}`] },
+        executionOrigin: providerTransportOrigin };
+    };
+    const result = await redriveConversationOutwardDeliveryThroughProviderAction({
+      stateCollection: state as never,
+      targetedContributions: targetedProviderDeliveryContributions(() => comments.length === 0 ? 'current'
+        : change === 'provider retired' ? 'missing' : change === 'provider unavailable' ? 'unavailable' : 'current'),
+      store, record: created.record, attemptId: 'authority-change-between-chunks', now: () => 100, signal,
+      actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never,
+    });
+    read.mockRestore();
+    expect(result).toMatchObject({ kind: 'settled', custody: {
+      state: 'partial', attemptCount: 1, providerMessageIds: ['comment-1'], failedChunk: 1,
+    } });
+    expect(comments).toEqual(['ab']);
+    await expect(store.lookup(request)).resolves.toMatchObject({ kind: 'rejoined', record: { custody: {
+      state: 'partial', providerMessageIds: ['comment-1'], failedChunk: 1,
+    } } });
+    const attention = await readConversationOutwardDeliveryConnectionAttention({
+      deliveriesCollection: deliveries as never, connectionIds: ['connection-1'], signal,
+    });
+    expect(attention.kind).toBe('ready');
+    if (attention.kind !== 'ready') throw new Error('Expected delivery attention');
+    expect(attention.attentionByConnection.get('connection-1')).toMatchObject({
+      partial: true, retryDue: false, outcomeUnknown: false,
+    });
   });
 
   it('stops at the refused first native chunk while retaining the complete custody body', async () => {
