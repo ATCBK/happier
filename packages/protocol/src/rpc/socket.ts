@@ -242,6 +242,8 @@ export type SocketRpcRequestPayload = Readonly<{
    * in-flight relay; the authenticated relay replaces it before target dispatch.
    */
   requestId?: string;
+  /** Cooperative cancel requests stop work but retain this call's own result ACK. */
+  waitForResultOnCancel?: boolean;
   authorization?: SocketRpcAuthorizationContext;
   /** Current Home admission for the exact Machine receiver, distinct from Session authority. */
   machineAdmission?: SocketRpcMachineAdmissionContextV1;

@@ -128,6 +128,8 @@ type MachineScopedRpcMethod = Readonly<{
 
 type ActiveSocketRpcCancellation = {
     controller: AbortController;
+    /** Cooperative work cancellation must not retire a still-connected caller's result. */
+    ackController?: AbortController;
     targetRequestId: string;
     targetSocketId: string | null;
     cancelled: boolean;
@@ -144,7 +146,10 @@ function readOptionalSocketRpcRequestId(data: unknown): string | null | undefine
 function cancelActiveSocketRpcCall(params: Readonly<{
     io: Server;
     active: ActiveSocketRpcCancellation;
+    retireAck?: boolean;
 }>): void {
+    // A disconnect still retires custody after an earlier cooperative cancel.
+    if (params.retireAck) params.active.ackController?.abort();
     if (params.active.cancelled) return;
     params.active.cancelled = true;
     params.active.controller.abort();
@@ -1094,6 +1099,11 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 return;
             }
             callerRequestId = parsedRequestId;
+            const waitForResultOnCancel = (data as { waitForResultOnCancel?: unknown } | undefined)?.waitForResultOnCancel;
+            if (waitForResultOnCancel !== undefined && typeof waitForResultOnCancel !== 'boolean') {
+                callback?.({ ok: false, error: 'Invalid RPC cancellation result policy' });
+                return;
+            }
             if (callerRequestId) {
                 if (activeCancellations.has(callerRequestId)) {
                     callback?.({
@@ -1104,6 +1114,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 }
                 cancellation = {
                     controller: new AbortController(),
+                    ...(waitForResultOnCancel === true ? { ackController: new AbortController() } : {}),
                     targetRequestId: `rpc_${randomUUID()}`,
                     targetSocketId: null,
                     cancelled: false,
@@ -2114,6 +2125,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         cancellation: {
                             targetRequestId: cancellation.targetRequestId,
                             signal: cancellation.controller.signal,
+                            ...(cancellation.ackController ? { ackSignal: cancellation.ackController.signal } : {}),
                             onTargetSelected: (target) => {
                                 cancellation!.targetSocketId = target.id;
                             },
@@ -2231,7 +2243,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
         disconnected = true;
         transferRelayLifecycle.disconnectSocket(params.socket.id);
         for (const active of activeCancellations.values()) {
-            cancelActiveSocketRpcCall({ io: params.io, active });
+            cancelActiveSocketRpcCall({ io: params.io, active, retireAck: true });
         }
         activeCancellations.clear();
         const presentationBindings = [...activePresentationBindings.entries()];

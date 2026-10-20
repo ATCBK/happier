@@ -147,6 +147,8 @@ export async function forwardRpcCall(params: Readonly<{
         /** Server-minted correlation that is safe to expose to the exact target. */
         targetRequestId: string;
         signal: AbortSignal;
+        /** Retain a cooperative caller's result until disconnect or the existing ACK deadline. */
+        ackSignal?: AbortSignal;
         /** Records the selected target before its request is emitted. */
         onTargetSelected: (target: RpcAckResponseEmitter) => void;
     }>;
@@ -334,11 +336,11 @@ export async function forwardRpcCall(params: Readonly<{
             if (params.cancellation?.signal.aborted) throw new Error("RPC request cancelled by caller");
             // Socket.IO's local Socket stores emit flags on the socket itself,
             // so configure the ACK immediately before dispatch, after async auth.
-            // Caller cancellation retires ACK custody for finite and unbounded
-            // waits alike; submission still leaves admission uncertain.
+            // Default cancellation retires ACK custody. Cooperative callers
+            // retain their own result until disconnect or the existing deadline.
             const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647), {
                 rejectOnDisconnect: true,
-                ...(params.cancellation ? { signal: params.cancellation.signal } : {}),
+                ...(params.cancellation ? { signal: params.cancellation.ackSignal ?? params.cancellation.signal } : {}),
             });
             requestSubmitted = true;
             const response = targetEmitter.emitWithAck(
