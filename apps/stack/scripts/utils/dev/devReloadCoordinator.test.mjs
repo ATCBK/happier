@@ -21,7 +21,7 @@ import {
   startDevReloadCoordinator,
 } from './devReloadCoordinator.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
-import { createHappyCliReloadDescriptors } from './daemon.mjs';
+import { createHappyCliReloadDescriptors, createHappyCliReloadExecutor, prepareDevDaemonSourceRuntime } from './daemon.mjs';
 import { createDevServerReloadDescriptors, createDevServerReloadExecutor } from './server.mjs';
 import { readHappyCliRuntimeInputFreshness } from '../proc/cli_runtime_inputs.mjs';
 import { inspectDependencyRefresh, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
@@ -2101,32 +2101,69 @@ test('an external publication update remains actionable when no generation owns 
   ]);
 });
 
-test('a terminally published daemon build activates before a superseding watch generation replans', async () => {
-  const calls = [];
-  const daemon = descriptor({ id: 'daemon:app', target: 'daemon' });
-  const activations = [];
-  const onChange = startCoordinator({
-    descriptors: [daemon],
-    executors: [executor('daemon', calls, {
-      async build(context) {
-        if (context.generation === 1) {
-          daemon.set('2');
-          return { allowSupersededActivation: true };
-        }
-        return undefined;
+test('a stale captured daemon generation activates only without a running incumbent, then replans', async t => {
+  for (const scenario of [
+    { name: 'crashed daemon with retained loaded identity', running: false, loaded: 'old', reason: 'daemon_not_running' },
+    { name: 'never started daemon', running: false, loaded: null, reason: 'missing_state' },
+    { name: 'live daemon without loaded identity', running: true, loaded: null },
+    { name: 'live recorded PID with missing control state', running: true, loaded: null, reason: 'missing_state' },
+  ]) await t.test(scenario.name, async () => {
+    const calls = [];
+    const daemon = descriptor({ id: 'daemon:app', target: 'daemon' });
+    const events = [];
+    let running = scenario.running;
+    let controlAvailable = !scenario.reason;
+    let loaded = scenario.loaded;
+    let generation = 0;
+    // Substitute compiler, control transport, runtime-state IO and process launch
+    // boundaries; preparation, liveness policy and coordinator remain real.
+    const daemonExecutor = createHappyCliReloadExecutor({
+      startDaemon: true,
+      runtimeStatePath: '/tmp/stack.runtime.json',
+      isShuttingDown: () => false,
+    }, {
+      prepareDevDaemonSourceRuntimeImpl: options => prepareDevDaemonSourceRuntime(options, {
+        async buildSourceRuntimeBundleImpl() {
+          generation++;
+          events.push(`build:${generation}`);
+          if (generation === 1) daemon.set('2');
+          return { identity: `gen-${generation}`, entrypoint: '/tmp/daemon.mjs', cliDir: '/tmp/cli' };
+        },
+        logger: { log() {} },
+      }),
+      pingDaemonImpl: async () => running && controlAvailable
+        ? { ok: true }
+        : { ok: false, reason: running ? scenario.reason : scenario.reason ?? 'daemon_not_running' },
+      readStackRuntimeStateFileImpl: async () => ({
+        processes: { daemonPid: 4242 },
+        sourceRuntimeIdentities: { daemon: { loaded } },
+      }),
+      isPidAliveImpl: pid => pid === 4242 && running,
+      async startLocalDaemonWithAuthImpl({ sourceRuntimeLaunchUpdate }) {
+        loaded = sourceRuntimeLaunchUpdate.identity;
+        running = true;
+        controlAvailable = true;
+        events.push(`activate:${loaded}`);
       },
-      async restart(context) {
-        assert.equal(context.allowSupersededActivation, context.generation === 1);
-        activations.push(context.generation);
-      },
-    })],
-    calls,
+      logger: { log() {}, warn() {} },
+    });
+    const failures = [];
+    const onChange = startCoordinator({
+      descriptors: [daemon], executors: [daemonExecutor], calls,
+      logger: { error(message) { failures.push(String(message)); } },
+    });
+    t.after(() => onChange.watcher.close());
+
+    daemon.set('1');
+    await onChange({ eventType: 'change', filename: 'app.ts' });
+
+    assert.deepEqual(failures, []);
+    assert.deepEqual(events, scenario.running
+      ? scenario.reason
+        ? ['build:1', 'build:2']
+        : ['build:1', 'build:2', 'activate:gen-2']
+      : ['build:1', 'activate:gen-1', 'build:2', 'activate:gen-2']);
   });
-
-  daemon.set('1');
-  await onChange({ eventType: 'change', filename: 'app.ts' });
-
-  assert.deepEqual(activations, [1, 2]);
 });
 
 test('an unavailable server may activate a successful superseded build before the latest generation', async () => {

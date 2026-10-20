@@ -321,11 +321,22 @@ export function createHappyCliReloadExecutor({
       successor = null;
       logger.log('[local] watch: happier-cli changed → preparing the daemon source generation...');
       successor = await prepareDevDaemonSourceRuntimeImpl({ sourceRuntimeOptions, env });
-      // With no daemon generation loaded yet, a source generation newer edits already
-      // superseded is still the best runnable daemon while the trailing build proceeds.
-      return (await readLoadedIdentity())
-        ? { ok: true }
-        : { ok: true, allowSupersededActivation: true };
+      const ping = await pingDaemonImpl({
+        cliHomeDir,
+        serverUrl: internalServerUrl,
+        internalServerUrl,
+        env,
+        stackName,
+      });
+      // A recorded loaded identity can outlive its daemon. Use the same absence
+      // decision as cold-start activation while the trailing build catches up.
+      const canColdStart = await shouldColdStartAfterDaemonControlMiss(
+        { ping, runtimeStatePath },
+        { readStackRuntimeStateFileImpl, isPidAliveImpl },
+      );
+      return canColdStart
+        ? { ok: true, allowSupersededActivation: true }
+        : { ok: true };
     },
     async restart() {
       if (!startDaemon || isShuttingDown?.()) return { skipped: true, reason: 'daemon-disabled' };
