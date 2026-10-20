@@ -116,6 +116,7 @@ export const english = {
             providers: 'Model providers',
             scmHostingProviders: 'Code hosting',
             scmBackends: 'Source control',
+            languageServers: 'Language servers',
             voice: 'Voice',
             connectedAccounts: 'Connected services',
             inputTypes: 'Input types',
