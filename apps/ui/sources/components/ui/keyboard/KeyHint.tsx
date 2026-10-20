@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useHardwareKeyboard } from '@/components/ui/selectionList/useHardwareKeyboard';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -101,7 +102,9 @@ export function KeyHint(props: KeyHintProps): React.ReactElement | null {
 export function KeyboardCommandHint(props: Readonly<{ commandId: KeyboardCommandId; testID?: string }>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const shortcut = useKeyboardShortcutLabel(props.commandId);
-    if (!shortcut) return null;
+    // Keycaps name a key: without a hardware keyboard (a finger, a phone) they are not drawn, as in SelectionList's footer.
+    const hasKeyboard = useHardwareKeyboard();
+    if (!shortcut || !hasKeyboard) return null;
     return (
         <View testID={props.testID} accessibilityLabel={shortcut} style={{ flexDirection: 'row', gap: theme.space.s2 }}>
             {splitKeybindingLabel(shortcut).map((label, index) => <KeyHint key={index} label={label} />)}

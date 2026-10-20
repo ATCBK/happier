@@ -702,6 +702,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     );
     const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, staleSince, lastOwnWriteHash, tooLarge, refreshAll, publishSavedFile } = useWorkspaceFileDetailsLoading({
         scope, filePath, diffMode,
+        accountId: editorAccountScope?.accountId ?? null,
         fileEntryKind: fileEntry?.kind ?? null,
         isBinaryContent: fileEntry?.stats.isBinary,
         fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
@@ -1337,7 +1338,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     <FileContentPanel
                         find={find}
                         liveMoment={displayMode === 'file' ? liveMoment : null}
-                        intelligence={displayMode === 'file' ? codeIntelligence.viewBinding : null}
+                        intelligence={displayMode === 'file' || displayMode === 'diff' ? codeIntelligence.viewBinding : null}
                         theme={theme}
                         displayMode={displayMode}
                         sessionId={sessionId}

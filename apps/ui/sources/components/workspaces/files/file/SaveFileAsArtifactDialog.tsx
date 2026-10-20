@@ -86,6 +86,7 @@ export function SaveFileAsArtifactDialog(props: SaveFileAsArtifactDialogProps) {
                 <View style={styles.field}>
                     <Text nativeID="save-as-artifact-title-label" style={styles.label}>{t('files.pane.page.artifactTitleLabel')}</Text>
                     <FieldTextInput testID="save-as-artifact-title" value={model.title} onChangeText={model.setTitle}
+                        accessibilityLabel={t('files.pane.page.artifactTitleLabel')}
                         accessibilityLabelledBy="save-as-artifact-title-label" editable={model.canEditFields}
                         returnKeyType="done" onSubmitEditing={() => { void submit(); }} />
                 </View>

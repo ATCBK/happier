@@ -87,6 +87,17 @@ export function glassSurfaceBackgroundColor(color: string, group: GlassSurfaceGr
 }
 
 /**
+ * The navigation theme's background, which react-navigation paints behind every stack screen. It is the
+ * opaque chrome canvas, except while the atmosphere paints behind the active surface (`atmosphereBehind`):
+ * then it clears so the one atmosphere layer shows through, and every route the atmosphere does not
+ * cover keeps its opaque chrome. A desktop overlay window is always clear.
+ */
+export function glassNavigationBackgroundColor(canvas: string, environment: GlassMaterialEnvironment, overlayWindow = false): string {
+    if (overlayWindow || environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper') return 'transparent';
+    return glassSurfaceBackgroundColor(canvas, 'chrome', true);
+}
+
+/**
  * The shell owns one coat plane per group; inner paints only inherit it. A plane lies on the window
  * canvas, with the atmosphere beneath it when mounted. It paints the tint only: a `backdrop-filter`
  * on the content ancestor would make the plane a backdrop root and

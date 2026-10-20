@@ -10,6 +10,7 @@ import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionT
 import type { WorkspaceFileLiveMoment } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileLiveMoment';
 import { CODE_GUTTER_METRICS, resolveCodeEditorLineNumberDigits } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import type { CodeLineDiagnosticRange } from '@/components/ui/code/view/CodeLineRow';
 import type { DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
 import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { MarkdownView, type MarkdownSourceRange, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
@@ -56,7 +57,13 @@ export type FileCodeIntelligenceBinding = Readonly<{
     onPointer: (line: number, character: number, rect: Rect | null) => void;
     onPointerAway: () => void;
     onActivate: (line: number, character: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => void;
+    /** This file's problems by 1-based line (stable until they change), for squiggles in View and Changes. */
+    getDiagnosticsByLine: () => ReadonlyMap<number, readonly CodeLineDiagnosticRange[]> | undefined;
+    subscribeDiagnostics: (listener: () => void) => () => void;
 }>;
+
+const NO_DIAGNOSTICS_SUBSCRIPTION = () => () => undefined;
+const NO_DIAGNOSTICS = () => undefined;
 
 type FileContentPanelProps = {
     theme: any;
@@ -537,22 +544,25 @@ function FileContentPanelInner({
     }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentControlsEnabled]);
 
     const liveTint = useFileLiveEditTint(liveMoment ?? null, lines);
+    const diagnosticsByNewLine = React.useSyncExternalStore(
+        intelligence?.subscribeDiagnostics ?? NO_DIAGNOSTICS_SUBSCRIPTION,
+        intelligence?.getDiagnosticsByLine ?? NO_DIAGNOSTICS,
+        NO_DIAGNOSTICS,
+    );
+    // One binding for the read view and the Changes body: rows report their 1-based new-side line.
     const codeIntelligence = React.useMemo(() => {
         if (!intelligence) return undefined;
-        const fileLines = new Map(lines.map(line => [line.id, line.newLine]));
-        const lineOf = (lineId: string) => fileLines.get(lineId) ?? null;
         return {
-            onPointerToken: (lineId: string, offset16: number, rect: Rect | null) => {
-                const line = lineOf(lineId);
-                if (line !== null) intelligence.onPointer(line, offset16, rect);
+            onPointerToken: (_lineId: string, offset16: number, rect: Rect | null, newLine: number) => {
+                intelligence.onPointer(newLine, offset16, rect);
             },
             onPointerAway: intelligence.onPointerAway,
-            onActivateToken: (lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => {
-                const line = lineOf(lineId);
-                if (line !== null) intelligence.onActivate(line, offset16, activation);
+            onActivateToken: (_lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>, newLine: number) => {
+                intelligence.onActivate(newLine, offset16, activation);
             },
+            ...(diagnosticsByNewLine ? { diagnosticsByNewLine } : {}),
         };
-    }, [intelligence, lines]);
+    }, [diagnosticsByNewLine, intelligence]);
     const fileCodeView = fileContent && displayMode === 'file'
         ? (
             <CodeLinesView
@@ -617,6 +627,7 @@ function FileContentPanelInner({
                 scrollToLineId={scrollToLineId}
                 findActive={find?.open}
                 findRangesByLineId={find?.lineRanges}
+                intelligence={codeIntelligence}
                 highlightLineId={jumpHighlight?.scrollToLineId}
                 highlightLineIds={highlightLineIds}
                 wrapLines={effectiveWrapLines}

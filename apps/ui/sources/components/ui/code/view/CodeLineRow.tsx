@@ -49,8 +49,41 @@ function mapTextOffsets<T>(values: readonly T[], text: (value: T) => string, ren
     });
 }
 
-function renderFindText(text: string, ranges?: readonly FindTextRange[], selectable?: boolean) {
-    return ranges?.length ? <FindHighlightedText text={text} ranges={ranges} selectable={selectable} /> : text;
+/** A language server's problem on a line, in the line's UTF-16 offsets (P7 squiggles in View and Changes). */
+export type CodeLineDiagnosticRange = Readonly<{ start: number; end: number; severity: 'error' | 'warning' | 'information' | 'hint' }>;
+type DiagnosticSquiggleStyles = Readonly<Record<CodeLineDiagnosticRange['severity'], object | null>>;
+
+function sliceDiagnostics(ranges: readonly CodeLineDiagnosticRange[] | undefined, start: number, length: number) {
+    return ranges?.filter((range) => range.end > start && range.start < start + length)
+        .map((range) => ({ start: Math.max(0, range.start - start), end: Math.min(length, range.end - start), severity: range.severity }));
+}
+
+function renderFindText(
+    text: string,
+    ranges?: readonly FindTextRange[],
+    selectable?: boolean,
+    diagnostics?: readonly CodeLineDiagnosticRange[],
+    squiggles?: DiagnosticSquiggleStyles,
+): React.ReactNode {
+    if (!diagnostics?.length || !squiggles) {
+        return ranges?.length ? <FindHighlightedText text={text} ranges={ranges} selectable={selectable} /> : text;
+    }
+    // Split at the problems' edges; each underlined piece keeps its own find highlights.
+    const edges = [...new Set([0, text.length, ...diagnostics.flatMap((range) => [range.start, range.end])])]
+        .filter((edge) => edge >= 0 && edge <= text.length).sort((a, b) => a - b);
+    const pieces: React.ReactNode[] = [];
+    for (let index = 0; index < edges.length - 1; index++) {
+        const start = edges[index]!;
+        const end = edges[index + 1]!;
+        if (end <= start) continue;
+        const piece = text.slice(start, end);
+        const inner = renderFindText(piece, sliceFindRanges(ranges ? [...ranges] : undefined, start, end - start), selectable);
+        const problem = diagnostics.find((range) => range.start <= start && range.end >= end);
+        const style = problem ? squiggles[problem.severity] : null;
+        pieces.push(style ? <Text key={start} useDefaultTypography={false} selectable={selectable} style={style}>{inner}</Text>
+            : <React.Fragment key={start}>{inner}</React.Fragment>);
+    }
+    return pieces;
 }
 
 export function CodeLineRow(props: {
@@ -83,9 +116,17 @@ export function CodeLineRow(props: {
     }>;
     advancedTokens?: readonly Readonly<{ text: string; color: string }>[];
     findRanges?: readonly FindTextRange[];
+    diagnostics?: readonly CodeLineDiagnosticRange[];
     onActivateToken?: (lineId: string, offset16: number) => void;
 }) {
     const { theme } = useUnistyles();
+    const diagnostics = props.diagnostics;
+    const squiggles = React.useMemo<DiagnosticSquiggleStyles | undefined>(() => diagnostics?.length ? {
+        error: squiggleStyle(theme.colors.state.danger.foreground),
+        warning: squiggleStyle(theme.colors.state.warning.foreground),
+        information: null,
+        hint: null,
+    } : undefined, [diagnostics?.length, theme.colors.state.danger.foreground, theme.colors.state.warning.foreground]);
     const materialRole = useContainingHappierMaterialRole();
     const paintColor = useHappierMaterialColorResolver();
     const styles = stylesheet;
@@ -311,7 +352,7 @@ export function CodeLineRow(props: {
                         {(props.syntaxHighlighting?.mode === 'advanced' && props.advancedTokens && !line.renderIsHeaderLine)
                             ? mapTextOffsets(props.advancedTokens, (token) => token.text, (token, idx, offset) => (
                                 <Text key={idx} useDefaultTypography={false} selectable={textSelectable} style={{ color: token.color }}>
-                                    {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable)}
+                                    {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable, sliceDiagnostics(diagnostics, offset, token.text.length), squiggles)}
                                 </Text>
                             ))
                             : intraLineTokensBySegment
@@ -346,12 +387,12 @@ export function CodeLineRow(props: {
                                                             fontWeight: tok.type === 'keyword' ? '600' : '400',
                                                         }}
                                                     >
-                                                        {renderFindText(tok.text, sliceFindRanges(props.findRanges, segmentOffset + offset, tok.text.length))}
+                                                        {renderFindText(tok.text, sliceFindRanges(props.findRanges, segmentOffset + offset, tok.text.length), undefined, sliceDiagnostics(diagnostics, segmentOffset + offset, tok.text.length), squiggles)}
                                                     </Text>
                                                 ))
                                                 : (
                                                     <Text useDefaultTypography={false} selectable={textSelectable} style={{ color: segmentFg }}>
-                                                        {renderFindText(segment.text, sliceFindRanges(props.findRanges, segmentOffset, segment.text.length))}
+                                                        {renderFindText(segment.text, sliceFindRanges(props.findRanges, segmentOffset, segment.text.length), undefined, sliceDiagnostics(diagnostics, segmentOffset, segment.text.length), squiggles)}
                                                     </Text>
                                                 )}
                                         </Text>
@@ -368,10 +409,10 @@ export function CodeLineRow(props: {
                                             fontWeight: token.type === 'keyword' ? '600' : '400',
                                         }}
                                     >
-                                        {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable)}
+                                        {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable, sliceDiagnostics(diagnostics, offset, token.text.length), squiggles)}
                                     </Text>
                                 ))
-                                : renderFindText(line.renderCodeText || ' ', props.findRanges, textSelectable)}
+                                : renderFindText(line.renderCodeText || ' ', props.findRanges, textSelectable, diagnostics, squiggles)}
                     </Text>
                 </View>
             </Pressable>
@@ -433,3 +474,10 @@ const stylesheet = StyleSheet.create({
         flexShrink: 0,
     },
 });
+
+/** The problem underline: a wavy line in the state's colour under the name (ink stays the code's). */
+function squiggleStyle(color: string): object {
+    return Platform.OS === 'web'
+        ? { textDecorationLine: 'underline', textDecorationStyle: 'wavy', textDecorationColor: color, textUnderlineOffset: 3 }
+        : { textDecorationLine: 'underline', textDecorationStyle: 'dotted', textDecorationColor: color };
+}

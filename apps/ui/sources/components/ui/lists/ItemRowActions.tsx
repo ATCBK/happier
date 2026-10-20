@@ -35,6 +35,11 @@ export interface ItemRowActionsProps {
     renderOverflowSection?: (section: Readonly<{ id: string; title: string }>) => React.ReactNode | undefined;
     /** Presents the same open menu contents in a domain-owned surface, such as a phone sheet. */
     renderOverflowSurface?: (props: Readonly<{ children: React.ReactNode; onRequestClose: () => void }>) => React.ReactNode;
+    /**
+     * On a phone the open menu is the shared bottom sheet (Popover `phonePresentation="sheet"`), titled
+     * by the row it acts on, with this quiet line under the title (a file's folder).
+     */
+    overflowPhoneSheet?: Readonly<{ subtitle?: string }>;
     /** A wider menu for rows with inline controls (a group's Width, Frame, Dividers); default 260. */
     overflowMaxWidthCap?: number;
     /** A taller menu where every entry should show without scrolling; default 280. */
@@ -387,6 +392,8 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                         boundaryRef={props.popoverBoundaryRef}
                         onRequestClose={onRequestClose}
                         backdrop={{ effect: 'none', closeOnPan: true }}
+                        {...(props.overflowPhoneSheet ? { phonePresentation: 'sheet' as const, accessibilityLabel: props.title,
+                            ...(props.overflowPhoneSheet.subtitle ? { sheetSubtitle: props.overflowPhoneSheet.subtitle } : {}) } : {})}
                     >
                         {({ maxHeight }) => (
                             <FloatingOverlay

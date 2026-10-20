@@ -25,6 +25,9 @@ export type CodeEditorTheme = Readonly<{
     /** The change gutter (P4-R9): added/modified bars in the diff add colour, the deletion wedge in ink. */
     changeAddedColor: string;
     changeDeletedColor: string;
+    /** Problem squiggles (P7): rose for errors, amber for warnings; information and hints draw nothing. */
+    diagnosticErrorColor?: string;
+    diagnosticWarningColor?: string;
     syntax: CodeEditorSyntaxTheme;
 }>;
 
@@ -45,7 +48,7 @@ type CodeEditorThemeSource = Readonly<{
         | 'surface'
         | 'syntax'
         | 'text'
-    > & Partial<Pick<Theme['colors'], 'find'>>;
+    > & Partial<Pick<Theme['colors'], 'find' | 'state'>>;
 }>;
 
 /** Share of the focus blue in the current-line fill. */
@@ -72,6 +75,8 @@ export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Part
         findCurrentMatchForeground: colors.find?.matchCurrentForeground,
         changeAddedColor: colors.diff.added.border,
         changeDeletedColor: colors.text.secondary,
+        diagnosticErrorColor: colors.state?.danger.foreground,
+        diagnosticWarningColor: colors.state?.warning.foreground,
         syntax: {
             defaultColor: colors.syntax.default,
             keywordColor: colors.syntax.keyword,
@@ -155,6 +160,15 @@ export function resolveCodeEditorChangeMarkStyles(theme: Pick<CodeEditorTheme, '
  * (Monaco's line decoration, CodeMirror's gutter marker): the bars set only their stroke, the wedge hangs
  * from the element's lower edge.
  */
+/** The engines' problem squiggle: a wavy underline in the state colour, the same in Monaco and CodeMirror. */
+export function formatCodeEditorDiagnosticCss(theme: Pick<CodeEditorTheme, 'diagnosticErrorColor' | 'diagnosticWarningColor'>,
+    selector: (severity: 'error' | 'warning') => string): string {
+    return ([['error', theme.diagnosticErrorColor], ['warning', theme.diagnosticWarningColor]] as const)
+        .filter((entry): entry is readonly ['error' | 'warning', string] => typeof entry[1] === 'string')
+        .map(([severity, color]) => `${selector(severity)}{text-decoration:underline wavy ${color};text-decoration-skip-ink:none;text-underline-offset:3px}`)
+        .join('\n');
+}
+
 export function formatCodeEditorChangeMarkCss(theme: Pick<CodeEditorTheme, 'changeAddedColor' | 'changeDeletedColor'>, selector: (kind: 'added' | 'modified' | 'deleted') => string,
     options: Readonly<{ /** CSS length from the start of the engine's marker lane. */ inset?: string }> = {}): string {
     const styles = resolveCodeEditorChangeMarkStyles(theme);

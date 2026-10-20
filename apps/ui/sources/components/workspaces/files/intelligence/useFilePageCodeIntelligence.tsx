@@ -4,6 +4,8 @@ import type { LanguageIntelligenceDiagnostic } from '@happier-dev/protocol/machi
 
 import type { DetailsTabHeaderMetaFact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import { useOptionalUniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
@@ -12,6 +14,7 @@ import type {
   TextEditorHandle,
 } from '@/components/ui/code/editor/codeEditorTypes';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import type { CodeLineDiagnosticRange } from '@/components/ui/code/view/CodeLineRow';
 import type { FileCodeIntelligenceBinding } from '@/components/workspaces/files/file/FileContentPanel';
 import {
   useWorkspaceFileOpener,
@@ -219,6 +222,7 @@ export function useFilePageCodeIntelligence(
   const latest = React.useRef(input);
   latest.current = input;
   const opener = useWorkspaceFileOpener();
+  const router = useRouter();
   const workspaceRefs = useWorkspaceRefs();
   const pane = useAppPaneScope(input.scopeId);
   const mainColumn = usePaneMainColumn();
@@ -283,7 +287,12 @@ export function useFilePageCodeIntelligence(
 
   const showProblems = React.useCallback(() => {
     if (phone)
-      interaction.open({ anchor: null, via: 'command', references: false, problems: true });
+      interaction.open({
+        anchor: null,
+        via: 'command',
+        references: false,
+        problems: true,
+      });
     else pane.openRight({ tabId: 'problems' });
   }, [interaction, pane, phone]);
 
@@ -308,6 +317,8 @@ export function useFilePageCodeIntelligence(
       const selection = snapshot.selection;
       if (selection === previous) return;
       previous = selection;
+      // A query re-reads the name it asks about (without the pointer's anchor); only the pointer moves the card.
+      if (selection && selection === snapshot.querySelection) return;
       const state = interaction.getState();
       if (state && state.via !== 'hover') return;
       // Phones have no hover; a tap asks instead.
@@ -378,6 +389,11 @@ export function useFilePageCodeIntelligence(
     () =>
       controller
         ? {
+            getDiagnosticsByLine: createDiagnosticsByLineReader(
+              controller,
+              () => latest.current.filePath,
+            ),
+            subscribeDiagnostics: controller.subscribe,
             onPointer: (line, character, rect) =>
               controller.inspect({
                 line: line - 1,
@@ -431,6 +447,7 @@ export function useFilePageCodeIntelligence(
         );
         return JSON.stringify([
           note?.kind === 'failure' ? note.text : null,
+          note?.action ?? null,
           file.state,
           file.count,
           snapshot.diagnostics?.count ?? null,
@@ -481,6 +498,19 @@ export function useFilePageCodeIntelligence(
   const restart = React.useCallback(() => {
     void controller?.restart();
   }, [controller]);
+  // A missing managed server installs where every Machine install lives (the Machine's installables).
+  const machineId = input.scope?.machineId ?? null;
+  const serverId = input.scope?.serverId;
+  const openInstallables = React.useCallback(() => {
+    if (!machineId) return;
+    router.push(
+      machinePageHref({
+        door: 'rail',
+        target: { machineId, ...(serverId ? { serverId } : {}) },
+        page: 'installables',
+      }) as never,
+    );
+  }, [machineId, router, serverId]);
   const notice =
     failureNote?.kind === 'failure' ? (
       <SurfaceFreshnessLine
@@ -494,7 +524,9 @@ export function useFilePageCodeIntelligence(
         action={
           failureNote.action === 'restart'
             ? { label: t('files.pane.intelligence.restart'), onPress: restart }
-            : undefined
+            : failureNote.action === 'install' && machineId
+              ? { label: t('common.install'), onPress: openInstallables }
+              : undefined
         }
       />
     ) : null;
@@ -659,29 +691,36 @@ export function useFilePageCodeIntelligence(
           ? {
               // Text in files and Replace start in this page's folder, like quick open below.
               'search.textInFiles': () => {
-                searchRuntime.open(undefined, searchSeed, { source: 'fileContent' });
+                searchRuntime.open(undefined, searchSeed, {
+                  source: 'fileContent',
+                });
                 return 'handled' as const;
               },
               'search.replaceInFiles': () => {
-                searchRuntime.open(undefined, searchSeed, { source: 'fileContent', replace: true });
-                return 'handled' as const;
-              },
-              ...(symbols ? {
-              'search.symbols': () => {
                 searchRuntime.open(undefined, searchSeed, {
-                  source: 'symbols',
-                  symbols,
+                  source: 'fileContent',
+                  replace: true,
                 });
                 return 'handled' as const;
               },
-              'search.files': () => {
-                searchRuntime.open(undefined, searchSeed, {
-                  source: 'files',
-                  symbols,
-                });
-                return 'handled' as const;
-              },
-              } : {}),
+              ...(symbols
+                ? {
+                    'search.symbols': () => {
+                      searchRuntime.open(undefined, searchSeed, {
+                        source: 'symbols',
+                        symbols,
+                      });
+                      return 'handled' as const;
+                    },
+                    'search.files': () => {
+                      searchRuntime.open(undefined, searchSeed, {
+                        source: 'files',
+                        symbols,
+                      });
+                      return 'handled' as const;
+                    },
+                  }
+                : {}),
             }
           : {},
       [input.active, searchRuntime, searchSeed, symbols],
@@ -736,6 +775,42 @@ export function useFilePageCodeIntelligence(
     menuCommands,
     symbols,
     showProblems,
+  };
+}
+
+/**
+ * This file's problems by 1-based line for squiggles (View and Changes), re-read only when the
+ * diagnostics projection changes, so pointer answers never re-render the code rows.
+ */
+function createDiagnosticsByLineReader(
+  controller: CodeIntelligenceController,
+  path: () => string,
+): () => ReadonlyMap<number, readonly CodeLineDiagnosticRange[]> | undefined {
+  let projection: ReturnType<CodeIntelligenceController['getDiagnosticsProjection']> | null = null;
+  let forPath = '';
+  let value: ReadonlyMap<number, readonly CodeLineDiagnosticRange[]> | undefined;
+  return () => {
+    const next = controller.getDiagnosticsProjection();
+    const currentPath = path();
+    if (next === projection && currentPath === forPath) return value;
+    projection = next;
+    forPath = currentPath;
+    const byLine = new Map<number, CodeLineDiagnosticRange[]>();
+    for (const item of selectCodeDiagnostics(next, currentPath).items) {
+      const { start, end } = item.range;
+      for (let line = start.line; line <= end.line; line++) {
+        const list = byLine.get(line + 1) ?? [];
+        byLine.set(line + 1, list);
+        list.push({
+          start: line === start.line ? start.character : 0,
+          // Through the line's end; rows clamp to their text.
+          end: line === end.line ? Math.max(end.character, start.line === end.line ? start.character + 1 : 0) : Number.MAX_SAFE_INTEGER,
+          severity: item.severity,
+        });
+      }
+    }
+    value = byLine.size > 0 ? byLine : undefined;
+    return value;
   };
 }
 
@@ -879,9 +954,7 @@ function FileCodeIntelligenceCardLayer(
   }, [controller, interaction]);
   const position = query?.position ?? null;
   if (state?.problems) {
-    return (
-      <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />
-    );
+    return <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />;
   }
   return (
     <CodeIntelligenceCard

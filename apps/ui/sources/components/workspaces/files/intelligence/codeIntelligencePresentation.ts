@@ -59,7 +59,8 @@ export type LanguageStateNote = Readonly<{
   kind: 'progress' | 'failure';
   text: string;
   detail?: string;
-  action?: 'restart';
+  /** Restart a stopped server; Install opens the Machine's installables for a missing managed one. */
+  action?: 'restart' | 'install';
 }>;
 
 const LAST_STDERR_LINES = 3;
@@ -115,6 +116,7 @@ export function resolveLanguageStateNote(
         server: missing.label,
         machine: machineName,
       }),
+      ...(missing.installable ? { action: 'install' as const } : {}),
     };
   if (input.machineUnreachable && snapshot.status === 'unavailable') {
     return {

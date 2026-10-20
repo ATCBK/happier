@@ -143,7 +143,8 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
             onLayout={(event) => setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width))}
             style={[styles.container, action !== null ? styles.withAction : null, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}
         >
-            <Animated.View
+            {/* A narrow footer with the list's one action gives the whole row to that action. */}
+            {narrow && action !== null ? null : <Animated.View
                 testID={selectionListTestId(props.testID, 'hints-animator')}
                 style={[styles.animator, action !== null ? styles.animatorBesideAction : null, animatedStyle]}
             >
@@ -159,7 +160,7 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
                         ) : null}
                     </View>
                 ))}
-            </Animated.View>
+            </Animated.View>}
             {action}
         </View>
     );

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 import {
     cleanupWorkspaceFileDetailsActionBoundary,
     installWorkspaceFileDetailsActionBoundary,
@@ -10,10 +11,11 @@ import {
 } from './workspaceFileDetailsTestHelpers';
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
-const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn() }));
+const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn(), replace: vi.fn() }));
 // Remote filesystem/SCM and platform digest boundaries; the loader stays real.
 vi.mock('@/sync/ops/scm/machineScm', () => ({ machineScmDiffFile: transport.diff }));
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({ callDaemonWorkspaceStatFileRpc: transport.stat }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: (request: unknown) => transport.replace(request) }));
 vi.mock('@/config', () => ({ config: { filesPreviewMaxBytes: 1000000 } }));
 vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }));
 const patch = (text: string) => `diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+${text}\n`;
@@ -21,15 +23,87 @@ const input = { scope: { serverId: 'server', machineId: 'machine', rootPath: '/r
 const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
 // Load the loader only after the socket boundary is installed.
 const { useWorkspaceFileDetailsLoading } = await import('./useWorkspaceFileDetailsLoading');
+const { machineWorkspaceFileReplaceApply } = await import('@/sync/ops/machineWorkspaceFileReplace');
 let current: ReturnType<typeof useWorkspaceFileDetailsLoading>;
 function Harness(props: Parameters<typeof useWorkspaceFileDetailsLoading>[0]) { current = useWorkspaceFileDetailsLoading(props); return null; }
 beforeEach(async () => {
     input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
     transport.diff.mockReset().mockResolvedValue({ success: true, diff: patch('new') });
     transport.stat.mockReset().mockResolvedValue({ success: true, exists: true, sizeBytes: 4 });
+    transport.replace.mockReset();
     workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
 });
 afterEach(cleanupWorkspaceFileDetailsActionBoundary);
+it('rereads acknowledged saved bytes without a snapshot change and rejects pre-write publication', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} includeDiff={false} includeFile />); });
+    let finishOld!: (value: { success: true; content: string }) => void;
+    let oldSignal: AbortSignal | undefined;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce((request: { signal?: AbortSignal }) => {
+        oldSignal = request.signal;
+        return new Promise(resolve => { finishOld = resolve; });
+    });
+    let oldRefresh!: Promise<void>;
+    await act(async () => { oldRefresh = current.refreshAll(); });
+    let finishReplacement!: (value: { success: true; content: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finishReplacement = resolve; }));
+    transport.replace.mockResolvedValueOnce({ ok: true, results: [{ path: '/repo/file.txt', status: 'replaced', hash: 'replace-ack' }] });
+    await act(async () => {
+        expect(await machineWorkspaceFileReplaceApply(input.scope.machineId, {
+            rootPath: input.scope.rootPath, operation: { kind: 'replace', matcher: { query: 'new', replacement: 'replaced' },
+                files: [{ path: input.filePath, expectedHash: 'a'.repeat(64) }] },
+        }, { serverId: input.scope.serverId, accountId: 'account-a' })).toMatchObject({ ok: true });
+    });
+    // Acknowledgement identity is available while its reread is still pending.
+    expect(current.lastOwnWriteHash).toBe('replace-ack');
+    expect(oldSignal?.aborted).toBe(true);
+    await act(async () => { finishReplacement({ success: true, content: Buffer.from('replaced').toString('base64') }); });
+    expect(current.fileContent?.content).toBe('replaced');
+    await act(async () => { finishOld({ success: true, content: Buffer.from('obsolete').toString('base64') }); await oldRefresh; });
+    expect(current.fileContent?.content).toBe('replaced');
+    workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: false, error: 'unreadable' });
+    const retained = current.fileContent;
+    transport.replace.mockResolvedValueOnce({ ok: true, results: [{ path: input.filePath, status: 'restored', hash: 'undo-ack' }] });
+    await act(async () => {
+        expect(await machineWorkspaceFileReplaceApply(input.scope.machineId, {
+            rootPath: input.scope.rootPath, operation: { kind: 'restore', files: [{ path: input.filePath,
+                expectedHash: 'b'.repeat(64), edits: [{ startUtf16: 0, deleteLength: 8, insertText: 'new', originalText: 'replaced' }] }] },
+        }, { serverId: input.scope.serverId, accountId: 'account-a' })).toMatchObject({ ok: true });
+    });
+    expect(current.fileContent).toBe(retained);
+    expect(current.staleSince).toEqual(expect.any(Number));
+    expect(current.lastOwnWriteHash).toBe('undo-ack');
+    expect(current.error).not.toBe(null);
+    await act(async () => { tree.unmount(); });
+});
+it('invalidates hidden saved bytes only for the selected Account and path, then rereads on activation', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    const props = { ...input, accountId: 'account-a', includeFile: true, includeDiff: false };
+    await act(async () => { tree = renderer.create(<Harness {...props} />); });
+    await act(async () => { tree.update(<Harness {...props} isActive={false} />); });
+    await act(async () => {
+        acknowledgeWorkspaceFileWrites({ ...input.scope, accountId: 'account-b' }, [{ path: input.filePath, hash: 'wrong-account' }]);
+        acknowledgeWorkspaceFileWrites({ ...input.scope, accountId: 'account-a' }, [{ path: 'other.txt', hash: 'wrong-path' }]);
+    });
+    expect(current.lastOwnWriteHash).toBe(null);
+    await act(async () => { tree.update(<Harness {...props} />); });
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
+    await act(async () => { tree.update(<Harness {...props} isActive={false} />); });
+    workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: true, content: Buffer.from('undone').toString('base64') });
+    await act(async () => { acknowledgeWorkspaceFileWrites({ ...input.scope, accountId: 'account-a' }, [{ path: input.filePath, hash: 'hidden-ack' }]); });
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
+    expect(current.lastOwnWriteHash).toBe('hidden-ack');
+    await act(async () => { tree.update(<Harness {...props} />); });
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(2);
+    expect(current.fileContent?.content).toBe('undone');
+    await act(async () => { tree.update(<Harness {...props} accountId={null} />); });
+    expect(current.lastOwnWriteHash).toBe(null);
+    const reads = workspaceFileDetailsActionBoundary.read.mock.calls.length;
+    await act(async () => { acknowledgeWorkspaceFileWrites({ ...input.scope, accountId: 'account-a' }, [{ path: input.filePath, hash: 'must-not-capture' }]); });
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(reads);
+    expect(current.lastOwnWriteHash).toBe(null);
+    await act(async () => { tree.unmount(); });
+});
 it('shows progressive diff and ignores an obsolete mode result', async () => {
     let finishOld!: (value: { success: true; diff: string }) => void;
     transport.diff.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));

@@ -137,7 +137,7 @@ export function usePierreInitialPresentation(params: Readonly<{
                 return;
             }
             if (evaluateDom()) return;
-            const hasPoolWork = stats.busyWorkers > 0 || stats.pendingTasks > 0 || stats.queuedTasks > 0;
+            const hasPoolWork = stats.busyWorkers > 0 || stats.queuedTasks > 0;
             if (hasPoolWork) {
                 sawPoolWork = true;
                 return;

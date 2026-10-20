@@ -1,14 +1,20 @@
 import * as React from 'react';
 import { t } from '@/text';
+import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 import { refreshWorkspaceFileDetails, type WorkspaceFileDetailsFileContent } from './refreshWorkspaceFileDetails';
 import { publishSavedWorkspaceFileDetails, reconcileWorkspaceFileDetails } from './reconcileWorkspaceFileDetails';
 
-type Input = Omit<Parameters<typeof refreshWorkspaceFileDetails>[0], 'scope' | 'signal'> & { scope: Parameters<typeof refreshWorkspaceFileDetails>[0]['scope'] | null } & Readonly<{ isActive: boolean; refreshFingerprint: string }>;
+type Input = Omit<Parameters<typeof refreshWorkspaceFileDetails>[0], 'scope' | 'signal'> & { scope: Parameters<typeof refreshWorkspaceFileDetails>[0]['scope'] | null } & Readonly<{ accountId?: string | null; isActive: boolean; refreshFingerprint: string }>;
 
 /** Owns retained details state and publication for the currently active request. */
 export function useWorkspaceFileDetailsLoading(input: Input) {
     const { scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent,
         maxImagePreviewBytes, previewSlice, includeDiff, includeFile, snapshotSignature, isActive, refreshFingerprint } = input;
+    // Explicit callers own their captured Account; only legacy unscoped callers may capture the matching active Home.
+    const accountId = input.accountId === undefined
+        ? selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), scope?.serverId ?? null)?.accountId ?? null
+        : input.accountId;
     const wantsDiff = includeDiff !== false && !previewSlice;
     const [fileContent, setFileContent] = React.useState<WorkspaceFileDetailsFileContent | null>(null);
     const [diffContent, setDiffContent] = React.useState<string | null>(null);
@@ -25,7 +31,7 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
     const request = React.useRef<object | null>(null);
     const transferAbort = React.useRef<AbortController | null>(null);
     const reusableFile = React.useRef<{ key: string; diffMode: Input['diffMode']; includeDiff: Input['includeDiff']; value: NonNullable<Input['reuseFile']> } | null>(null);
-    const resourceKey = JSON.stringify([scope?.serverId, scope?.machineId, scope?.rootPath, filePath]);
+    const resourceKey = JSON.stringify([scope?.serverId, accountId, scope?.machineId, scope?.rootPath, filePath]);
     const activeResource = React.useRef(resourceKey);
     activeResource.current = resourceKey;
     const [contentResource, setContentResource] = React.useState(resourceKey);
@@ -53,7 +59,7 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
         publication.current = { ...publication.current, diffContent: null };
         request.current = null;
     }
-    const fileKey = JSON.stringify([scope?.serverId, scope?.machineId, scope?.rootPath, filePath, snapshotSignature, refreshFingerprint, maxImagePreviewBytes, isBinaryContent, previewSlice]);
+    const fileKey = JSON.stringify([resourceKey, snapshotSignature, refreshFingerprint, maxImagePreviewBytes, isBinaryContent, previewSlice]);
     const refreshAll = React.useCallback(async (options?: Readonly<{ background?: boolean; allowFileReuse?: boolean }>) => {
         if (!isActive || !scope) return;
         if (options?.allowFileReuse && includeFile === true && reusableFile.current?.key === fileKey
@@ -123,6 +129,20 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
             transferAbort.current = null;
         };
     }, [refreshAll, refreshFingerprint]);
+    React.useEffect(() => {
+        if (!scope || !accountId) return;
+        return subscribeAcknowledgedWorkspaceFileWrites({ ...scope, accountId }, filePath, write => {
+            if (activeResource.current !== resourceKey) return;
+            // Neither cached bytes nor a read begun before this acknowledgement may publish again.
+            reusableFile.current = null;
+            request.current = null;
+            transferAbort.current?.abort();
+            publication.current = { ...publication.current, lastOwnWriteHash: write.hash };
+            setLastOwnWriteHash(write.hash);
+            // A hidden page retains its useful display, but refreshAll performs no IO until activation.
+            void refreshAll();
+        });
+    }, [scope, accountId, filePath, resourceKey, refreshAll]);
     const publishSavedFile = React.useCallback((value: Readonly<{ text: string; hash: string }>) => {
         if (activeResource.current !== resourceKey) return;
         // A read started before this acknowledged write no longer owns publication.

@@ -74,6 +74,8 @@ export type DiffViewerBaseProps = Readonly<{
     /** Bind this mounted renderer's temporary Find refold operation to its surface controller. */
     registerFindRefold?: (refold: NonNullable<FindController['refold']>) => (() => void) | undefined;
     findRangesByLineId?: CodeLinesViewProps['findRangesByLineId'];
+    /** P7: names on the new side answer like the read view (card, definition, squiggles). */
+    intelligence?: CodeLinesViewProps['intelligence'];
     selectedLineIds?: ReadonlySet<string>;
     testID?: CodeLinesViewProps['testID'];
     onLayout?: CodeLinesViewProps['onLayout'];

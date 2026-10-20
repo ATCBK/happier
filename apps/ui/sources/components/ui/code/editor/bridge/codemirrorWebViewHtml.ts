@@ -1,6 +1,6 @@
 import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
 import { minimalCodeEditorEdit } from '../codeEditorDocumentEdit';
-import { formatCodeEditorChangeMarkCss, type CodeEditorTheme } from '../editorTheme';
+import { formatCodeEditorChangeMarkCss, formatCodeEditorDiagnosticCss, type CodeEditorTheme } from '../editorTheme';
 import { CODEMIRROR_WEBVIEW_BUNDLE_JS } from './codemirrorWebViewBundle.generated';
 
 export type CodeMirrorWebViewTheme = Omit<CodeEditorTheme, 'monacoThemeName'>;
@@ -94,6 +94,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       }
       .happier-editor-marker { display: block; position: relative; height: 100%; }
       ${formatCodeEditorChangeMarkCss(params.theme, (kind) => '.happier-editor-marker.happier-editor-change-' + kind)}
+      ${formatCodeEditorDiagnosticCss(params.theme, (severity) => '.happier-editor-diagnostic-' + severity)}
     </style>
   </head>
   <body>

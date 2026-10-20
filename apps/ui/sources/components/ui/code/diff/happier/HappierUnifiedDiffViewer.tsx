@@ -188,6 +188,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 highlightLineIds={props.highlightLineIds}
                 reviewedLineIds={props.reviewedLineIds}
                 findRangesByLineId={props.findRangesByLineId}
+                intelligence={props.intelligence}
                 syntaxHighlighting={syntaxHighlighting}
                 testID={props.testID}
                 onLayout={props.onLayout}

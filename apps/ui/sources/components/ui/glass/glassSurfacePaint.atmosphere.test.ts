@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { glassPresetMaterials } from './glassMaterial';
-import { glassSurfacePlaneBackdropStyle, resolveGlassSurfacePlaneMaterial } from './glassSurfacePaint';
+import { glassNavigationBackgroundColor, glassSurfaceBackgroundColor, glassSurfacePlaneBackdropStyle, resolveGlassSurfacePlaneMaterial } from './glassSurfacePaint';
 
 describe('session atmosphere coats at the glass owner', () => {
     const clear = { glassSurfaceMaterials: glassPresetMaterials('clear') };
@@ -38,5 +38,23 @@ describe('session atmosphere coats at the glass owner', () => {
     it('lets only an opt-in reading coat blur the common picture through the content material', () => {
         expect(glassSurfacePlaneBackdropStyle(clear, 'content', false, wallpaper, 'reading')).not.toBeNull();
         expect(glassSurfacePlaneBackdropStyle(clear, 'content', false, wallpaper)).toBeNull();
+    });
+});
+
+describe('navigation background under the atmosphere', () => {
+    const canvas = 'rgb(242, 240, 235)';
+    const opaqueChrome = glassSurfaceBackgroundColor(canvas, 'chrome', true);
+    it('lets the route background clear only while the atmosphere paints behind the active surface', () => {
+        expect(glassNavigationBackgroundColor(canvas, { atmosphereBehind: 'wallpaper' })).toBe('transparent');
+        expect(glassNavigationBackgroundColor(canvas, { atmosphereBehind: 'band' })).toBe('transparent');
+    });
+    it('keeps the opaque chrome background on every route the atmosphere does not cover', () => {
+        expect(opaqueChrome).not.toBe('transparent');
+        expect(glassNavigationBackgroundColor(canvas, {})).toBe(opaqueChrome);
+        expect(glassNavigationBackgroundColor(canvas, { atmosphereBehind: 'none' })).toBe(opaqueChrome);
+        expect(glassNavigationBackgroundColor(canvas, { atmosphereBehind: 'none', reduceTransparency: true })).toBe(opaqueChrome);
+    });
+    it('keeps a desktop overlay window clear regardless of the atmosphere', () => {
+        expect(glassNavigationBackgroundColor(canvas, {}, true)).toBe('transparent');
     });
 });

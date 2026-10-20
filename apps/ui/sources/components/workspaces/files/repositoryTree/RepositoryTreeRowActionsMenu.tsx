@@ -7,6 +7,7 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
+import { useDeviceType } from '@/utils/platform/responsive';
 import type { FilesystemBrowserRowActionsControl } from '@/components/ui/filesystemBrowser/FilesystemBrowserRow';
 import { useWorkspaceOpenActions } from '@/components/appShell/workspace/useWorkspaceOpenActions';
 import { resolveFileMenuItems, type FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
@@ -73,6 +74,7 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     control?: FilesystemBrowserRowActionsControl;
 }>) {
     const { theme } = useUnistyles();
+    const phone = useDeviceType() === 'phone';
     const workspaceOpen = useWorkspaceOpenActions(props.kind === 'file' ? props.href ?? null : null);
     const machineReachable = props.fileMenuContext?.machineReachable ?? !props.disableWriteActions;
     const unavailableReason = props.fileMenuContext?.unavailableReason ?? t('errors.daemonUnavailableBody');
@@ -176,15 +178,17 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     // last and red, each run of rows set apart by a quiet rule.
     const rowActions = React.useMemo<ItemAction[]>(() => {
         const inGroup = (id: string, title = '') => (action: ItemAction): ItemAction => ({ ...action, group: { id, title } });
+        // The phone sheet's own title names the file, so its first run carries no second label.
+        const openTitle = phone ? '' : menuTitle;
         return [
-            ...sharedActions.filter((_, index) => sharedItems[index].group === 'open').map(inGroup('open', menuTitle)),
+            ...sharedActions.filter((_, index) => sharedItems[index].group === 'open').map(inGroup('open', openTitle)),
             ...workspaceOpen.items.filter(item => item.id !== 'workspace.open.right' || !sharedItems.some(shared => shared.id === 'openBeside'))
-                .map(item => inGroup('open', menuTitle)({ id: item.id, title: item.title, icon: item.icon, onPress: () => { workspaceOpen.select(item.id); } })),
+                .map(item => inGroup('open', openTitle)({ id: item.id, title: item.title, icon: item.icon, onPress: () => { workspaceOpen.select(item.id); } })),
             ...sharedActions.filter((_, index) => sharedItems[index].group !== 'open' && sharedItems[index].group !== 'change').map(inGroup('share')),
             ...items.map(item => inGroup('file')({ ...item, onPress: () => props.onSelect(item.id as RepositoryTreeRowActionMenuItemId) })),
             ...sharedActions.filter((_, index) => sharedItems[index].group === 'change').map(inGroup('change')),
         ];
-    }, [items, menuTitle, props.onSelect, sharedActions, sharedItems, workspaceOpen]);
+    }, [items, menuTitle, phone, props.onSelect, sharedActions, sharedItems, workspaceOpen]);
 
     // Room for the whole menu (its title row, every item, each group's padding), so no item is cut at the
     // menu's foot on a desktop window (lab FB1k); the popover still shrinks to a shorter window and scrolls.

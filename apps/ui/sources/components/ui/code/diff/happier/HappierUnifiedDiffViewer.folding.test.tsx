@@ -16,7 +16,7 @@ const codeLinesViewType = Reflect.get(CodeLinesView, 'type') ?? CodeLinesView;
 function viewProps(screen: Awaited<ReturnType<typeof renderScreen>>): CodeLinesViewProps {
     const view = screen.findAllByType(codeLinesViewType)[0];
     if (!view) throw new Error('Expected the real CodeLinesView');
-    return view.props;
+    return { ...view.props, lines: view.props.lines };
 }
 
 function buildDemoUnifiedDiff(): string {
