@@ -37,6 +37,8 @@ import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE
 import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
+import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
 vi.mock('axios', () => ({ default: http }));
@@ -71,6 +73,43 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, input),
     });
   }
+  it('reads owned notices through the CLI Inbox without a mounted app, and reports app-only sources as partial', async () => {
+    const accountId = 'notice-owner';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const content = AccountNoticeArtifactBodyV1Schema.parse({ v: 1, source: { kind: 'plugin', pluginId: 'qa.notice', itemId: 'stable-item' },
+      type: 'update', resolved: false, body: 'Saved notice', page: { pageId: 'notice', subPath: 'stable-item' } });
+    const header = AccountNoticeArtifactHeaderV1Schema.parse({ ...content, kind: 'account_notice.v1', status: 'open', title: 'Notice' });
+    const row = { id: artifactId, ownerAccountId: accountId, access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+      header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(content) }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    let credentialCurrent = true;
+    let retireOnList = false;
+    http.get.mockImplementation(async (url: string) => {
+      const address = new URL(url);
+      if (address.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (address.pathname === '/v1/artifacts') {
+        if (retireOnList) credentialCurrent = false;
+        return { status: 200, data: address.searchParams.has('kind') ? { items: [row], hasUnclassified: false } : [row] };
+      }
+      if (address.pathname === `/v1/artifacts/${artifactId}`) return { status: 200, data: row };
+      throw new Error(`Unexpected notice read ${address.pathname}`);
+    });
+    const executor = createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'notice-home', serverHttpBaseUrl: 'https://notice.test', isCredentialCurrent: () => credentialCurrent });
+    const context = { surface: 'cli', authority: 'account_automation', bypassApprovals: true } as const;
+    const result = await executor.execute('inbox.get', {}, context);
+    expect(result).toMatchObject({ ok: true, result: { status: 'partial', accountNoticeIds: [artifactId], items: [
+      { producer: 'notice', type: 'update', title: 'Notice', read: false, source: { id: artifactId, serverId: 'notice-home' } },
+    ], coverage: { sources: expect.arrayContaining([{ source: 'action_operations', status: 'unavailable', reason: 'device_local' }]) } } });
+    if (!result.ok) throw new Error('Expected Inbox result');
+    expect(AppShellActionOutputSchemas['inbox.get'].safeParse(result.result).success).toBe(true);
+    expect(await executor.execute('artifact.list', { kind: 'account_notice.v1' }, context)).toMatchObject({ ok: true, result: { items: [] } });
+    expect(await executor.execute('artifact.get', { artifactId }, context)).toMatchObject({ ok: true, result: { artifact: { artifactId, header } } });
+    expect(await executor.execute('inbox.get', {}, { ...context, expectedAccountId: 'foreign' }))
+      .toMatchObject({ ok: false, errorCode: 'forbidden' });
+    retireOnList = true;
+    expect(await executor.execute('inbox.get', {}, context)).toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
+  });
   it('uses the captured Doc decision proof for read-only Artifact preparation and the encoded decision packet', async () => {
     const keyPair = tweetnacl.sign.keyPair();
     const accountId = 'doc-owner';

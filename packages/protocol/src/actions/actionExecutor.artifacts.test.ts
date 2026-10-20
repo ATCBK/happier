@@ -13,6 +13,7 @@ import { z } from 'zod/mini';
 import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsagePrimitives.js';
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '../activity/usageNoticeArtifactV1.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 
 function usageNoticeArtifact() {
   const notice = { topic: 'connected_service_usage', kind: 'credit_expiry', serviceId: 'cloud', profileId: 'account',
@@ -85,6 +86,40 @@ const ids = ['artifact.create', 'artifact.get', 'artifact.list', 'artifact.updat
   'artifact.publish_from_file', 'artifact.revisions.list', 'artifact.revisions.restore', 'artifact.storage.usage'] as const;
 
 describe('ordinary Artifact Actions', () => {
+  it.each(['cli', 'agent', 'mcp'] as const)('admits own-Account %s notice read, mark-read and CAS dismissal without producer authority', async surface => {
+    const initial = accountNoticeArtifact();
+    const boundary = openedArtifactBoundary(initial);
+    const executor = createActionExecutor({ artifactAction: boundary.action });
+    const context = { surface, authority: 'account_automation', runtimeAccountId: 'owner', expectedAccountId: 'owner',
+      actionCaller: { kind: 'host' }, bypassApprovals: true } as const;
+    expect(await executor.execute('artifact.get', { artifactId: initial.artifactId }, context))
+      .toMatchObject({ ok: true, result: { artifact: initial } });
+    if (surface === 'agent') {
+      expect(await executor.execute('artifact.get', { artifactId: initial.artifactId }, { ...context,
+        actionCaller: { kind: 'session', sessionId: 'own-session', starterDepth: 0, turnDepth: 0 } }))
+        .toMatchObject({ ok: true, result: { artifact: initial } });
+    }
+    const readHeader = { ...initial.header, readAt: 2000 };
+    expect(await executor.execute('artifact.update', { artifactId: initial.artifactId, expectedRevision: initial.revision,
+      header: readHeader, body: initial.body }, context)).toMatchObject({ ok: true });
+    const revision = boundary.read()!.revision;
+    expect(await executor.execute('artifact.update', { artifactId: initial.artifactId, expectedRevision: revision,
+      header: { ...readHeader, resolved: true }, body: initial.body }, context))
+      .toMatchObject({ ok: false, errorCode: 'artifact_kind_internal' });
+    expect(await executor.execute('artifact.update', { artifactId: initial.artifactId, expectedRevision: initial.revision,
+      header: { ...readHeader, status: 'dismissed' }, body: initial.body }, context))
+      .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+    expect(await executor.execute('artifact.update', { artifactId: initial.artifactId, expectedRevision: revision,
+      header: { ...readHeader, status: 'dismissed' }, body: initial.body }, context)).toMatchObject({ ok: true });
+    expect(boundary.read()).toMatchObject({ header: { status: 'dismissed', readAt: 2000, resolved: false }, body: initial.body });
+    for (const invalidContext of [{ ...context, expectedAccountId: 'foreign' }, { ...context, runtimeAccountId: undefined },
+      { ...context, rpcSessionAuthorization: { kind: 'session.write', sessionId: 'session' } } as const,
+      { ...context, externalActionCredential: { accountId: 'owner', principalId: 'api', credentialId: 'token', grant: API_TOKEN_FULL_GRANT_V1 } },
+      { ...context, actionCaller: { kind: 'plugin', pluginId: 'acme.review' } } as const]) {
+      expect(await executor.execute('artifact.get', { artifactId: initial.artifactId }, invalidContext))
+        .toMatchObject({ ok: false });
+    }
+  });
   it('admits owned notice reads and exact CAS dismissal from host Voice with the ordinary dangerous approval default', async () => {
     const initial = accountNoticeArtifact();
     const boundary = openedArtifactBoundary(initial);
