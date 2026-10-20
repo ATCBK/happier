@@ -46,7 +46,7 @@ test('server and daemon logs are windowed, query attempts correlate by request i
 });
 
 test('comparison keeps cold/warm separate and withholds timing percentiles below five repeats', () => {
-  const run = (cache, durationMs, requests) => ({ journey: 'J1', cache, uiMode: 'export', durationMs, counts: { requests } });
+  const run = (cache, durationMs, requests) => ({ journey: 'J1', cache, uiMode: 'export', status: 'CAPTURED', captureMode: 'timing', instrumentation: { storeTelemetry: false, fiberHook: false }, durationMs, counts: { requests } });
   const before = Array.from({ length: 5 }, (_, i) => run('cold', i + 1, 10));
   const after = [run('cold', 2, 4), ...Array.from({ length: 5 }, () => run('warm', 3, 3))];
   const result = compareRuns(before, after);

@@ -2,6 +2,7 @@
 // the browser rather than retaining every fiber/commit or any props/state data.
 (() => {
   if (globalThis.__happierPerfProbe) return;
+  const counts = globalThis.__HAPPIER_PERF_CAPTURE_MODE__ !== 'timing';
   const tags = new Set([0, 1, 9, 11, 14, 15]);
   const current = new WeakMap();
   const name = type => typeof type === 'function' ? type.displayName || type.name || 'Anonymous'
@@ -13,7 +14,7 @@
     inject(renderer) { const id = this.renderers.size + 1; this.renderers.set(id, renderer); return id; },
     checkDCE() {}, on() {}, off() {}, emit() {}, sub() { return () => {}; } };
   const commit = hook.onCommitFiberRoot;
-  hook.onCommitFiberRoot = function (...args) {
+  if (counts) hook.onCommitFiberRoot = function (...args) {
     commit?.apply(this, args);
     const started = performance.now();
     const root = args[1];
@@ -36,7 +37,7 @@
     for (const component of names) data.components[component].commits++;
     data.hookMs += performance.now() - started;
   };
-  if (!previous) Object.defineProperty(globalThis, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: hook, configurable: true });
+  if (counts && !previous) Object.defineProperty(globalThis, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: hook, configurable: true });
   let observer;
   if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
     observer = new PerformanceObserver(list => {
@@ -50,16 +51,18 @@
   try {
     if (sessionStorage.getItem(savedKey) === null) sessionStorage.setItem(savedKey, JSON.stringify(localStorage.getItem(storageKey)));
     original = JSON.parse(sessionStorage.getItem(savedKey));
-    localStorage.setItem(storageKey, JSON.stringify({ ...JSON.parse(original || '{}'), syncPerformanceTelemetryEnabled: true }));
+    localStorage.setItem(storageKey, JSON.stringify({ ...JSON.parse(original || '{}'), syncPerformanceTelemetryEnabled: counts }));
   } catch { /* Availability is reported by the collector, never inferred. */ }
   globalThis.__happierPerfProbe = {
     reset() { data = empty(); globalThis.__HAPPIER_SYNC_PERFORMANCE__?.reset(); },
-    collect() { globalThis.__HAPPIER_SYNC_PERFORMANCE__?.markScenario('perf-capture-end'); return { ...data, renderers: [...hook.renderers.values()].map(renderer => ({ version: renderer.version, package: renderer.rendererPackageName })),
+    collect() { globalThis.__HAPPIER_SYNC_PERFORMANCE__?.markScenario?.('perf-capture-end'); return { ...data, renderers: counts ? [...hook.renderers.values()].map(renderer => ({ version: renderer.version, package: renderer.rendererPackageName })) : [],
+      instrumentation: { fiberHook: counts || Boolean(previous), storeTelemetry: globalThis.__HAPPIER_SYNC_PERFORMANCE__?.isEnabled?.() ?? null },
       telemetryAvailable: Boolean(globalThis.__HAPPIER_SYNC_PERFORMANCE__),
       telemetry: globalThis.__HAPPIER_SYNC_PERFORMANCE__?.flush() }; },
     stop() {
       observer?.disconnect();
-      hook.onCommitFiberRoot = commit;
+      if (counts) hook.onCommitFiberRoot = commit;
+      if (counts && !previous) delete globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
       try { if (original === null) localStorage.removeItem(storageKey); else if (original !== undefined) localStorage.setItem(storageKey, original); sessionStorage.removeItem(savedKey); } catch {}
       delete globalThis.__happierPerfProbe;
     },

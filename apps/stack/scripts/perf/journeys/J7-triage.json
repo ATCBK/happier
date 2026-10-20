@@ -1,14 +1,19 @@
 {
   "id": "J7-triage",
-  "intent": "Authenticated PRs & Issues list to an existing entry's source detail, followed by one minute with that detail open. Requires a populated Triage list and a first entry with an admitted source detail; no external source mutation is performed.",
+  "intent": "Authenticated PRs & Issues list to the existing GitHub PR 612 and issue 540, with thirty seconds observing each admitted source detail. Requires those existing entries; no external source mutation is performed.",
   "prepare": [{ "op": "open" }, { "op": "home" }],
   "steps": [
-    { "op": "open", "path": "/plugins/triage/triage" },
+    { "op": "open", "path": "/plugins/happier.triage/triage" },
     { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-list-region\"]"] },
-    { "op": "browser", "args": ["wait", "[data-testid^=\"triage-entry-row:\"]"] },
-    { "op": "browser", "args": ["find", "first", "[data-testid^=\"triage-entry-row:\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D\"]"] },
+    { "op": "browser", "args": ["find", "testid", "triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D", "click"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-detail-region\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "location.pathname.endsWith(',612')"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]"] },
-    { "op": "idle", "ms": 60000 }
+    { "op": "idle", "ms": 30000 },
+    { "op": "browser", "args": ["find", "testid", "triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22issue%22%2C%22github%3A1117388084%22%2C%22540%22%5D", "click"] },
+    { "op": "browser", "args": ["wait", "--fn", "location.pathname.endsWith(',540')"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]"] },
+    { "op": "idle", "ms": 30000 }
   ]
 }

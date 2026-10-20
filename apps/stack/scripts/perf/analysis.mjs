@@ -146,16 +146,17 @@ function percentile(values, fraction) {
 }
 
 export function compareRuns(before, after) {
-  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode]);
+  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode, run.captureMode ?? 'unknown']);
   return [...new Set([...before, ...after].map(key))].map(group => {
     const left = before.filter(run => key(run) === group);
     const right = after.filter(run => key(run) === group);
     const mean = (runs, metric) => runs.length && runs.every(run => typeof run.counts[metric] === 'number')
       ? runs.reduce((sum, run) => sum + run.counts[metric], 0) / runs.length : null;
     const metrics = new Set([...left, ...right].flatMap(run => Object.keys(run.counts)));
-    const timing = runs => runs.length >= 5 && runs.every(run => run.uiMode === 'export' && run.status !== 'INCOMPLETE')
+    const timing = runs => runs.length >= 5 && runs.every(run => run.uiMode === 'export' && run.status === 'CAPTURED'
+      && run.captureMode === 'timing' && run.instrumentation?.storeTelemetry === false && run.instrumentation?.fiberHook === false)
       ? { p50Ms: percentile(runs.map(run => run.durationMs), .5), p95Ms: percentile(runs.map(run => run.durationMs), .95) } : null;
-    return { journey: JSON.parse(group)[0], cache: JSON.parse(group)[1], uiMode: JSON.parse(group)[2],
+    return { journey: JSON.parse(group)[0], cache: JSON.parse(group)[1], uiMode: JSON.parse(group)[2], captureMode: JSON.parse(group)[3],
       beforeRuns: left.length, afterRuns: right.length, beforeTiming: timing(left), afterTiming: timing(right),
       counts: Object.fromEntries([...metrics].map(metric => {
         const a = mean(left, metric), b = mean(right, metric);

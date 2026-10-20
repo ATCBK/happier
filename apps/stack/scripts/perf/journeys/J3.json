@@ -5,25 +5,23 @@
     { "op": "open" },
     { "op": "home" },
     { "op": "browser", "args": ["wait", "[data-testid^=\"session-list-item-\"]"] },
-    { "op": "browser", "args": ["eval", "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"] }
+    { "op": "browser", "args": ["eval", "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"] },
+    { "op": "browser", "args": ["scroll", "up", "100000", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop === 0"] }
   ],
   "steps": [
-    { "op": "browser", "args": ["hover", "[data-testid=\"session-list-content\"]"] },
-    { "op": "browser", "args": ["mouse", "wheel", "720"] },
-    { "op": "browser", "args": ["mouse", "wheel", "720"] },
-    { "op": "browser", "args": ["mouse", "wheel", "720"] },
-    { "op": "browser", "args": ["mouse", "wheel", "-720"] },
-    { "op": "browser", "args": ["mouse", "wheel", "-720"] },
-    { "op": "browser", "args": ["mouse", "wheel", "-720"] },
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop > 0"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-trigger\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"session-list-filter-panel\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-attention\"]"] },
-    { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-done\"]"] },
-    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-filter-panel\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"], [data-testid=\"session-list-query-empty-state\"], [data-testid=\"session-list-filtered-no-results\"]')"] },
-    { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-trigger\"]"] },
-    { "op": "browser", "args": ["wait", "[data-testid=\"session-list-filter-panel\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "!!document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"], [data-testid=\"session-list-query-empty-state\"], [data-testid=\"session-list-filtered-no-results\"]')"] },
     { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-attention\"]"] },
-    { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-done\"]"] },
-    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-filter-panel\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] }
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] }
   ]
 }

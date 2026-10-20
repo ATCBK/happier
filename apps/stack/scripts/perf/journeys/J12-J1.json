@@ -25,6 +25,30 @@
       "op": "open"
     },
     {
+      "op": "browser",
+      "when": "cold",
+      "args": [
+        "find",
+        "role",
+        "button",
+        "click",
+        "--name",
+        "Skip"
+      ]
+    },
+    {
+      "op": "browser",
+      "when": "cold",
+      "args": [
+        "find",
+        "role",
+        "button",
+        "click",
+        "--name",
+        "Get started"
+      ]
+    },
+    {
       "op": "restore",
       "when": "cold"
     },

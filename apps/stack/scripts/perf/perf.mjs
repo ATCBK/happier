@@ -52,8 +52,8 @@ async function compare(before, after) {
   const rows = compareRuns(await loadRuns(before), await loadRuns(after));
   const lines = ['| Journey/cache/UI | Metric | Before mean | After mean | Delta |', '| --- | --- | ---: | ---: | ---: |'];
   for (const row of rows) {
-    for (const [metric, values] of Object.entries(row.counts)) lines.push(`| ${row.journey}/${row.cache}/${row.uiMode} | ${metric} | ${values.before ?? 'unavailable'} | ${values.after ?? 'unavailable'} | ${values.delta ?? 'unavailable'} |`);
-    for (const percentile of ['p50Ms', 'p95Ms']) lines.push(`| ${row.journey}/${row.cache}/${row.uiMode} | ${percentile} (≥5 export repeats) | ${row.beforeTiming?.[percentile] ?? 'unavailable'} | ${row.afterTiming?.[percentile] ?? 'unavailable'} | ${row.beforeTiming && row.afterTiming ? row.afterTiming[percentile] - row.beforeTiming[percentile] : 'unavailable'} |`);
+    for (const [metric, values] of Object.entries(row.counts)) lines.push(`| ${row.journey}/${row.cache}/${row.uiMode}/${row.captureMode} | ${metric} | ${values.before ?? 'unavailable'} | ${values.after ?? 'unavailable'} | ${values.delta ?? 'unavailable'} |`);
+    for (const percentile of ['p50Ms', 'p95Ms']) lines.push(`| ${row.journey}/${row.cache}/${row.uiMode}/${row.captureMode} | ${percentile} (≥5 export repeats) | ${row.beforeTiming?.[percentile] ?? 'unavailable'} | ${row.afterTiming?.[percentile] ?? 'unavailable'} | ${row.beforeTiming && row.afterTiming ? row.afterTiming[percentile] - row.beforeTiming[percentile] : 'unavailable'} |`);
   }
   console.log(lines.join('\n'));
 }
@@ -66,6 +66,7 @@ async function journey(id) {
   if (typeof session !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(session)) throw new Error('--session=<lane> is required');
   if (!['cold', 'warm'].includes(options.cache)) throw new Error('--cache=cold|warm is required');
   if (!['export', 'dev'].includes(options['ui-mode'])) throw new Error('--ui-mode=export|dev is required');
+  if (!['timing', 'counts'].includes(options['capture-mode'])) throw new Error('--capture-mode=timing|counts is required');
   if (!options.cdp || !options.url || !options['home-selector']) throw new Error('--cdp, --url, --home-selector are required');
   if (options.stack && options.stack !== 'agent-qa-perf') throw new Error('PERF-E2E only uses agent-qa-perf');
   const output = resolve(options.out ?? join(repo, '.happier/qa/perf', session, `${id}-${options.cache}-${Date.now()}`));
@@ -74,7 +75,13 @@ async function journey(id) {
     await mkdir(dirname(output), { recursive: true });
     await mkdir(output, { mode: 0o700 });
   });
-  let phase = 'setup', capture, browserResult, hostBefore, hostAfter;
+  let phase = 'setup', capture, browserResult, hostBefore, hostAfter, lanesBefore, lanesAfter;
+  const laneLoad = async () => ({ atMs: Date.now(), basis: 'Declared lane report status, not proof of simultaneous capture; actual shared host load is in hostBefore/hostAfter',
+    lanes: await Promise.all(Array.from({ length: 8 }, async (_, index) => {
+      const lane = `B${index + 1}`;
+      try { return { lane, status: (await readFile(join(repo, '.project/plans/2026-10-20-performance-program/lanes', `${lane}.md`), 'utf8')).split('\n')[0] }; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; return { lane, status: 'report unavailable' }; }
+    })) });
   const marks = [];
   const browser = args => command('agent-browser', ['--session', session, '--cdp', options.cdp, ...args],
     { env: { ...process.env, AGENT_BROWSER_RESTORE_SAVE: 'never' } });
@@ -124,15 +131,19 @@ async function journey(id) {
     } else throw new Error(`Unknown journey operation ${step.op}`);
   };
   try {
-    capture = await startCapture({ cdp: options.cdp, pageId: options['page-id'], cache: options.cache, signal: abort.signal });
+    capture = await startCapture({ cdp: options.cdp, pageId: options['page-id'], cache: options.cache, captureMode: options['capture-mode'], signal: abort.signal });
     abort.signal.addEventListener('abort', () => capture.cdp.close(), { once: true });
     for (const step of definition.prepare ?? []) await runStep(step);
-    phase = 'host-before'; hostBefore = await host(Date.now()); requireIdentity(hostBefore);
+    phase = 'host-before'; [hostBefore, lanesBefore] = await Promise.all([host(Date.now()), laneLoad()]); requireIdentity(hostBefore);
     await capture.begin();
     for (const step of definition.steps) await runStep(step);
     phase = 'browser-finish'; browserResult = await capture.finish();
+    const expectedInstrumentation = options['capture-mode'] === 'counts';
+    if (browserResult.react.instrumentation?.storeTelemetry !== expectedInstrumentation || browserResult.react.instrumentation?.fiberHook !== expectedInstrumentation) {
+      throw new Error('RELOAD NEEDED: loaded UI did not establish the requested store/fiber capture mode');
+    }
     if (new URL(browserResult.observedUi.url).origin !== new URL(options.url).origin) throw new Error('Observed page left the requested QA UI origin');
-    phase = 'host-after'; hostAfter = await host(browserResult.startMs, browserResult.endMs); requireIdentity(hostAfter);
+    phase = 'host-after'; [hostAfter, lanesAfter] = await Promise.all([host(browserResult.startMs, browserResult.endMs), laneLoad()]); requireIdentity(hostAfter);
     if (JSON.stringify(hostBefore.identity) !== JSON.stringify(hostAfter.identity)) throw new Error('Runtime identity changed during capture');
     for (const role of ['server', 'daemon']) if (hostBefore[role].pid !== hostAfter[role].pid) throw new Error(`${role} process changed during capture`);
     const server = summarizeLogs(hostAfter.logs.records, browserResult);
@@ -149,12 +160,15 @@ async function journey(id) {
       daemonControlRequests: server.daemon.filter(event => event.module === 'daemon-control').length,
       browserRpcCalls: browserResult.sockets.filter(event => event.direction === 'sent' && event.event === 'rpc-call').length };
     const gaps = [];
-    if (!telemetryMeasured) gaps.push('UI telemetry absent or disabled; no store counters established');
-    if (!browserResult.react.renderers.length) gaps.push('React renderer did not inject the pre-document hook; render counts unavailable');
+    if (expectedInstrumentation && !telemetryMeasured) gaps.push('UI telemetry absent or disabled; no store counters established');
+    if (expectedInstrumentation && !browserResult.react.renderers.length) gaps.push('React renderer did not inject the pre-document hook; render counts unavailable');
+    if (storeTelemetry.events.some(event => /^sync\.store\.storage\.selector\.[^.]+\.\d+$/.test(event.name))) gaps.push('RELOAD NEEDED: obsolete per-function selector ids loaded');
     if (!server.records.some(record => record.module === 'web-latency')) gaps.push('No server trace records; zero DB/request counts are not established');
     if (!server.daemon.length) gaps.push('No daemon operation records; zero RPC/poll counts are not established');
     if (!browserResult.attribution.mappedFrames) gaps.push('Source maps absent/unreadable; CPU attribution is generated script/symbol only');
-    const bundle = { version: 1, journey: id, intent: definition.intent, cache: options.cache, uiMode: options['ui-mode'],
+    const bundle = { version: 2, journey: id, intent: definition.intent, cache: options.cache, uiMode: options['ui-mode'],
+      captureMode: options['capture-mode'], instrumentation: browserResult.react.instrumentation,
+      concurrentLaneLoad: { before: lanesBefore, after: lanesAfter },
       status: gaps.length ? 'INCOMPLETE' : 'CAPTURED', gaps, url: safeUrl(options.url), session,
       pageId: capture.cdp.pageId, startMs: browserResult.startMs, endMs: browserResult.endMs, durationMs: browserResult.durationMs,
       observedUi: browserResult.observedUi,
@@ -168,7 +182,7 @@ async function journey(id) {
         }])) },
       marks, attribution: browserResult.attribution, hostBefore, hostAfter,
       correlation: 'CDP wall/monotonic offset; server SQL→HTTP by trace requestId; UI→server by returned request id when present, otherwise time window only',
-      timingPolicy: 'Individual durations are raw observations. Compare reports p50/p95 only for ≥5 export runs per cold/warm group.' };
+      timingPolicy: 'Individual durations include browser automation overhead. Compare reports p50/p95 only for ≥5 complete export timing-mode runs per cold/warm group with store telemetry and fiber hook observed OFF; count-mode durations are never timing evidence. Shared lane contention is not a quiet-host baseline.' };
     await writeJson(join(output, 'cpu.cpuprofile'), browserResult.profile);
     await writeJson(join(output, 'cpu-summary.json'), browserResult.cpu);
     await writeJson(join(output, 'network.json'), browserResult.network);
@@ -189,7 +203,7 @@ async function journey(id) {
       await writeJson(join(output, 'react.json'), browserResult.react);
       await writeJson(join(output, 'sockets.json'), browserResult.sockets);
     }
-    await writeJson(join(output, 'failure.json'), { phase, error: error.message, marks, hostBefore, hostAfter });
+    await writeJson(join(output, 'failure.json'), { phase, error: error.message, captureMode: options['capture-mode'], concurrentLaneLoad: { before: lanesBefore, after: lanesAfter }, marks, hostBefore, hostAfter });
     throw error;
   } finally { await capture?.close(); }
 }
@@ -198,7 +212,7 @@ export async function runPerformanceCli(argv = process.argv.slice(2)) {
   const [mode, id, after] = argv;
   if (mode === 'compare' && id && after) await compare(id, after);
   else if (mode === 'journey' && id) await journey(id).catch(error => { console.error(error.message); process.exitCode = 1; });
-  else console.log('node apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs journey J1|J13 --session=P0-H --cdp=http://127.0.0.1:PORT --url=QA_URL --home-selector=CSS --cache=cold|warm --ui-mode=export|dev [--restore-stdin] [--out=NEW_DIRECTORY] [--journey=JSON_PATH] [--page-id=ID]\nnode apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs compare BEFORE_DIRECTORY AFTER_DIRECTORY');
+  else console.log('node apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs journey J1|J13 --session=P0-H --cdp=http://127.0.0.1:PORT --url=QA_URL --home-selector=CSS --cache=cold|warm --ui-mode=export|dev --capture-mode=timing|counts [--restore-stdin] [--out=NEW_DIRECTORY] [--journey=JSON_PATH] [--page-id=ID]\nnode apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs compare BEFORE_DIRECTORY AFTER_DIRECTORY');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await runPerformanceCli();

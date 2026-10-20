@@ -2,7 +2,7 @@
   "id": "J8",
   "intent": "Machines list to an online Machine's Overview, Processes and Storage, then return to Overview; count live resource demand, retained-tab work, key preparation and RPC phases without changing resource policy.",
   "prerequisites": [
-    "Authenticated agent-qa-perf browser; the first Machine in list view must be the recorded online, control-ready QA Machine.",
+    "Authenticated agent-qa-perf browser; the pinned Machine 620a8bc8-99ec-461a-87f7-2b980ac7a68c must remain the online, control-ready agent-qa-perf daemon. Its identity was read from the perf stack's machineIdByServerId setting.",
     "Use a desktop viewport and clear any remembered Machine search through the UI before capture. Record the selected Machine and existing summary metric settings."
   ],
   "prepare": [{ "op": "open" }, { "op": "home" }],
@@ -10,8 +10,8 @@
     { "op": "open", "path": "/machines" },
     { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.header\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"machines.index.view:list\"]"] },
-    { "op": "browser", "args": ["wait", "[data-testid^=\"machines.index.row.\"][role=\"button\"]"] },
-    { "op": "browser", "args": ["find", "first", "[data-testid^=\"machines.index.row.\"][role=\"button\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tabs\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"machine-page-tab:overview\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tab-body.overview\"]"] },

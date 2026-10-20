@@ -16,7 +16,7 @@ close` session too; warm repetitions may deliberately reuse it within the round.
 node apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs journey J13 \
   --session=P0-H --cdp=http://127.0.0.1:PORT --url=RETURNED_BROWSER_URL \
   --home-selector='[data-testid="session-list-view-options-trigger"]' \
-  --cache=warm --ui-mode=export --out=.happier/qa/perf/P0-H/J13-warm-1
+  --cache=warm --ui-mode=export --capture-mode=counts --out=.happier/qa/perf/P0-H/J13-warm-1
 ```
 
 Use the current loaded Home's stable test ID if its composition differs from
@@ -35,6 +35,18 @@ restore. Recreate only the owned QA browser between cold repetitions.
 minutes without interaction. Cold means the browser HTTP cache is disabled and
 cleared; it does not imply an empty server cache or database. Warm leaves the
 browser cache enabled. Neither mode changes freshness, approvals or revocation.
+
+Every journey explicitly selects `--capture-mode=timing|counts`. Timing sets a
+pre-document diagnostic override at the canonical telemetry owner and leaves the
+React fiber hook OFF. Counts turns store telemetry and the fiber hook ON. Both
+record CPU/network/long-task observations; count-run durations are never timing
+evidence. The bundle records requested mode and observed enablement. An older UI
+that cannot attest enablement fails with `RELOAD NEEDED`; only the orchestrator
+refreshes the export. Use fresh cold browsers for five timing J1 repetitions,
+then a separate count run for component/store attribution. Each bundle includes
+B1–B8 declared report-status snapshots and actual host load before/after; report
+status is not proof that another lane was actively capturing. Concurrent runs
+are not a quiet-host baseline, even when percentiles can be computed.
 
 Production captures require the stack to report `sourceUi=export` and both
 server/daemon identities to have nonempty matching selected/loaded values and
@@ -55,9 +67,11 @@ identity rule, avoiding stale `PerformedWork` flags on unchanged children.
 Store telemetry stays in `syncPerformanceTelemetry`; the canonical Zustand
 storage hook reports actual notifications and per-selector evaluations/output
 identity changes without changing subscription equality or storing values.
-Selector ids identify function instances within a run. Inline anonymous
-selectors can receive different ids after reload; use component names and CPU
-source attribution when comparing them across runs.
+Selector events aggregate by function name, never by per-render function ids.
+Anonymous inline selectors share an explicit anonymous bucket. Minified names
+can change between exports and name collisions coalesce; use CPU source maps
+and component evidence for callsite-level conclusions. Output identity-change
+fields remain per-closure observations, not a count of component renders.
 
 No headers, bodies, SQL parameters, auth state or socket argument values are
 saved. The protocol owns capability-path redaction. A salted per-run digest
@@ -94,7 +108,8 @@ control clicks and test IDs; keep mutation authority with the lane's brief.
 node apps/ui/scripts/perf/agentBrowserUiPerfAudit.mjs compare BEFORE_DIRECTORY AFTER_DIRECTORY
 ```
 
-Comparison keeps journey, cold/warm and export/dev groups separate. Counts are
+Comparison keeps journey, cold/warm, export/dev and capture-mode groups separate. Counts are
 per-run means. Timing p50/p95 use nearest rank and require at least five complete
-export runs on each side; otherwise they are unavailable. Inspect captured host
+export timing-mode runs with both instruments observed OFF on each side;
+otherwise they are unavailable. Legacy unspecified-mode bundles never qualify. Inspect captured host
 load and gaps before treating any comparison as a performance result.

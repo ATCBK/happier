@@ -10,6 +10,7 @@ function stackFrames(stack) {
 }
 
 export async function startCapture(options) {
+  if (!['timing', 'counts'].includes(options.captureMode)) throw new Error('Explicit captureMode=timing|counts required');
   const cdp = await connectPage(options.cdp, options.pageId, options.signal);
   const salt = randomBytes(32).toString('hex');
   const requests = [], sockets = [], telemetry = [], scripts = new Map();
@@ -81,7 +82,7 @@ export async function startCapture(options) {
     const { metrics } = await cdp.send('Performance.getMetrics');
     const timestamp = metrics.find(metric => metric.name === 'Timestamp')?.value;
     if (typeof timestamp === 'number') offsetMs = await evaluate('Date.now()') - timestamp * 1000;
-    const probe = await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
+    const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
     const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe });
     // Install on an already loaded J13 page too, then reload through the journey
     // preparation so React sees the hook before its renderer initializes.
@@ -141,6 +142,7 @@ export async function startCapture(options) {
           await cdp.send('Network.setCacheDisabled', { cacheDisabled: false });
           await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
           await evaluate('globalThis.__happierPerfProbe?.stop()');
+          await evaluate('delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__');
         } finally { cdp.close(); }
       },
     };

@@ -12,6 +12,7 @@ test('the existing audit CLI reads journey bundles and prints the measured compa
     await mkdir(directory, { recursive: true });
     await writeFile(fixture.path(side, String(index), 'bundle.json'), JSON.stringify({
       journey: 'J1', cache: 'cold', uiMode: 'export', status: 'CAPTURED', durationMs: side === 'before' ? 10 : 5,
+      captureMode: 'timing', instrumentation: { storeTelemetry: false, fiberHook: false },
       counts: { requests: side === 'before' ? 5 : 1 },
     }));
   }
