@@ -24,15 +24,24 @@ export function formatHappierAsOfTime(at: number, now: number = Date.now(), loca
  * why" when the content's read time is known, the reason alone otherwise — busy or not. Each realm
  * keeps its own render binding and says "As of {time}" in its own i18n (`formatAsOf`).
  */
-export function resolveHappierFreshnessText(input: Readonly<{
+type HappierFreshnessTextInput = Readonly<{
   asOf?: number | null;
   reason: string;
   formatAsOf: (time: string) => string;
   now?: number;
   /** The locale the host shows its other times in; the runtime's own when absent. */
   locale?: string;
-}>): string {
-  if (typeof input.asOf !== 'number') return input.reason;
-  const asOf = input.formatAsOf(formatHappierAsOfTime(input.asOf, input.now, input.locale));
-  return input.reason ? `${asOf} · ${input.reason}` : asOf;
+}>;
+
+export type HappierFreshnessTextParts = Readonly<{ text: string; asOf: string | null; reason: string }>;
+
+/** Separate clauses for wrapping layouts; existing callers retain the joined string API. */
+export function resolveHappierFreshnessText(input: HappierFreshnessTextInput & { parts: true }): HappierFreshnessTextParts;
+export function resolveHappierFreshnessText(input: HappierFreshnessTextInput & { parts?: false }): string;
+export function resolveHappierFreshnessText(input: HappierFreshnessTextInput & { parts?: boolean }): string | HappierFreshnessTextParts {
+  const asOf = typeof input.asOf === 'number'
+    ? input.formatAsOf(formatHappierAsOfTime(input.asOf, input.now, input.locale))
+    : null;
+  const text = asOf ? (input.reason ? `${asOf} · ${input.reason}` : asOf) : input.reason;
+  return input.parts ? { text, asOf, reason: input.reason } : text;
 }

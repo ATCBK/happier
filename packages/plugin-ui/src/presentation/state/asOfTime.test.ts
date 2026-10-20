@@ -24,4 +24,12 @@ describe('resolveHappierFreshnessText: one text policy for host and plugin fresh
       .toMatch(/^As of 10:42.* · Reconnecting…$/u);
     expect(resolveHappierFreshnessText({ asOf: null, reason: 'Reconnecting…', formatAsOf })).toBe('Reconnecting…');
   });
+
+  it('offers separable clauses without changing the existing joined string API', () => {
+    const input = { asOf, now, reason: 'devbox isn’t answering', formatAsOf, locale: 'en-GB' };
+    const parts = resolveHappierFreshnessText({ ...input, parts: true });
+    expect(parts).toEqual({ asOf: 'As of 10:42', reason: input.reason, text: resolveHappierFreshnessText(input) });
+    expect(resolveHappierFreshnessText({ ...input, asOf: null, parts: true }))
+      .toEqual({ asOf: null, reason: input.reason, text: input.reason });
+  });
 });
