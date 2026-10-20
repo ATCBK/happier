@@ -14,7 +14,8 @@ import { verifyExternalActionMachineRpcExecution } from '../../../../server/sour
 import { parseSessionListQueryActionResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionMetadataOwnerPatchV1Schema,
+  SessionMetadataTuplePatchSuccessV1Schema, type SessionMetadataOwnerPatchV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { auth } from '../../../../server/sources/app/auth/auth';
 import { createAuthenticatedTestApp } from '../../../../server/sources/app/api/testkit/sqliteFastify';
@@ -147,6 +148,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   let inactive = false;
   const activeSessions = new Set<string>();
   const archivedSessions = new Set<string>();
+  const ownerTuples = new Map<string, SessionMetadataOwnerPatchV1>();
   let nestedReportId: string | undefined;
   const lifecycleEffects: string[] = [];
   const row = (id: string) => {
@@ -154,6 +156,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
       ...(id === sessionId && callerWorkspaceMissing ? {} : { path: '/workspace' }), flavor: 'codex' };
     const owner = createSessionOwnerMetadataV1({ metadata });
     if (!owner.ok) throw new Error('Invalid caller metadata fixture');
+    const tuple = ownerTuples.get(id);
     return { ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const, share: null,
       active: !inactive || activeSessions.has(id),
       archivedAt: archivedSessions.has(id) ? 123 : null,
@@ -162,6 +165,9 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
         metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata })),
         ownerMetadata: { t: 'plain' as const, v: owner.ownerMetadata },
       }),
+      ...(tuple ? { metadata: tuple.sharedMetadata.ciphertext, ownerMetadata: tuple.ownerMetadata,
+        metadataVersion: tuple.sharedMetadata.expectedVersion + 1, agentState: tuple.agentState.ciphertext,
+        agentStateVersion: tuple.agentState.expectedVersion + 1 } : {}),
       ...(id === childId ? { manager: { sessionId } }
         : id === nestedReportId ? { manager: { sessionId: childId } } : {}) };
   };
@@ -200,6 +206,17 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   app.get('/v2/sessions/:sessionId', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.status.get', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async request => ({ session: row((request.params as { sessionId: string }).sessionId) }));
+  // Persist the native Stop owner's tuple at the HTTP/DB boundary; signing,
+  // metadata projection and Stop-intent admission remain production logic.
+  app.patch('/v2/sessions/:sessionId', { preHandler: app.authenticate,
+    config: { restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
+  }, async request => {
+    const patch = SessionMetadataOwnerPatchV1Schema.parse(request.body);
+    ownerTuples.set((request.params as { sessionId: string }).sessionId, patch);
+    return SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+      sharedMetadata: { version: patch.sharedMetadata.expectedVersion + 1 },
+      agentState: { version: patch.agentState.expectedVersion + 1 } });
+  });
   app.get('/v1/sessions/:sessionId/messages', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.messages.recent.get', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async () => ({ messages: [{ id: 'message-child', seq: 1, localId: null, sidechainId: null, createdAt: 1, updatedAt: 1,
