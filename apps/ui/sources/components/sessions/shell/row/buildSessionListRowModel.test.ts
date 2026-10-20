@@ -316,6 +316,8 @@ describe('buildSessionListRowModel', () => {
             hasPendingPermissionRequests: true,
             hasPendingUserActionRequests: true,
             pendingRequestObservedAt: NOW_MS - 10,
+            // Read: an unread completed turn would rightly present as Ready for review instead.
+            lastViewedSessionSeq: 10,
         });
         const item = createSessionItem(rowSession);
         const build = (renderable: SessionListRenderableSession) => buildSessionListRowModel({
@@ -587,7 +589,7 @@ describe('buildSessionListRowModel', () => {
         expect(model.presentation.statusTextKey).toBeUndefined();
     });
 
-    it('presents background activity with the normal working indicator and precise neutral secondary copy', () => {
+    it('keeps pending attention over background activity with precise neutral secondary copy', () => {
         const model = buildSessionListRowModel({
             item: createSessionItem(createRenderable('s1', {
                 active: true,
@@ -618,7 +620,7 @@ describe('buildSessionListRowModel', () => {
         expect(model.attention.rowState).toBe('pending');
         expect(model.hasUnreadMessages).toBe(true);
         expect(model.pendingCount).toBe(2);
-        expect(model.presentation.attentionIndicator).toBe('working');
+        expect(model.presentation.attentionIndicator).toBe('pending');
         expect(model.presentation.secondaryLine).toBe('status');
         expect(model.presentation.backgroundActivityStatusLine).toBe(true);
         expect(model.presentation.statusTextKey).toBeUndefined();

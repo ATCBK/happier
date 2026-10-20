@@ -2556,6 +2556,7 @@ export const es: TranslationStructure = {
                 profileMissing: 'La cuenta conectada seleccionada ya no está disponible. Actualiza la lista de cuentas y elige otra.',
                 groupMissing: 'El Pool de cuentas seleccionado ya no está disponible. Actualiza la lista de cuentas y elige otro Pool.',
                 metadataUpdateFailed: 'La sesión no pudo guardar la nueva selección de autenticación. Inténtalo de nuevo cuando termine de sincronizarse.',
+                restartDisallowedByExecutionPolicy: 'Este cambio de autenticación requiere un reinicio que no está permitido mientras la sesión está en ejecución. Detén la sesión antes de cambiar su autenticación.',
                 restartFailed: 'La sesión no pudo reiniciarse con la nueva selección de autenticación. Detén la sesión e inténtalo de nuevo.',
                 hotApplyFailed: 'La sesión en ejecución rechazó la nueva selección de autenticación. Reinicia la sesión e inténtalo de nuevo.',
                 agentMismatch: 'Esta selección de autenticación no coincide con el backend de la sesión.',
@@ -9345,6 +9346,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
         progressAccessibilityLabel: "Progreso de la descarga",
+        verifyingDetail: "Verificando",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificado ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
+        verifyingAccessibilityLabel: "Progreso de la verificación",
         failedDetail: "Falló",
         failedSubtitle: "No se pudo preparar el modelo. Toca para volver a intentarlo.",
         failedResumableSubtitle: ({ size }: { size: string }) => `La descarga no terminó. Se conservan ${size}; toca para reanudarla.`,

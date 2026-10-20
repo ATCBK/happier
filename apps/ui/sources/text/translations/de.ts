@@ -2340,6 +2340,7 @@ export const de: TranslationStructure = {
                 profileMissing: 'Das gewählte verbundene Konto ist nicht mehr verfügbar. Aktualisiere die Kontoliste und wähl ein anderes Konto.',
                 groupMissing: 'Der gewählte Konto-Pool ist nicht mehr verfügbar. Aktualisiere die Kontoliste und wähl einen anderen Pool.',
                 metadataUpdateFailed: 'Die Session konnte die neue Auth-Auswahl nicht speichern. Versuch es noch einmal, sobald die Session fertig synchronisiert ist.',
+                restartDisallowedByExecutionPolicy: 'Diese Änderung der Authentifizierung erfordert einen Neustart, der bei laufender Session nicht erlaubt ist. Stopp die Session, bevor du ihre Authentifizierung änderst.',
                 restartFailed: 'Die Session konnte mit der neuen Auth-Auswahl nicht neu gestartet werden. Stopp die Session und versuch es noch einmal.',
                 hotApplyFailed: 'Die laufende Session hat die neue Auth-Auswahl abgelehnt. Starte die Session neu und versuch es noch einmal.',
                 agentMismatch: 'Diese Auth-Auswahl passt nicht zum Backend der Session.',
@@ -8862,6 +8863,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} von ${total} · ${filesDone} von ${filesTotal} ${filesTotal === 1 ? 'Datei' : 'Dateien'}`,
                 progressAccessibilityLabel: "Download-Fortschritt",
+                verifyingDetail: "Wird geprüft",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${verified} von ${total} geprüft · ${filesDone} von ${filesTotal} ${filesTotal === 1 ? 'Datei' : 'Dateien'}`,
+                verifyingAccessibilityLabel: "Prüffortschritt",
                 failedDetail: "Fehlgeschlagen",
                 failedSubtitle: "Das Modell konnte nicht vorbereitet werden. Tippe, um es erneut zu versuchen.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `Der Download wurde nicht abgeschlossen. ${size} bleiben erhalten – tippe zum Fortsetzen.`,

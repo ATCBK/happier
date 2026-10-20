@@ -2508,6 +2508,7 @@ export const ru: TranslationStructure = {
                 profileMissing: 'Выбранный подключенный аккаунт больше недоступен. Обновите список аккаунтов и выберите другой.',
                 groupMissing: 'Выбранный пул аккаунтов больше недоступен. Обновите список аккаунтов и выберите другой пул.',
                 metadataUpdateFailed: 'Сессии не удалось сохранить новый выбор аутентификации. Попробуйте снова после завершения синхронизации сессии.',
+                restartDisallowedByExecutionPolicy: 'Это изменение аутентификации требует перезапуска, который запрещён во время работы сессии. Остановите сессию перед изменением её аутентификации.',
                 restartFailed: 'Не удалось перезапустить сессию с новым выбором аутентификации. Остановите сессию и попробуйте снова.',
                 hotApplyFailed: 'Запущенная сессия отклонила новый выбор аутентификации. Перезапустите сессию и попробуйте снова.',
                 agentMismatch: 'Этот выбор аутентификации не соответствует бэкенду сессии.',
@@ -9317,6 +9318,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
         progressAccessibilityLabel: "Ход загрузки",
+        verifyingDetail: "Проверка",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Проверено ${verified} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        verifyingAccessibilityLabel: "Ход проверки",
         failedDetail: "Ошибка",
         failedSubtitle: "Не удалось подготовить модель. Нажмите, чтобы повторить.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Загрузка не завершилась. ${size} сохранено — нажмите, чтобы продолжить.`,

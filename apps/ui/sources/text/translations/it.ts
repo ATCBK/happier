@@ -2899,6 +2899,7 @@ export const it: TranslationStructure = {
                 profileMissing: 'L’account connesso selezionato non è più disponibile. Aggiorna l’elenco degli account e scegline un altro.',
                 groupMissing: 'Il Pool di account selezionato non è più disponibile. Aggiorna l’elenco degli account e scegli un altro Pool.',
                 metadataUpdateFailed: 'La sessione non ha potuto salvare la nuova selezione di autenticazione. Riprova dopo il completamento della sincronizzazione.',
+                restartDisallowedByExecutionPolicy: 'Questa modifica dell’autenticazione richiede un riavvio non consentito mentre la sessione è in esecuzione. Arresta la sessione prima di modificarne l’autenticazione.',
                 restartFailed: 'Non è stato possibile riavviare la sessione con la nuova selezione di autenticazione. Arresta la sessione e riprova.',
                 hotApplyFailed: 'La sessione in esecuzione ha rifiutato la nuova selezione di autenticazione. Riavvia la sessione e riprova.',
                 agentMismatch: 'Questa selezione di autenticazione non corrisponde al backend della sessione.',
@@ -9666,6 +9667,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} di ${total} · ${filesDone} di ${filesTotal} file`,
         progressAccessibilityLabel: "Avanzamento del download",
+        verifyingDetail: "Verifica in corso",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificati ${verified} di ${total} · ${filesDone} di ${filesTotal} file`,
+        verifyingAccessibilityLabel: "Avanzamento della verifica",
         failedDetail: "Non riuscito",
         failedSubtitle: "Impossibile preparare il modello. Tocca per riprovare.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Il download non è stato completato. ${size} sono stati conservati: tocca per riprendere.`,

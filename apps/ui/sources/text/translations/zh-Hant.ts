@@ -1216,6 +1216,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 profileMissing: '選取的已連線帳號已無法使用。請重新整理帳號清單並選擇其他帳號。',
                 groupMissing: '選取的帳號池已無法使用。請重新整理帳號清單並選擇其他池。',
                 metadataUpdateFailed: '工作階段無法儲存新的驗證選擇。請在同步完成後再試一次。',
+                restartDisallowedByExecutionPolicy: '此驗證變更需要重新啟動，但工作階段執行期間不允許重新啟動。請先停止工作階段，再變更其驗證。',
                 restartFailed: '無法使用新的驗證選擇重新啟動工作階段。請停止工作階段後再試一次。',
                 hotApplyFailed: '執行中的工作階段拒絕了新的驗證選擇。請重新啟動工作階段後再試一次。',
                 agentMismatch: '此驗證選擇與工作階段後端不相符。',
@@ -7653,6 +7654,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} / ${total} · ${filesDone} / ${filesTotal} 個檔案`,
                 progressAccessibilityLabel: "下載進度",
+                verifyingDetail: "正在驗證",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `已驗證 ${verified} / ${total} · ${filesDone} / ${filesTotal} 個檔案`,
+                verifyingAccessibilityLabel: "驗證進度",
                 failedDetail: "失敗",
                 failedSubtitle: "無法準備模型。輕點以重試。",
                 failedResumableSubtitle: ({ size }: { size: string }) => `下載未完成。已保留 ${size}，輕點即可繼續。`,
