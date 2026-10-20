@@ -15,6 +15,8 @@ const ALLOWED_DIRECT_ACCOUNT_WRITE_FILES = new Set([
 ]);
 
 const ALLOWED_DIRECT_LOCAL_WRITE_FILES = new Set([
+    // Device geometry is local drag intent, deliberately outside the Settings Action catalog.
+    'components/ui/lists/collection/useCollectionRailWidth.ts',
     'hooks/server/useHomeViewSelectionSettings.ts',
     'sync/ops/actions/connectedServiceActionDeps.ts',
     'sync/ops/actions/defaultActionExecutor.ts',

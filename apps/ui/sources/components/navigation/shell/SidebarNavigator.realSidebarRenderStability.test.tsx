@@ -223,7 +223,7 @@ const initialStorageState = storage.getState();
 
 beforeEach(() => {
     storage.setState({ ...initialStorageState, localSettings: { ...initialStorageState.localSettings,
-        sidebarCollapsed: false, sidebarWidthPx: 320, sidebarWidthBasisPx: 1200 } }, true);
+        sidebarCollapsed: false, sidebarWidthPx: 320 } }, true);
 });
 afterEach(async () => {
     hoistedState.isDesktopHost = false;

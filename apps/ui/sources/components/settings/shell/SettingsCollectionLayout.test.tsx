@@ -85,20 +85,23 @@ describe('SettingsCollectionLayout', () => {
     it('restores each navigator width and keeps the preference when a narrow pane temporarily clamps it', async () => {
         getStorage().getState().applyLocalSettings({ collectionRailWidthsV1: { machines: 380, teams: 310 } });
         const screen = await renderCollection();
-        const railWidth = () => [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
-            .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {}).width;
+        let measuredWidth = 1200;
+        const railWidth = () => measuredWidth * [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
+            .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {}).flex;
         await layoutAt(screen, 1200);
-        expect(railWidth()).toBe(380);
+        expect(railWidth()).toBeCloseTo(380);
+        measuredWidth = 780;
         await layoutAt(screen, 780);
-        expect(railWidth()).toBe(300);
+        expect(railWidth()).toBeCloseTo(300);
         expect(getStorage().getState().localSettings.collectionRailWidthsV1.machines).toBe(380);
+        measuredWidth = 1200;
         await layoutAt(screen, 1200);
-        expect(railWidth()).toBe(380);
+        expect(railWidth()).toBeCloseTo(380);
         await act(async () => screen.tree.update(<SettingsCollectionLayout navigator="teams" rootPathname="/settings/teams"
             resolveChildRoute={() => 'index'} rail={<View />} railWidth="standard" detailMinWidthPx={480}
             testID="settings-machines" />));
         await layoutAt(screen, 1200);
-        expect(railWidth()).toBe(310);
+        expect(railWidth()).toBeCloseTo(310);
     });
 
     /** The options the collection gives the one phone header above both panes. */
@@ -194,7 +197,7 @@ describe('SettingsCollectionLayout', () => {
             await layoutAt(screen, 1200);
             const railStyle = [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
                 .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {});
-            expect(railStyle.width).toBe(HAPPIER_COLLECTION_RAIL_WIDTH_PX[role]);
+            expect(1200 * railStyle.flex).toBeCloseTo(HAPPIER_COLLECTION_RAIL_WIDTH_PX[role]);
             const needed = COLLECTION_RAIL_MIN_WIDTH_PX + 480;
             await layoutAt(screen, needed - 1);
             expect(hostByTestID(screen, 'machines-rail'), `${role} one pixel short`).toBeNull();
