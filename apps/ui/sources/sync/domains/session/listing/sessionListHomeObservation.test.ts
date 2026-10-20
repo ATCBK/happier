@@ -163,7 +163,7 @@ describe('isSessionListQueryHomeCoverageComplete', () => {
 
 describe('isSessionListHomeOpening', () => {
     const row = createSessionListRenderableSessionFixture({ id: 'listed' });
-    const state = (phase: SessionListQueryHomeState['phase'] | null, listed: boolean) => ({
+    const state = (phase: SessionListQueryHomeState['phase'] | null, listed: boolean): Parameters<typeof isSessionListHomeOpening>[0] => ({
         sessionListRowsByServerId: listed ? { home: { [row.id]: row } } : {},
         concurrentSessionListCacheByServerId: phase ? { home: { listObservation: { phase, lastSuccessAt: null } } } : {},
     });

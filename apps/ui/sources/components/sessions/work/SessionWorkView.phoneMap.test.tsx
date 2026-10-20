@@ -40,6 +40,7 @@ const { resolveServerScopedMachine } = await import('@/sync/domains/machines/res
 // Keep the Work producer, launcher, selectors, pane and header publication real.
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
 const { storage } = await import('@/sync/domains/state/storage');
+const syncRuntime = await import('@/sync/sync');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
@@ -296,6 +297,7 @@ describe('Work pane after a child was archived', () => {
         if (!draftScope) throw new Error('Expected the restored Account draft scope');
         await ensureSessionDraftRepositoryHydrated(draftScope);
         const lead = createSessionFixture({ id: 'lead', serverId });
+        const hydrateRows = vi.spyOn(syncRuntime.sync, 'hydrateSessionListRows').mockResolvedValue(undefined);
         // The empty invitation is only said once the Session's transcript has loaded.
         storage.setState({ sessions: { lead }, sessionListRowsByServerId: {}, sessionMessages: { lead: createSessionMessagesFixture({ isLoaded: true }) } });
         const screen = await renderScreen(<WorkHost serverId={serverId} />, {
@@ -311,10 +313,15 @@ describe('Work pane after a child was archived', () => {
             await waitForHomeGovernance(() => expect(screen.findHostByTestId('session-work-state-archived')).not.toBeNull());
             expect(screen.findHostByTestId('session-work-empty')).toBeNull();
             expect(screen.findHostByTestId('session-work-unarchive:old-child')).not.toBeNull();
+            // The archived row names itself from its own content: the pane demands it like the sidebar does.
+            expect(hydrateRows).toHaveBeenCalledWith([{ serverId, sessionId: 'old-child' }]);
+            // Nothing live to switch between, so no List | Map (the desktop header follows the same rule).
+            expect(screen.findHostByTestId('session-work-view:list')).toBeNull();
             // The header line counts it, where it used to say nothing was started.
             expect(screen.getTextContent()).toContain('sessionWork.subtitle.archived');
             expect(screen.getTextContent()).not.toContain('sessionWork.subtitle.nothingStarted');
         } finally {
+            hydrateRows.mockRestore();
             await screen.unmount();
             storage.setState(initial, true);
             resetSessionDraftRepositoryForTests();

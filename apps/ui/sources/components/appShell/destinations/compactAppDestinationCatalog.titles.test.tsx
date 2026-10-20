@@ -31,6 +31,7 @@ import {
     useDestinationInstanceTitles,
 } from './compactAppDestinationCatalog';
 
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 // Keep real translations throughout this graph: late panel mocks split the title

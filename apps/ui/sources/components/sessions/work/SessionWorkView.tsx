@@ -56,6 +56,8 @@ import { useSessionWorkMenuActions } from './sessionWorkMenuActions';
 import { useSessionLineage } from './sessionLineage';
 import { createSessionWorkMapDetailsTab } from './SessionWorkMapDetailsView';
 import { WorkItemRow, WorkViewportContext, useWorkScrollViewport } from './WorkItemRow';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { useSessionArchivedReports } from './useSessionArchivedReports';
 import { WorkRowUnarchive } from './WorkRowUnarchive';
 import { readSessionWorkflowStepRunId, SessionStepWork } from './SessionStepWork';
@@ -266,8 +268,30 @@ export const SessionWorkView = React.memo((props: Readonly<{
         if (tab) openLauncherStartDraft(tab);
     }, [openLauncherConversation, openLauncherRun, openLauncherStartDraft, pane.scopeState?.details]);
     const hasReports = (projection?.summary.sessions ?? 0) > 0;
+    // A workflow step's checks are the workflow's (lab `session-F`): no List | Map, ⤢ or "+".
+    const stepRunId = readSessionWorkflowStepRunId(session);
+    // What this Session led and archived is read here, where it is shown; a closed strip never asks.
+    useSessionArchivedReports({ sessionId: props.sessionId, serverId: sessionServerId, enabled: stepRunId === null });
+    const archivedCount = projection?.archivedSessions.length ?? 0;
+    // A Session shown here names itself from its own content, like in the sidebar: the pane demands it, so an
+    // archived row reads its real title, Agent mark and facts instead of waiting for another surface.
+    const shownSessionAddresses = React.useMemo(() => {
+        if (!sessionServerId || !projection) return NO_SESSION_ADDRESSES;
+        return [...projection.sessions, ...projection.archivedSessions].flatMap((item) => (
+            item.open.kind === 'session' ? [{ serverId: sessionServerId, sessionId: item.open.sessionId }] : []
+        ));
+    }, [projection, sessionServerId]);
+    useSessionContentDemand(shownSessionAddresses, { tag: 'sessionWork.hydrateShownSessions', hydrate: 'unsettled', active: stepRunId === null });
+    const summary = projection?.summary ?? null;
+    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary, archivedCount) : EMPTY_LINE), [archivedCount, summary]);
+    const { nothingYet, holdWorkingPlace, managedUnavailable } = resolveWorkReadPresentation({
+        projection, managedRuns: sources?.managedRuns ?? null, transcriptLoaded: useSessionTranscriptLoaded(props.sessionId),
+    });
+    // The invitation is for a Session that never started anything: an archived child is something it did.
+    const nothingStarted = nothingYet && archivedCount === 0;
     // List | Map: in the pane header beside the lead; full width at the top of a phone's pushed page,
-    // whose nav bar holds only "+" and ⋯ (lab `convo-P1`).
+    // whose nav bar holds only "+" and ⋯ (lab `convo-P1`). One rule for both widths: the switch exists only
+    // while there is live work to list or map; an invitation or archived-only Session has nothing to switch.
     const phone = deviceType === 'phone';
     const viewTabs = (
         <SegmentedTabBar
@@ -284,13 +308,11 @@ export const SessionWorkView = React.memo((props: Readonly<{
             onSelectTab={setView}
         />
     );
-    // A workflow step's checks are the workflow's (lab `session-F`): no List | Map, ⤢ or "+".
-    const stepRunId = readSessionWorkflowStepRunId(session);
     const headerAction = React.useMemo(() => stepRunId ? null : (
         <View style={styles.headerActions}>
-            {phone ? null : viewTabs}
+            {phone || nothingYet ? null : viewTabs}
             {/* ⤢ (lab `convo-W7`): the map at full size beside the transcript, where there is room. */}
-            {canExpandMap ? (
+            {canExpandMap && !nothingYet ? (
                 <IconButton
                     testID="session-work-expand-map"
                     iconName="arrows-out"
@@ -307,20 +329,10 @@ export const SessionWorkView = React.memo((props: Readonly<{
                 unavailableText={resolveUnavailableText(launcher, machineName)}
             />
         </View>
-    ), [canExpandMap, goalControlEntry, launcher, machineName, openMapInDetails, openTriggers, phone, stepRunId, styles.headerActions, view]);
+    ), [canExpandMap, goalControlEntry, launcher, machineName, nothingYet, openMapInDetails, openTriggers, phone, stepRunId, styles.headerActions, view]);
     const menuActions = useSessionWorkMenuActions({
         sessionId: props.sessionId, serverId: sessionServerId, hasReports,
     });
-    const summary = projection?.summary ?? null;
-    // What this Session led and archived is read here, where it is shown; a closed strip never asks.
-    useSessionArchivedReports({ sessionId: props.sessionId, serverId: sessionServerId, enabled: stepRunId === null });
-    const archivedCount = projection?.archivedSessions.length ?? 0;
-    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary, archivedCount) : EMPTY_LINE), [archivedCount, summary]);
-    const { nothingYet, holdWorkingPlace, managedUnavailable } = resolveWorkReadPresentation({
-        projection, managedRuns: sources?.managedRuns ?? null, transcriptLoaded: useSessionTranscriptLoaded(props.sessionId),
-    });
-    // The invitation is for a Session that never started anything: an archived child is something it did.
-    const nothingStarted = nothingYet && archivedCount === 0;
     // The lead this Session reports to is the pane's first fact, its "Managed by" row (lab P1w); the
     // header line says what is going on under it.
     const lineage = useSessionLineage(props.sessionId, sessionServerId);
@@ -717,4 +729,5 @@ const WorkStateSection = React.memo(function WorkStateSection(props: Readonly<{
 
 const EMPTY_SUBAGENTS: readonly SessionSubagent[] = Object.freeze([]);
 const EMPTY_LINE: ReturnType<typeof describeWorkPaneLine> = [];
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 const EMPTY_ROWS: ReturnType<typeof readSessionAgentActivityRows> = Object.freeze([]);
