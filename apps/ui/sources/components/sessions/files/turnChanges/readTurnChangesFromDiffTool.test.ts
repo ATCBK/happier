@@ -14,6 +14,19 @@ const TURN_META = {
 } as const;
 
 describe('readTurnChangesFromDiffTool', () => {
+    it('preserves the first hunk target from canonical turn evidence, including removed files', () => {
+        const result = readTurnChangesFromDiffTool({ name: 'Diff', input: { _happier: TURN_META, files: [
+            { file_path: 'src/a.ts', unified_diff: '@@ -40,2 +40,2 @@\n context\n-old\n+new\n@@ -90 +90 @@\n-next\n+later\n' },
+            { file_path: 'src/deleted.ts', change_kind: 'deleted', unified_diff: '@@ -12,2 +0,0 @@\n-old\n-gone\n' },
+            { file_path: 'src/no-diff.ts', stats: { addedLines: 3, removedLines: 0 } },
+        ] } });
+        expect(result).toMatchObject({ firstHunkAnchors: {
+            'src/a.ts': { kind: 'diffLine', side: 'after', startLine: 40, newLine: 40, oldLine: null },
+            'src/deleted.ts': { kind: 'diffLine', side: 'before', startLine: 12, oldLine: 12, newLine: null },
+        } });
+        expect(result?.firstHunkAnchors['src/no-diff.ts']).toBeUndefined();
+    });
+
     it('reads the turn-end recap as that turn’s files with their line counts, one row per path', () => {
         const result = readTurnChangesFromDiffTool({
             name: 'Diff',
