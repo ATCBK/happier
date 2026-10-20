@@ -69,6 +69,25 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
         expect(harness.rpcRequests).toHaveLength(0);
     });
 
+    it('requires a workspace for ZIP creation even when complete file bytes are held', async () => {
+        vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:workspace-archive');
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const cachedContent = { bytes: new Uint8Array([0, 255, 42]), fileName: 'report.txt', mimeType: 'text/plain' };
+        const hook = await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: null }));
+        await act(async () => {
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: true, cachedContent }))
+                .resolves.toEqual({ ok: false, error: 'Workspace scope not available' });
+        });
+        const connected = await renderTransfers();
+        await act(async () => {
+            await expect(connected.getCurrent().startDownload({ path: 'report.txt', asZip: true, cachedContent }))
+                .resolves.toEqual({ ok: true });
+        });
+        expect(harness.rpcRequests).toContainEqual(expect.objectContaining({ method: 'daemon.filesystem.download',
+            payload: expect.objectContaining({ input: expect.objectContaining({ asZip: true }) }) }));
+    });
+
     it('streams a Tauri open into the app-owned temp sink and hands its path to the scoped opener', async () => {
         const bytes: number[] = [];
         const path = '/tmp/happier-downloads/file-123/report.txt';

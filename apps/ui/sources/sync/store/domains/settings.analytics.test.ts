@@ -121,7 +121,7 @@ describe('createSettingsDomain local settings analytics', () => {
         state.applyLocalSettings({
             themePreference: 'dark',
             uiFontScale: 1.35,
-            sidebarWidthPx: 220,
+            sidebarWidthPx: 420,
             acknowledgedCliVersions: {
                 'machine-a': '1.2.3',
             },
@@ -146,8 +146,8 @@ describe('createSettingsDomain local settings analytics', () => {
                 scope: 'local_setting',
                 identity_scope: 'device_user',
                 source: 'ui',
-                prev_value: 'medium',
-                next_value: 'small',
+                prev_value: 'small',
+                next_value: 'medium',
             }),
         );
         expect(mocks.tracking.capture).toHaveBeenCalledWith(
