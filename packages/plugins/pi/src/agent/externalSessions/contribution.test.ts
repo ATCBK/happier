@@ -534,7 +534,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
       preparation: { kind: 'building_candidate_index', scanned: 1 },
     });
     expect(JSON.parse(Buffer.from(first.value.nextCursor, 'base64url').toString('utf8'))).toMatchObject({
-      v: 2,
+      v: 3,
       kind: 'piCandidateIndexScan',
       sourceKey: JSON.stringify([await realpath(agentDir), await realpath(join(agentDir, 'sessions'))]),
       sourceGeneration: expect.any(String),
@@ -864,7 +864,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     expect(freshScan.toSorted()).toEqual(firstScan.toSorted());
   });
 
-  it('keeps concurrent root scans independently continuable by their opaque scan ids', async () => {
+  it('keeps concurrent root scans independently continuable', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     await Promise.all([
       createSessionFile({
@@ -903,7 +903,6 @@ describe('Pi pure External Sessions contribution leaf', () => {
       || !bFirst.ok
       || !bFirst.value.nextCursor
     ) return;
-    expect(aFirst.value.nextCursor).not.toBe(bFirst.value.nextCursor);
 
     const aSecond = await contribution.listCandidates({
       ...invocation(),
@@ -932,7 +931,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     ].map((candidate) => candidate.remoteSessionId).toSorted()).toEqual(expectedIds);
   });
 
-  it('admits exactly one simultaneous continuation for the same opaque cursor', async () => {
+  it('replays simultaneous continuations without consuming another caller\'s cursor', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     await Promise.all(Array.from({ length: 4 }, (_, index) => createSessionFile({
       sessionRoot,
@@ -966,14 +965,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
         maxItems: 1,
       }),
     ]);
-    expect(duplicates.filter((result) => result.ok)).toHaveLength(1);
-    expect(duplicates.filter((result) => !result.ok)).toEqual([
-      expect.objectContaining({
-        ok: false,
-        code: 'source_invalid',
-        retryable: true,
-      }),
-    ]);
+    expect(duplicates.every((result) => result.ok)).toBe(true);
+    expect(duplicates[0]).toEqual(duplicates[1]);
     const winner = duplicates.find((result) => result.ok);
     if (!winner?.ok) return;
 
@@ -1002,7 +995,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     ]);
   });
 
-  it('does not publish a continuation after its in-flight scan is evicted', async () => {
+  it('keeps an in-flight continuation live while 17 other scans start', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     await Promise.all(Array.from({ length: 3 }, (_, index) => createSessionFile({
       sessionRoot,
@@ -1022,7 +1015,6 @@ describe('Pi pure External Sessions contribution leaf', () => {
     expect(first).toMatchObject({ ok: true, value: { nextCursor: expect.any(String) } });
     if (!first.ok || !first.value.nextCursor) return;
 
-    // The continuation claims the scan synchronously before its first filesystem await.
     const inFlight = contribution.listCandidates({
       ...invocation(),
       source,
@@ -1030,7 +1022,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
       maxItems: 1,
     });
     const roots = await Promise.all(Array.from(
-      { length: 16 },
+      { length: 17 },
       () => contribution.listCandidates({
         ...invocation(),
         source,
@@ -1038,9 +1030,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
       }),
     ));
     await expect(inFlight).resolves.toMatchObject({
-      ok: false,
-      code: 'source_invalid',
-      retryable: true,
+      ok: true,
+      value: { candidates: [expect.any(Object)], nextCursor: expect.any(String) },
     });
 
     for (const root of roots) {
@@ -1061,7 +1052,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     }
   });
 
-  it('bounds abandoned continuation resources by evicting only the oldest scan', async () => {
+  it('continues the first of 18 interleaved scans after the contribution is recreated', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     await Promise.all([
       createSessionFile({
@@ -1083,7 +1074,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     const source = { kind: 'piAgentDir' as const };
     const cursors: string[] = [];
 
-    for (let index = 0; index < 17; index += 1) {
+    for (let index = 0; index < 18; index += 1) {
       const page = await contribution.listCandidates({
         ...invocation(),
         source,
@@ -1094,19 +1085,9 @@ describe('Pi pure External Sessions contribution leaf', () => {
       cursors.push(page.value.nextCursor);
     }
 
-    await expect(contribution.listCandidates({
-      ...invocation(),
-      source,
-      cursor: cursors[0],
-      maxItems: 1,
-    })).resolves.toMatchObject({
-      ok: false,
-      code: 'source_invalid',
-      retryable: true,
-    });
-
-    for (const cursor of cursors.slice(1)) {
-      await expect(contribution.listCandidates({
+    const resumed = createPiExternalSessionsContribution({ env: { PI_CODING_AGENT_DIR: agentDir } });
+    for (const [index, cursor] of cursors.entries()) {
+      await expect((index === 0 ? contribution : resumed).listCandidates({
         ...invocation(),
         source,
         cursor,
@@ -1116,6 +1097,32 @@ describe('Pi pure External Sessions contribution leaf', () => {
         value: { nextCursor: null },
       });
     }
+  });
+
+  it('replays an overflowing candidate from native storage within the caller byte budget', async () => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    await Promise.all(Array.from({ length: 3 }, (_, index) => createSessionFile({
+      sessionRoot, sessionId: `pi-byte-page-${index}`, createdAt: '2026-07-21T10:00:00.000Z',
+      title: `Candidate ${index} ${'title '.repeat(20)}`,
+    })));
+    const source = { kind: 'piAgentDir' as const, agentDir };
+    const first = await createPiExternalSessionsContribution().listCandidates({ ...invocation(), source, maxItems: 1 });
+    if (!first.ok) throw new Error('Expected a one-candidate reference page');
+    const byteBudget = Buffer.byteLength(JSON.stringify(first));
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await createPiExternalSessionsContribution().listCandidates({
+        ...invocation(byteBudget), source, maxItems: 3, ...(cursor ? { cursor } : {}),
+      });
+      expect(page.ok).toBe(true);
+      if (!page.ok) throw new Error(page.code);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(byteBudget);
+      expect(page.value.candidates).toHaveLength(1);
+      ids.push(...page.value.candidates.map(candidate => candidate.remoteSessionId));
+      cursor = page.value.nextCursor ?? undefined;
+    } while (cursor);
+    expect(ids.sort()).toEqual(['pi-byte-page-0', 'pi-byte-page-1', 'pi-byte-page-2']);
   });
 
   it('rejects a candidate continuation when native root membership changes between chunks', async () => {
@@ -2516,6 +2523,14 @@ describe('Pi pure External Sessions contribution leaf', () => {
       ok: false,
       code: 'invalid_request',
     });
+    // The cursor is untrusted input: a directory position cannot grant a path
+    // outside this source, even with an otherwise valid source generation.
+    const forged: Record<string, unknown> = JSON.parse(Buffer.from(first.value.nextCursor, 'base64url').toString('utf8'));
+    forged.position = { rootEntryOffset: 1, rootName: '../outside', rootGeneration: 'forged', fileEntryOffset: 0 };
+    await expect(firstContribution.listCandidates({
+      ...invocation(), source: { kind: 'piAgentDir' }, maxItems: 1,
+      cursor: Buffer.from(JSON.stringify(forged)).toString('base64url'),
+    })).resolves.toMatchObject({ ok: false, code: 'invalid_request' });
   });
 
   it('replaces inline tool-result image bytes with a visible transcript marker', async () => {

@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
 import {
   createExternalSessionContentSearchControl,
+  discoverAgentAccountingJsonlSource,
   searchExternalSessionContent,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import {
@@ -30,7 +32,7 @@ import {
   OhMyPiCandidateSourceChangedError,
   type OhMyPiExternalSessionCandidate,
 } from './candidates.js';
-import { resolveOhMyPiSessionFile } from './files.js';
+import { resolveOhMyPiSessionFile, resolveOhMyPiSessionsRoot } from './files.js';
 import {
   OhMyPiExternalSessionIncompleteBranchError,
   OhMyPiExternalSessionInvalidCursorError,
@@ -460,11 +462,20 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
   const readEnv = () => params.env ?? process.env;
 
   return Object.freeze({
-    resolveSource(request) {
+    async resolveSource(request) {
       const stopped = invocationFailure(request);
       if (stopped) return stopped;
       const validation = validateSource({ source: request.source, env: readEnv() });
-      return validation.ok ? ok({ source: validation.value.publicSource }) : validation;
+      if (!validation.ok) return validation;
+      if (request.includeAccountingSource === false) return ok({ source: validation.value.publicSource });
+      const sessionsRoot = await resolveOhMyPiSessionsRoot({ source: validation.value.legacySource, env: readEnv() });
+      const inventory = await discoverAgentAccountingJsonlSource([sessionsRoot], request.signal);
+      return ok({ source: validation.value.publicSource, accountingSource: {
+        rootPath: sessionsRoot,
+        resourceKey: `ohmypi:transcripts:${createHash('sha256').update(sessionsRoot).digest('base64url')}`,
+        changeObservation: 'watch_file_changes' as const,
+        watchFileChanges: { files: [...inventory.files], topologyDirectories: [...inventory.topologyDirectories] },
+      } });
     },
 
     async listCandidates(request) {

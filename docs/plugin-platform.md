@@ -2230,6 +2230,12 @@ The helper retains the matching page/item locator and re-decodes that page befor
 returning its snippet. Native source verification and hard invocation cancellation
 remain at each codec. Interrupted or unreadable source ranges stay partial.
 
+Pi candidate continuations carry generation-checked directory offsets and native
+branch progress. Each invocation closes its directory handles on settlement,
+including cancellation and failure. Abandoned queries retain no plugin scan state;
+starting another query cannot evict an existing continuation. Resuming replays
+directory entries to the cursor position and decodes candidate text from storage.
+
 Claude uses the existing backward JSONL scanner to retain in-transcript progress
 across equally budgeted candidate pages. Its continuation binds row locations and
 branch-selection progress to the observed file identity; returned text is decoded

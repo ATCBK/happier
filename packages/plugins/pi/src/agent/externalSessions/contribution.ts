@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import type { Dir } from 'node:fs';
+import { createHash } from 'node:crypto';
+import type { Dir, Dirent } from 'node:fs';
 import { lstat, opendir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -63,14 +63,23 @@ import {
   type PiV3SessionTreeFold,
 } from '../transcripts/sessionFormat.js';
 
-type PiCandidateCursorV2 = Readonly<{
-  v: 2;
+type PiCandidateScanPosition = Readonly<{
+  rootEntryOffset: number;
+  rootName: string | null;
+  rootGeneration: string | null;
+  fileEntryOffset: number;
+}>;
+
+type PiCandidateCursor = Readonly<{
+  v: 3;
   kind: 'piCandidateIndexScan';
   sourceKey: string;
   sourceGeneration: string;
-  scanId: string;
+  searchTerm: string;
+  searchTarget: 'metadata' | 'content';
+  position: PiCandidateScanPosition;
   scanned: number;
-  contentCursor?: string | null;
+  contentProgress?: PiContentSearchProgress;
 }>;
 
 type PiTranscriptOlderProjectionCursor = Readonly<{
@@ -201,7 +210,7 @@ function readOptionalString(value: unknown): string | null {
 }
 
 function encodeCursor(
-  value: PiCandidateCursorV2 | PiTranscriptCursorV2,
+  value: PiCandidateCursor | PiTranscriptCursorV2,
 ): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
@@ -216,29 +225,69 @@ function decodeCursorRecord(raw: string | null | undefined): Record<string, unkn
   }
 }
 
-function decodeCandidateCursor(raw: string | undefined): PiCandidateCursorV2 | null {
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseContentSearchProgress(value: unknown): PiContentSearchProgress | null {
+  if (!isRecord(value) || !readOptionalString(value.sourceIdentity)
+    || !isNonNegativeInteger(value.maxItems) || value.maxItems < 1
+    || !isNonNegativeInteger(value.maxSerializedBytes) || value.maxSerializedBytes < 1
+    || typeof value.complete !== 'boolean' || !isNonNegativeInteger(value.itemCount)
+    || (value.cursor !== undefined && !readOptionalString(value.cursor))) return null;
+  let match: PiContentSearchProgress['match'] = null;
+  if (value.match !== null) {
+    if (!isRecord(value.match) || !readOptionalString(value.match.id)
+      || (value.match.cursor !== undefined && !readOptionalString(value.match.cursor))
+      || !isNonNegativeInteger(value.match.distanceFromEnd) || value.match.distanceFromEnd < 1
+      || value.match.distanceFromEnd > value.itemCount) return null;
+    match = { id: String(value.match.id), distanceFromEnd: value.match.distanceFromEnd,
+      ...(value.match.cursor === undefined ? {} : { cursor: String(value.match.cursor) }) };
+  }
+  return {
+    sourceIdentity: String(value.sourceIdentity), maxItems: value.maxItems,
+    maxSerializedBytes: value.maxSerializedBytes, complete: value.complete,
+    itemCount: value.itemCount, match,
+    ...(value.cursor === undefined ? {} : { cursor: String(value.cursor) }),
+  };
+}
+
+function decodeCandidateCursor(raw: string | undefined): PiCandidateCursor | null {
   const record = decodeCursorRecord(raw);
   if (
     !record
-    || record.v !== 2
+    || record.v !== 3
     || record.kind !== 'piCandidateIndexScan'
     || !readOptionalString(record.sourceKey)
     || !readOptionalString(record.sourceGeneration)
-    || !readOptionalString(record.scanId)
-    || !Number.isSafeInteger(record.scanned)
-    || (record.scanned as number) < 0
-    || (record.contentCursor !== undefined && record.contentCursor !== null && !readOptionalString(record.contentCursor))
+    || typeof record.searchTerm !== 'string'
+    || (record.searchTarget !== 'metadata' && record.searchTarget !== 'content')
+    || !isNonNegativeInteger(record.scanned)
+    || !isRecord(record.position)
   ) {
     return null;
   }
+  const position = record.position;
+  if (!isNonNegativeInteger(position.rootEntryOffset) || !isNonNegativeInteger(position.fileEntryOffset)
+    || (position.rootName !== null && (typeof position.rootName !== 'string'
+      || !position.rootName || /[/\\]/.test(position.rootName) || position.rootName === '.' || position.rootName === '..'))
+    || (position.rootGeneration !== null && !readOptionalString(position.rootGeneration))
+    || ((position.rootName === null) !== (position.rootGeneration === null))
+    || (position.rootName === null && position.fileEntryOffset !== 0)
+    || (position.rootName !== null && position.rootEntryOffset === 0)) return null;
+  const contentProgress = record.contentProgress === undefined ? undefined : parseContentSearchProgress(record.contentProgress);
+  if (record.contentProgress !== undefined && (!contentProgress || record.searchTarget !== 'content' || position.rootName === null)) return null;
   return {
-    v: 2,
+    v: 3,
     kind: 'piCandidateIndexScan',
     sourceKey: String(record.sourceKey),
     sourceGeneration: String(record.sourceGeneration),
-    scanId: String(record.scanId),
-    scanned: record.scanned as number,
-    ...(record.contentCursor === undefined ? {} : { contentCursor: record.contentCursor === null ? null : String(record.contentCursor) }),
+    searchTerm: record.searchTerm,
+    searchTarget: record.searchTarget,
+    position: { rootEntryOffset: position.rootEntryOffset, rootName: position.rootName,
+      rootGeneration: position.rootGeneration === null ? null : String(position.rootGeneration), fileEntryOffset: position.fileEntryOffset },
+    scanned: record.scanned,
+    ...(contentProgress ? { contentProgress } : {}),
   };
 }
 
@@ -427,34 +476,32 @@ async function canonicalizePiSessionFile(params: Readonly<{
 }
 
 type PiCandidateDirectory = Readonly<{
+  name: string;
   path: string;
   generation: string;
   handle: Dir;
   hasEntries: boolean;
+  entriesRead: number;
 }>;
 
 type PiCandidateScanState = {
-  readonly scanId: string;
   readonly sourceKey: string;
   readonly sourceGeneration: string;
   readonly sessionsRoot: string;
   readonly searchTerm: string;
   searchTarget?: 'metadata' | 'content';
   readonly rootDirectory: Dir | null;
+  rootEntriesRead: number;
   readonly rootGenerations: Map<string, string>;
   currentDirectory: PiCandidateDirectory | null;
-  pendingCandidate: AgentExternalSessionCandidate | null;
   pendingFilePath: string | null;
+  lastFilePosition: PiCandidateScanPosition | null;
   contentProgress: PiContentSearchProgress | null;
   scanned: number;
   complete: boolean;
-  inFlight: boolean;
-  retired: boolean;
-  closeStarted: boolean;
 };
 
 type PiContentSearchProgress = NonNullable<Parameters<typeof searchExternalSessionContent>[0]['pageProgress']> & {
-  readonly filePath: string;
   readonly sourceIdentity: string;
   readonly maxItems: number;
   readonly maxSerializedBytes: number;
@@ -485,17 +532,10 @@ function candidateScanPreparation(
   }>;
 }> {
   if (searchTerm) return {};
-  // A candidate that did not fit the prior response is re-emitted on the next
-  // call. Do not report its file entry as indexed until that response carries
-  // the candidate, otherwise the host's one index owner correctly sees a
-  // non-advancing continuation.
-  const scanned = Math.max(0, scan.scanned - (scan.pendingCandidate ? 1 : 0));
   return {
-    preparation: { kind: 'building_candidate_index', scanned },
+    preparation: { kind: 'building_candidate_index', scanned: scan.scanned },
   };
 }
-
-const MAX_ACTIVE_CANDIDATE_SCANS = 16;
 
 class PiCandidateSourceChangedError extends Error {
   readonly name = 'PiCandidateSourceChangedError';
@@ -532,23 +572,71 @@ async function createCandidateScan(
 ): Promise<PiCandidateScanState> {
   const sourceGeneration = await readDirectoryGeneration(source.sessionsRoot) ?? `missing:${source.sessionsRoot}`;
   return {
-    scanId: randomUUID(),
     sourceKey: sourceKey(source),
     sourceGeneration,
     sessionsRoot: source.sessionsRoot,
     searchTerm,
     rootDirectory: await opendir(source.sessionsRoot).catch(() => null),
+    rootEntriesRead: 0,
     rootGenerations: new Map(),
     currentDirectory: null,
-    pendingCandidate: null,
     pendingFilePath: null,
+    lastFilePosition: null,
     contentProgress: null,
     scanned: 0,
     complete: false,
-    inFlight: false,
-    retired: false,
-    closeStarted: false,
   };
+}
+
+function candidateScanPosition(scan: PiCandidateScanState): PiCandidateScanPosition {
+  return { rootEntryOffset: scan.rootEntriesRead, rootName: scan.currentDirectory?.name ?? null,
+    rootGeneration: scan.currentDirectory?.generation ?? null, fileEntryOffset: scan.currentDirectory?.entriesRead ?? 0 };
+}
+
+function encodeCandidateScan(scan: PiCandidateScanState): string {
+  return encodeCursor({ v: 3, kind: 'piCandidateIndexScan', sourceKey: scan.sourceKey,
+    sourceGeneration: scan.sourceGeneration, searchTerm: scan.searchTerm, searchTarget: scan.searchTarget ?? 'metadata',
+    scanned: scan.scanned,
+    // A yielded/overflowing candidate is re-read from native storage rather
+    // than trusting serialized candidate text, snippets or paths.
+    position: scan.pendingFilePath && scan.lastFilePosition ? scan.lastFilePosition : candidateScanPosition(scan),
+    ...(scan.contentProgress ? { contentProgress: scan.contentProgress } : {}),
+  });
+}
+
+async function resumeCandidateScan(scan: PiCandidateScanState, cursor: PiCandidateCursor, signal: AbortSignal): Promise<void> {
+  if (scan.sourceGeneration !== cursor.sourceGeneration) throw new PiCandidateSourceChangedError('Pi candidate source changed while paging.');
+  // Like OhMyPi's native directory cursor, offsets are replayed only within a
+  // generation-checked directory. Handles and bodies never outlive this call.
+  const position = cursor.position;
+  let rootEntry: Dirent | null = null;
+  while (scan.rootEntriesRead < position.rootEntryOffset) {
+    signal.throwIfAborted();
+    rootEntry = await scan.rootDirectory?.read() ?? null;
+    if (!rootEntry) throw new PiCandidateSourceChangedError('Pi candidate root frontier is unavailable.');
+    scan.rootEntriesRead += 1;
+  }
+  if (position.rootName !== null) {
+    if (!rootEntry?.isDirectory() || rootEntry.isSymbolicLink() || rootEntry.name !== position.rootName) {
+      throw new PiCandidateSourceChangedError('Pi candidate workspace frontier changed.');
+    }
+    const path = join(scan.sessionsRoot, rootEntry.name);
+    const metadata = await lstat(path).catch(() => null);
+    const generation = await readDirectoryGeneration(path);
+    if (!metadata?.isDirectory() || metadata.isSymbolicLink() || !generation || generation !== position.rootGeneration) {
+      throw new PiCandidateSourceChangedError('Pi candidate workspace changed while paging.');
+    }
+    const handle = await opendir(path);
+    scan.currentDirectory = { name: rootEntry.name, path, generation, handle,
+      entriesRead: position.fileEntryOffset, hasEntries: position.fileEntryOffset > 0 };
+    scan.rootGenerations.set(path, generation);
+    for (let index = 0; index < position.fileEntryOffset; index += 1) {
+      signal.throwIfAborted();
+      if (!await handle.read()) throw new PiCandidateSourceChangedError('Pi candidate file frontier is unavailable.');
+    }
+  }
+  scan.scanned = cursor.scanned;
+  scan.contentProgress = cursor.contentProgress ?? null;
 }
 
 async function validateCandidateScan(state: PiCandidateScanState): Promise<void> {
@@ -582,6 +670,7 @@ async function nextCandidateFile(
   while (!state.complete && budget.fileEntries < budget.limit) {
     signal.throwIfAborted();
     if (state.currentDirectory) {
+      const position = candidateScanPosition(state);
       const entry = await state.currentDirectory.handle.read();
       signal.throwIfAborted();
       if (!entry) {
@@ -598,9 +687,10 @@ async function nextCandidateFile(
         continue;
       }
       budget.fileEntries += 1;
-      state.currentDirectory = { ...state.currentDirectory, hasEntries: true };
+      state.currentDirectory = { ...state.currentDirectory, hasEntries: true, entriesRead: state.currentDirectory.entriesRead + 1 };
       state.scanned += 1;
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.jsonl')) continue;
+      state.lastFilePosition = position;
       return join(state.currentDirectory.path, entry.name);
     }
 
@@ -617,6 +707,7 @@ async function nextCandidateFile(
       break;
     }
     budget.rootEntries += 1;
+    state.rootEntriesRead += 1;
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       state.scanned += 1;
       continue;
@@ -638,7 +729,7 @@ async function nextCandidateFile(
       continue;
     }
     state.rootGenerations.set(path, generation);
-    state.currentDirectory = { path, generation, handle, hasEntries: false };
+    state.currentDirectory = { name: entry.name, path, generation, handle, hasEntries: false, entriesRead: 0 };
   }
   return null;
 }
@@ -1190,8 +1281,8 @@ function readSessionFileFromIdentity(
 /**
  * A public ref carries no private `sessionFile`, so the leaf must replay its
  * own candidate discovery and select the exact winner by the shared candidate
- * precedence contract. This scan is transient: unlike browse pagination, it
- * owns no cursor, cache, or cross-invocation candidate state.
+ * precedence contract. Like browse pages, it owns no cache or cross-invocation
+ * candidate state.
  */
 async function resolvePiUnqualifiedSessionFile(params: Readonly<{
   source: ResolvedPiSource;
@@ -1242,46 +1333,6 @@ export function createPiExternalSessionsContribution(params: Readonly<{
   env?: NodeJS.ProcessEnv;
 }> = {}): AgentExternalSessionsContribution {
   const readEnv = () => params.env ?? process.env;
-  const candidateScansById = new Map<string, PiCandidateScanState>();
-
-  function isLiveCandidateScan(scan: PiCandidateScanState): boolean {
-    return !scan.retired && candidateScansById.get(scan.scanId) === scan;
-  }
-
-  async function closeCandidateScanOnce(scan: PiCandidateScanState): Promise<void> {
-    if (scan.closeStarted) return;
-    scan.closeStarted = true;
-    await closeCandidateScan(scan);
-  }
-
-  async function retireCandidateScan(scan: PiCandidateScanState | null): Promise<void> {
-    if (!scan) return;
-    if (!scan.retired) {
-      if (candidateScansById.get(scan.scanId) === scan) {
-        candidateScansById.delete(scan.scanId);
-      }
-      scan.retired = true;
-    }
-    if (!scan.inFlight) await closeCandidateScanOnce(scan);
-  }
-
-  async function releaseCandidateScan(scan: PiCandidateScanState): Promise<void> {
-    scan.inFlight = false;
-    if (scan.retired) await closeCandidateScanOnce(scan);
-  }
-
-  async function startCandidateScan(
-    source: ResolvedPiSource,
-    searchTerm: string,
-  ): Promise<PiCandidateScanState> {
-    const scan = await createCandidateScan(source, searchTerm);
-    while (candidateScansById.size >= MAX_ACTIVE_CANDIDATE_SCANS) {
-      const oldest = candidateScansById.values().next().value ?? null;
-      await retireCandidateScan(oldest);
-    }
-    candidateScansById.set(scan.scanId, scan);
-    return scan;
-  }
 
   const contribution = Object.freeze({
     readAccounting(request) {
@@ -1327,80 +1378,32 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       }
 
       let scan: PiCandidateScanState | null = null;
-      let admitted = false;
       try {
-        if (!decodedCursor) {
-          scan = await startCandidateScan(resolved.value, searchTerm);
-          scan.searchTarget = searchTarget;
-        } else {
-          scan = candidateScansById.get(decodedCursor.scanId) ?? null;
-        }
-        if (
-          !scan
-          || scan.inFlight
-          || !isLiveCandidateScan(scan)
-        ) {
+        if (decodedCursor && (decodedCursor.searchTerm !== searchTerm || decodedCursor.searchTarget !== searchTarget)) {
           return failed(
             'source_invalid',
             'Pi candidate cursor source generation is stale or unavailable.',
             true,
           );
         }
-        scan.inFlight = true;
-        admitted = true;
-        if (
-          decodedCursor
-          && (
-            decodedCursor.sourceGeneration !== scan.sourceGeneration
-            || decodedCursor.scanned !== scan.scanned
-            || decodedCursor.contentCursor !== (scan.contentProgress ? scan.contentProgress.cursor ?? null : undefined)
-            || scan.sourceKey !== sourceKey(resolved.value)
-            || scan.searchTerm !== searchTerm
-            || (scan.searchTarget ?? 'metadata') !== searchTarget
-          )
-        ) {
-          return failed(
-            'source_invalid',
-            'Pi candidate cursor source generation is stale or unavailable.',
-            true,
-          );
-        }
-
+        scan = await createCandidateScan(resolved.value, searchTerm);
+        scan.searchTarget = searchTarget;
+        if (decodedCursor) await resumeCandidateScan(scan, decodedCursor, request.signal);
         await validateCandidateScan(scan);
-        if (!isLiveCandidateScan(scan)) {
-          return failed(
-            'source_invalid',
-            'Pi candidate cursor source generation is stale or unavailable.',
-            true,
-          );
-        }
         const limit = Math.trunc(request.maxItems);
-        const hasPendingEntry = scan.pendingCandidate !== null || scan.pendingFilePath !== null;
         const budget: PiCandidateChunkBudget = {
           rootEntries: 0,
-          fileEntries: hasPendingEntry ? 1 : 0,
+          fileEntries: 0,
           limit,
         };
         const candidates: AgentExternalSessionCandidate[] = [];
-        if (scan.pendingCandidate) {
-          candidates.push(scan.pendingCandidate);
-          scan.pendingCandidate = null;
-        }
-        let pendingFilePath = scan.pendingFilePath;
-        if (pendingFilePath) {
-          scan.pendingFilePath = null;
-          scan.scanned += 1;
-        }
-
-        while (pendingFilePath || budget.fileEntries < limit) {
+        while (budget.fileEntries < limit) {
           request.signal.throwIfAborted();
-          const filePath = pendingFilePath ?? await nextCandidateFile(scan, budget, request.signal);
-          pendingFilePath = null;
+          const filePath = await nextCandidateFile(scan, budget, request.signal);
           if (!filePath) break;
           let candidate: AgentExternalSessionCandidate | null;
           try {
-            if (scan.contentProgress && (scan.contentProgress.filePath !== filePath
-              || scan.contentProgress.sourceIdentity !== await readContentSourceIdentity(filePath))) {
+            if (scan.contentProgress && scan.contentProgress.sourceIdentity !== await readContentSourceIdentity(filePath)) {
               throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
             }
             candidate = await inspectPiCandidateFile({
@@ -1413,7 +1416,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
               const resumingContent = scan.contentProgress !== null;
               const sourceIdentity = scan.contentProgress?.sourceIdentity ?? await readContentSourceIdentity(filePath);
               const progress: PiContentSearchProgress = scan.contentProgress ?? {
-                filePath, sourceIdentity, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes,
+                sourceIdentity, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes,
                 cursor: undefined, complete: false, itemCount: 0, match: null,
               };
               scan.contentProgress = progress;
@@ -1463,22 +1466,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             break;
           }
           if (!candidate) continue;
-          if (!isLiveCandidateScan(scan)) {
-            return failed(
-              'source_invalid',
-              'Pi candidate cursor source generation is stale or unavailable.',
-              true,
-            );
-          }
-          const nextCursor = encodeCursor({
-            v: 2,
-            kind: 'piCandidateIndexScan',
-            sourceKey: scan.sourceKey,
-            sourceGeneration: scan.sourceGeneration,
-            scanId: scan.scanId,
-            scanned: scan.scanned,
-            ...(scan.contentProgress ? { contentCursor: scan.contentProgress.cursor ?? null } : {}),
-          });
+          const nextCursor = encodeCandidateScan(scan);
           const proposed = ok({
             candidates: [...candidates, candidate],
             nextCursor,
@@ -1488,18 +1476,18 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           });
           if (!isAgentExternalSessionsResultWithinByteBudget(proposed, request.maxSerializedBytes)) {
             if (candidates.length === 0) {
-              await retireCandidateScan(scan);
               return createAgentExternalSessionsProducerOverflowFailure(
                 'Pi candidate result byte budget cannot fit one candidate.',
               );
             }
-            scan.pendingCandidate = candidate;
+            scan.pendingFilePath = filePath;
+            scan.scanned -= 1;
             break;
           }
           candidates.push(candidate);
         }
 
-        if (!yielded && !scan.complete && !scan.pendingCandidate && !scan.pendingFilePath) {
+        if (!yielded && !scan.complete && !scan.pendingFilePath) {
           const peekBudget: PiCandidateChunkBudget = {
             rootEntries: budget.rootEntries,
             fileEntries: budget.fileEntries,
@@ -1512,30 +1500,14 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           }
         }
         await validateCandidateScan(scan);
-        if (!isLiveCandidateScan(scan)) {
-          return failed(
-            'source_invalid',
-            'Pi candidate cursor source generation is stale or unavailable.',
-            true,
-          );
-        }
         request.signal.throwIfAborted();
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) {
-          await retireCandidateScan(scan);
           return after;
         }
-        const hasMore = !scan.complete || scan.pendingCandidate !== null || scan.pendingFilePath !== null;
+        const hasMore = !scan.complete || scan.pendingFilePath !== null;
         const nextCursor = hasMore
-          ? encodeCursor({
-            v: 2,
-            kind: 'piCandidateIndexScan',
-            sourceKey: scan.sourceKey,
-            sourceGeneration: scan.sourceGeneration,
-            scanId: scan.scanId,
-            scanned: scan.scanned,
-            ...(scan.contentProgress ? { contentCursor: scan.contentProgress.cursor ?? null } : {}),
-          })
+          ? encodeCandidateScan(scan)
           : null;
         const value: AgentExternalSessionsListCandidatesResult = {
           candidates,
@@ -1546,38 +1518,26 @@ export function createPiExternalSessionsContribution(params: Readonly<{
         };
         const result = ok(value);
         if (!isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)) {
-          await retireCandidateScan(scan);
           return createAgentExternalSessionsProducerOverflowFailure(
             'Pi candidate result byte budget cannot fit the page envelope.',
           );
         }
-        if (!hasMore) await retireCandidateScan(scan);
         return result;
       } catch (error) {
-        if (scan?.retired || (scan && !isLiveCandidateScan(scan))) {
-          return failed(
-            'source_invalid',
-            'Pi candidate cursor source generation is stale or unavailable.',
-            true,
-          );
-        }
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) {
-          await retireCandidateScan(scan);
           return after;
         }
         if (error instanceof PiCandidateSourceChangedError) {
-          await retireCandidateScan(scan);
           return failed('source_invalid', error.message, true);
         }
-        await retireCandidateScan(scan);
         return failed(
           'agent_error',
           error instanceof Error ? error.message : 'Pi external-session listing failed.',
           true,
         );
       } finally {
-        if (admitted && scan) await releaseCandidateScan(scan);
+        await closeCandidateScan(scan);
       }
     },
 

@@ -108,6 +108,7 @@ describe('Oh My Pi public External Sessions contribution', () => {
 
     expect(await contribution.resolveSource({
       ...invocation(),
+      includeAccountingSource: false,
       source: {
         kind: 'ohMyPiAgentDir',
         agentDir,

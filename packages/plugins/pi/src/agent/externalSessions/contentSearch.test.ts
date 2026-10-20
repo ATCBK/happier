@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fileSystem from 'node:fs/promises';
+import type { Dir } from 'node:fs';
 import { SessionManager } from 'pi-coding-agent-0821';
 import type { AssistantMessage } from 'pi-ai-0821';
 import { createPiExternalSessionsContribution } from './contribution.js';
@@ -54,6 +55,47 @@ async function fixture() {
 }
 
 describe('pi direct conversation content search', () => {
+  it('closes directory resources for abandoned, superseded and cancelled pages', async () => {
+    const { contribution, request } = await fixture();
+    await writeFile(join(request.source.agentDir, 'sessions', '-repo', 'second.jsonl'), [
+      { type: 'session', version: 3, id: 'second', timestamp: '2026-07-24T10:00:00.000Z', cwd: '/repo' },
+      { type: 'message', id: 'user', parentId: null, timestamp: '2026-07-24T10:00:00.000Z',
+        message: { role: 'user', content: 'ordinary second title' } },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n');
+    const opened: Dir[] = [];
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fileSystem.opendir).mockImplementation(async (...args) => {
+      const directory = await actual.opendir(...args);
+      opened.push(directory);
+      return directory;
+    });
+    for (let index = 0; index < 18; index += 1) {
+      const controller = new AbortController();
+      const page = await contribution.listCandidates({ ...request, signal: controller.signal,
+        maxItems: 1, searchTarget: 'metadata', searchTerm: index % 2 ? 'ordinary' : '' });
+      expect(page).toMatchObject({ ok: true, value: { nextCursor: expect.any(String) } });
+      // Settled host invocations abort their private signal; abandonment and
+      // query replacement never call back into the plugin with a scan lifetime.
+      controller.abort();
+      for (const directory of opened.splice(0)) {
+        await expect(directory.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+      }
+    }
+    const controller = new AbortController();
+    const check = controller.signal.throwIfAborted.bind(controller.signal);
+    let checks = 0;
+    vi.spyOn(controller.signal, 'throwIfAborted').mockImplementation(() => {
+      if (++checks === 2) controller.abort();
+      check();
+    });
+    await expect(contribution.listCandidates({ ...request, signal: controller.signal,
+      maxItems: 1, searchTerm: 'ordinary' })).resolves.toMatchObject({ ok: false, code: 'cancelled' });
+    expect(opened.length).toBeGreaterThan(0);
+    for (const directory of opened) {
+      await expect(directory.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+    }
+  });
+
   it('advances native branch pages across identical slow budgets and continues beyond the file', async () => {
     const { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListResponseSchema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
     const agentDir = await mkdtemp(join(tmpdir(), 'happier-pi-progress-'));
@@ -100,7 +142,7 @@ describe('pi direct conversation content search', () => {
       clock += 6000;
       return handle;
     });
-    const contribution = createPiExternalSessionsContribution({ env: {} });
+    let contribution = createPiExternalSessionsContribution({ env: {} });
     // The subprocess spends an entire scan budget; repeating this optimization
     // on continuation would prevent even a committed native page from advancing.
     const ripgrep = { run: async () => {
@@ -128,6 +170,9 @@ describe('pi direct conversation content search', () => {
       }
       const previousCursor = cursor;
       cursor = result.value.nextCursor;
+      // A settled page must leave no plugin-held scan state. Native branch
+      // progress belongs to the cursor even after activation is replaced.
+      contribution = createPiExternalSessionsContribution({ env: {} });
       if (!cursor) {
         expect(result.value.contentCoverage).toBe('complete');
         break;
@@ -179,7 +224,7 @@ describe('pi direct conversation content search', () => {
       .resolves.toMatchObject({ ok: false, code: 'cancelled' });
     expect(boundedReads).toBe(2);
     await expect(contribution.listCandidates({ ...request(), cursor: cancelledCursor }))
-      .resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      .resolves.toMatchObject({ ok: true });
     vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
       const handle = await actual.open(...args);
       clock += 1000;

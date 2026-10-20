@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
 import type {
@@ -25,6 +26,7 @@ import {
 import { canonicalizePath } from '@happier-dev/plugin-sdk/fs';
 import {
   createExternalSessionContentSearchControl,
+  discoverAgentAccountingJsonlSource,
   ExternalSessionContentSearchYield,
   readJsonlFileForwardLines,
   searchExternalSessionContent,
@@ -954,7 +956,15 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
       if (stopped) return stopped;
       const validation = await validateSource({ source: request.source, env: readEnv() });
       if (!validation.ok) return boundedResult(request, validation);
-      return boundedResult(request, ok({ source: validation.value.source }));
+      if (request.includeAccountingSource === false) return boundedResult(request, ok({ source: validation.value.source }));
+      const { brainDir } = validation.value;
+      const inventory = await discoverAgentAccountingJsonlSource([brainDir], request.signal);
+      return boundedResult(request, ok({ source: validation.value.source, accountingSource: {
+        rootPath: brainDir, rootField: 'brainDir',
+        resourceKey: `antigravity:transcripts:${createHash('sha256').update(brainDir).digest('base64url')}`,
+        changeObservation: 'watch_file_changes' as const,
+        watchFileChanges: { files: [...inventory.files], topologyDirectories: [...inventory.topologyDirectories] },
+      } }));
     },
 
     async listCandidates(request) {
