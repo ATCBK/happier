@@ -5,7 +5,9 @@ import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '.
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
 import { SessionDiscussionParticipantV1Schema } from '../sessions/creation/sessionDiscussionParticipantV1.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
-import { isSessionStopConfirmed, SessionStopResultSchema } from '../sessions/control/contract.js';
+import { isSessionStopConfirmed, SessionStopResultSchema, SessionArchiveResultSchema, SessionArchiveActionInputV1Schema, SessionArchiveActionResultV1Schema, type SessionArchiveReportOutcomeV1 } from '../sessions/control/contract.js';
+import { readSessionManagerSessionIdV1 } from '../sessions/follow/sessionManagerV1.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '../sessions/listing/query.js';
 import { bindActionSessionTargetOperands, previewActionSessionTargets, readActionSessionTargetField, readActionSessionTargetOperands, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
 import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema,
   deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
@@ -9565,7 +9567,99 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             archived: actionId === 'session.archive',
             ...(serverId ? { serverId } : {}),
           });
-          return completeActionResult(res);
+          if (actionId === 'session.unarchive') return completeActionResult(res);
+          const completed = completeActionResult(res);
+          if (!completed.ok || isDeferredApprovalResult(completed)) return completed;
+          const native = readRecord(res);
+          if (native.ok === false || native.success === false) {
+            const code = readNonEmptyString(native.code) ?? 'session_archive_failed';
+            return { ok: false, errorCode: code, error: readNonEmptyString(native.message) ?? code };
+          }
+          if (native.ok !== true && native.success !== true && !SessionArchiveResultSchema.safeParse(native).success) {
+            return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+          }
+          const archivedSessionId = readNonEmptyString(native.sessionId) ?? sessionId;
+          const result = { success: true as const, sessionId: archivedSessionId,
+            ...(typeof native.archivedAt === 'number' ? { archivedAt: native.archivedAt } : {}) };
+          if (SessionArchiveActionInputV1Schema.parse(data).alsoArchiveReports !== true) {
+            return completeActionResult(SessionArchiveActionResultV1Schema.parse(result));
+          }
+          const reports: SessionArchiveReportOutcomeV1[] = [];
+          const seenReports = new Set<string>();
+          const seenCursors = new Set<string>();
+          let cursor: string | undefined;
+          let reportsError: { errorCode: string; error: string } | undefined;
+          let reportsWithheld = false;
+          do {
+            let page: ReturnType<typeof parseSessionListQueryActionResultV1>;
+            try {
+              ctx.signal?.throwIfAborted();
+              const rawPage = await deps.sessionList({
+                context: ctx, view: 'summary', query: { v: 1, storage: 'active', includeInactive: true,
+                  scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [],
+                  underSessionId: archivedSessionId, limit: SESSION_LIST_PAGE_MAX_LIMIT,
+                  ...(cursor ? { cursor } : {}) },
+                ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
+              });
+              const failure = readActionFailureEnvelope(rawPage);
+              if (failure) { reportsError = { errorCode: failure.errorCode, error: failure.error }; break; }
+              page = parseSessionListQueryActionResultV1(rawPage);
+            } catch (error) {
+              const failure = normalizeActionExecutorThrownError(error);
+              reportsError = { errorCode: failure.errorCode, error: failure.error };
+              break;
+            }
+            if (!page || 'view' in page) {
+              reportsError = { errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+              break;
+            }
+            reportsWithheld ||= (page.metadataUpgradeRequiredCount ?? 0) > 0;
+            for (const report of page.sessions) {
+              if (ctx.signal?.aborted) { reportsError = { errorCode: 'cancelled', error: 'cancelled' }; break; }
+              if (report.id === archivedSessionId || seenReports.has(report.id)
+                || readSessionManagerSessionIdV1(report) !== archivedSessionId || ('archivedAt' in report && report.archivedAt != null)
+                || (serverId && typeof report.serverId === 'string' && report.serverId !== serverId)) continue;
+              seenReports.add(report.id);
+              const identity = { sessionId: report.id, ...(typeof report.title === 'string' ? { title: report.title } : {}) };
+              const childContext = { ...ctx, ...(serverId ? { serverId } : {}),
+                // A decision about the lead is not approval for a different target.
+                bypassApprovals: false, presentUserConfirmation: undefined,
+                sessionTargetsV1: undefined };
+              const stopThenArchive = async (): Promise<ActionExecuteResult> => {
+                const stopped = await executeHostChild('session.stop', { sessionId: report.id }, childContext);
+                if (!stopped.ok || isDeferredApprovalResult(stopped)) return stopped;
+                const stop = SessionStopResultSchema.safeParse(stopped.result);
+                return stop.success && isSessionStopConfirmed(stop.data)
+                  ? await executeHostChild('session.archive', { sessionId: report.id }, childContext)
+                  : { ok: false, errorCode: 'session_stop_unconfirmed', error: 'session_stop_unconfirmed' };
+              };
+              let archived: ActionExecuteResult;
+              try {
+                archived = report.active ? await stopThenArchive()
+                  : await executeHostChild('session.archive', { sessionId: report.id }, childContext);
+                if (!archived.ok && archived.errorCode === 'session_active' && !report.active) archived = await stopThenArchive();
+              } catch (error) {
+                archived = { ok: false, ...normalizeActionExecutorThrownError(error) };
+              }
+              const approval = archived.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(archived.result) : null;
+              reports.push(!archived.ok ? { ...identity, status: 'failed', errorCode: archived.errorCode, error: archived.error }
+                : approval?.success ? { ...identity, status: 'approval_pending', artifactId: approval.data.artifactId }
+                : { ...identity, status: 'archived' });
+            }
+            if (reportsError) break;
+            if (!page.hasNext) break;
+            if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
+              reportsError = { errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+              break;
+            }
+            seenCursors.add(page.nextCursor);
+            cursor = page.nextCursor;
+          } while (true);
+          if (reportsWithheld && !reportsError) reportsError = {
+            errorCode: 'session_metadata_upgrade_required', error: 'session_metadata_upgrade_required',
+          };
+          return completeActionResult(SessionArchiveActionResultV1Schema.parse({ ...result, reports,
+            ...(reportsError ? { reportsError } : {}) }));
         }
 
         if (isSessionFollowActionIdV1(actionId)) {

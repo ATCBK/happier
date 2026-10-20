@@ -32,7 +32,7 @@ import { AccountHomeContinuationInputV1Schema, AccountHomeContinuationResultV1Sc
 import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
 import { SessionResumeRequestV1Schema } from '../sessions/control/sessionResumeRequestV1.js';
 import { SessionNeedsYouRaiseInputV1Schema, SessionNeedsYouRaiseOutputV1Schema } from '../sessions/permissions/questionV1.js';
-import { SessionStatusActionResultV1Schema } from '../sessions/control/contract.js';
+import { SessionStatusActionResultV1Schema, SessionArchiveActionInputV1Schema, SessionArchiveActionResultV1Schema } from '../sessions/control/contract.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
 import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { RestartSessionRunnerResultV1Schema } from '../sessions/control/sessionRunnerRestartV1.js';
@@ -9912,10 +9912,13 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
     inputHints: {
       description: 'Move a session out of your list without deleting it.',
       title: 'Archive a session',
-      fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
+      fields: [
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
+        { path: 'alsoArchiveReports', title: 'Also archive direct sub-sessions', widget: 'boolean' },
+      ],
     },
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionIdRequiredInputSchema,
+    outputSchema: lazyZodSchema(() => SessionArchiveActionResultV1Schema),
+    inputSchema: lazyZodSchema(() => SessionArchiveActionInputV1Schema),
     cli: SESSION_ARCHIVE_CLI_PROJECTION,
   },
   {
