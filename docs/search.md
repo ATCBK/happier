@@ -618,6 +618,24 @@ and unknown frames remain partial/unsupported, as do incomplete recorded tool
 results. The native id agrees with ACP
 `session/list`; the plugin reader replaces the old resume-only declaration.
 
+Gemini's 0.3 development reader replays the CLI v0.64.0 JSONL recording
+format, including patches, checkpoints and inclusive rewinds, and the legacy
+JSON snapshot shape. It shares native-file discovery with resume import under
+`GEMINI_CLI_HOME/.gemini/tmp` (or the default home). Search and transcript pages
+consume the same active-history projection: display text is preserved across
+native parts, tool inputs are excluded, and unknown dialects remain incomplete
+or unsupported. Existing source observation drives Memory append, rewrite and
+confirmed-deletion handling without a vendor process or export.
+
+Qwen Code's 0.3 development reader covers the CLI v0.25.3 native JSONL dialect
+under `QWEN_RUNTIME_DIR`, `QWEN_HOME`, or `~/.qwen`, including archived chats.
+The native session ID agrees with ACP list/load. One decoder selects the active
+parent chain, joins streaming fragments and preserves visible history across
+model-context compression. Content matching uses that decoded projection,
+excluding tool inputs and model-only summaries. Unknown versions remain
+unsupported; the shared observer drives Memory append, rewrite and confirmed
+deletion. This replaces the undeployed resume-only Qwen source declaration.
+
 Devin's schema-16 native database contains conversation bodies, but its reader
 remains disabled: the available SQLite read-only boundary can modify SHM or
 create WAL sidecars, including on an unsuccessful open. A non-mutating live-WAL

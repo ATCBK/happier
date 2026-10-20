@@ -181,6 +181,12 @@ Agents, including these sources where their history is readable. Unsupported or
 unavailable readers cannot supply an index simply because the Agent appears
 in the selection list. Both modes depend on the machine being online.
 
+In this development channel, Gemini's CLI v0.64.0 recording format and legacy
+JSON history, plus Qwen Code's CLI v0.25.3 native history, also support standard
+search and opt-in indexing. Patches, rewinds and active-branch changes update
+the searchable history; Qwen compression preserves visible conversation text.
+No export or running vendor process is required to read these files.
+
 In this development channel, Grok's paired session files, Cursor CLI's
 JSONL transcripts with v1 metadata, and Kiro's v1 CLI chat store also supply
 standard search and opt-in indexing. Transcript and metadata changes use
