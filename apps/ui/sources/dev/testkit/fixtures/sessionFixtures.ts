@@ -167,7 +167,8 @@ export function createPlainSessionByIdResponseFixture(session: Session) {
     const access = session.access;
     return V2SessionByIdResponseSchema.parse({ session: {
         ...(access && access.level !== 'owner' ? recipientRecord : record),
-        agentState: session.agentState === null ? null : JSON.stringify(session.agentState),
+        agentState: (access && access.level !== 'owner') || session.agentState === null
+            ? null : JSON.stringify(session.agentState),
         latestTurnStatus: session.latestTurnStatus,
         latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
         lastRuntimeIssue: session.lastRuntimeIssue,

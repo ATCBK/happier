@@ -8,7 +8,9 @@ import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/
 import { DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV2Schema,
   DaemonSessionGoalClearRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { createSessionFixture, createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -1141,6 +1143,39 @@ describe('default Action executor mode and catalog contracts', () => {
       expect(read().metadataVersion).toBe(1);
     },
   );
+  it('composes the archive choice through the real HTTP list/archive owners and strict UI consumer', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const rows = ['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last', 'cascade-grandchild'].map(id =>
+      createPlainSessionCurrentProjectionRecordFixture({ id, active: false,
+        ...(id !== 'cascade-lead' ? { manager: { sessionId: id === 'cascade-grandchild' ? 'cascade-child' : 'cascade-lead' } } : {}),
+      }));
+    const archived: string[] = [];
+    for (const row of rows) {
+      homes.answer(serverId, `/v2/sessions/${row.id}`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}?accessProjectionVersion=1`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}/archive`, { select: () => {
+        archived.push(row.id);
+        return row.id === 'cascade-refused' ? { status: 403, body: { error: 'Forbidden' } }
+          : { body: { success: true, archivedAt: 10 } };
+      } });
+    }
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      const query = SessionListQueryV1Schema.parse(input);
+      expect(query).toMatchObject({ storage: 'active', underSessionId: 'cascade-lead' });
+      return { body: SessionListQueryResponseV1Schema.parse({ sessions: rows.slice(1).map(row => ({
+        ...row, viewer: createSessionViewerFixture(),
+      })), nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) };
+    } });
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const result = await executeSessionLifecycleAction('session.archive', 'cascade-lead', { serverId, alsoArchiveReports: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ success: true, sessionId: 'cascade-lead', reports: [
+      { sessionId: 'cascade-child', status: 'archived' },
+      { sessionId: 'cascade-refused', status: 'failed' },
+      { sessionId: 'cascade-last', status: 'archived' },
+    ] });
+    expect(getActionSpec('session.archive').outputSchema.parse(result)).toEqual(result);
+    expect(archived).toEqual(['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last']);
+  });
   beforeEach(async () => {
     webLocks = installWebLockManagerMock();
     storage.setState(originalState, true);
