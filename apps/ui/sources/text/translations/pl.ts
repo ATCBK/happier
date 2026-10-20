@@ -1893,6 +1893,7 @@ const plValues = {
     transientFailure: "Serwer był zajęty, więc nic nie zostało zmienione. Spróbuj ponownie.",
     failureGeneric: 'Zatwierdzona akcja nie powiodła się',
     failureNoReason: 'Nie zapisano przyczyny.',
+    failureNamed: ({ action }: { action: string }) => `Nie udało się dokończyć: ${action}`,
     pluginChangeDaemonUnavailable: 'Happier nie połączył się z maszyną, aby zmienić jej wtyczki, więc nic się nie zmieniło.',
     failureNotRun: 'Żądanie nie zostało wykonane',
     failureFileWrite: 'Nie udało się zapisać pliku',

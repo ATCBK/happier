@@ -1901,6 +1901,7 @@ const frValues = {
     transientFailure: "Le serveur était occupé, donc rien n'a été modifié. Réessayez.",
     failureGeneric: "L'action approuvée a échoué",
     failureNoReason: "Aucun motif n'a été enregistré.",
+    failureNamed: ({ action }: { action: string }) => `Impossible de terminer : ${action}`,
     pluginChangeDaemonUnavailable: "Happier n'a pas pu joindre la machine pour modifier ses plugins, donc rien n'a changé.",
     failureNotRun: 'Demande non exécutée',
     failureFileWrite: "Impossible d'écrire le fichier",

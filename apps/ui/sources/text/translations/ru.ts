@@ -1894,6 +1894,7 @@ const ruValues = {
     transientFailure: "Сервер был занят, поэтому ничего не изменилось. Повторите попытку.",
     failureGeneric: 'Одобренное действие не выполнено',
     failureNoReason: 'Причина не записана.',
+    failureNamed: ({ action }: { action: string }) => `Не удалось завершить: ${action}`,
     pluginChangeDaemonUnavailable: 'Happier не смог связаться с машиной, чтобы изменить её плагины, поэтому ничего не изменилось.',
     failureNotRun: 'Запрос не выполнен',
     failureFileWrite: 'Не удалось записать файл',

@@ -1456,6 +1456,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     transientFailure: "伺服器忙碌中，因此未做任何變更。請重試。",
     failureGeneric: '已核准的操作失敗了',
     failureNoReason: '未記錄原因。',
+    failureNamed: ({ action }: { action: string }) => `未能完成：${action}`,
     pluginChangeDaemonUnavailable: 'Happier 無法連線到這台機器來變更其外掛程式，因此沒有任何變更。',
     failureNotRun: '請求未執行',
     failureFileWrite: '無法寫入檔案',

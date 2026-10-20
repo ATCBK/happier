@@ -2102,6 +2102,7 @@ const ptValues = {
     transientFailure: "O servidor estava ocupado, então nada foi alterado. Tente novamente.",
     failureGeneric: 'A ação aprovada falhou',
     failureNoReason: 'Nenhum motivo foi registrado.',
+    failureNamed: ({ action }: { action: string }) => `Não foi possível concluir: ${action}`,
     pluginChangeDaemonUnavailable: 'O Happier não conseguiu alcançar a máquina para alterar seus plugins, então nada foi alterado.',
     failureNotRun: 'Pedido não executado',
     failureFileWrite: 'Não foi possível escrever o ficheiro',

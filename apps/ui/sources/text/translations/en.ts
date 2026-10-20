@@ -1641,6 +1641,7 @@ const enApprovals = {
   transientFailure: "The server was busy, so nothing was changed. Try again.",
   failureGeneric: 'The approved action failed',
   failureNoReason: 'No reason was recorded.',
+  failureNamed: ({ action }: { action: string }) => `Couldn't finish: ${action}`,
   pluginChangeDaemonUnavailable: 'Happier couldn’t reach the Machine to change its plugins, so nothing changed.',
   failureNotRun: 'Request not run',
   failureFileWrite: "Couldn't write the file",

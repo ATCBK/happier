@@ -2049,6 +2049,7 @@ const jaValues = {
     transientFailure: "サーバーがビジー状態だったため、何も変更されていません。もう一度お試しください。",
     failureGeneric: '承認した操作に失敗しました',
     failureNoReason: '理由は記録されていません。',
+    failureNamed: ({ action }: { action: string }) => `完了できませんでした：${action}`,
     pluginChangeDaemonUnavailable: 'Happier がマシンに接続できずプラグインを変更できなかったため、何も変更されていません。',
     failureNotRun: 'リクエストは実行されませんでした',
     failureFileWrite: 'ファイルを書き込めませんでした',

@@ -1879,6 +1879,7 @@ const itValues = {
     transientFailure: "Il server era occupato, quindi non è stato modificato nulla. Riprova.",
     failureGeneric: "L'azione approvata non è riuscita",
     failureNoReason: 'Non è stato registrato alcun motivo.',
+    failureNamed: ({ action }: { action: string }) => `Impossibile completare: ${action}`,
     pluginChangeDaemonUnavailable: 'Happier non ha potuto raggiungere la macchina per modificarne i plugin, quindi non è cambiato nulla.',
     failureNotRun: 'Richiesta non eseguita',
     failureFileWrite: 'Impossibile scrivere il file',

@@ -1686,6 +1686,7 @@ export const de: TranslationStructure = {
         transientFailure: "Der Server war ausgelastet, daher wurde nichts geändert. Versuche es erneut.",
         failureGeneric: 'Die freigegebene Aktion ist fehlgeschlagen',
         failureNoReason: 'Es wurde kein Grund aufgezeichnet.',
+        failureNamed: ({ action }: { action: string }) => `Nicht abgeschlossen: ${action}`,
         pluginChangeDaemonUnavailable: 'Happier konnte den Rechner nicht erreichen, um seine Plugins zu ändern, daher wurde nichts geändert.',
         failureNotRun: 'Anfrage nicht ausgeführt',
         failureFileWrite: 'Datei konnte nicht geschrieben werden',

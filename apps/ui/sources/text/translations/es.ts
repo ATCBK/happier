@@ -2066,6 +2066,7 @@ const esValues = {
     transientFailure: "El servidor estaba ocupado, así que no se cambió nada. Inténtalo de nuevo.",
     failureGeneric: 'La acción aprobada falló',
     failureNoReason: 'No se registró ningún motivo.',
+    failureNamed: ({ action }: { action: string }) => `No se pudo completar: ${action}`,
     pluginChangeDaemonUnavailable: 'Happier no pudo conectar con la máquina para cambiar sus plugins, así que no se cambió nada.',
     failureNotRun: 'Solicitud no ejecutada',
     failureFileWrite: 'No se pudo escribir el archivo',

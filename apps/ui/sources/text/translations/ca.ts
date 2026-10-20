@@ -1900,6 +1900,7 @@ const caValues = {
         transientFailure: "El servidor estava ocupat, així que no s'ha canviat res. Torna-ho a provar.",
         failureGeneric: "L'acció aprovada ha fallat",
         failureNoReason: "No s'ha registrat cap motiu.",
+        failureNamed: ({ action }: { action: string }) => `No s'ha pogut completar: ${action}`,
         pluginChangeDaemonUnavailable: "Happier no ha pogut connectar amb la màquina per canviar-ne els connectors, així que no s'ha canviat res.",
         failureNotRun: 'Sol·licitud no executada',
         failureFileWrite: "No s'ha pogut escriure el fitxer",
