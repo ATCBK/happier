@@ -43,6 +43,7 @@ export function resolveWorkspaceFileUploadTarget(input: Readonly<{
     path: unknown;
     sizeBytes: unknown;
     overwrite: unknown;
+    expectedHash?: unknown;
     accessPolicy?: FilesystemAccessPolicy;
     additionalAllowedWriteDirs?: readonly string[];
     sessionRpcTransferMaxBytes?: number | null;
@@ -50,7 +51,9 @@ export function resolveWorkspaceFileUploadTarget(input: Readonly<{
 }>): WorkspaceFileUploadTargetResult {
     const path = typeof input.path === 'string' ? input.path : '';
     const sizeBytes = normalizeSizeBytes(input.sizeBytes);
-    const overwrite = Boolean(input.overwrite);
+    const expectedHash = input.expectedHash === null ? null
+        : typeof input.expectedHash === 'string' && input.expectedHash.trim() ? input.expectedHash.trim() : undefined;
+    const overwrite = expectedHash === null ? false : typeof expectedHash === 'string' || Boolean(input.overwrite);
 
     if (!path) {
         return { success: false, error: 'Missing path' };
@@ -83,12 +86,14 @@ export function resolveWorkspaceFileUploadTarget(input: Readonly<{
             destDisplayPath: path,
             expectedSizeBytes: sizeBytes,
             overwrite,
-            finalizeUpload: async ({ uploadId, tempPath, sizeBytes: finalizedSizeBytes }) =>
+            finalizeUpload: async ({ uploadId, tempPath, sizeBytes: finalizedSizeBytes, sha256 }) =>
                 await finalizeWorkspaceFileUpload({
                     tempPath,
                     destPath,
                     destDisplayPath: path,
                     overwrite,
+                    expectedHash,
+                    sha256,
                     sizeBytes: finalizedSizeBytes,
                     fileOperations: input.finalizeFileOperations?.({
                         uploadId,
