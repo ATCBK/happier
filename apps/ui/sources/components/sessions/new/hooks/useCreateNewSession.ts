@@ -60,7 +60,7 @@ import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/rev
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
 import { nowServerMs } from '@/sync/runtime/time';
-import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
+import { canInvokePromptTemplate, resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { resolvePromptInvocationComposerSendAction } from '@/sync/domains/input/slashCommands/promptInvocationBehavior';
@@ -1099,7 +1099,8 @@ export function useCreateNewSession(params: Readonly<{
             const shouldSendInitialMessage = (opts?.initialMessage ?? 'send') !== 'skip';
             const shouldPrepareInitialMessage = shouldSendInitialMessage && sessionPrompt.trim();
             const invocationScope = current.draftScope ?? selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), resolvedTargetServerId);
-            if (shouldPrepareInitialMessage && invocationScope) await refreshPromptLibraryCatalog(invocationScope);
+            // Only a `/token` prompt reads the catalog, so any other launch never waits on it.
+            if (shouldPrepareInitialMessage && invocationScope && canInvokePromptTemplate(sessionPrompt)) await refreshPromptLibraryCatalog(invocationScope);
             if (!isLaunchScopeStillActive() || (invocationScope && !areServerAccountScopesEqual(invocationScope,
                 latestParamsRef.current.draftScope ?? selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), resolvedTargetServerId)))) return;
             await prepareSubmittedInstructions();
