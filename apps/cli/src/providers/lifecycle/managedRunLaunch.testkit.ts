@@ -20,6 +20,7 @@ import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGate
  * supplied by each test; no authorization, registry or materializer is mocked. */
 export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
   catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
+  holdResponseForInput?: string;
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
   const pluginId = 'acme.managed-run';
@@ -28,6 +29,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   const gateway = input.physicalGateway ? createSharedGatewayRegistryTestkit({ directory,
     ...(input.happyHomeDir ? { happyHomeDir: input.happyHomeDir } : {}),
     ...(input.catalogModels ? { catalogModels: input.catalogModels } : {}),
+    ...(input.holdResponseForInput ? { holdResponseForInput: input.holdResponseForInput } : {}),
     ...(input.controller ? { controller: input.controller } : {}),
     ...(input.probeCatalog ? { catalog: { source: 'static+probe' as const, manualModelPolicy: 'catalog-only' as const,
       staticModels: [{ id: 'example', name: 'Example' }], sourceRegistryVersion: 'fixture-registry:v1',

@@ -4597,6 +4597,16 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 await retireExplicitStartOperation(existing);
                 return Object.freeze({ status: 'not_current' as const });
             }
+            // Shared physical custody has its own operation identity. Its
+            // observed death cannot mark each consumer's explicit-Start entry
+            // terminal through the ordinary same-scope lookup. Re-enter the
+            // existing retirement/start lifecycle instead of rejoining that
+            // consumer's dead endpoint. Authority is still checked above and
+            // by establishment; no Agent request is retried here.
+            if (existing?.sharedProvider && !existing.terminal) {
+                const retained = await existing.establishment;
+                if (!readsCurrent(retained.projection.isCurrent)) existing.terminal = true;
+            }
             if (existing?.terminal) {
                 await retireExplicitStartOperation(existing);
                 existing = semanticEntries.get(entryKey);

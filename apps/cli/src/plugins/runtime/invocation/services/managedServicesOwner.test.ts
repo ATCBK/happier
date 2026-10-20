@@ -80,7 +80,7 @@ import {
     createPluginInvocationServicesFactory,
 } from './factory';
 import { withPluginInvocationServiceBindingAvailability } from './unavailable';
-import { createSharedManagedProviderSessionAccess } from '@/daemon/startup/sharedManagedProviderSessionAccess';
+import { createSharedManagedProviderSessionAccess, createSharedManagedProviderSessionStart } from '@/daemon/startup/sharedManagedProviderSessionAccess';
 import { listHappierProcessRoots } from '@/daemon/processes/roots/listHappierProcessRoots';
 import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
 import { resolveProcessOwnerRequester } from '@/daemon/processes/ownership/resolveProcessOwnerRequester';
@@ -671,6 +671,54 @@ describe('managed-services SVC09 owner', () => {
         } finally {
             await service?.dispose();
             await owner.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+    it.each(['process-death', 'failed-start'] as const)('G1 re-enters local Session custody after %s', async failure => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-local-gateway-recovery-'));
+        const firstProcess = createLifecycleProcess(4_591);
+        const nextProcess = createLifecycleProcess(4_592);
+        const harness = createLifecycleHarness([firstProcess, nextProcess], 'daemon', {
+            sharedGatewayAccessDirectory: directory,
+            fetch: async url => new Response(null, { status: String(url).endsWith('/_happier/consumer-access/settle') ? 200 : 204 }),
+        });
+        const signal = new AbortController().signal;
+        const services = harness.owner.bindScope(lifecycleScope({ occurrenceId: 'local-recovery', sessionId: 'session', operationId: 'session' }), harness.exec, {
+            managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true, isPhysicalOccurrenceCurrent: () => true,
+                sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId: 'session' } },
+            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, 'session.capability'), isCurrent: () => true,
+                ...gatewayRequestAuthUses() },
+        });
+        const spec: ManagedServiceSpec = { ...lifecycleSpec({ id: 'local-recovery', port: 4_359 }),
+            requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
+            clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' } };
+        let captured: Parameters<typeof harness.owner.materializeManagedProviderAgentBinding>[0] | null = null;
+        const start = createSharedManagedProviderSessionStart({ readProjection: () => captured,
+            start: async () => {
+                const service = await services.supervise(spec);
+                const projection = await harness.owner.projectManagedProviderEndpointAccess({ service,
+                    endpoints: [{ endpointTemplateId: 'responses', servicePath: '/v1' }], signal, isCurrent: () => true });
+                if (!projection) throw new Error('Expected admitted local consumer');
+                captured = { service, projection, endpointTemplateId: 'responses', materialize: async () => ({ v: 1, kind: 'spawnEnv', env: [] }) };
+            } });
+        const read = createSharedManagedProviderSessionAccess({ start, readProjection: () => captured,
+            materialize: harness.owner.materializeManagedProviderAgentBinding, endpointTemplateId: 'responses', revalidate: async () => true,
+            cleanup: async () => { await captured?.projection.cleanup(); } });
+        try {
+            if (failure === 'failed-start') {
+                harness.exec.spawn.mockRejectedValueOnce(new Error('OS spawn temporarily unavailable'));
+                await expect(read(signal)).rejects.toBeInstanceOf(Error);
+            } else {
+                const initial = await read(signal);
+                expect(initial.endpointUrl).toBe('http://127.0.0.1:4359/v1');
+                await firstProcess.dispose();
+                await vi.waitFor(() => expect(captured?.projection.isCurrent()).toBe(false));
+            }
+            const restored = await Promise.all([read(signal), read(signal)]);
+            expect(restored.map(binding => binding.endpointUrl)).toEqual(['http://127.0.0.1:4359/v1', 'http://127.0.0.1:4359/v1']);
+            expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
+        } finally {
+            await harness.owner.dispose();
             await rm(directory, { recursive: true, force: true });
         }
     });

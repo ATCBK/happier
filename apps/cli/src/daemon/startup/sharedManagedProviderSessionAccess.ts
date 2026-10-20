@@ -5,6 +5,24 @@ import type { ResolvedManagedProviderRuntimeInvocationServices } from '@/plugins
 type MaterializeSharedBinding = NonNullable<ResolvedManagedProviderRuntimeInvocationServices['materializeManagedProviderAgentBinding']>;
 type SharedProjection = Pick<Parameters<MaterializeSharedBinding>[0], 'service' | 'projection'>;
 
+/** Coalesces Session consumer establishment at its existing custody owner. */
+export function createSharedManagedProviderSessionStart(input: Readonly<{
+    start(): Promise<void>;
+    readProjection(): SharedProjection | null;
+}>) {
+    let startPromise: Promise<void> | null = null;
+    return () => {
+        if (startPromise) return startPromise;
+        const captured = input.readProjection();
+        if (captured?.projection.isCurrent()) return Promise.resolve();
+        startPromise = (async () => {
+            if (captured) await captured.projection.cleanup();
+            await input.start();
+        })().finally(() => { startPromise = null; });
+        return startPromise;
+    };
+}
+
 /** Reads the exact daemon-owned consumer projection without rematerializing the Agent. */
 export function createSharedManagedProviderSessionAccess(input: Readonly<{
     start(): Promise<void>;
