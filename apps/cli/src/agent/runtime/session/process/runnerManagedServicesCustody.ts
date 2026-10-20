@@ -40,7 +40,6 @@ import type {
     RunnerDaemonManagedProviderRetentionV1,
 } from './agentRuntimeDaemonPluginServicesProtocol';
 import {
-    MANAGED_SERVICE_ENDPOINT_READ_NEXT_RPC_TIMEOUT_MS,
     MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS,
     ManagedServiceEndpointReadCancelResultV1Schema,
     ManagedServiceEndpointReadNextResultV1Schema,
@@ -2852,7 +2851,7 @@ export function createRunnerManagedServicesClient(input: Readonly<{
         call(input: Readonly<{
             method: string;
             request: unknown;
-            timeoutMs: number;
+            timeoutMs: number | null;
             signal?: AbortSignal;
         }>): Promise<unknown>;
     }>;
@@ -2996,10 +2995,6 @@ export function createRunnerManagedServicesClient(input: Readonly<{
             }
             const rpc = input.endpointReadRpc;
             const requestId = randomUUID();
-            const rpcTimeoutMs = Math.min(
-                (request.timeoutMs ?? 300_000) + 5_000,
-                2_147_483_647,
-            );
             const route = Object.freeze({
                 kind: 'exactHandle' as const,
                 claim,
@@ -3061,7 +3056,7 @@ export function createRunnerManagedServicesClient(input: Readonly<{
                             method:
                                 MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS
                                     .CANCEL,
-                            timeoutMs: 5_000,
+                            timeoutMs: null,
                             request: {
                                 v: 1,
                                 requestId,
@@ -3101,7 +3096,7 @@ export function createRunnerManagedServicesClient(input: Readonly<{
                 openDispatched = true;
                 const rawOpen = await rpc.call({
                     method: MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.OPEN,
-                    timeoutMs: rpcTimeoutMs,
+                    timeoutMs: request.timeoutMs ?? null,
                     request: openRequest,
                     signal: transportController.signal,
                 });
@@ -3143,8 +3138,7 @@ export function createRunnerManagedServicesClient(input: Readonly<{
                                 method:
                                     MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS
                                         .NEXT,
-                                timeoutMs:
-                                    MANAGED_SERVICE_ENDPOINT_READ_NEXT_RPC_TIMEOUT_MS,
+                                timeoutMs: null,
                                 request: {
                                     v: 1,
                                     requestId,
@@ -3192,6 +3186,9 @@ export function createRunnerManagedServicesClient(input: Readonly<{
                 });
             } catch (error) {
                 await cancelRemote();
+                if (request.signal?.aborted) {
+                    return fail('plugin_operation_aborted', 'Managed service request was aborted');
+                }
                 throw error;
             }
         };

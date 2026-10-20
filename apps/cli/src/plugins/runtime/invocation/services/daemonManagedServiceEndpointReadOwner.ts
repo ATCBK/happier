@@ -5,7 +5,6 @@ import type { StoredCredentials } from '@/persistence';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import {
-  MANAGED_SERVICE_ENDPOINT_READ_NEXT_RPC_TIMEOUT_MS,
   MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS,
   ManagedServiceEndpointReadCancelResultV1Schema,
   ManagedServiceEndpointReadNextResultV1Schema,
@@ -47,18 +46,18 @@ type RunnerEndpointReadRpc = Readonly<{
   call(input: Readonly<{
     method: string;
     request: unknown;
-    timeoutMs: number;
+    timeoutMs: number | null;
+    signal?: AbortSignal;
   }>): Promise<unknown>;
 }>;
-
-const MAX_ACTIVE_READS = 128;
 
 async function callResolvedSessionRpc(input: Readonly<{
   credentials: StoredCredentials;
   transport: SessionTransport;
   method: string;
   request: unknown;
-  timeoutMs: number;
+  timeoutMs: number | null;
+  signal?: AbortSignal;
 }>): Promise<unknown> {
   const common = {
     token: input.credentials.token,
@@ -66,6 +65,7 @@ async function callResolvedSessionRpc(input: Readonly<{
     method: `${input.transport.sessionId}:${input.method}`,
     request: input.request,
     timeoutMs: input.timeoutMs,
+    signal: input.signal,
   };
   return input.transport.mode === 'plain'
     ? await callSessionRpc({
@@ -99,6 +99,7 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
 }> {
   const pendingClaims = new Map<string, PendingClaim>();
   const activeCancels = new Map<string, () => Promise<void>>();
+  const retirement = new AbortController();
   let disposed = false;
   let disposePromise: Promise<void> | null = null;
 
@@ -125,9 +126,6 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
         readInput.request.headers,
       );
       const projection = readInput.projection;
-      if (activeCancels.size >= MAX_ACTIVE_READS) {
-        throw new Error('Managed server endpoint read capacity is exhausted');
-      }
       let rpc: RunnerEndpointReadRpc | null;
       if (input.resolveRunnerEndpointReadRpc) {
         rpc = await input.resolveRunnerEndpointReadRpc(
@@ -146,7 +144,8 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
                 call: async (rpcInput: Readonly<{
                   method: string;
                   request: unknown;
-                  timeoutMs: number;
+                  timeoutMs: number | null;
+                  signal?: AbortSignal;
                 }>) => await callResolvedSessionRpc({
                   credentials: input.credentials,
                   transport,
@@ -167,9 +166,6 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
       if (disposed) {
         throw new Error('Managed server endpoint read owner is unavailable');
       }
-      if (activeCancels.size >= MAX_ACTIVE_READS) {
-        throw new Error('Managed server endpoint read capacity is exhausted');
-      }
       const requestId = randomUUID();
       const pending: PendingClaim = { projection, claimed: false };
       pendingClaims.set(requestId, pending);
@@ -189,7 +185,7 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
           try {
             const raw = await runnerRpc.call({
               method: MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.CANCEL,
-              timeoutMs: 5_000,
+              timeoutMs: null,
               request: {
                 v: 1,
                 requestId,
@@ -225,7 +221,8 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
         openDispatched = true;
         const rawOpen = await runnerRpc.call({
           method: MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.OPEN,
-          timeoutMs: 20_000,
+          timeoutMs: null,
+          signal: readInput.signal,
           request: {
             v: 1,
             requestId,
@@ -272,8 +269,8 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
             try {
               const rawNext = await runnerRpc.call({
                 method: MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.NEXT,
-                timeoutMs:
-                  MANAGED_SERVICE_ENDPOINT_READ_NEXT_RPC_TIMEOUT_MS,
+                timeoutMs: null,
+                signal: readInput.signal,
                 request: {
                   v: 1,
                   requestId,
@@ -380,7 +377,7 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
           projection,
           resolveCurrentContribution,
           request,
-          signal: bindingInput.signal,
+          signal: AbortSignal.any([bindingInput.signal, retirement.signal]),
         });
       });
     };
@@ -426,7 +423,8 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
               call: async (rpcInput: Readonly<{
                 method: string;
                 request: unknown;
-                timeoutMs: number;
+                timeoutMs: number | null;
+                signal?: AbortSignal;
               }>) => await callResolvedSessionRpc({
                 credentials: input.credentials,
                 transport,
@@ -442,7 +440,8 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
       try {
         const raw = await rpc.call({
           method: MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.OPEN,
-          timeoutMs: 20_000,
+          timeoutMs: null,
+          signal: retirement.signal,
           request: {
             v: 1,
             requestId,
@@ -481,9 +480,6 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
             if (latest?.projectionToken !== projection.projectionToken) {
               throw new Error('Managed server endpoint read owner is unavailable');
             }
-            const controller = request.signal
-              ? null
-              : new AbortController();
             return await readProjection({
               projection,
               resolveCurrentContribution: async () => {
@@ -494,7 +490,9 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
                 return candidate;
               },
               request: { pathAndQuery: request.pathAndQuery },
-              signal: request.signal ?? controller!.signal,
+              signal: request.signal
+                ? AbortSignal.any([request.signal, retirement.signal])
+                : retirement.signal,
             });
           },
         });
@@ -522,6 +520,7 @@ export function createDaemonManagedServiceEndpointReadOwner(input: Readonly<{
     dispose() {
       if (disposePromise) return disposePromise;
       disposed = true;
+      retirement.abort(new Error('Managed server endpoint read owner was disposed'));
       pendingClaims.clear();
       const cancels = [...activeCancels.values()];
       disposePromise = Promise.allSettled(

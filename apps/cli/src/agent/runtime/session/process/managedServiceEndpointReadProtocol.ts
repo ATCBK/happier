@@ -22,10 +22,6 @@ export const MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS = Object.freeze({
   CANCEL: SESSION_RPC_METHODS.SESSION_MANAGED_SERVICE_ENDPOINT_READ_CANCEL_V1,
 });
 
-// Socket.IO acknowledgements require a finite timeout even though response
-// body lifetime is owned by the caller, exact handle, and custody scope.
-export const MANAGED_SERVICE_ENDPOINT_READ_NEXT_RPC_TIMEOUT_MS = 2_147_483_647;
-
 const RequestIdSchema = z.string().check(z.uuid());
 const ProjectionTokenSchema = z.string().check(z.regex(/^[a-f0-9]{64}$/u));
 const ProjectionSchema = z.custom<ManagedServiceEndpointProjectionV1>(

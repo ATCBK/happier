@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 
 import {
@@ -119,6 +119,7 @@ const invalidBindings: readonly (readonly [string, BindingOverride])[] = [
 ];
 
 describe('daemon managed-service endpoint read owner', () => {
+    afterEach(() => vi.useRealTimers());
     it('lets concurrent endpoint reads wait under caller custody and cancels outstanding headers', async () => {
         vi.useFakeTimers();
         let owner: ReturnType<typeof createDaemonManagedServiceEndpointReadOwner>;
@@ -137,7 +138,8 @@ describe('daemon managed-service endpoint read owner', () => {
                     expect(owner.claim({ requestId: request.requestId,
                         projectionToken: projection.projectionToken, sessionId: projection.sessionId, pluginId })).toBe(true);
                     return await new Promise<unknown>((resolve, reject) => {
-                        const timeout = setTimeout(() => reject(new Error('RPC call timeout')), rpcInput.timeoutMs);
+                        const timeout = rpcInput.timeoutMs === null ? undefined
+                            : setTimeout(() => reject(new Error('RPC call timeout')), rpcInput.timeoutMs);
                         const response = setTimeout(() => {
                             clearTimeout(timeout);
                             resolve({ v: 1, requestId: request.requestId, status: 'opened',
@@ -318,7 +320,7 @@ describe('daemon managed-service endpoint read owner', () => {
         const runnerCall = vi.fn(async (rpcInput: Readonly<{
             method: string;
             request: unknown;
-            timeoutMs: number;
+            timeoutMs: number | null;
         }>) => {
             if (
                 rpcInput.method
@@ -455,7 +457,7 @@ describe('daemon managed-service endpoint read owner', () => {
         const runnerCall = vi.fn(async (rpcInput: Readonly<{
             method: string;
             request: unknown;
-            timeoutMs: number;
+            timeoutMs: number | null;
         }>) => {
             if (
                 rpcInput.method
@@ -543,6 +545,7 @@ describe('daemon managed-service endpoint read owner', () => {
     });
 
     it('joins remote cleanup and rejects when disposed while OPEN is settling', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         let releaseOpen!: () => void;
         let releaseCancel!: () => void;
         let markOpenStarted!: () => void;
@@ -565,7 +568,7 @@ describe('daemon managed-service endpoint read owner', () => {
         const runnerCall = vi.fn(async (rpcInput: Readonly<{
             method: string;
             request: unknown;
-            timeoutMs: number;
+            timeoutMs: number | null;
         }>) => {
             if (
                 rpcInput.method
@@ -599,13 +602,24 @@ describe('daemon managed-service endpoint read owner', () => {
                 rpcInput.method
                 === MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.CANCEL
             ) {
-                expect(rpcInput.timeoutMs).toBe(5_000);
                 const request =
                     ManagedServiceEndpointReadCancelRequestV1Schema.parse(
                         rpcInput.request,
                     );
                 markCancelStarted();
-                await cancelReleased;
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                    await Promise.race([
+                        cancelReleased,
+                        new Promise<never>((_resolve, reject) => {
+                            if (rpcInput.timeoutMs !== null) {
+                                timer = setTimeout(() => reject(new Error('RPC call timeout')), rpcInput.timeoutMs);
+                            }
+                        }),
+                    ]);
+                } finally {
+                    clearTimeout(timer);
+                }
                 return {
                     v: 1 as const,
                     requestId: request.requestId,
@@ -649,6 +663,7 @@ describe('daemon managed-service endpoint read owner', () => {
             disposalSettled = true;
         });
         await cancelStarted;
+        await vi.advanceTimersByTimeAsync(7_000);
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(disposalSettled).toBe(false);
 
@@ -690,7 +705,7 @@ describe('daemon managed-service endpoint read owner', () => {
         const runnerCall = vi.fn(async (rpcInput: Readonly<{
             method: string;
             request: unknown;
-            timeoutMs: number;
+            timeoutMs: number | null;
         }>) => {
             if (
                 rpcInput.method
@@ -724,7 +739,6 @@ describe('daemon managed-service endpoint read owner', () => {
                 rpcInput.method
                 === MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.CANCEL
             ) {
-                expect(rpcInput.timeoutMs).toBe(5_000);
                 const request =
                     ManagedServiceEndpointReadCancelRequestV1Schema.parse(
                         rpcInput.request,

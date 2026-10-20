@@ -496,7 +496,7 @@ describe('runner managed-services Provider custody', () => {
             async call(input: Readonly<{
                 method: string;
                 request: unknown;
-                timeoutMs: number;
+                timeoutMs: number | null;
             }>) {
                 const request = input.request as {
                     requestId: string;
@@ -662,7 +662,8 @@ describe('runner managed-services Provider custody', () => {
                         return { v: 1, requestId: request.requestId, status: 'cancelled', cancelled: true };
                     }
                     return await new Promise<unknown>((resolve, reject) => {
-                        const timer = setTimeout(() => reject(new Error('RPC call timeout')), input.timeoutMs);
+                        const timer = input.timeoutMs === null ? undefined
+                            : setTimeout(() => reject(new Error('RPC call timeout')), input.timeoutMs);
                         const response = setTimeout(() => {
                             clearTimeout(timer);
                             resolve({ v: 1, requestId: request.requestId, status: 'opened',
@@ -710,7 +711,7 @@ describe('runner managed-services Provider custody', () => {
                 async call(input: Readonly<{
                     method: string;
                     request: unknown;
-                    timeoutMs: number;
+                    timeoutMs: number | null;
                     signal?: AbortSignal;
                 }>) {
                     const request = input.request as { requestId: string };
@@ -734,10 +735,9 @@ describe('runner managed-services Provider custody', () => {
                         input.method
                             === MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.NEXT
                     ) {
-                        expect(input.timeoutMs).toBe(2_147_483_647);
                         nextCount += 1;
                         return await new Promise<unknown>((resolve, reject) => {
-                            const transportTimeout = setTimeout(
+                            const transportTimeout = input.timeoutMs === null ? undefined : setTimeout(
                                 () => reject(new Error('RPC call timeout')),
                                 input.timeoutMs,
                             );
@@ -837,7 +837,7 @@ describe('runner managed-services Provider custody', () => {
             async call(input: Readonly<{
                 method: string;
                 request: unknown;
-                timeoutMs: number;
+                timeoutMs: number | null;
                 signal?: AbortSignal;
             }>) {
                 const request = input.request as { requestId: string };

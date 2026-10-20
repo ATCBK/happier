@@ -8224,7 +8224,7 @@ export async function startDaemonSessionControlRuntime(
         rpcInput: Readonly<{
           method: string;
           request: unknown;
-          timeoutMs: number;
+          timeoutMs: number | null;
           signal?: AbortSignal;
         }>,
       ): Promise<unknown> {

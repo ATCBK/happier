@@ -246,23 +246,6 @@ function boundManagedServiceEndpointResponseBody(
     });
 }
 
-/**
- * How many managed-service response bodies one runner may hold open at once.
- *
- * This is an ADMISSION bound, not a lifetime: each live entry retains an abort controller, a Fetch
- * body reader and the socket underneath it, so an unbounded number of simultaneously open bodies is
- * a real runner file-descriptor and memory cost. It deliberately does not decide when an admitted
- * response ends — the public request contract gives post-header lifetime to the caller's signal and
- * the exact handle, and slots are returned by caller cancel, stream end, projection release and
- * authority retirement.
- *
- * The value is a deliberate budget rather than a measured platform limit: it is far below the
- * default POSIX descriptor ceiling while being orders of magnitude above any observed concurrent
- * managed-stream count. Raising or lowering it is a product decision, so it is named and exported
- * here instead of being an anonymous literal at the admission check.
- */
-export const RUNNER_MANAGED_SERVICE_MAX_ACTIVE_ENDPOINT_READS = 128;
-
 export function createRunnerManagedServiceEndpointProjectionBinding(
     remote: RemoteRunnerManagedServiceEndpointProjectionOwner,
     options: Readonly<{
@@ -496,8 +479,6 @@ export function createRunnerManagedServiceEndpointProjectionBinding(
             if (!('headers' in request)) return unavailable();
             if (
                 activeReads.has(request.requestId)
-                || activeReads.size
-                    >= RUNNER_MANAGED_SERVICE_MAX_ACTIVE_ENDPOINT_READS
                 || hasCallerAuthentication(request.headers)
             ) return unavailable();
             if (

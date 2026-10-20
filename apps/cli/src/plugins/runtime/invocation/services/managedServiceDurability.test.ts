@@ -874,6 +874,24 @@ describe('managed server durability owner', () => {
         }
     });
 
+    it('round-trips a valid canonical projection larger than the former file-reader ceiling', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-managed-projection-record-'));
+        const owner = createManagedServiceDurabilityOwner({ rootDir: root,
+            observeProcessStartIdentity: async (pid) => processIdentity(pid) });
+        try {
+            const input = { ...endpointProjection(record('large-record')),
+                sessionId: 's'.repeat(10_000), pluginId: 'p'.repeat(10_000), contributionId: 'c'.repeat(10_000),
+                serverId: 'v'.repeat(10_000), instanceId: 'i'.repeat(10_000), operationClaimId: 'o'.repeat(10_000),
+                process: { pid: 42, startIdentity: 'b'.repeat(10_000) } };
+            const token = await owner.publishEndpointProjection(input);
+            const projections = readManagedServiceEndpointProjectionCandidates(root);
+            expect(projections).toHaveLength(1);
+            expect(projections[0]).toMatchObject({ ...input, projectionToken: token });
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
     it('reaps confirmed stale runner projections when resolving a current contribution', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-managed-runner-projection-capacity-'));
         const owner = createManagedServiceDurabilityOwner({
@@ -891,7 +909,6 @@ describe('managed server durability owner', () => {
         })).resolves.toMatch(/^[a-f0-9]{64}$/u);
         await expect(owner.resolveEndpointProjection({
             pluginId: 'opencode',
-            sessionId: 'session-one',
             contributionId: 'opencode/agent',
             selector: { kind: 'currentContribution' },
         })).resolves.toMatchObject({ instanceId: 'replacement-runner' });
