@@ -132,6 +132,21 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
+/** The incumbent Connected Services chip presentation, shared by non-composer authoring hosts. */
+export function useSessionAuthoringChipRenderContext(
+    popoverAnchorRef: React.RefObject<React.ComponentRef<typeof View> | null>,
+): AgentInputExtraActionChipRenderContext {
+    const { theme } = useUnistyles();
+    return React.useMemo(() => ({
+        chipStyle: (pressed: boolean) => [styles.chip, pressed ? styles.chipPressed : null],
+        showLabel: true,
+        iconColor: theme.colors.composer.chipTint,
+        textStyle: styles.chipText,
+        countTextStyle: styles.chipText,
+        popoverAnchorRef,
+    }), [popoverAnchorRef, theme.colors.composer.chipTint]);
+}
+
 /** One selectable value: a chip that names the current choice and its picker. */
 function SessionAuthoringOptionChip(props: Readonly<{
     controlId: string;
@@ -605,14 +620,7 @@ export function SessionAuthoringControls(props: SessionAuthoringControlsProps): 
     const engineField = props.onChangeFields === undefined ? undefined
         : props.fields.find(field => field === 'agentTarget' || field === 'modelSelection');
 
-    const chipRenderContext = React.useMemo<AgentInputExtraActionChipRenderContext>(() => ({
-        chipStyle: (pressed: boolean) => [styles.chip, pressed ? styles.chipPressed : null],
-        showLabel: true,
-        iconColor: theme.colors.composer.chipTint,
-        textStyle: styles.chipText,
-        countTextStyle: styles.chipText,
-        popoverAnchorRef: overlayAnchorRef,
-    }), [theme.colors.composer.chipTint]);
+    const chipRenderContext = useSessionAuthoringChipRenderContext(overlayAnchorRef);
 
     const presentation = props.presentation ?? 'chips';
     const isChanged = (field: SessionAuthoringFieldId) => props.overriddenFields === 'all'

@@ -2017,7 +2017,7 @@ describe('sessionAuthoringDraftAdapters', () => {
         }));
     });
 
-    it('persists a canonical built-in fallback instead of the legacy customAcp sentinel for configured ACP backend drafts', () => {
+    it('preserves an unselected Agent while retaining the compatibility display default', () => {
         const draft = buildNewSessionAuthoringDraft({
             directory: '/tmp/project',
             checkoutCreationDraft: null,
@@ -2057,20 +2057,14 @@ describe('sessionAuthoringDraftAdapters', () => {
 
         expect(persistedDraft).toEqual(expect.objectContaining({
             agentType: 'codex',
-            agentTarget: {
-                kind: 'agent',
-                identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
-            },
+            agentTarget: null,
         }));
         expect(buildNewSessionAuthoringDraftFromPersistedDraft(persistedDraft)).toEqual(expect.objectContaining({
-            agentTarget: {
-                kind: 'agent',
-                identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
-            },
+            agentTarget: null,
         }));
     });
 
-    it('ignores a legacy customAcp preferred persisted agent when autosaving configured ACP backend drafts', () => {
+    it('ignores a legacy customAcp display default without authoring a fallback Agent', () => {
         const draft = buildNewSessionAuthoringDraft({
             directory: '/tmp/project',
             checkoutCreationDraft: null,
@@ -2110,15 +2104,12 @@ describe('sessionAuthoringDraftAdapters', () => {
 
         expect(persistedDraft).toEqual(expect.objectContaining({
             agentType: DEFAULT_AGENT_ID,
-            agentTarget: {
-                kind: 'agent',
-                identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
-            },
+            agentTarget: null,
         }));
         expect(persistedDraft).not.toHaveProperty('backendTarget');
     });
 
-    it('does not manufacture the legacy customAcp sentinel in temp data for configured ACP backend drafts', () => {
+    it('keeps an unselected Agent in temp data without the legacy customAcp sentinel', () => {
         const draft = buildNewSessionAuthoringDraft({
             directory: '/tmp/project',
             checkoutCreationDraft: null,
@@ -2151,10 +2142,7 @@ describe('sessionAuthoringDraftAdapters', () => {
         });
 
         expect(tempData).toEqual(expect.objectContaining({
-            agentTarget: {
-                kind: 'agent',
-                identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
-            },
+            agentTarget: null,
         }));
         expect(tempData).not.toHaveProperty('backendTarget');
         expect(tempData.agentType).not.toBe('customAcp');

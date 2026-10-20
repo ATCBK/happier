@@ -1761,24 +1761,24 @@ export function useNewSessionScreenModel(input?: Readonly<{
             sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(selectionOutcome.selection)
         ));
         if (!model) return;
-        let admitted = false;
-        await confirmExperimentalProviderModel.confirm({ kind: 'team-model', model }, () => { admitted = true; });
-        if (!admitted || !stillCurrent()) return;
-        if (selectedResource.sessionUsePolicy !== 'personal_allowed') {
-            accessDraftState.applyTeamCredentialPolicy(
-                selectedResource.teamId,
-                selectedResource.sessionUsePolicy === 'team_visibility_required',
-            );
-        }
-        setSelectedTeamCredentialModel(selectionOutcome.selection);
-        setModelSelection({
-            v: 1,
-            updatedAt: Date.now(),
-            ref: {
-                agentTargetKey: selectionOutcome.selection.agentTargetKey,
-                providerConnectionId: null,
-                modelId: selectionOutcome.selection.modelId,
-            },
+        await confirmExperimentalProviderModel.confirm({ kind: 'team-model', model }, () => {
+            if (!stillCurrent()) return;
+            if (selectedResource.sessionUsePolicy !== 'personal_allowed') {
+                accessDraftState.applyTeamCredentialPolicy(
+                    selectedResource.teamId,
+                    selectedResource.sessionUsePolicy === 'team_visibility_required',
+                );
+            }
+            setSelectedTeamCredentialModel(selectionOutcome.selection);
+            setModelSelection({
+                v: 1,
+                updatedAt: Date.now(),
+                ref: {
+                    agentTargetKey: selectionOutcome.selection.agentTargetKey,
+                    providerConnectionId: null,
+                    modelId: selectionOutcome.selection.modelId,
+                },
+            });
         });
     }, [accessDraftState, confirmExperimentalProviderModel, coordinateTeamCredentialSelection, setModelSelection, teamCredentialSelectionContextRef]);
     const teamCredentialProviderBinding = React.useMemo(() => selectedTeamCredentialModel

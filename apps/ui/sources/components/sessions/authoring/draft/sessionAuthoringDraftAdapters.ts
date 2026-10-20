@@ -544,7 +544,7 @@ function resolveNewSessionSourceModelId(source: NewSessionAuthoringDraftSource):
 
 function buildNewSessionAuthoringDraftFromSource(source: NewSessionAuthoringDraftSource): SessionAuthoringDraft {
     const backendTarget = source.source.backendTarget ?? null;
-    const agentTarget = source.source.agentTarget ?? resolveCompatibilityAgentTarget(
+    const agentTarget = source.source.agentTarget !== undefined ? source.source.agentTarget : resolveCompatibilityAgentTarget(
         backendTarget,
         source.source.agentType,
     );
@@ -1367,7 +1367,6 @@ export function buildNewSessionTempDataFromAuthoringDraft(params: Readonly<{
         : params.draft.agentTarget
             ? resolveBundledAgentIdFromContributionIdentity(params.draft.agentTarget.identity)
             : DEFAULT_AGENT_ID;
-    const persistedAgentTarget = params.draft.agentTarget ?? resolveCompatibilityAgentTarget(null, canonicalAgentId);
     const targetKey = params.draft.agentTarget
         ? buildBackendTargetKeyV2(params.draft.agentTarget)
         : backendTarget
@@ -1406,7 +1405,7 @@ export function buildNewSessionTempDataFromAuthoringDraft(params: Readonly<{
         ...(params.draft.initialTriggers !== undefined ? { initialTriggers: params.draft.initialTriggers } : {}),
         checkoutCreationDraft: params.draft.checkoutCreationDraft,
         ...(canonicalAgentId ? { agentType: canonicalAgentId } : {}),
-        ...(persistedAgentTarget ? { agentTarget: persistedAgentTarget } : {}),
+        agentTarget: params.draft.agentTarget,
         ...(backendTarget ? { backendTarget } : {}),
         selectedProfileId: params.draft.profileId,
         transcriptStorage: params.draft.transcriptStorage ?? undefined,
@@ -1454,7 +1453,6 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
         persistedAgentId: params.preferredPersistedAgentId,
         selectedBuiltInAgentId: canonicalSelectedBuiltInAgentId,
     });
-    const persistedAgentTarget = params.draft.agentTarget ?? resolveCompatibilityAgentTarget(null, agentType);
     const normalizedBackendNewSessionOptionStateByTargetKey = normalizeBackendNewSessionOptionStateByTargetKey(
         params.backendNewSessionOptionStateByTargetKey,
     );
@@ -1515,7 +1513,7 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
             sessionOnlySecretValueEncByProfileIdByEnvVarName: params.sessionOnlySecretValueEncByProfileIdByEnvVarName,
         } : {}),
         agentType,
-        agentTarget: persistedAgentTarget,
+        agentTarget: params.draft.agentTarget,
         ...(params.draft.transcriptStorage ? { transcriptStorage: params.draft.transcriptStorage } : {}),
         permissionMode: isPermissionMode(params.draft.permissionMode) ? params.draft.permissionMode : 'default',
         modelSelection: params.draft.modelSelection,

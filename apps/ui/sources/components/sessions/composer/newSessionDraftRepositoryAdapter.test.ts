@@ -82,6 +82,44 @@ function cataloguedNewSessionAuthoring(
 }
 
 describe('newSessionDraftRepositoryAdapter', () => {
+    it.each(['prompt', 'ask', 'bot'] as const)('keeps a fresh %s seed unselected through repository projection', (kind) => {
+        const draftId = '00000000-0000-4000-8000-000000000957';
+        seedNewSessionDraftV1({
+            scope,
+            createDraftId: () => draftId,
+            seed: kind === 'prompt'
+                ? { prompt: { text: 'Review this selection', mode: 'replace' } }
+                : { sessionName: kind === 'ask' ? 'Happier' : 'Release helper', initialSessionFacts: { createdAsBot: true } },
+        });
+        expect(cataloguedNewSessionAuthoring(getSessionDraftSnapshot(scope, { kind: 'newSession', draftId }))?.agentTarget?.value).toBeNull();
+        const projected = readNewSessionDraftFromRepository({ scope, draftId });
+        expect(projected?.agentTarget).toBeNull();
+        expect(projected?.backendTarget).toBeUndefined();
+        // A subsequent authoring write must not promote the display fallback.
+        if (!projected) throw new Error('Missing seeded draft');
+        const authoring = buildNewSessionAuthoringDraftFromPersistedDraft(projected);
+        expect(authoring.agentTarget).toBeNull();
+        const temp = buildNewSessionTempDataFromAuthoringDraft({ draft: authoring, machineId: null });
+        expect(buildNewSessionAuthoringDraftFromTempData(temp).agentTarget).toBeNull();
+        const persisted = buildPersistedNewSessionDraftFromAuthoringDraft({
+            draft: authoring, machineId: null, selectedSecretId: null,
+            selectedSecretIdByProfileIdByEnvVarName: null,
+            sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
+            backendNewSessionOptionStateByTargetKey: null, updatedAt: projected.updatedAt,
+        });
+        expect(buildNewSessionAuthoringDraftFromPersistedDraft(persisted).agentTarget).toBeNull();
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: projected });
+        expect(cataloguedNewSessionAuthoring(getSessionDraftSnapshot(scope, { kind: 'newSession', draftId }))?.agentTarget?.value).toBeNull();
+    });
+    it('keeps an explicitly configured Agent on a seeded draft', () => {
+        const draftId = '00000000-0000-4000-8000-000000000958';
+        seedNewSessionDraftV1({ scope, createDraftId: () => draftId,
+            seed: { sessionName: 'Happier' }, configurationDraft: authoringDraft({ agentType: 'claude' }),
+        });
+        expect(cataloguedNewSessionAuthoring(getSessionDraftSnapshot(scope, { kind: 'newSession', draftId }))?.agentTarget?.value).toMatchObject({
+            kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
+        });
+    });
     it('keeps missing-draft configuration passive and still creates and edits readable authored drafts', () => {
         const draftId = '00000000-0000-4000-8000-000000000956';
         const address = { kind: 'newSession' as const, draftId };

@@ -129,8 +129,9 @@ export function projectNewSessionDraftSyncedAuthoringFields(params: Readonly<{
         ...(draft.initialTriggers !== undefined ? { initialTriggers: draft.initialTriggers } : {}),
         ...(draft.primaryTeamId !== undefined ? { primaryTeamId: draft.primaryTeamId } : {}),
         ...(draft.organizationPlacement ? { organizationPlacement: draft.organizationPlacement } : {}),
-        agentTarget: draft.agentTarget
-            ?? resolveAgentExecutionTargetForPersistedSelection({
+        agentTarget: draft.agentTarget !== undefined
+            ? draft.agentTarget
+            : resolveAgentExecutionTargetForPersistedSelection({
                 backendTarget: draft.backendTarget ?? null,
                 fallbackAgentId: draft.agentType,
             }),
