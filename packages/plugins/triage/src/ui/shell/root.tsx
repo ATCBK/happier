@@ -1634,8 +1634,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   };
   /** The shared row facts the Collection's rows read: Pin/Unpin, and the one open path (the peek's Open). */
   const rowEnvironment = React.useMemo(
-    () => ({ handlers: pinHandlers, onOpen: activateRow }),
-    [activateRow, pinHandlers],
+    () => ({ handlers: pinHandlers, onOpen: onCollectionOpenChange }),
+    [onCollectionOpenChange, pinHandlers],
   );
   /** The signal column exists only while some row has a primary status fact to show in it. */
   const itemAnatomy = useTriageListAnatomyV1({
@@ -1645,8 +1645,10 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     organizing,
     sharedGroupReasons,
   });
-  const routeLens = React.useMemo(() => readTriageRouteLensV1(surface), [
-    surface.order, surface.smartPolicy, surface.filters, surface.search.query, surface.selectedViewId, surface.selection,
+  // Every row names its own selection below; the current detail must not
+  // replace all row destinations when the rest of the lens is unchanged.
+  const routeLens = React.useMemo(() => readTriageRouteLensV1({ ...surface, selection: null }), [
+    surface.order, surface.smartPolicy, surface.filters, surface.search.query, surface.selectedViewId,
   ]);
   const anatomy = React.useMemo(() => ({ ...itemAnatomy,
     destination: (item: TriageListItemV1) => {

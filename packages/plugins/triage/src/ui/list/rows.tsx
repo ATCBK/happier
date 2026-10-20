@@ -26,7 +26,7 @@ import { formatTriageTimestampV1, resolveTriageRowFactStatusToneV1 } from '@happ
 
 import type { TriageListDisplayRowV1 } from '../marks/pinnedRows.js';
 import type { TriageSourceDescriptorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
-import { readTriageSourceDescriptorV1, resolveTriageSourceWorkflowSubjectV1 } from '../detail/sourceSurface.js';
+import { readTriageSourceDescriptorV1, resolveTriageSourceDescriptorV1, resolveTriageSourceWorkflowSubjectV1 } from '../detail/sourceSurface.js';
 import {
   readTriageEntryRowAnnouncementV1,
   readTriageEntryRowContextV1,
@@ -532,11 +532,14 @@ export function useTriageListAnatomyV1(input: Readonly<{
   sharedGroupReasons?: ReadonlyMap<TriageListGroupIdV1, string>;
 }>): CollectionAnatomy<TriageListItemV1> {
   const text = usePluginTranslation();
-  const surfaceContext = useSurfaceContext();
+  const { locale, targetedContributions } = useSurfaceContext();
+  // Row facts read only these serialized contributions and the locale. Other
+  // host-context pushes must not replace every row's anatomy and callbacks.
+  const contributionSnapshotJson = JSON.stringify(targetedContributions);
   // A column no listed entry fills is not drawn: an all-dash Agent column is noise, like an all-dash Signal one.
   const { withSignal, withAgent = true, withReason = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS } = input;
   return React.useMemo<CollectionAnatomy<TriageListItemV1>>(() => {
-    const descriptorOf = (item: TriageListItemV1) => readTriageSourceDescriptorV1(surfaceContext, item.row.entryRef.source);
+    const descriptorOf = (item: TriageListItemV1) => resolveTriageSourceDescriptorV1(targetedContributions, item.row.entryRef.source);
     return {
       wrapItem: (item, children) => {
         const { row, locator } = item;
@@ -576,7 +579,7 @@ export function useTriageListAnatomyV1(input: Readonly<{
       glyph: (item) => {
         const mark = readTriageRowMarkV1(
           item.row,
-          resolveTriageSourceWorkflowSubjectV1(surfaceContext.targetedContributions, item.row.entryRef),
+          resolveTriageSourceWorkflowSubjectV1(targetedContributions, item.row.entryRef),
         );
         return <Icon name={mark.name} size="small" tone={mark.tone} />;
       },
@@ -648,12 +651,12 @@ export function useTriageListAnatomyV1(input: Readonly<{
       } } : {}),
       age: (item) => (item.row.activityAtMs === null
         ? null
-        : formatTriageCompactAgeV1(surfaceContext.locale, item.row.activityAtMs, Date.now())),
+        : formatTriageCompactAgeV1(locale, item.row.activityAtMs, Date.now())),
       peek: (item) => <TriageListPeek item={item} />,
       accessibilityLabel: (item) => item.row.title,
       accessibilityHint: (item) => triageListRowItemProps(item.row, false, {
         nowMs: Date.now(),
-        locale: surfaceContext.locale,
+        locale,
         descriptor: descriptorOf(item),
         source: item.row.entryRef.source,
         text,
@@ -672,5 +675,5 @@ export function useTriageListAnatomyV1(input: Readonly<{
         age: text('plugins.triage.surface.column.age', 'Age'),
       },
     };
-  }, [organizing, sharedGroupReasons, surfaceContext, text, withAgent, withReason, withSignal]);
+  }, [contributionSnapshotJson, locale, organizing, sharedGroupReasons, text, withAgent, withReason, withSignal]);
 }
