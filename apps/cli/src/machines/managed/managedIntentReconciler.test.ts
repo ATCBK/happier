@@ -365,6 +365,37 @@ describe('unused Stop through guest drain and controller operation custody', () 
                 .toMatchObject({ kind: 'found' }));
         } finally { await runtime.stop(); }
     });
+    it('does not recreate accepted Start operations while compute runs and the exact Session input remains pending', async () => {
+        const test = setup(undefined, undefined, 'start', {
+            observedAt: 10, availability: 'present', power: 'running', storage: 'retained',
+        });
+        test.setMachine({ wakeOnAcceptedMessage: true,
+            observation: { observedAt: 10, availability: 'present', power: 'running', storage: 'retained' } });
+        const machine = test.readMachine();
+        const target = { homeId: machine.homeId, managedId: machine.id, enrolledMachineId: 'guest',
+            expectedIntentRevision: machine.intentRevision, controller: machine.controller,
+            origin: { kind: 'session-input' as const, session: { homeId: machine.homeId, sessionId: 'session' },
+                pendingRequestId: 'retained-pending', requestedAt: 1 }, reason: 'admitted-work' as const };
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'owner',
+            generateOperationId: () => 'already-running-wake' });
+        let reads = 0;
+        const runtime = createDaemonManagedMachinePolicyRuntime({
+            readCensus: async () => { reads++; return { machines: [test.readMachine()], targets: [target] }; },
+            executePolicy: async request => operations.observeExecution({ actionId: 'machines.managed.power.set', input: {},
+                actionRequestId: 'already-running-wake', execute: async operation => ({ ok: true,
+                    result: await test.driver.executePolicy(request.machine, request.purpose, {
+                        requestId: 'already-running-wake', context: operation, signal: request.signal,
+                    }) }) }),
+        });
+        try {
+            for (let expected = 1; expected <= 3; expected++) {
+                runtime.notifyChanged();
+                await vi.waitFor(() => expect(reads).toBe(expected));
+            }
+        } finally { await runtime.stop(); }
+        expect(await operations.handlers.getV2({ operationId: 'already-running-wake' })).toMatchObject({ kind: 'not_found' });
+        expect(test.effects).toEqual([]);
+    });
     it.each(['idle', 'busy', 'unknown', 'missing-confirmation', 'approval-held', 'approval-approved', 'approval-rejected', 'approval-observation-failed'] as const)(
         'settles unused Stop only with confirmed idle (%s)', async disposition => {
         vi.useFakeTimers({ toFake: ['Date'] });

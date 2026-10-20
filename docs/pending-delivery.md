@@ -629,16 +629,17 @@ This section describes development behavior that is not yet a released contract.
 - The banner action **Process when online** re-arms the exact Session authorization. **Retry** uses the existing manual resume action when the machine is reachable. **Keep queued** clears that authorization while preserving FIFO delivery. These actions do not change the account preference or create a second activation path.
 - The server transaction that mutates Pending rows is the only writer of the current activation authorization. The current main-conversation Pending wire accepts `resumeWhenAvailable` as a mutation command, applies it atomically to the existing Session authorization, and never persists it as a second row-level desired state. Execution-run-targeted input cannot author this Session activation command.
 - UI recovery and Agent/MCP/CLI callers share `session.pending.action.set` (`session pending action set` in the CLI). It updates the exact `sessionId`/`localId` through that existing PATCH owner, preserving `requestedAction` when explicitly rearming with `resumeWhenAvailable: true`. The Action uses the ordinary approval policy; managed wake still requires current Manage and its fire-time policy Ask. Reset holds retain their separate witnessed reset-start Action.
-- `Session.lastActiveAt` is the lifecycle fence. An authorization at or before that value is stale and is not projected, so newer session activity invalidates an old start request without a second client-owned clock.
+- Activation stays bound to its exact `requestId` and `requestedAt`. Publisher registration and keepalive prove process presence before Agent admission; they preserve the authorization so a later definite startup refusal can still settle it.
 - The Pending activation hint is lossy notification only. The durable server-owned session authorization is authoritative, and the daemon consults it both after a live hint and during one finite reconnect scan.
 - The daemon on the session's exact owning machine is the sole unattended starter for modern activation. It re-reads the session and exact Pending row, applies the existing external-session safeguards, and then uses the existing inactive-session resume path. This mechanism does not take over an external or Direct session.
 - Machine or daemon unreachability leaves the authorization waiting. A genuine terminal start failure is recorded as failed and is not retried merely because a daemon reconnects. When the machine is reachable, explicit **Retry** uses the canonical manual resume action; while it is offline, **Process when online** re-arms the exact authorization. There is no periodic polling, unbounded retry loop, or exactly-once delivery guarantee.
 - For an admitted managed wake, the failure writer ignores `runtime_start_failed` while compute is stopped, unknown, lost, or still reconciling a submitted native effect. The authorization and original input remain waiting for the managed policy owner. Its signed reports settle definite Ask or native failures with the managed-start failure codes; ordinary Agent-start failure can settle after compute is observed running.
+- Once compute is observed present and running with no submitted native effect, the controller does not create another Start or Ask for the retained input. An incumbent native reconciliation keeps its existing lifetime until it settles.
 - A failed managed-policy census read leaves an existing held invocation waiting. The next successful census can retire a withdrawn or replaced origin; runtime shutdown and explicit operation cancellation still retire it. Approval and native-effect admission revalidate current authority before any power effect.
-- Becoming active, resolving the exact Pending row, or choosing **Keep queued** clears that exact authorization. **Auto-resume options** leads to the account preference for future sends.
+- Claiming or resolving the exact Pending row, withdrawing it, or choosing **Keep queued** clears that exact authorization. **Auto-resume options** leads to the account preference for future sends.
 - Modern delegation requires server Pending Input V2 support and activation capability from the session's exact target machine. Older or mixed components retain the existing direct-wake fallback rather than treating unattended daemon activation as available.
 
-The durable banner derives the user-facing state from this ownership: waiting while the machine is offline, waiting while the daemon is reachable, queued without activation, or terminal start failure. Pending owns the payload; the server owns activation authorization; session activity fences staleness; and the daemon owns unattended process start.
+The durable banner derives the user-facing state from this ownership: waiting while the machine is offline, waiting while the daemon is reachable, queued without activation, or terminal start failure. Pending owns the payload and exact authorization settlement; the daemon owns unattended process start. A stale failure report cannot replace a later rearmed authorization.
 
 In current development source, a terminal activation refusal also retains
 `pendingActivationFailureDetails` on the Session read projection. Its closed
@@ -650,6 +651,15 @@ facts once the CAS succeeds. A stale report cannot replace newer activation
 state, and the original Pending input remains in custody. Native error prose,
 paths, credentials and input content are excluded. This is source behavior,
 not evidence that an already-running daemon or server has loaded it.
+
+The existing runner supervisor also settles a definite construction dependency
+failure after the startup webhook. It accepts only a failure from that runner's
+occurrence, the launch's exact activation stamp, and the current admitted Home,
+Account, Session, Machine and installation. Cross-Account reporting uses the
+Session requester's recovered credentials. `preparation_pending` and unavailable
+plugin catalogs keep their existing recovery path; an optional MCP omission or
+the broad `mcp_request_auth_unavailable` diagnostic alone is not a definite
+startup refusal.
 
 Cold requester preparation records a failed phase's allowlisted error class,
 code, HTTP status and source frames through the shared code-only diagnostic;

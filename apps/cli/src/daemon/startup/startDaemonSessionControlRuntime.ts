@@ -28,6 +28,7 @@ import type { DaemonAdmissionDrain } from '../lifecycle/admissionDrain';
 import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
 import { createSessionFollowOccurrenceDispatcher } from '@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { reportPendingSessionActivationFailure } from '@/api/session/pendingActivationTransport';
 import { readTrackedSessionInputLiveWork } from '../lifecycle/readTrackedSessionInputLiveWork';
 import { waitForChangeOrDeadline } from '../lifecycle/waitForChangeOrDeadline';
 import { ExecutionRunListResponseSchema, isExecutionRunActive } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -647,6 +648,7 @@ import { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } from '@happier-dev/protocol/sessio
 import { resolveExistingSessionSpawnPreGate } from '../spawn/resolveExistingSessionSpawnPreGate';
 import {
   createSessionRunnerRespawnManager,
+  isCurrentDefiniteSessionStartupFailure,
   type SessionRunnerRespawnManager,
   type SessionRunnerRespawnTerminalReason,
 } from '../processSupervision/sessionRunnerRespawn';
@@ -6337,8 +6339,33 @@ export async function startDaemonSessionControlRuntime(
           sessionId,
         }));
         await assertSessionAccountCurrent(sessionId, context, attribution);
-        return rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
+        const issue = rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
           ? rawSession.lastRuntimeIssue ?? null : null;
+        const execution = tracked.spawnOptions?.executionAuthorization;
+        const pending = rawSession?.pendingActivationAuthorization;
+        const target = pending?.admittedTarget;
+        if (isCurrentDefiniteSessionStartupFailure(issue, tracked.processStartTimeMs)
+          && execution?.provenance === 'user_request' && typeof execution.requestedAt === 'number'
+          && pending?.status === 'waiting' && pending.requestId === execution.requestId
+          && pending.requestedAt === execution.requestedAt && target?.sessionId === sessionId
+          && target.accountId === (context?.bootstrap.attribution.accountId ?? params.externalActionAccountId)
+          && target.machineId === params.machineId
+          && target.installationId === readInstallationIdentityIfExistsSync()?.installationId) {
+          const origin = await params.resolveCurrentMachineExecutionOriginContext?.();
+          if (origin?.serverIdentityId === target.homeId && origin.machineId === target.machineId) {
+            await assertSessionAccountCurrent(sessionId, context, attribution);
+            // The webhook admitted process custody before Agent construction. Its
+            // later definite refusal still owns this exact retained activation.
+            // Home keeps the managed-compute running guard and request CAS.
+            await withSessionAccountHome(context, () => reportPendingSessionActivationFailure({
+              token: context?.bootstrap.credentials.token ?? params.credentials.token,
+              sessionId, requestId: execution.requestId, requestedAt: execution.requestedAt!,
+              failureCode: 'runtime_start_failed',
+              failureDetails: { reason: 'spawn-rejected', spawnErrorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED },
+            }));
+          }
+        }
+        return issue;
       }, attribution);
     },
     // Only the current intended respawn cycle may finish during shutdown drain.
