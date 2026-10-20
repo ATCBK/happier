@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
 import { resolveMessageActionReferenceSnapshotV1 } from '@/api/session/messageActionReference';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -3119,7 +3120,8 @@ describe('daemon contribution registry projection rpc handler', () => {
         const runtimeRegistry = createRuntimeRegistry(registry, { readPluginSourceCustody: () => ({ kind: 'development', registeredRootId: 'fixture:client-message' }) });
         const reference = { v: 1 as const, sessionId: 'session-1', messageId: 'message-1', observedRevision: 'revision-1' };
         const snapshot = { sessionId: reference.sessionId, messageId: reference.messageId, observedRevision: reference.observedRevision,
-            role: 'agent' as const, contentCategory: 'text' as const, seq: 7, visibleText: 'Selected answer\nwith details',
+            role: 'agent' as const, contentCategory: 'text' as const, seq: 7,
+            visibleText: `  Selected answer\n${'Long ACP reply café 🦊\n'.repeat(700)}Final suffix\n  `,
             structuredPresentationSummary: null, provenanceCategory: 'owner' as const };
         let currentRevision = reference.observedRevision;
         const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'available', message: {
@@ -3132,8 +3134,9 @@ describe('daemon contribution registry projection rpc handler', () => {
             resolveMessageActionReferenceSnapshotV1({ ...params, token: 'fixture-token', serverUrl: 'https://home.example',
                 readCurrentMessage: async () => ({ sessionId: reference.sessionId, messageId: reference.messageId,
                     observedRevision: currentRevision, seq: snapshot.seq, messageRole: 'agent',
-                    decryptedContent: { role: 'agent', content: { type: 'text', text: snapshot.visibleText },
-                        meta: { happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } },
+                    decryptedContent: buildAcpAgentMessageEnvelope({ provider: 'acme.agent',
+                        body: { type: 'message', message: snapshot.visibleText },
+                        meta: { happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } }),
                 }),
             }));
         const { handlers, registrar } = createRegistrar();
