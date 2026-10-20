@@ -36,6 +36,7 @@ export function buildPierreWorkerAssets({ repoRootDir, expoAppDir }) {
     if (!workerDistDir) {
         throw new Error('Pierre worker dist directory not found (expected worker-portable.js).');
     }
+    const { version } = JSON.parse(readUtf8(path.resolve(workerDistDir, '..', '..', 'package.json')));
 
     const portableWorkerPath = path.resolve(workerDistDir, 'worker-portable.js');
     const rawWorker = readUtf8(portableWorkerPath);
@@ -50,16 +51,25 @@ export function buildPierreWorkerAssets({ repoRootDir, expoAppDir }) {
         throw new Error(`Pierre wasm helper not found at ${wasmSourcePath}`);
     }
 
-    const outWorkerPath = path.resolve(expoAppDir, 'public', 'pierre-diff-worker.js');
-    const outWasmPath = path.resolve(expoAppDir, 'public', 'pierre-diff-worker-wasm.js');
+    const publicDir = path.resolve(expoAppDir, 'public');
+    const workerFileName = `pierre-diff-worker.${version}.js`;
+    const wasmFileName = `pierre-diff-worker-wasm.${version}.js`;
+    const outWorkerPath = path.resolve(publicDir, workerFileName);
+    const outWasmPath = path.resolve(publicDir, wasmFileName);
 
     const rewrittenWorker = stripSourceMapComment(rawWorker).replace(
         wasmImportMatch[0],
-        'import("./pierre-diff-worker-wasm.js")',
+        `import("./${wasmFileName}")`,
     );
 
     const wroteWorker = writeIfChanged(outWorkerPath, rewrittenWorker);
     copyFile(wasmSourcePath, outWasmPath);
+    for (const entry of fs.readdirSync(publicDir, { withFileTypes: true })) {
+        if (!entry.isFile() || entry.name === workerFileName || entry.name === wasmFileName) continue;
+        if (/^pierre-diff-worker(?:-wasm)?(?:\.\d+\.\d+\.\d+(?:-[\da-zA-Z.-]+)?(?:\+[\da-zA-Z.-]+)?)?\.js$/.test(entry.name)) {
+            fs.unlinkSync(path.resolve(publicDir, entry.name));
+        }
+    }
 
     return {
         workerDistDir,

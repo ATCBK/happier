@@ -1,41 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerPoolManager } from '@pierre/diffs/worker';
-
-// Workers are the browser/process boundary; the real Pierre manager, theme registry,
-// and Happier pool owner run beneath this transport.
-class BrowserWorker extends EventTarget {
-    static instances: BrowserWorker[] = [];
-    static successfulConstructionsBeforeFailure: number | undefined;
-    terminated = false;
-
-    constructor() {
-        super();
-        if (BrowserWorker.successfulConstructionsBeforeFailure === 0) throw new Error('worker disabled');
-        if (BrowserWorker.successfulConstructionsBeforeFailure !== undefined) BrowserWorker.successfulConstructionsBeforeFailure--;
-        BrowserWorker.instances.push(this);
-    }
-
-    postMessage(message: unknown): void {
-        if (typeof message !== 'object' || message === null || !('id' in message) || !('type' in message)) {
-            throw new Error('Expected a Pierre worker request');
-        }
-        const { id, type } = message;
-        queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', {
-            data: { type: 'success', requestType: type, id, sentAt: Date.now() },
-        })));
-    }
-
-    terminate(): void {
-        this.terminated = true;
-    }
-}
+import { BrowserWorker } from './pierreWorkerTestHelpers';
 
 const pools: WorkerPoolManager[] = [];
 
 beforeEach(() => {
     vi.resetModules();
-    BrowserWorker.instances = [];
-    BrowserWorker.successfulConstructionsBeforeFailure = undefined;
+    BrowserWorker.reset();
     vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
     vi.stubGlobal('document', { baseURI: 'http://localhost/' });
     vi.stubGlobal('Worker', BrowserWorker);
@@ -90,16 +61,27 @@ describe('getPierreDiffWorkerPool', () => {
         if (!split) throw new Error('Expected a split pool');
         pools.push(split);
         await split.initialize();
+        const unifiedChanged = vi.fn();
+        const splitChanged = vi.fn();
+        const unsubscribeUnified = owner.subscribePierreDiffWorkerPool('unified', unifiedChanged);
+        const unsubscribeSplit = owner.subscribePierreDiffWorkerPool('split', splitChanged);
 
         const event = new Event('error', { cancelable: true });
         worker.dispatchEvent(event);
 
         expect(owner.getPierreDiffWorkerPool({ style: 'unified' })).toBeNull();
         expect(owner.getPierreDiffWorkerPool({ style: 'split' })).toBe(split);
+        expect(owner.getPierreDiffWorkerPoolFailed('unified')).toBe(true);
+        expect(owner.getPierreDiffWorkerPoolFailed('split')).toBe(false);
+        expect(unifiedChanged).toHaveBeenCalledTimes(1);
+        expect(splitChanged).not.toHaveBeenCalled();
         expect(worker.terminated).toBe(true);
         expect(event.defaultPrevented).toBe(true);
         worker.dispatchEvent(new Event('error'));
         expect(console.debug).toHaveBeenCalledTimes(1);
+        expect(unifiedChanged).toHaveBeenCalledTimes(1);
+        unsubscribeUnified();
+        unsubscribeSplit();
     });
 
     it('reuses a style pool when the effective theme changes', async () => {

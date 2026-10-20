@@ -15,8 +15,6 @@ const PRELOAD_LANGS: SupportedLanguages[] = [
     'markdown',
 ];
 
-let pool: WorkerPoolManager | null | undefined;
-
 const poolByStyle: Record<PierreDiffPresentationStyle, WorkerPoolManager | null | undefined> = {
     unified: undefined,
     split: undefined,
@@ -26,6 +24,30 @@ const poolThemeKeyByStyle: Record<PierreDiffPresentationStyle, string | undefine
     unified: undefined,
     split: undefined,
 };
+
+const poolListenersByStyle: Record<PierreDiffPresentationStyle, Set<() => void>> = {
+    unified: new Set(),
+    split: new Set(),
+};
+
+export function subscribePierreDiffWorkerPool(style: PierreDiffPresentationStyle, listener: () => void): () => void {
+    poolListenersByStyle[style].add(listener);
+    return () => { poolListenersByStyle[style].delete(listener); };
+}
+
+export function getPierreDiffWorkerPoolFailed(style: PierreDiffPresentationStyle): boolean {
+    return poolByStyle[style] === null;
+}
+
+function failWorkerPool(style: PierreDiffPresentationStyle, error: unknown): void {
+    if (getPierreDiffWorkerPoolFailed(style)) return;
+    const failedPool = poolByStyle[style];
+    poolByStyle[style] = null;
+    poolThemeKeyByStyle[style] = undefined;
+    failedPool?.terminate();
+    console.debug(`[pierre] ${style} worker pool failed; using Happier renderer`, error);
+    for (const listener of poolListenersByStyle[style]) listener();
+}
 
 function resolveWorkerPoolThemeIds(themeIds: HappierPierreThemeIds | undefined): HappierPierreThemeIds {
     return themeIds ?? HAPPIER_PIERRE_THEME_IDS;
@@ -46,20 +68,17 @@ export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPr
     if (existingPool !== undefined) {
         if (existingPool && poolThemeKeyByStyle[style] !== themeKey) {
             poolThemeKeyByStyle[style] = themeKey;
-            const setRenderOptions = (existingPool as { setRenderOptions?: (options: unknown) => Promise<void> }).setRenderOptions;
-            if (typeof setRenderOptions === 'function') {
-                void setRenderOptions.call(existingPool, {
-                    theme: {
-                        light: themeIds.light,
-                        dark: themeIds.dark,
-                    },
-                    lineDiffType: config.defaultLineDiffType,
-                }).catch(() => {
-                    if (poolThemeKeyByStyle[style] === themeKey) {
-                        poolThemeKeyByStyle[style] = undefined;
-                    }
-                });
-            }
+            void existingPool.setRenderOptions({
+                theme: {
+                    light: themeIds.light,
+                    dark: themeIds.dark,
+                },
+                lineDiffType: config.defaultLineDiffType,
+            }).catch(() => {
+                if (poolThemeKeyByStyle[style] === themeKey) {
+                    poolThemeKeyByStyle[style] = undefined;
+                }
+            });
         }
         return existingPool ?? null;
     }
@@ -78,6 +97,10 @@ export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPr
                 workerFactory: createPierreDiffWorker,
                 poolSize: config.poolSize,
                 totalASTLRUCacheSize: config.totalASTLRUCacheSize,
+                onWorkerError: (event) => {
+                    event.preventDefault();
+                    failWorkerPool(style, event);
+                },
             },
             {
                 theme: {
@@ -90,17 +113,12 @@ export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPr
             },
         );
 
-        // Attach a catch handler to avoid unhandled rejections if workers fail to initialize.
-        void created.initialize().catch(() => {});
-
         poolByStyle[style] = created;
         poolThemeKeyByStyle[style] = themeKey;
-        pool = created;
+        void created.initialize().catch((error: unknown) => failWorkerPool(style, error));
         return created;
-    } catch {
-        poolByStyle[style] = null;
-        poolThemeKeyByStyle[style] = undefined;
-        pool = null;
-        return poolByStyle[style];
+    } catch (error) {
+        failWorkerPool(style, error);
+        return null;
     }
 }
