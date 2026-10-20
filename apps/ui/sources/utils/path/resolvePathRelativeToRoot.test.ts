@@ -12,3 +12,10 @@ it('projects contained relative spelling without replacing canonical Windows con
     expect(resolvePathRelativeToRoot({ root: '/repo', path: '/repo-other/Sub', preservePathSpelling: true })).toBeNull();
     expect(resolvePathRelativeToRoot({ root: 'C:\\Repo', path: 'D:\\Repo\\Sub', preservePathSpelling: true })).toBeNull();
 });
+
+it('preserves a whitespace-only filename in absolute raw paths without changing ordinary root trimming', () => {
+    expect(resolvePathRelativeToRoot({ root: '/repo', path: '/repo/ ', preservePathSpelling: true })).toBe(' ');
+    expect(resolvePathRelativeToRoot({ root: '/repo', path: '/repo/\n', preservePathSpelling: true })).toBe('\n');
+    expect(resolvePathRelativeToRoot({ root: ' /repo ', path: '/repo/ ', preservePathSpelling: true })).toBe(' ');
+    expect(resolvePathRelativeToRoot({ root: '/repo', path: ' /repo/src/a.ts ' })).toBe('src/a.ts');
+});

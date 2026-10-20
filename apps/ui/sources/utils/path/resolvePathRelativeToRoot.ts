@@ -1,5 +1,10 @@
 import { normalizeFileSystemPath } from '@/sync/domains/fileSystem/normalizeFileSystemPath';
 
+/** Normalize relative separators and a leading ./ without trimming filename bytes. */
+export function normalizeRelativeLocalPath(value: string): string {
+    return value.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/{2,}/g, '/');
+}
+
 function collapseRepeatedSlashesPreservingUncPrefix(path: string): string {
     if (path.startsWith('//')) {
         return `//${path.slice(2).replace(/\/{2,}/g, '/')}`;
@@ -7,10 +12,10 @@ function collapseRepeatedSlashesPreservingUncPrefix(path: string): string {
     return path.replace(/^([a-z]:)\/{2,}/i, (_match, drive: string) => `${drive}/`).replace(/\/{2,}/g, '/');
 }
 
-export function normalizeLocalPathForComparison(value: string): string | null {
-    const withForwardSlashes = value.trim().replace(/\\/g, '/');
+export function normalizeLocalPathForComparison(value: string, options?: Readonly<{ preserveWhitespace?: boolean }>): string | null {
+    const withForwardSlashes = (options?.preserveWhitespace ? value : value.trim()).replace(/\\/g, '/');
     const withoutBrowserExpandedDriveSlash = withForwardSlashes.replace(/^\/+([A-Za-z]:\/)/, '$1');
-    const normalized = normalizeFileSystemPath(withoutBrowserExpandedDriveSlash);
+    const normalized = normalizeFileSystemPath(withoutBrowserExpandedDriveSlash, options);
     if (normalized && /^[a-z]:$/i.test(normalized) && /^[a-z]:\/+$/i.test(withoutBrowserExpandedDriveSlash)) return `${normalized}/`;
     return normalized ? collapseRepeatedSlashesPreservingUncPrefix(normalized) : null;
 }
@@ -25,7 +30,7 @@ export function resolvePathRelativeToRoot(params: Readonly<{
     /** Keep the actual entry spelling after the canonical containment comparison. */
     preservePathSpelling?: boolean;
 }>): string | null {
-    const path = normalizeLocalPathForComparison(params.path);
+    const path = normalizeLocalPathForComparison(params.path, { preserveWhitespace: params.preservePathSpelling === true });
     const root = normalizeLocalPathForComparison(params.root);
     if (!path || !root || !isAbsoluteLocalPath(path) || !isAbsoluteLocalPath(root)) return null;
 

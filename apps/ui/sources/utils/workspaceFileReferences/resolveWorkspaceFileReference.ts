@@ -2,6 +2,7 @@ import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativ
 import {
     isAbsoluteLocalPath,
     normalizeLocalPathForComparison,
+    normalizeRelativeLocalPath,
     resolvePathRelativeToRoot,
 } from '@/utils/path/resolvePathRelativeToRoot';
 import type { ReviewCommentAnchor, ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -21,7 +22,7 @@ export type ResolvedWorkspaceFileReference = Readonly<{
 const LOOPBACK_HTTP_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1']);
 
 function normalizeRelativePath(value: string): string {
-    return value.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/{2,}/g, '/');
+    return normalizeRelativeLocalPath(value.trim());
 }
 
 function splitLineSuffix(value: string): Readonly<{
