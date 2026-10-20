@@ -64,6 +64,25 @@ function harness(registry?: RegistryPorts, foundReader?: (machineId: string, pat
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it('opens a page through the batched Artifact owner while retaining per-item failures', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const artifact = h.artifacts.get(created.skillId)!;
+    h.artifacts.set('unreadable', { ...artifact, id: 'unreadable', body: 'invalid' });
+    h.artifacts.set('removed', { ...artifact, id: 'removed' });
+    const store = { ...h.store,
+      // Independent persistent-store transport; domain decoding and projection stay real.
+      readMany: async (ids: readonly string[]) => Promise.allSettled(ids.map(async id => id === 'removed' ? null : h.artifacts.get(id) ?? null)),
+      read: async () => { throw new Error('Unexpected per-item transport'); },
+    };
+    const execute = createSkillActionExecuteV1({ store, skillRules: h.skillRules, randomId: () => 'unused', includeInSession: async () => ({ ok: true }) });
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await execute('skills.list', {}, { surface: 'ui' }));
+    expect(result.items.find(item => item.skillId === created.skillId)).toMatchObject({ name: 'sample', description: 'A useful skill', userInvocable: true });
+    expect(result.unavailableItems).toEqual([
+      { skillId: 'unreadable', title: 'sample', reason: 'skill_content_unavailable' },
+      { skillId: 'removed', title: 'sample', reason: 'not_found' },
+    ]);
+  });
   it('selects classified skill pages through the real library Action and daemon catalog', async () => {
     const h = harness();
     const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));

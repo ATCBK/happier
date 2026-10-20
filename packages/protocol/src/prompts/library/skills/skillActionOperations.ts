@@ -117,7 +117,8 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     if (result.status !== 'ready' || result.record.key !== 'skill-rules') return fail('catalog_unavailable');
     return { rules: result.record.value.rules, revision: result.revision };
   }
-  async function read(skillId: string, signal?: AbortSignal, pluginSkills?: readonly ReadOnlySkillV1[]): Promise<Readonly<{
+  async function read(skillId: string, signal?: AbortSignal, pluginSkills?: readonly ReadOnlySkillV1[],
+    observation?: PromiseSettledResult<PromptLibraryStoredArtifact | null>): Promise<Readonly<{
     artifact: PromptLibraryStoredArtifact | null; skillId: string; revision: string;
     content: NonNullable<ReturnType<typeof readSkillBundleContentV1>>; lock: SkillLockV1;
   }>> {
@@ -127,7 +128,8 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
       return { artifact: null, skillId, revision: bundled.digest, content: bundled, lock };
     }
     if (isPluginSkillIdV1(skillId)) return fail('not_found');
-    const artifact = await port.store.read(skillId, signal ? { signal } : undefined);
+    if (observation?.status === 'rejected') throw observation.reason;
+    const artifact = observation ? observation.value : await port.store.read(skillId, signal ? { signal } : undefined);
     if (!artifact) return fail('not_found');
     const content = readSkillBundleContentV1(artifact);
     if (!content) return fail('skill_content_unavailable');

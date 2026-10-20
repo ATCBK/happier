@@ -164,6 +164,11 @@ export function createUiPromptLibraryArtifactStore(
   artifacts: WorkflowDefinitionArtifactOperations,
   account?: LazyActionAccountContext,
 ): PromptLibraryArtifactStore {
+  const storedArtifact = (artifact: Awaited<ReturnType<WorkflowDefinitionArtifactOperations['read']>>): PromptLibraryStoredArtifact | null => artifact ? {
+    id: artifact.artifactId, revision: artifact.revision, header: artifact.header,
+    body: typeof artifact.body === 'string' ? artifact.body : null,
+    owned: artifact.access === 'owner', access: artifact.access,
+  } : null;
   const organization: ArtifactFolderActionPortV1 | undefined = account ? {
     serverId: account.serverId,
     matchesServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, account.serverId),
@@ -212,19 +217,17 @@ export function createUiPromptLibraryArtifactStore(
   } : undefined;
   return {
     ...(organization ? { organization } : {}),
+    ...(account ? { readMany: async (ids: readonly string[], options?: Readonly<{ signal?: AbortSignal }>) => {
+      throwIfAborted(options?.signal);
+      const results = await account.readArtifactContents(ids, options);
+      account.assertCurrent(); throwIfAborted(options?.signal);
+      return results.map(result => result.status === 'rejected' ? result
+        : { status: 'fulfilled' as const, value: storedArtifact(result.value) });
+    } } : {}),
     read: async (id, options) => {
       throwIfAborted(options?.signal);
       const artifact = await (account ? account.readArtifactContent(id, options) : artifacts.read(id, options));
-      return artifact
-        ? {
-            id: artifact.artifactId,
-            revision: artifact.revision,
-            header: artifact.header,
-            body: typeof artifact.body === 'string' ? artifact.body : null,
-            owned: artifact.access === 'owner',
-            access: artifact.access,
-          }
-        : null;
+      return storedArtifact(artifact);
     },
     create: async (input) => {
       throwIfAborted(input.signal);

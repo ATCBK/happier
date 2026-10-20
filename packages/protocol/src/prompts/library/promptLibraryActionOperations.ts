@@ -58,6 +58,8 @@ export type PromptLibraryArtifactStore = Readonly<{
     nextCursor?: string;
   }>>;
   read(artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<PromptLibraryStoredArtifact | null>;
+  /** A transport batch keeps per-identity refusal and not-found semantics in input order. */
+  readMany?(artifactIds: readonly string[], options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly PromiseSettledResult<PromptLibraryStoredArtifact | null>[]>;
   update(input: Readonly<{
     artifactId: string;
     /** The revision returned by the read used to derive this mutation. */

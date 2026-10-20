@@ -863,27 +863,48 @@ export async function fetchAndApplyArtifactBodies(params: Readonly<{
     applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
     shouldContinue?: () => boolean;
 }>): Promise<void> {
-    const { credentials, encryption, artifactDataKeys, applyArtifacts } = params;
     const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
     if (params.artifactIds.length === 0 || !shouldContinue()) return;
-    const detailReads = await fetchArtifactReadBatch(credentials, params.artifactIds, params);
+    const details = await fetchArtifactsWithBodiesFromApi(params);
     if (!shouldContinue()) return;
-    const artifacts: Artifact[] = [];
-    for (const item of detailReads) {
-        if (item.ok) artifacts.push(item.artifact);
-        else if (item.error !== 'artifact_not_found') throw new HappyError(item.error, item.retryable,
-            { code: item.error, status: item.status });
+    const hydrated: DecryptedArtifact[] = [];
+    for (const detail of details) {
+        if (detail.status === 'rejected') throw detail.reason;
+        if (detail.value) hydrated.push(detail.value);
     }
+    if (hydrated.length > 0) params.applyArtifacts(hydrated);
+}
+
+/** Exact reads share transport and key opening, while each identity keeps its own refusal. */
+export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
+    credentials: AuthCredentials;
+    artifactIds: readonly string[];
+    request?: ArtifactApiOptions['request'];
+    signal?: AbortSignal;
+    encryption: Encryption | null;
+    artifactDataKeys: ArtifactDataKeyCache;
+    prepareRecipientKeys?: boolean;
+    shouldContinue?: () => boolean;
+}>): Promise<PromiseSettledResult<DecryptedArtifact | null>[]> {
+    params.signal?.throwIfAborted();
+    const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
+    if (params.artifactIds.length === 0 || !shouldContinue()) return [];
+    const { credentials, encryption, artifactDataKeys } = params;
+    const detailReads = await fetchArtifactReadBatch(credentials, params.artifactIds, params);
+    if (!shouldContinue()) return [];
+    const artifacts = detailReads.flatMap(item => item.ok ? [item.artifact] : []);
     await resolveArtifactDataKeys({ artifacts, encryption, artifactDataKeys });
-    if (!shouldContinue()) return;
-    const details = await Promise.all(detailReads.map(async item => {
-        if (!item.ok || !shouldContinue()) return null;
+    params.signal?.throwIfAborted();
+    if (!shouldContinue()) return [];
+    return Promise.allSettled(detailReads.map(async item => {
+        if (!shouldContinue()) return null;
+        if (!item.ok) {
+            if (item.error === 'artifact_not_found') return null;
+            throw new HappyError(item.error, item.retryable, { code: item.error, status: item.status });
+        }
         return openArtifactWithRecipientKeyPreparation({ ...params, artifact: item.artifact,
             recipientCensus: item.recipientCensus });
     }));
-    if (!shouldContinue()) return;
-    const hydrated = details.filter((artifact): artifact is DecryptedArtifact => artifact !== null);
-    if (hydrated.length > 0) applyArtifacts(hydrated);
 }
 
 export async function fetchArtifactWithBodyFromApi(params: {

@@ -29,7 +29,7 @@ import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serve
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
-import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi,
+import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, fetchArtifactsWithBodiesFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
@@ -124,6 +124,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             },
             fetchArtifact: async (_artifactId: string) => unavailable(),
             readArtifactContent: async (..._args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => artifactUnavailable(),
+            readArtifactContents: async (_ids: readonly string[], _options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]):
+                Promise<PromiseSettledResult<Awaited<ReturnType<WorkflowDefinitionArtifactOperations['read']>>>[]> => artifactUnavailable(),
             createArtifact: async (_header: Readonly<Record<string, unknown>>, _body: string) => unavailable(),
             createArtifactDocument: async (_input: ArtifactCreateOperation) => artifactUnavailable(),
             updateArtifactDocument: async (_input: ArtifactUpdateOperation) => artifactUnavailable(),
@@ -407,9 +409,10 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     throw error;
                 }
         };
-        const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) => {
-                const artifact = await (publish ? fetchArtifact : readArtifact)(artifactId, options);
+        const projectArtifactDocument = async (artifact: DecryptedArtifact | null, publish: boolean,
+            options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]) => {
                 if (!artifact) return null;
+                const artifactId = artifact.id;
                 const header = readableRawArtifactHeader(artifact);
                 if (artifact.bodyVersion === undefined || (artifact.body !== null && typeof artifact.body !== 'string')) throw artifactContentUnavailable();
                 const access = requireArtifactAccessProjection(artifact);
@@ -425,6 +428,18 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     ...access, ...sharing,
                     publicAudience: artifact.publicAudience,
                     revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
+        };
+        const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) =>
+            projectArtifactDocument(await (publish ? fetchArtifact : readArtifact)(artifactId, options), publish, options);
+        const readArtifactContents = async (artifactIds: readonly string[], options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]) => {
+            assertCurrent(); options?.signal?.throwIfAborted();
+            const results = await fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds,
+                signal: options?.signal ?? signal });
+            assertCurrent(); options?.signal?.throwIfAborted();
+            return Promise.allSettled(results.map(async result => {
+                if (result.status === 'rejected') throw result.reason;
+                return projectArtifactDocument(result.value, false, options);
+            }));
         };
         const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
             read: (...args) => readArtifactDocument(true, ...args),
@@ -570,6 +585,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             // Finite content observations use the same codec and authority without
             // invalidating the list that is currently reading them.
             readArtifactContent: (...args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => readArtifactDocument(false, ...args),
+            readArtifactContents,
             createArtifactDocument,
             updateArtifactDocument,
             readArtifactHtmlBundle: async (artifactId: string, operationSignal?: AbortSignal): Promise<ArtifactHtmlBundleRead> => {

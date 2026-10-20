@@ -81,10 +81,12 @@ describe('UI qualified prompt-library Artifact authority', () => {
   it.each([true, false])('reads Skills through captured filtered pages with truthful unclassified fallback (%s)', async hasUnclassified => {
     const catalog = createPromptLibraryCatalogBoundary();
     const inventoryQueries: string[] = [];
+    const contentRequests: string[] = [];
     const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
       entries: [{ path: 'SKILL.md', contentKind: 'utf8',
         contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
       handleRequest: async (path, init) => {
+        if (path === '/v1/artifacts/current' || path === '/v1/artifacts/read') contentRequests.push(path);
         if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
           inventoryQueries.push(path);
           const rows = f.boundary.list();
@@ -104,6 +106,7 @@ describe('UI qualified prompt-library Artifact authority', () => {
     expect(inventoryQueries).toEqual(hasUnclassified
       ? ['/v1/artifacts?limit=500&kind=skill', '/v1/artifacts?limit=500']
       : ['/v1/artifacts?limit=500&kind=skill']);
+    expect(contentRequests).toEqual(['/v1/artifacts/read']);
   });
   it.each(['complete', 'incomplete', 'unreadable', 'failed', 'different-account', 'different-credentials', 'cancelled'] as const)(
     'joins only an eligible cold inventory attempt through the unfiltered store (%s)', async scenario => {
