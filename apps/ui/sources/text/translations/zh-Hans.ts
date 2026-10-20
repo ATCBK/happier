@@ -17604,6 +17604,7 @@ settingsSession: {
         pastSessions: '过往会话',
         noResults: ({ query }: { query: string }) => `还没有关于“${query}”的内容。`,
         searchUnavailable: '搜索需要一台已开启记忆搜索的机器。',
+        turnOnSearch: "开启",
         documentSearchUnavailable: '此处无法搜索记忆文档。',
         accessPrivate: '仅你可见',
         accessShared: '已共享',

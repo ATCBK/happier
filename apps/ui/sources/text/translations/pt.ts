@@ -18114,6 +18114,7 @@ settingsSession: {
         pastSessions: 'Sessões anteriores',
         noResults: ({ query }: { query: string }) => `Nada sobre “${query}” ainda.`,
         searchUnavailable: 'A pesquisa precisa de uma máquina com a pesquisa de memória ativada.',
+        turnOnSearch: "Ativar",
         documentSearchUnavailable: 'A pesquisa em documentos de memória não está disponível aqui.',
         accessPrivate: 'Só você pode ver',
         accessShared: 'Compartilhada',

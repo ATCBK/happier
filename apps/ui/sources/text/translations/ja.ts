@@ -17907,6 +17907,7 @@ settingsSession: {
         pastSessions: '過去のセッション',
         noResults: ({ query }: { query: string }) => `「${query}」についてはまだ何もありません。`,
         searchUnavailable: '検索には、メモリ検索を有効にしたマシンが必要です。',
+        turnOnSearch: "オンにする",
         documentSearchUnavailable: 'ここではメモリ文書の検索を利用できません。',
         accessPrivate: 'あなただけが見られます',
         accessShared: '共有中',

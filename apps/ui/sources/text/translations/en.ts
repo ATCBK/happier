@@ -1817,6 +1817,7 @@ const enMemoryContext = {
     pastSessions: 'Past sessions',
     noResults: ({ query }: { query: string }) => `Nothing about “${query}” yet.`,
     searchUnavailable: 'Search needs a machine with memory search turned on.',
+    turnOnSearch: "Turn on",
     documentSearchUnavailable: 'Memory document search is unavailable here.',
     accessPrivate: 'Only you can see it',
     accessShared: 'Shared',

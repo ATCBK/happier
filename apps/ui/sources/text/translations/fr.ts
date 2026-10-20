@@ -17877,6 +17877,7 @@ settingsSession: {
         pastSessions: 'Sessions passées',
         noResults: ({ query }: { query: string }) => `Rien sur « ${query} » pour l’instant.`,
         searchUnavailable: 'La recherche nécessite une machine où la recherche en mémoire est activée.',
+        turnOnSearch: "Activer",
         documentSearchUnavailable: 'La recherche dans les documents de mémoire est indisponible ici.',
         accessPrivate: 'Visible par toi seul',
         accessShared: 'Partagée',

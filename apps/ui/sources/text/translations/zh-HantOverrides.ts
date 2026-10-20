@@ -13952,6 +13952,7 @@ settingsSession: {
         pastSessions: '過往工作階段',
         noResults: ({ query }: { query: string }) => `還沒有關於「${query}」的內容。`,
         searchUnavailable: '搜尋需要一台已開啟記憶搜尋的機器。',
+        turnOnSearch: "開啟",
         documentSearchUnavailable: '此處無法搜尋記憶文件。',
         accessPrivate: '僅你可見',
         accessShared: '已分享',

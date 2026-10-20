@@ -18112,6 +18112,7 @@ settingsSession: {
         pastSessions: 'Frühere Sitzungen',
         noResults: ({ query }: { query: string }) => `Noch nichts zu „${query}“.`,
         searchUnavailable: 'Die Suche braucht einen Rechner mit aktivierter Gedächtnissuche.',
+        turnOnSearch: "Einschalten",
         documentSearchUnavailable: 'Die Suche in Gedächtnisdokumenten ist hier nicht verfügbar.',
         accessPrivate: 'Nur du kannst es sehen',
         accessShared: 'Geteilt',

@@ -17027,6 +17027,7 @@ settingsSession: {
         pastSessions: 'Wcześniejsze sesje',
         noResults: ({ query }: { query: string }) => `Jeszcze nic o „${query}”.`,
         searchUnavailable: 'Wyszukiwanie wymaga maszyny z włączonym wyszukiwaniem w pamięci.',
+        turnOnSearch: "Włącz",
         documentSearchUnavailable: 'Wyszukiwanie w dokumentach pamięci jest tutaj niedostępne.',
         accessPrivate: 'Tylko ty ją widzisz',
         accessShared: 'Udostępniona',

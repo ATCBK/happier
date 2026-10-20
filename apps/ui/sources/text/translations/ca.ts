@@ -15946,6 +15946,7 @@ settingsSession: {
         pastSessions: 'Sessions anteriors',
         noResults: ({ query }: { query: string }) => `Encara res sobre «${query}».`,
         searchUnavailable: 'La cerca necessita una màquina amb la cerca de memòria activada.',
+        turnOnSearch: "Activa",
         documentSearchUnavailable: 'La cerca en documents de memòria no està disponible aquí.',
         accessPrivate: 'Només tu la pots veure',
         accessShared: 'Compartida',
