@@ -999,7 +999,7 @@ export function createLiveRemoteSshManageHostTaskKind() {
   });
 }
 
-export function createLiveRemoteSshBootstrapTaskKind(options: Pick<systemTasks.RemoteSshBootstrapMachineDeps, 'assertManagedEnrollmentCurrent'> = {}) {
+export function createLiveRemoteSshBootstrapTaskKind(options: Pick<systemTasks.RemoteSshBootstrapMachineDeps, 'assertManagedEnrollmentCurrent' | 'onEnrollmentDeadline'> = {}) {
   const baseKind = systemTasks.createRemoteSshBootstrapMachineTaskKind({
     ...options,
     resolveHostTrust: resolveLiveRemoteHostTrust,

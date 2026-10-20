@@ -190,8 +190,11 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
   approvePairingRequest(request: RemoteHomeEnrollmentPairingRequest): Promise<void>;
   signal?: AbortSignal;
   timeoutMs: number;
+  /** Let the controller's authority reads consume this exact recipe deadline. */
+  onEnrollmentDeadline?(deadlineMs: number): void;
 }>): Promise<RemoteHomeEnrollmentResult> {
   const deadlineMs = Date.now() + params.timeoutMs;
+  params.onEnrollmentDeadline?.(deadlineMs);
   const timedOut = () => new SystemTaskExecutionError('auth_enrollment_timeout',
     'Remote Home enrollment timed out. Retry setup to request fresh approval.');
   const remainingMs = (): number => {

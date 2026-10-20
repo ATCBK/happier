@@ -60,7 +60,8 @@ describe('action operation canonical execution observer', () => {
     expect(store.get(scope, 'unobserved-operation')).not.toHaveProperty('operationCredentialUses');
   });
 
-  it('retains admitted credential observations when the effect owner reports an unconfirmed outcome', async () => {
+  it.each(['machines.managed.power.set', 'machines.managed.acquire', 'machines.managed.bootstrap.retry'])(
+    'retains admitted credential observations when %s reports an unconfirmed outcome', async actionId => {
     const operationCredentialUses = [ActionOperationCredentialUseV1Schema.parse({
       v: 1, kind: 'connected_account', label: null, owner: null,
       service: { pluginId: 'acme.compute', localId: 'cloud' },
@@ -73,13 +74,16 @@ describe('action operation canonical execution observer', () => {
         version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
       } }),
     });
-    await runner.observe({ actionId: 'machines.managed.power.set', scope, execute: async () => ({
+    await runner.observe({ actionId, scope, execute: async () => ({
       ok: false, errorCode: 'action_outcome_unknown', error: 'Outcome unknown', operationCredentialUses,
     }) });
     const operation = store.get(scope, 'unconfirmed-credential-operation');
     expect(operation).toMatchObject({ state: 'running', observation: { kind: 'outcome_uncertain' }, operationCredentialUses });
     expect(operation).not.toHaveProperty('settledAt');
     expect(ActionOperationSnapshotV1Schema.parse(operation)).toEqual(operation);
+    const legacy = projectActionOperationSnapshotForV1Reader(operation!);
+    expect(PredecessorSnapshotSchema.parse(legacy)).toEqual(legacy);
+    expect(legacy.state).toBe('running');
   });
 
   it('returns recorded uncertainty to ordinary Wait while retirement still waits for physical settlement', async () => {

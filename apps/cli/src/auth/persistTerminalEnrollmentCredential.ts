@@ -16,7 +16,7 @@ import {
 } from '@/persistence';
 import type { OpenTerminalProvisioningResponseResult } from '@/auth/terminalProvisioningResponse';
 import { ensureMachineIdForCredentials } from '@/ui/auth';
-import { retryTerminalEnrollmentHomeOperation, type TerminalEnrollmentHomeRetry } from './retryTerminalEnrollmentHomeOperation';
+import { retryHomeOperation, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export async function persistTerminalEnrollmentCredential(params: Readonly<{
   token: string;
@@ -66,7 +66,7 @@ export async function registerAndPersistManagedTerminalEnrollmentCredential(para
   opened: OpenTerminalProvisioningResponseResult;
   runtimeOrigin: string;
   managedEnrollment: ManagedEnrollmentCorrelationV1;
-  homeRetry: TerminalEnrollmentHomeRetry;
+  homeRetry: HomeOperationRetry;
   assertCurrent(): void;
 }>): Promise<Readonly<{ machineId: string; encryptionType: 'dataKey' | 'tokenOnly' }>> {
   params.assertCurrent();
@@ -89,7 +89,7 @@ export async function registerTerminalEnrollmentMachine(
   credentials: StoredCredentials,
   runtimeOrigin: string,
   managedEnrollment?: ManagedEnrollmentCorrelationV1,
-  homeRetry?: TerminalEnrollmentHomeRetry,
+  homeRetry?: HomeOperationRetry,
 ): Promise<string> {
   const register = async () => await runWithServerHttpBaseUrl(runtimeOrigin, async () => {
     const { machineId } = await ensureMachineIdForCredentials(credentials);
@@ -103,5 +103,5 @@ export async function registerTerminalEnrollmentMachine(
     });
     return registered.machineId;
   });
-  return await (homeRetry ? retryTerminalEnrollmentHomeOperation(homeRetry, register) : register());
+  return await (homeRetry ? retryHomeOperation(homeRetry, register) : register());
 }

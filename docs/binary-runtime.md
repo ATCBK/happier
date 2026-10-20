@@ -63,6 +63,13 @@ refusals remain terminal, and managed enrollment saves its bearer only after
 registration succeeds. Retry after an unsuccessful attempt requests fresh
 approval while retaining the guest's Machine identity. Feature-read diagnostics
 preserve the HTTP status or transport failure for the shared recovery policy.
+During managed enrollment, the controller's repeatable `controller/current`
+observations use that same Home retry policy and the remote recipe's existing
+deadline and polling cadence. Native effects, submission and report mutations
+are not replayed. If Home remains unavailable after that lifetime, Create or
+bootstrap Retry retains `action_outcome_unknown` as an `outcome_uncertain`
+operation rather than claiming the guest failed; enrollment may already have
+committed. This controller-side recovery requires a controller refresh.
 Shared offline warnings use stderr, keeping finite command stdout valid JSON
 when post-claim machine registration fails.
 A failed wait process without a usable diagnostic code reports

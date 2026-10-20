@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createHttpStatusError } from '@/api/client/httpStatusError';
-import { retryTerminalEnrollmentHomeOperation } from './retryTerminalEnrollmentHomeOperation';
+import { retryHomeOperation } from './retryHomeOperation';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -10,7 +10,7 @@ describe('post-claim Home recovery', () => {
     const refusal = createHttpStatusError(status, 'Home refused enrollment');
     // Substitute only the Home request boundary; the retry policy is real.
     const request = vi.fn(async () => { throw refusal; });
-    await expect(retryTerminalEnrollmentHomeOperation({ deadlineMs: Date.now() + 60_000, pollIntervalMs: 1000 }, request))
+    await expect(retryHomeOperation({ deadlineMs: Date.now() + 60_000, pollIntervalMs: 1000 }, request))
       .rejects.toBe(refusal);
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -22,7 +22,7 @@ describe('post-claim Home recovery', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     const unavailable = createHttpStatusError(503, 'Home unavailable');
     const request = vi.fn(async () => { nowMs += 2; throw unavailable; });
-    await expect(retryTerminalEnrollmentHomeOperation({ deadlineMs: 3, pollIntervalMs: 1000 }, request))
+    await expect(retryHomeOperation({ deadlineMs: 3, pollIntervalMs: 1000 }, request))
       .rejects.toBe(unavailable);
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -33,7 +33,7 @@ describe('post-claim Home recovery', () => {
       controller.abort();
       throw createHttpStatusError(503, 'Home unavailable');
     });
-    await expect(retryTerminalEnrollmentHomeOperation({ deadlineMs: Date.now() + 60_000,
+    await expect(retryHomeOperation({ deadlineMs: Date.now() + 60_000,
       pollIntervalMs: 1000, signal: controller.signal }, request)).rejects.toMatchObject({ name: 'AbortError' });
     expect(request).toHaveBeenCalledTimes(1);
   });

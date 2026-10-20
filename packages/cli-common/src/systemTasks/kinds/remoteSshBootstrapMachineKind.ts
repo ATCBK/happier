@@ -300,6 +300,7 @@ export type RemoteHostTrustResolution =
     }>;
 
 export type RemoteSshBootstrapMachineDeps = Readonly<{
+  onEnrollmentDeadline?: (deadlineMs: number) => void;
   assertManagedEnrollmentCurrent?: (correlation: ManagedEnrollmentCorrelationV1) => Promise<void>;
   resolveHostTrust: (params: Readonly<{
     ssh: SystemTaskSshConnectionConfig;
@@ -558,6 +559,7 @@ export function createRemoteSshBootstrapMachineTaskKind(
       });
       return await runRemoteMachineBootstrapRecipe({
         ctx, parsedRemote, parsedLocalForApproval, relayRuntime, relayRuntimeLocalServerUrl,
+        onEnrollmentDeadline: deps.onEnrollmentDeadline,
         remoteHappierExecutor, serviceRecipeExecutor,
         createRemoteEnrollmentExecutor: () => deps.createRemoteEnrollmentExecutor?.({
           parsed: parsedRemote, auth, knownHostsMode, signal: ctx.signal,
@@ -855,11 +857,12 @@ type RemoteMachineBootstrapRecipeParams = Readonly<{
   approveLocalAuthRequest(request: Omit<Parameters<RemoteSshBootstrapMachineDeps['approveLocalAuthRequest']>[0], 'parsed'> & { parsed: RemoteBootstrapMachineConfiguration }): Promise<void>;
   assertCurrent?: () => Promise<void>;
   enrollmentProcessIO?: 'streaming' | 'buffered';
+  onEnrollmentDeadline?: (deadlineMs: number) => void;
 }>;
 
 async function runRemoteMachineBootstrapRecipe({
   ctx, parsedRemote, parsedLocalForApproval, relayRuntime, relayRuntimeLocalServerUrl,
-  remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO,
+  remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO, onEnrollmentDeadline,
 }: RemoteMachineBootstrapRecipeParams) {
   const webappUrl = deriveWebappUrl(parsedRemote.relay.relayUrl, parsedRemote.relay.webappUrl);
   const relayProfile = {
@@ -911,6 +914,7 @@ async function runRemoteMachineBootstrapRecipe({
               : { kind: 'https_url', url: parsedRemote.relay.relayUrl },
             signal: ctx.signal,
             timeoutMs: 10 * 60_000,
+            onEnrollmentDeadline,
             ...(parsedRemote.managedEnrollment ? { managedEnrollment: parsedRemote.managedEnrollment } : {}),
             approvePairingRequest: async (request) => {
               publicKey = request.publicKey;
@@ -1094,6 +1098,7 @@ async function runRemoteMachineBootstrapRecipe({
 
 /** Native IO joins the same installer/enrollment/service recipe as SSH. */
 export function createRemoteNativeBootstrapMachineTaskKind(input: Readonly<{
+  onEnrollmentDeadline?: (deadlineMs: number) => void;
   configuration: RemoteBootstrapMachineConfiguration;
   installRemoteCli(signal?: AbortSignal): Promise<void>;
   executor: HappierJsonExecutor;
@@ -1130,6 +1135,7 @@ export function createRemoteNativeBootstrapMachineTaskKind(input: Readonly<{
         approveLocalAuthRequest: input.approveLocalAuthRequest,
         assertCurrent: input.assertCurrent,
         enrollmentProcessIO: 'buffered',
+        onEnrollmentDeadline: input.onEnrollmentDeadline,
       });
     },
   };

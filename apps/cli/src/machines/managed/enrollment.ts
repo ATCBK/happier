@@ -14,6 +14,7 @@ import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SavedSecretRefV1 } from '@happier-dev/protocol';
 import { ManagedMachineControllerError } from './controllerErrors';
+import { REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export type ManagedNativeBootstrapIO = Readonly<{
   /** Buffered stdout/stderr/status is sufficient; output observers are optional. */
@@ -23,6 +24,7 @@ export type ManagedNativeBootstrapIO = Readonly<{
 }>;
 export type ManagedMachineEnrollmentDependencies = Readonly<{
   readCurrentManagedRow(): Promise<ManagedMachineV1>;
+  onEnrollmentLifetime?(lifetime: HomeOperationRetry): void;
   native?: ManagedNativeBootstrapIO;
   materializeBootstrapCredential?(reference: Extract<SavedSecretRefV1, { kind: 'shared_resource' }>): Promise<Readonly<{ path: string; dispose(): Promise<void> }>>;
 }>;
@@ -41,6 +43,9 @@ export async function runManagedMachineEnrollment(input: Readonly<{
 }>, deps: ManagedMachineEnrollmentDependencies): Promise<Readonly<{ machineId: string }>> {
   const correlation = ManagedEnrollmentCorrelationV1Schema.parse(input.correlation);
   const carrier = ManagedBootstrapCarrierV1Schema.parse(input.carrier);
+  const onEnrollmentDeadline = (deadlineMs: number) => deps.onEnrollmentLifetime?.({ deadlineMs,
+    pollIntervalMs: carrier.kind === 'native' ? TERMINAL_AUTH_POLL_INTERVAL_MS : REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS,
+    signal: input.signal });
   if (input.target.homeServerIdentityId !== correlation.homeId || !input.target.descriptor) {
     throw new SystemTaskExecutionError('home_identity_mismatch', 'Managed enrollment requires its admitted Home descriptor.');
   }
@@ -118,7 +123,7 @@ export async function runManagedMachineEnrollment(input: Readonly<{
     try {
       await assertCurrent();
       const { createLiveRemoteSshBootstrapTaskKind } = await import('@/capabilities/systemTasks/ssh/liveRemoteSshBootstrap');
-      const task = createLiveRemoteSshBootstrapTaskKind({ assertManagedEnrollmentCurrent: async () => { await assertCurrent(); } });
+      const task = createLiveRemoteSshBootstrapTaskKind({ onEnrollmentDeadline, assertManagedEnrollmentCurrent: async () => { await assertCurrent(); } });
       return await runPreparedTask({ run: async (ctx) => task.run({ ...ctx, params: { ...configuration, ssh: {
         target: `${carrier.user}@${carrier.address}`, auth: 'keyfile', identityFile: credential.path,
           ...(carrier.port ? { port: carrier.port } : {}), hostKeyEvidence: carrier.hostKeyEvidence,
@@ -215,6 +220,7 @@ export async function runManagedMachineEnrollment(input: Readonly<{
       });
   });
   const task = createRemoteNativeBootstrapMachineTaskKind({
+    onEnrollmentDeadline,
     configuration, executor, assertCurrent: async () => { await assertCurrent(); },
     installRemoteCli,
     approveLocalAuthRequest: async ({ publicKey, pairing, supportsTokenOnly, signal }) => {

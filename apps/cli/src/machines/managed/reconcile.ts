@@ -27,6 +27,7 @@ import type { ManagedNativeBootstrapIO } from './enrollment';
 import { ManagedMachineControllerError, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
 import type { ManagedMachineAcquisitionDriverInput, ManagedMachineControllerClient, ManagedMachineExecutionOptions } from './acquire';
 import { sshPublicKey } from './bootstrapSshPublicKey';
+import { isRetryableHomeOperationError, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export type ManagedMachineReconciliationInput = Readonly<{
     input: ManagedMachineAcquisitionDriverInput;
@@ -544,40 +545,54 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
         controller: correlation.controller, resource: correlation.resource };
     params.options.context?.operationOwnerUpdate?.update({ domainRef });
     let bootstrapTask: Readonly<{ id: string; taskKind: 'remote.ssh.bootstrapMachine.v1' }> | undefined;
-    const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
-        onTask: ({ taskId, kind }) => {
-            bootstrapTask = { id: taskId, taskKind: kind };
-            params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef, bootstrapTask } });
-        },
-        // The task's open question rides on the same operation, so the page waiting on it can ask it.
-        onPrompt: (prompt) => {
-            if (!bootstrapTask) return;
-            params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef,
-                bootstrapTask: { ...bootstrapTask, ...(prompt ? { prompt } : {}) } } });
-        },
-        onEvent: (event) => {
-            if (event.type !== 'progress' || !event.message) return;
-            const progress = (event.stepId
-                ? { kind: 'phase', phase: event.stepId, label: event.message }
-                : { kind: 'indeterminate', label: event.message }) satisfies ActionOperationProgressV1;
-            params.options.context?.operationOwnerUpdate?.update({ progress });
-        },
-    }, {
-        readCurrentManagedRow: async () => {
-            params.options.signal?.throwIfAborted();
-            if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
-                throw new ManagedMachineControllerError('provider_unavailable');
-            }
-            return await params.client.row('current', params.client.correlation(machine));
-        }, native,
-        materializeBootstrapCredential: async (reference) => {
-            if (reference.resourceId !== machine.bootstrapCredentialRef?.resourceId || bootstrapCredentialRevision === undefined) {
-                throw new ManagedMachineControllerError('credential_unavailable');
-            }
-            return await materializeBootstrapCredential(params, machine, bootstrapCredentialRevision);
-        },
-    });
-    machine = await params.client.row('current', params.client.correlation(machine));
-    if (machine.enrolledMachineId !== enrollment.machineId) throw new ManagedMachineControllerError('enrollment_retired');
-    return null;
+    let enrollmentLifetime: HomeOperationRetry | undefined;
+    try {
+        const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
+            onTask: ({ taskId, kind }) => {
+                bootstrapTask = { id: taskId, taskKind: kind };
+                params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef, bootstrapTask } });
+            },
+            // The task's open question rides on the same operation, so the page waiting on it can ask it.
+            onPrompt: (prompt) => {
+                if (!bootstrapTask) return;
+                params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef,
+                    bootstrapTask: { ...bootstrapTask, ...(prompt ? { prompt } : {}) } } });
+            },
+            onEvent: (event) => {
+                if (event.type !== 'progress' || !event.message) return;
+                const progress = (event.stepId
+                    ? { kind: 'phase', phase: event.stepId, label: event.message }
+                    : { kind: 'indeterminate', label: event.message }) satisfies ActionOperationProgressV1;
+                params.options.context?.operationOwnerUpdate?.update({ progress });
+            },
+        }, {
+            onEnrollmentLifetime: lifetime => {
+                enrollmentLifetime = lifetime;
+                params.client.setHomeOperationRetry(lifetime);
+            },
+            readCurrentManagedRow: async () => {
+                params.options.signal?.throwIfAborted();
+                if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
+                    throw new ManagedMachineControllerError('provider_unavailable');
+                }
+                return await params.client.row('current', params.client.correlation(machine));
+            }, native,
+            materializeBootstrapCredential: async (reference) => {
+                if (reference.resourceId !== machine.bootstrapCredentialRef?.resourceId || bootstrapCredentialRevision === undefined) {
+                    throw new ManagedMachineControllerError('credential_unavailable');
+                }
+                return await materializeBootstrapCredential(params, machine, bootstrapCredentialRevision);
+            },
+        });
+        machine = await params.client.row('current', params.client.correlation(machine));
+        if (machine.enrolledMachineId !== enrollment.machineId) throw new ManagedMachineControllerError('enrollment_retired');
+        return null;
+    } catch (error) {
+        // A guest may have committed enrollment while Home cannot be read.
+        // Unavailable confirmation never proves that the guest effect failed.
+        if (enrollmentLifetime && !params.options.signal?.aborted && isRetryableHomeOperationError(error)) {
+            throw new ManagedMachineControllerError('action_outcome_unknown');
+        }
+        throw error;
+    } finally { params.client.setHomeOperationRetry(); }
 }

@@ -102,7 +102,8 @@ function isRetryableSessionCreation(actionId: string, result: ActionExecuteResul
 }
 
 function isUnconfirmedOwnedOutcome(actionId: string, result: ActionExecuteResult): boolean {
-  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild') {
+  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild'
+    || actionId === 'machines.managed.acquire' || actionId === 'machines.managed.bootstrap.retry') {
     return !result.ok && result.errorCode === 'action_outcome_unknown';
   }
   if (actionId === 'daemon.filesystem.upload' || actionId === 'daemon.filesystem.download' || actionId === 'daemon.filesystem.copy') {

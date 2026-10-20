@@ -26,7 +26,7 @@ import {
   fetchServerFeaturesSnapshot,
   observeServerFeaturesSnapshot,
 } from '@/features/serverFeaturesClient';
-import { retryTerminalEnrollmentHomeOperation } from './retryTerminalEnrollmentHomeOperation';
+import { retryHomeOperation, REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS } from '@/api/client/retryHomeOperation';
 
 const MAX_PROVISIONING_RESPONSE_B64_CHARS = 4096;
 
@@ -99,7 +99,7 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
   onPairingRequest(request: RemoteTerminalEnrollmentPairingRequest): Promise<void> | void;
 }>): Promise<RemoteTerminalEnrollmentResult> {
   const deadlineMs = Date.now() + Math.max(1, Math.floor(params.timeoutMs));
-  const pollIntervalMs = Math.max(1, Math.floor(params.pollIntervalMs ?? 500));
+  const pollIntervalMs = Math.max(1, Math.floor(params.pollIntervalMs ?? REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS));
   const homeRetry = { deadlineMs, pollIntervalMs, signal: params.signal };
   throwIfStopped(params.signal, deadlineMs);
   const managedEnrollment = params.managedEnrollment === undefined ? undefined
@@ -204,7 +204,7 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
       if (!token || !responseB64 || responseB64.length > MAX_PROVISIONING_RESPONSE_B64_CHARS) {
         throw new Error('Remote Home enrollment returned an invalid provisioning response.');
       }
-      await retryTerminalEnrollmentHomeOperation(homeRetry, async () => {
+      await retryHomeOperation(homeRetry, async () => {
         throwIfStopped(params.signal, deadlineMs);
         const authenticatedSnapshot = await observeServerFeaturesSnapshot({
           serverUrl: acquired.runtime.runtimeOrigin,

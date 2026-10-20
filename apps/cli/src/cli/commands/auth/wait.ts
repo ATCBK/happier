@@ -32,7 +32,7 @@ import {
 } from '@/auth/terminalAuthEnrollmentClient';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { useServerProfile } from '@/server/serverProfiles';
-import { retryTerminalEnrollmentHomeOperation, type TerminalEnrollmentHomeRetry } from '@/auth/retryTerminalEnrollmentHomeOperation';
+import { retryHomeOperation, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 type PendingAuthState = Readonly<{
   publicKey: string;
@@ -197,7 +197,7 @@ async function completeClaimedCredentialHandoff(params: Readonly<{
   credentials: StoredCredentials;
   statePath: string;
   runtimeOrigin: string;
-  homeRetry: TerminalEnrollmentHomeRetry;
+  homeRetry: HomeOperationRetry;
 }>): Promise<string> {
   // The relay claim is one-shot. Once credentials are durable, this request
   // must no longer be retryable even if the subsequent registration fails.
@@ -270,7 +270,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
   );
   if (!acquired.ok) throw new AuthWaitError('AUTH_WAIT_TRANSPORT_UNAVAILABLE', 'Unable to acquire the selected Home enrollment carrier');
   const pollIntervalMsRaw = Number(process.env.HAPPIER_AUTH_POLL_INTERVAL_MS ?? '');
-  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : 1000;
+  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : TERMINAL_AUTH_POLL_INTERVAL_MS;
   const homeRetry = { deadlineMs: state.pairingExpiresAtMs, pollIntervalMs, signal };
 
   try {
@@ -320,7 +320,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected response from server.');
       }
       if (target.descriptor) {
-        await retryTerminalEnrollmentHomeOperation(homeRetry, async () => {
+        await retryHomeOperation(homeRetry, async () => {
           const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
             serverUrl: acquired.runtime.runtimeOrigin,
             token,
