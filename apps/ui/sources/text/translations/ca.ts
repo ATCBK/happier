@@ -7091,6 +7091,11 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             showBannerAction: 'Mostra el bàner',
             hideBannerAction: 'Amaga el bàner',
         },
+        runnerRestartBackgroundWork: {
+            title: 'Hi ha feina en segon pla en execució',
+            body: ({ count }: { count: number }) => count > 0 ? `Hi ha feina en segon pla en execució (${count}). Reiniciar pot aturar aquesta feina.` : 'Reiniciar pot aturar la feina en segon pla d’aquesta sessió.',
+            confirmAction: 'Reinicia igualment',
+        },
         staleRunner: {
             banner: {
                 stopAndResumeBody: 'Aquest executor no es pot reiniciar de manera segura. Atura la sessió i reprèn-la per utilitzar el runtime actual.',

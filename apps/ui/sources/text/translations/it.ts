@@ -8054,6 +8054,11 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
         showBannerAction: 'Mostra banner',
         hideBannerAction: 'Nascondi banner',
     },
+    runnerRestartBackgroundWork: {
+        title: 'Lavoro in background in corso',
+        body: ({ count }: { count: number }) => count > 0 ? `È in corso del lavoro in background (${count}). Il riavvio potrebbe interrompere questo lavoro.` : 'Il riavvio potrebbe interrompere il lavoro in background di questa sessione.',
+        confirmAction: 'Riavvia comunque',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Questo runner non può riavviarsi in sicurezza. Arresta la sessione, poi riprendila per usare il runtime corrente.',

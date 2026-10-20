@@ -7667,6 +7667,11 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         showBannerAction: 'Pokaż baner',
         hideBannerAction: 'Ukryj baner',
     },
+    runnerRestartBackgroundWork: {
+        title: 'Praca w tle jest w toku',
+        body: ({ count }: { count: number }) => count > 0 ? `Praca w tle jest w toku (${count}). Ponowne uruchomienie może zatrzymać tę pracę.` : 'Ponowne uruchomienie może zatrzymać pracę w tle w tej sesji.',
+        confirmAction: 'Uruchom ponownie mimo to',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Tego runnera nie można bezpiecznie uruchomić ponownie. Zatrzymaj sesję, a następnie ją wznów, aby użyć bieżącego środowiska uruchomieniowego.',

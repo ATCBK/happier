@@ -6480,6 +6480,11 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
               showBannerAction: '顯示橫幅',
               hideBannerAction: '隱藏橫幅',
           },
+          runnerRestartBackgroundWork: {
+              title: '背景工作正在執行',
+              body: ({ count }: { count: number }) => count > 0 ? `${count} 個背景工作正在執行。重新啟動可能會停止這些工作。` : '重新啟動可能會停止此工作階段的背景工作。',
+              confirmAction: '仍要重新啟動',
+          },
           staleRunner: {
             banner: {
               stopAndResumeBody: '此執行器無法安全重新啟動。請停止工作階段，然後繼續工作階段以使用目前的執行階段。',

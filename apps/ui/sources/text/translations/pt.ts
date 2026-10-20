@@ -7938,6 +7938,11 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         showBannerAction: 'Mostrar aviso',
         hideBannerAction: 'Ocultar aviso',
     },
+    runnerRestartBackgroundWork: {
+        title: 'Há trabalho em segundo plano em execução',
+        body: ({ count }: { count: number }) => count > 0 ? `Há trabalho em segundo plano em execução (${count}). Reiniciar pode interromper este trabalho.` : 'Reiniciar pode interromper o trabalho em segundo plano desta sessão.',
+        confirmAction: 'Reiniciar mesmo assim',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Este runner não pode reiniciar com segurança. Pare a sessão e depois retome para usar o runtime atual.',

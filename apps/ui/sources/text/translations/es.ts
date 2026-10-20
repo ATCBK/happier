@@ -7829,6 +7829,11 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
         showBannerAction: 'Mostrar aviso',
         hideBannerAction: 'Ocultar aviso',
     },
+    runnerRestartBackgroundWork: {
+        title: 'Hay trabajo en segundo plano en ejecución',
+        body: ({ count }: { count: number }) => count > 0 ? `Hay trabajo en segundo plano en ejecución (${count}). Reiniciar puede detener este trabajo.` : 'Reiniciar puede detener el trabajo en segundo plano de esta sesión.',
+        confirmAction: 'Reiniciar de todos modos',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Este runner no puede reiniciarse de forma segura. Detén la sesión y luego reanúdala para usar el runtime actual.',

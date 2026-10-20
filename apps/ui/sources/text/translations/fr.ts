@@ -7671,6 +7671,11 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
         showBannerAction: 'Afficher la bannière',
         hideBannerAction: 'Masquer la bannière',
     },
+    runnerRestartBackgroundWork: {
+        title: 'Du travail est en cours en arrière-plan',
+        body: ({ count }: { count: number }) => count > 0 ? `Du travail est en cours en arrière-plan (${count}). Le redémarrage peut interrompre ce travail.` : 'Le redémarrage peut interrompre le travail en arrière-plan de cette session.',
+        confirmAction: 'Redémarrer quand même',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Ce runner ne peut pas redémarrer en toute sécurité. Arrête la session, puis reprends-la pour utiliser le runtime actuel.',

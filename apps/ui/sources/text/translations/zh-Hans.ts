@@ -7517,6 +7517,11 @@ const zhHansValues = {
         showBannerAction: '显示横幅',
         hideBannerAction: '隐藏横幅',
     },
+    runnerRestartBackgroundWork: {
+        title: '后台任务正在运行',
+        body: ({ count }: { count: number }) => count > 0 ? `${count} 个后台任务正在运行。重启可能会停止这些工作。` : '重启可能会停止此会话的后台任务。',
+        confirmAction: '仍然重启',
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: '此运行器无法安全重启。请停止会话，然后恢复会话以使用当前运行时。',

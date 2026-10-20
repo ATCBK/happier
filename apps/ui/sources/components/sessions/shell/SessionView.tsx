@@ -4690,6 +4690,10 @@ function SessionViewLoadedContent({
             throw error;
         }
         if (sessionViewCaller.signal.aborted) return;
+        if (!result) {
+            setStaleSessionRunnerOperationStatus(null);
+            return;
+        }
         if (result.status === 'restarted' || result.status === 'already_current') {
             // Resolving the issue removes the banner on its own. Collapse is a remembered user
             // preference per banner kind, so a successful restart must not silently re-expand it.
@@ -8238,6 +8242,7 @@ function SessionViewLoadedContent({
                     } : {}),
                 });
                 if (sessionViewCaller.signal.aborted) return false;
+                if (!result) return false;
                 if (result.status === 'restarted') {
                     setModelTransitionActionRequired(null);
                     return true;
