@@ -189,6 +189,48 @@ describe('archive routing from canonical session-list rows', () => {
       : storage.getState().ordinarySessionListMembershipByServerId[owner.id]).toContain(active.id);
   });
 
+  it.each(['archive', 'unarchive'] as const)('projects a remote %s through Home identity discovery while HTTP is pending', async action => {
+    const owner = await boundary.addHome(`https://discovered-${action}.example`, `discovered-${action}`);
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    const { setServerProfileIdentityForUrl, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
+    const { readSessionListRowForServerId } = await import('@/sync/domains/session/listing/sessionListRowStateLookup');
+    const { sessionArchiveWithServerScope, sessionUnarchiveWithServerScope } = await import('../sessions');
+    storage.setState(storage.getInitialState(), true);
+    const before = action === 'archive' ? null : 10;
+    const after = action === 'archive' ? 42 : null;
+    const sessionId = `discovered-${action}`;
+    storage.getState().applyServerScopedSessionListRows(owner.id, [
+      createSessionListRenderableSessionFixture({ id: sessionId, archivedAt: before }),
+    ], { source: action === 'archive' ? 'ordinary' : 'archived', mode: 'replace' });
+    let releaseResponse!: () => void;
+    let enterRequest!: () => void;
+    const responseReady = new Promise<void>(resolve => { releaseResponse = resolve; });
+    const requestEntered = new Promise<void>(resolve => { enterRequest = resolve; });
+    boundary.setHttpResponder(async input => {
+      if (new URL(String(input)).pathname !== `/v2/sessions/${sessionId}/${action}`) return null;
+      enterRequest();
+      await responseReady;
+      return Response.json({ success: true, archivedAt: after });
+    });
+    const run = action === 'archive' ? sessionArchiveWithServerScope : sessionUnarchiveWithServerScope;
+    const pending = run(sessionId, { serverId: owner.id });
+    const canonicalId = `srv_discovered_${action}`;
+    try {
+      await requestEntered;
+      await setServerProfileIdentityForUrl(owner.serverUrl, canonicalId);
+      expect(readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, canonicalId, sessionId)?.archivedAt).toBe(before);
+    } finally {
+      releaseResponse();
+    }
+    await expect(pending).resolves.toMatchObject({ success: true });
+    expect(readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, canonicalId, sessionId)?.archivedAt).toBe(after);
+    const memberships = action === 'archive' ? storage.getState().archivedSessionListMembershipByServerId
+      : storage.getState().ordinarySessionListMembershipByServerId;
+    expect(Object.entries(memberships).filter(([serverId]) => areServerProfileIdentifiersEquivalent(serverId, canonicalId))
+      .flatMap(([, ids]) => ids ?? [])).toContain(sessionId);
+  });
+
   it('defaults a null serverId to the preferred owner Home from its canonical local list', async () => {
     const owner = await boundary.addHome('https://archive-owner.example', 'archive-account');
     const { storage } = await import('@/sync/domains/state/storage');

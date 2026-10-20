@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
@@ -371,5 +371,46 @@ describe('stopSessionAndMaybeArchive', () => {
                 patch: { keepVisibleWhenInactive: false },
             },
         ]);
+    });
+});
+
+
+describe('shared archive admission across Home identity discovery', () => {
+    beforeAll(async () => {
+        vi.doUnmock('@/sync/domains/state/storage');
+        vi.resetModules();
+    });
+
+    it('admits one public stop-and-archive operation when its Home learns a stable identity', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { upsertServerProfile, setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
+        storage.setState(storage.getInitialState(), true);
+        const home = await upsertServerProfile({ serverUrl: 'https://archive-discovery.example' });
+        let releaseStop!: () => void;
+        const stopped = new Promise<void>(resolve => { releaseStop = resolve; });
+        let stopCount = 0;
+        let archiveCount = 0;
+        // These callbacks are the public owner's effect adapters. Admission and
+        // the real SessionsDomain remain inside the process under test.
+        const adapters = {
+            hideInactiveSessions: true, isPinned: false, archiveAfterStop: 'always' as const,
+            stopSession: async () => { stopCount += 1; await stopped; return { success: true }; },
+            archiveSession: async () => { archiveCount += 1; return { success: true }; },
+            stopErrorMessage: 'stop failed', archiveErrorMessage: 'archive failed',
+        };
+        const first = stopSessionAndMaybeArchive({ ...adapters, address: address('same-session', home.id) });
+        let second: ReturnType<typeof stopSessionAndMaybeArchive> | undefined;
+        try {
+            expect(stopCount).toBe(1);
+            await setServerProfileIdentityForUrl(home.serverUrl, 'srv_archive_discovered');
+            second = stopSessionAndMaybeArchive({ ...adapters, address: address('same-session', 'srv_archive_discovered') });
+            expect(stopCount).toBe(1);
+        } finally {
+            releaseStop();
+            await Promise.all([first, second]);
+        }
+        expect(archiveCount).toBe(1);
+        expect(storage.getState().sessionArchiveOperations).toEqual({});
     });
 });
