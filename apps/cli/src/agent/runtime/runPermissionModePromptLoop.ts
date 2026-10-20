@@ -1161,6 +1161,7 @@ export async function runPermissionModePromptLoop(opts: {
       ? { type: null } as const
       : parseSpecialCommand(message.message.text);
     if (special.type === 'clear') {
+      opts.session.markPendingProviderInputDispatched(normalizePermissionModeQueuedPromptLocalIds(message.message));
       opts.messageBuffer.addMessage(`Resetting ${opts.providerName} session…`, 'status');
       await opts.onBeforeReset?.({ reason: 'clear' });
       resetAssistantTextSnapshotTurnScope(opts.session, 'clear');
@@ -1326,6 +1327,7 @@ export async function runPermissionModePromptLoop(opts: {
         const dispatchCompactContext = async (): Promise<void> => {
           try {
             if (typeof opts.runtime.compactContext === 'function') {
+              opts.session.markPendingProviderInputDispatched(localIds);
               await opts.runtime.compactContext(special.originalMessage ?? message.message.text.trim());
             } else {
               throw new Error('/compact is not supported by this runtime');
@@ -1774,6 +1776,9 @@ export async function runPermissionModePromptLoop(opts: {
         }
         // Invoking the runtime is the effect boundary. From here onward a thrown transport or
         // AbortError is ambiguous, so the durable association must remain for reconciliation.
+        opts.session.markPendingProviderInputDispatched([
+          ...localIds, ...representedPendingInputs.map(input => input.localId),
+        ]);
         releaseUndispatchedReplaySeed = null;
         for (const follow of representedFollowDeliveries) {
           opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId

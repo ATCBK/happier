@@ -3941,6 +3941,13 @@ export async function blockPendingDelivery(params: {
                     },
                 });
                 if (!existing) return { ok: false, error: "not-found" } as const;
+                if (reason === "host_retired_before_dispatch" && (existing.status !== "queued"
+                    || existing.deliveryState !== "delivering" && !(existing.deliveryState === "blocked"
+                        && existing.deliveryBlockedReason === "host_retired_before_dispatch"))) {
+                    // A delayed retiring host cannot turn a successor's
+                    // uncertainty (or a terminal disposition) into replay proof.
+                    return { ok: false, error: "delivery-settlement-conflict" } as const;
+                }
                 if (reason === "conditional_steer_unavailable") {
                     const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                     if (

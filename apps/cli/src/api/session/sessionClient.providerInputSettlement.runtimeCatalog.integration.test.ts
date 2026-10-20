@@ -142,6 +142,29 @@ describe('ApiSessionClient provider-input settlement', () => {
     sendSessionMessageMock.mockReset();
   });
 
+  it('preserves a claimed initial prompt as pre-effect custody when the host closes before native dispatch', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    blockDeliveryMock.mockResolvedValue({ didUpdate: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'initial-prompt-before-capability-restart');
+    markMaterializedProviderInput(client, 'native-send-started-without-receipt');
+    client.markPendingProviderInputDispatched(['native-send-started-without-receipt']);
+    markMaterializedProviderInput(client, 'possibly-delivered');
+    await client.observeProviderInputSettlement({ kind: 'effect_may_have_occurred', localId: 'possibly-delivered',
+      userMessageSeq: null, issue: { code: 'native_send_outcome_unknown', severity: 'error' } });
+    blockDeliveryMock.mockClear();
+
+    client.prepareForClose();
+    expect(() => client.markPendingProviderInputDispatched(['initial-prompt-before-capability-restart']))
+      .toThrow('retired before native dispatch');
+    await client.close();
+
+    expect(blockDeliveryMock.mock.calls.map(([request]) => ({ localId: request.localId, reason: request.reason })))
+      .toEqual([{ localId: 'initial-prompt-before-capability-restart', reason: 'host_retired_before_dispatch' }]);
+    expect(resolveAcceptedMock).not.toHaveBeenCalled();
+  });
+
   it('branches on the exact protected admission result instead of a generic send code', async () => {
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });

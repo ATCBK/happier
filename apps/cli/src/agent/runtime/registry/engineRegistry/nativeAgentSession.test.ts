@@ -13017,6 +13017,27 @@ describe('native Agent session host adapter', () => {
         }]);
     });
 
+    it('keeps disposal before native dispatch distinct from an uncertain native send', async () => {
+        const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+        let admissionSignal: AbortSignal | undefined;
+        const runtime = createNativeAgentSessionOperations({ send, watch: () => ({ dispose() {} }), dispose: async () => {} },
+            'session-1', undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], undefined, undefined,
+            async (_witness, { signal }) => {
+                admissionSignal = signal;
+                await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+            });
+        const outcomes: unknown[] = [];
+        runtime.setOnPromptDeliveryOutcome(outcome => outcomes.push(outcome));
+        const sending = runtime.sendTurnPrompt('initial marker', { localId: 'initial-input', turnId: 'initial-turn' });
+        const rejected = expect(sending).rejects.toThrow('retired before dispatch');
+        await vi.waitFor(() => expect(admissionSignal).toBeDefined());
+        await runtime.resetOrDisposeRuntime('host_shutdown');
+        await rejected;
+        expect(send).not.toHaveBeenCalled();
+        expect(outcomes).toEqual([expect.objectContaining({ type: 'input-rejected-before-provider', localId: 'initial-input',
+            reason: 'host_retired_before_dispatch', retryable: true, retireLocalCustodyAfterDurableBlock: true })]);
+    });
+
     it('publishes unresolved input custody before waiting for native disposal', async () => {
         let releaseDispose = () => {};
         const nativeDisposal = new Promise<void>((resolve) => { releaseDispose = resolve; });

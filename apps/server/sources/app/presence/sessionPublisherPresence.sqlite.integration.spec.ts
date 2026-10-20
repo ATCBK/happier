@@ -24,6 +24,7 @@ import { holdSqliteWriteLock } from "@/testkit/sqliteWriteLock";
 
 import { createSessionPublisherPresence, expireSessionPublisherCandidates, readSessionPublisherAuthorityProjection } from "./sessionPublisherPresence";
 import { resolveCurrentSessionPublisherFromServer } from "@/app/api/socket/externalActionDispatcher";
+import { blockPendingDelivery, enqueuePendingMessage, materializeNextPendingMessage, resolveAcceptedPendingDelivery } from "@/app/session/pending/pendingMessageService";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -487,6 +488,46 @@ describe("session publisher presence on SQLite", () => {
         });
     });
 
+    it("reclaims a proven undispatched initial prompt once after a planned publisher replacement", async () => {
+        const seeded = await seed();
+        const presence = createSessionPublisherPresence({ now: () => new Date(seeded.fence.getTime() + 10) });
+        const socket = {};
+        const first = await presence.registerPublisher({ socket, binding: seeded.binding,
+            completeActivitySnapshot: { state: "idle", activeCount: 0 } });
+        if (first.status !== "registered") throw new Error("expected registration");
+        const request = { actorUserId: seeded.binding.accountId, sessionId: seeded.binding.sessionId,
+            localId: `initial-prompt-${randomUUID()}` };
+        expect(await enqueuePendingMessage({ ...request, authentication, ciphertext: "initial-assistant-marker",
+            requestedAction: { v: 1, kind: "enqueue" } })).toMatchObject({ ok: true });
+        const authority = { ...seeded.binding, committedFence: first.committedFence };
+        expect(await materializeNextPendingMessage({ actorUserId: request.actorUserId, sessionId: request.sessionId,
+            publisherAuthority: authority, deliveryState: "provider", deliveryTiming: "after_foreground_ready",
+            foregroundState: "ready" })).toMatchObject({ ok: true, didMaterialize: true });
+        expect(await blockPendingDelivery({ ...request, reason: "host_retired_before_dispatch" }))
+            .toMatchObject({ ok: true, didUpdate: true });
+        await presence.closePublisher({ socket });
+
+        const replacementSocket = {};
+        const replacement = await presence.registerPublisher({ socket: replacementSocket, binding: seeded.binding,
+            completeActivitySnapshot: { state: "idle", activeCount: 0 } });
+        if (replacement.status !== "registered") throw new Error("expected successor registration");
+        expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
+            sessionId: request.sessionId, localId: request.localId } },
+            select: { deliveryState: true, deliveryBlockedReason: true, providerAction: true } }))
+            .toEqual({ deliveryState: null, deliveryBlockedReason: null, providerAction: null });
+        const successor = { ...seeded.binding, committedFence: replacement.committedFence };
+        const delivery = await materializeNextPendingMessage({ actorUserId: request.actorUserId, sessionId: request.sessionId,
+            publisherAuthority: successor, deliveryState: "provider", deliveryTiming: "after_foreground_ready", foregroundState: "ready" });
+        expect(delivery).toMatchObject({ ok: true, didMaterialize: true, message: { localId: request.localId,
+            content: { t: "encrypted", c: "initial-assistant-marker" }, providerAction: "send" } });
+        expect(await resolveAcceptedPendingDelivery({ ...request, publisherAuthority: successor }))
+            .toMatchObject({ ok: true, pendingCount: 0, pendingBlockedCount: 0 });
+        expect(await materializeNextPendingMessage({ actorUserId: request.actorUserId, sessionId: request.sessionId,
+            publisherAuthority: successor, deliveryState: "provider", deliveryTiming: "after_foreground_ready",
+            foregroundState: "ready" })).toMatchObject({ ok: true, didMaterialize: false });
+        expect(await db.sessionMessage.count({ where: { sessionId: request.sessionId, localId: request.localId } })).toBe(1);
+    });
+
     it("contracts inherited provider delivery before successor publisher authority becomes usable", async () => {
         const seeded = await seed();
         await db.sessionPendingMessage.createMany({
@@ -510,11 +551,22 @@ describe("session publisher presence on SQLite", () => {
                 status: "queued",
                 deliveryState: "delivering",
                 position: 2,
+            }, {
+                sessionId: seeded.binding.sessionId,
+                authorAccountId: seeded.binding.accountId,
+                localId: `historical-disposal-${randomUUID()}`,
+                content: { t: "encrypted", c: "historical-ciphertext" },
+                requestedAction: { v: 1, kind: "enqueue" },
+                providerAction: "send",
+                status: "queued",
+                deliveryState: "blocked",
+                deliveryBlockedReason: "runtime_disposed_before_delivery",
+                position: 3,
             }],
         });
         await db.session.update({
             where: { id: seeded.binding.sessionId },
-            data: { pendingCount: 2 },
+            data: { pendingCount: 3 },
         });
         const presence = createSessionPublisherPresence({
             now: () => new Date(seeded.fence.getTime() + 10),
@@ -534,11 +586,17 @@ describe("session publisher presence on SQLite", () => {
         })).resolves.toEqual([
             { deliveryState: "blocked", deliveryBlockedReason: "delivery_outcome_uncertain", providerAction: "send" },
             { deliveryState: "blocked", deliveryBlockedReason: "delivery_outcome_uncertain", providerAction: null },
+            { deliveryState: "blocked", deliveryBlockedReason: "runtime_disposed_before_delivery", providerAction: "send" },
         ]);
         await expect(db.session.findUniqueOrThrow({
             where: { id: seeded.binding.sessionId },
             select: { pendingBlockedCount: true, pendingVersion: true, active: true },
-        })).resolves.toEqual({ pendingBlockedCount: 2, pendingVersion: 1, active: true });
+        })).resolves.toEqual({ pendingBlockedCount: 3, pendingVersion: 1, active: true });
+        const uncertain = await db.sessionPendingMessage.findFirstOrThrow({ where: { sessionId: seeded.binding.sessionId },
+            orderBy: { position: "asc" }, select: { localId: true } });
+        expect(await blockPendingDelivery({ actorUserId: seeded.binding.accountId, sessionId: seeded.binding.sessionId,
+            localId: uncertain.localId, reason: "host_retired_before_dispatch" }))
+            .toEqual({ ok: false, error: "delivery-settlement-conflict" });
     });
 
     it("does not let a queued touch reactivate a cleanly closed publisher fence", async () => {

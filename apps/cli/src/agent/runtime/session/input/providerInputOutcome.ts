@@ -47,7 +47,7 @@ export type RuntimeExactProviderInputOutcome =
     }>)
     | (RuntimeExactProviderInputOutcomeBase & Readonly<{
         type: 'input-rejected-before-provider';
-        reason: 'provider_unavailable_before_acceptance';
+        reason: 'provider_unavailable_before_acceptance' | 'host_retired_before_dispatch';
         diagnostic: NativeInputRejectedEvent['diagnostic'];
         retryable: true;
         retireLocalCustodyAfterDurableBlock: true;
@@ -69,6 +69,7 @@ export type SessionProviderInputRejectedBeforeEffectReason =
     | 'terminal_composer_draft'
     | 'runtime_config_blocked'
     | 'provider_unavailable_before_acceptance'
+    | 'host_retired_before_dispatch'
     | 'steering_unavailable'
     | 'conditional_steer_unavailable'
     | 'unsupported_action';
@@ -87,6 +88,7 @@ function readSessionProviderInputRejectedBeforeEffectReason(
     return value === 'terminal_composer_draft'
         || value === 'runtime_config_blocked'
         || value === 'provider_unavailable_before_acceptance'
+        || value === 'host_retired_before_dispatch'
         || value === 'steering_unavailable'
         || value === 'conditional_steer_unavailable'
         || value === 'unsupported_action'

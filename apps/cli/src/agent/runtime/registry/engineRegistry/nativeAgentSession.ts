@@ -4275,12 +4275,22 @@ export function createNativeAgentSessionOperations(
                 // Native evidence is fenced as soon as retirement begins. Preserve
                 // exact unresolved custody before native cleanup can block or fail.
                 for (const correlation of inputCorrelations.values()) {
-                    correlation.admissionAbortController?.abort(
-                        new Error('Native Agent runtime delivery was retired before dispatch'),
-                    );
                     if (acceptedInputIds.has(correlation.inputId)) continue;
                     if (rejectedInputIds.has(correlation.inputId)) continue;
                     if (uncertainInputIds.has(correlation.inputId)) continue;
+                    if (correlation.admissionAbortController) {
+                        rejectedInputIds.add(correlation.inputId);
+                        emitDeliveryOutcome({ type: 'input-rejected-before-provider', localInputId: correlation.inputId,
+                            userMessageSeq: correlation.userMessageSeq,
+                            ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
+                            reason: 'host_retired_before_dispatch',
+                            diagnostic: { code: 'host_retired_before_dispatch', severity: 'warning' },
+                            retryable: true, retireLocalCustodyAfterDurableBlock: true });
+                        correlation.admissionAbortController.abort(
+                            new Error('Native Agent runtime delivery was retired before dispatch'),
+                        );
+                        continue;
+                    }
                     uncertainInputIds.add(correlation.inputId);
                     emitDeliveryOutcome({
                         type: 'input-custody-unknown',

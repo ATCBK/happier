@@ -1,5 +1,23 @@
 # Pending delivery architecture
 
+## Host retirement before dispatch (0.3 development)
+
+Claiming an input transfers custody to the host; it does not prove native
+dispatch. The Session client records the foreground prompt and steer effect
+boundaries, including every original represented by a composed prompt. During
+close it settles only claimed inputs that never crossed that boundary as
+`host_retired_before_dispatch`. Native input still waiting for host admission
+uses the same exact-input settlement when disposed.
+
+A successor publisher returns only that proven pre-dispatch disposition to the
+existing Pending queue, preserving its local id, content and requested action.
+Inherited delivering claims remain `delivery_outcome_uncertain`; a late
+pre-dispatch settlement cannot overwrite that uncertainty. Historical
+`runtime_disposed_before_delivery` rows retain their existing behavior. A failed
+close-time write supplies no replay proof, so replacement keeps the uncertainty
+guard. This development correction requires the composed CLI/daemon replay on
+the loaded runtime; source tests alone do not certify it.
+
 ## First-input admission and storage failures (development)
 
 Pending position allocation runs through `inPendingQueuePositionTx`. Its shared

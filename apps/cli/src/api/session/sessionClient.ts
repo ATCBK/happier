@@ -628,6 +628,8 @@ export class ApiSessionClient extends EventEmitter {
     private readonly pendingTranscriptMessageUpdates = new Set<Promise<unknown>>();
     private readonly locallyAuthoredTranscriptObservationUserLocalIds = new Set<string>();
     private readonly pendingProviderInputSettlementWrites = new Set<Promise<void>>();
+    private readonly dispatchedPendingProviderInputLocalIds = new Set<string>();
+    private providerInputClosing = false;
     private readonly terminalPendingSettlementWrites = new Set<Promise<void>>();
     // Keep witnessed detail with the existing unresolved settlement custody across reconnects.
     private readonly terminalPendingSettlementLocalIds = new Map<string, RetainedProviderInputSettlement>();
@@ -4720,6 +4722,19 @@ export class ApiSessionClient extends EventEmitter {
 
     /** Begin close-time write retirement before host lifecycle projections drain. */
     prepareForClose(): void {
+        if (!this.providerInputClosing) {
+            this.providerInputClosing = true;
+            // Claiming Pending is host custody, not native dispatch. Preserve the
+            // exact pre-effect fact before a successor inherits these claims.
+            for (const localId of this.materializationRuntime.pendingQueueMaterializedLocalIds) {
+                if (this.executionRunPendingCustody.has(localId)
+                    || this.dispatchedPendingProviderInputLocalIds.has(localId)
+                    || this.terminalPendingSettlementLocalIds.has(localId)) continue;
+                void this.observeProviderInputSettlement({ kind: 'rejected_before_effect', localId,
+                    userMessageSeq: null, reason: 'host_retired_before_dispatch',
+                    diagnostic: { code: 'host_retired_before_dispatch', severity: 'warning' }, retryable: true });
+            }
+        }
         this.terminalPendingSettlementOperationAbortController.abort();
         this.socket.off('disconnect', this.cancelDisconnectedCloseWrites);
         this.socket.on('disconnect', this.cancelDisconnectedCloseWrites);
@@ -4777,7 +4792,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     shouldAttemptPendingMaterialization(): boolean {
-        return this.materializationRuntime.shouldAttemptPendingMaterialization();
+        return !this.providerInputClosing && this.materializationRuntime.shouldAttemptPendingMaterialization();
     }
 
     getPendingQueueState(): PendingQueueState {
@@ -4894,8 +4909,19 @@ export class ApiSessionClient extends EventEmitter {
             && this.materializationRuntime.hasPendingQueueMaterializedLocalId(normalizedLocalId);
     }
 
+    /** Synchronous host effect boundary, including every original represented by a dispatch. */
+    markPendingProviderInputDispatched(localIds: readonly string[]): void {
+        if (this.providerInputClosing || this.closed) {
+            throw Object.assign(new Error('Session input retired before native dispatch'), { name: 'AbortError' });
+        }
+        for (const localId of localIds) {
+            if (this.hasPendingProviderInput(localId)) this.dispatchedPendingProviderInputLocalIds.add(localId);
+        }
+    }
+
     private deletePendingProviderInputLocalState(localId: string): void {
         this.materializationRuntime.deleteMaterializedLocalId(localId);
+        this.dispatchedPendingProviderInputLocalIds.delete(localId);
         this.nonBlockingArchivedPendingDeliveryLocalIds.delete(localId);
     }
 
@@ -5270,6 +5296,9 @@ export class ApiSessionClient extends EventEmitter {
         const localId = readPendingLocalId(outcome.localId);
         if (!localId || this.closed || !this.hasPendingProviderInput(localId)) return Promise.resolve(false);
         if (outcome.kind === 'custody_observed') return Promise.resolve(false);
+        if (outcome.kind === 'accepted' || outcome.kind === 'effect_may_have_occurred') {
+            this.dispatchedPendingProviderInputLocalIds.add(localId);
+        }
         const executionRun = this.executionRunPendingCustody.get(localId);
         if (executionRun && !executionRun.isCurrent()) return Promise.resolve(false);
 

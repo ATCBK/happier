@@ -137,6 +137,7 @@ export function createApiSessionClientFixture(options?: {
     return {
         keepAlive() {},
         prepareForClose() {},
+        markPendingProviderInputDispatched() {},
         async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
         },
@@ -256,6 +257,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         async refreshSessionSnapshotFromServerBestEffort() {},
         async disposeExecutionRuns() {},
         observeProviderInputSettlement() {},
+        markPendingProviderInputDispatched() {},
         confirmUserMessageLocallyConsumed() {},
         getMetadataSnapshot() {
             return metadata;

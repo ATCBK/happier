@@ -391,12 +391,24 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 deliveryBlockedReason: "delivery_outcome_uncertain",
             },
         });
+        // Only the retiring host's exact pre-dispatch proof permits reuse of
+        // this input. A frozen claim or historical disposal reason is not proof.
+        const undispatched = await tx.sessionPendingMessage.updateMany({
+            where: {
+                sessionId: binding.sessionId,
+                targetExecutionRunId: null,
+                status: "queued",
+                deliveryState: "blocked",
+                deliveryBlockedReason: "host_retired_before_dispatch",
+            },
+            data: { deliveryState: null, deliveryBlockedReason: null, providerAction: null },
+        });
         let pendingState: Readonly<{
             pendingCount: number;
             pendingBlockedCount: number;
             pendingVersion: number;
         }> | undefined;
-        if (inherited.count > 0) {
+        if (inherited.count > 0 || undispatched.count > 0) {
             const [pendingCount, pendingBlockedCount] = await Promise.all([
                 tx.sessionPendingMessage.count({ where: { sessionId: binding.sessionId, targetExecutionRunId: null, status: "queued" } }),
                 tx.sessionPendingMessage.count({

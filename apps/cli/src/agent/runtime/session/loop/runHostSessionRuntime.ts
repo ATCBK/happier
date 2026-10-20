@@ -2257,6 +2257,9 @@ export async function runHostSessionRuntime(
       if (!runtime?.steerPrompt) {
         throw new Error('in-flight steer is not available');
       }
+      currentLifecycleSession.markPendingProviderInputDispatched([
+        ...(options?.localIds ?? []), ...(options?.localId ? [options.localId] : []),
+      ]);
       if (options === undefined) {
         await runtime.steerPrompt(text);
         return;
