@@ -96,16 +96,16 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     if(!source) throw new RegistryFetchErrorV1({state:'invalid_source'});
     return source;
   };
-  const direct=async(request:Extract<RegistryFetchRequestV1,{sourceId:string}>,source:RegistrySourceDescriptorV1):Promise<RegistryFetchResponseV1>=>{
+  const direct=async(request:Extract<RegistryFetchRequestV1,{sourceId:string}>,source:RegistrySourceDescriptorV1, operationCtx: RegistryFetchContextV1):Promise<RegistryFetchResponseV1>=>{
     const adapter=adapterFor(source);
     if(!source.kinds.includes(request.kind)) throw new RegistryFetchErrorV1({state:'invalid_source'});
-    const formatCtx: RegistryFetchContextV1 = { ...ctx, readTargetItem: async target => {
+    const formatCtx: RegistryFetchContextV1 = { ...operationCtx, readTargetItem: async target => {
       const descriptor: RegistrySourceDescriptorV1 = { ...target.source, origin: { kind: 'built_in' }, removable: false };
       const targetAdapter = adapterFor(descriptor);
       const placements = resolveRegistryFetchPlanV1({ host: deps.host, adapter: targetAdapter, source: descriptor, op: 'read' });
       for (const [index, placement] of placements.entries()) {
         try {
-          if (placement === 'direct') return RegistryItemV1Schema.parse(await targetAdapter.read(ctx, target));
+          if (placement === 'direct') return RegistryItemV1Schema.parse(await targetAdapter.read(operationCtx, target));
           // Browsing a curated pointer never requires a Machine. Its details
           // read fills the reviewed version through the existing daemon owner.
           if (request.op === 'list') return null;
@@ -135,15 +135,15 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
         path: item.payload.skill.ref.path, ref: item.payload.skill.ref.commit };
       const placement = resolveRegistryFetchPlanV1({ host: deps.host, adapter: githubRegistryAdapterV1, source: target, op: 'files' });
       if (placement[0] === 'daemon') return RegistryFetchResponseV1Schema.parse(await viaDaemon(request));
-      const files = await fetchFiles(item.payload.skill, target);
+      const files = await fetchFiles(item.payload.skill, target, operationCtx);
       return { op: 'files', files: files.map(file => ({ path: file.path, unixMode: file.unixMode, contentBase64: encodeBase64(file.bytes) })) };
     }
-    const files=await fetchFiles(item.payload.skill,source);
+    const files=await fetchFiles(item.payload.skill,source,operationCtx);
     return {op:'files',files:files.map(file=>({path:file.path,unixMode:file.unixMode,contentBase64:encodeBase64(file.bytes)}))};
   };
-  const fetchFiles=async(skill:RegistrySkillSourceV1,source:RegistrySourceDescriptorV1):Promise<readonly RegistrySkillFileBytesV1[]>=>{
-    if(!readGitHubRepositoryV1(skill.ref.repo) && deps.git) {
-      return deps.git.files(skill,source);
+  const fetchFiles=async(skill:RegistrySkillSourceV1,source:RegistrySourceDescriptorV1, operationCtx = ctx):Promise<readonly RegistrySkillFileBytesV1[]>=>{
+    if(!readGitHubRepositoryV1(skill.ref.repo) && operationCtx.git) {
+      return operationCtx.git.files(skill,source);
     }
     // Source-scoped transport retains token origin rules for every raw-file request.
     const http: RegistryHttpV1 = {
@@ -154,10 +154,15 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     return fetchRegistrySkillFilesV1({...ctx,http},skill);
   };
   const fetchRequest = async (raw: RegistryFetchRequestV1, admittedSource?: RegistrySourceDescriptorV1): Promise<RegistryFetchResponseV1> => {
+    return deps.git?.withOperation
+      ? deps.git.withOperation(git => fetchRequestInOperation(raw, admittedSource, { ...ctx, git }))
+      : fetchRequestInOperation(raw, admittedSource, ctx);
+  };
+  const fetchRequestInOperation = async (raw: RegistryFetchRequestV1, admittedSource: RegistrySourceDescriptorV1 | undefined, operationCtx: RegistryFetchContextV1): Promise<RegistryFetchResponseV1> => {
     const request = RegistryFetchRequestV1Schema.parse(raw);
     try {
       deps.signal?.throwIfAborted();
-      if (!('sourceId' in request)) return await fetchLinkRequest(request);
+      if (!('sourceId' in request)) return await fetchLinkRequest(request, operationCtx);
       // A list already admitted this exact descriptor from its one Account inventory.
       const source = admittedSource ?? await sourceById(request.sourceId);
       if (!source.enabled) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
@@ -167,7 +172,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
       for (const [index, placement] of placements.entries()) {
         try {
           const response = placement === 'direct'
-            ? await direct(request, source)
+            ? await direct(request, source, operationCtx)
             : await viaDaemon(request);
           return RegistryFetchResponseV1Schema.parse(response);
         } catch (error) {
@@ -217,7 +222,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
       origin: { kind: 'user' }, removable: true,
     };
   };
-  const fetchLinkRequest = async (request: Exclude<RegistryFetchRequestV1, { sourceId: string }>): Promise<RegistryFetchResponseV1> => {
+  const fetchLinkRequest = async (request: Exclude<RegistryFetchRequestV1, { sourceId: string }>, operationCtx: RegistryFetchContextV1): Promise<RegistryFetchResponseV1> => {
     const normalized = normalizeRegistrySourceUrlV1(request.url);
     // Detection has no admitted format yet. Probe the public HTTPS metadata
     // through its canonical detector before a format-specific fetch plan.
@@ -262,25 +267,25 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
         }
         if (request.op === 'link') {
           if (source.format === 'skills-sh' && new URL(normalized).pathname.replace(/\/$/, '') !== '') {
-            const item = await adapter.read(ctx, {
+            const item = await adapter.read(operationCtx, {
               source: { ...source, url: new URL(normalized).origin }, kind: 'skill', itemId: new URL(normalized).pathname.slice(1),
             });
             return RegistryFetchResponseV1Schema.parse({ op: 'link', items: [item] });
           }
-          const page = await adapter.list(ctx, { source, kind: 'skill' });
+          const page = await adapter.list(operationCtx, { source, kind: 'skill' });
           if (page.status.state !== 'ok') throw new RegistryFetchErrorV1(page.status);
-          const items = await Promise.all(page.items.filter(item => !item.problem).map(item => adapter.read(ctx, {
+          const items = await Promise.all(page.items.filter(item => !item.problem).map(item => adapter.read(operationCtx, {
             source, kind: 'skill', itemId: item.itemId, version: item.version,
           })));
           return RegistryFetchResponseV1Schema.parse({ op: 'link', items });
         }
         if (request.version !== request.ref.commit) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
-        const item = await adapter.read(ctx, { source, kind: 'skill', itemId: '', version: request.version });
+        const item = await adapter.read(operationCtx, { source, kind: 'skill', itemId: '', version: request.version });
         if (item.payload.kind !== 'skill') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
         if (item.payload.skill.ref.treeSha !== request.ref.treeSha) throw new Error('registry_tree_sha_mismatch');
         if (item.summary.problem) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
         return {
-          op: 'files', files: (await fetchFiles(item.payload.skill, source)).map(file => ({
+          op: 'files', files: (await fetchFiles(item.payload.skill, source, operationCtx)).map(file => ({
             path: file.path, unixMode: file.unixMode, contentBase64: encodeBase64(file.bytes),
           })),
         };

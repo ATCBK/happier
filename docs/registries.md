@@ -97,6 +97,13 @@ token. Changing a token does not clear an upstream-proven origin throttle.
 
 Skill reads return a pinned pointer. Installation re-reads that version and
 verifies Git blob/tree hashes and file modes before writing through `skills.*`.
+Each non-GitHub Git request shares one temporary acquisition across its listing,
+read and file steps. The SCM transport requests a blobless shallow clone and
+reads blob sizes/content only within the selected skill folder; a name listing
+needs only trees. Git servers that ignore filtering still work, with one full
+acquisition instead. Every Git command, including lazy blob fetches, retains the
+same source-scoped credential environment and cancellation signal. Acquisitions
+are removed after the request's readers settle; no registry cache survives it.
 Claude marketplace imports only skill bundles, not hooks, commands, Agents or
 MCP servers. Plugin browsing contains published discovery facts; install review,
 machine credential profiles and installation remain daemon-owned. Exact plugin

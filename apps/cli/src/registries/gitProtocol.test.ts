@@ -3,6 +3,7 @@ import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:https';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {describe,expect,it,vi} from 'vitest';
 import * as scm from '@/scm/runtime';
 import {runScmCommand} from '@/scm/runtime';
@@ -13,7 +14,7 @@ import {createEphemeralTlsServerFixture} from '../../../../packages/tests/src/te
 
 describe('Node Git registry transport',()=>{
   it.each([true,false])('acquires one filtered repository for a selected-content operation and retires it afterwards (filter supported: %s)',async filterSupported=>{
-    const cwd=await mkdtemp(join(process.platform==='win32'?tmpdir():'/tmp','happier-registry-selected-'));
+    const cwd=await mkdtemp(join(tmpdir(),'happier-registry-selected-'));
     const command=async(args:string[])=>{const result=await runScmCommand({bin:'git',cwd,args});if(!result.success)throw new Error(result.stderr);return result.stdout.trim();};
     let restore=()=>{};
     try{
@@ -28,6 +29,16 @@ describe('Node Git registry transport',()=>{
       const commit=await command(['rev-parse','HEAD']);
       const gitVersion=await command(['--version']);
       const allObjects=(await command(['rev-list','--objects','HEAD'])).split('\n').length;
+      // Measure the previous read + files transfers over upload-pack, without local hardlink optimization.
+      let baselineTransferredObjects=0;
+      for(const name of ['before-read','before-files']){
+        const baseline=join(cwd,name);
+        await command(['clone','--depth','1','--no-checkout','--',pathToFileURL(cwd).href,baseline]);
+        const stats=await command(['-C',baseline,'count-objects','-v']);
+        const fields=new Map(stats.split('\n').map(line=>{const [key,value]=line.split(': ');return [key!,value!] as const;}));
+        baselineTransferredObjects+=Number(fields.get('count'))+Number(fields.get('in-pack'));
+      }
+      expect(baselineTransferredObjects).toBe(allObjects*2);
       const source={id:'selected',title:'Selected',format:'git' as const,kinds:['skill' as const],url:cwd,enabled:true,addedAt:0,
         origin:{kind:'user' as const},removable:true};
       const realRun=scm.runScmCommand;
@@ -52,12 +63,28 @@ describe('Node Git registry transport',()=>{
       expect(downloaded.map(file=>file.path).sort()).toEqual(['SKILL.md','asset.bin']);
       expect(downloaded.find(file=>file.path==='asset.bin')!.bytes).toEqual(new Uint8Array(binary));
       const objects=[...objectCounts.values()].reduce((sum,count)=>sum+count,0);
-      console.info('selected Git acquisition',{gitVersion,filterSupported,acquisitions:acquired.length,objects,fullRepositoryObjects:allObjects});
+      console.info('selected Git acquisition',{gitVersion,filterSupported,baselineTransferredObjects,acquisitions:acquired.length,objects,fullRepositoryObjects:allObjects});
       expect(acquired).toHaveLength(1);
       if(filterSupported)expect(objects).toBeLessThan(allObjects);
       await Promise.all(acquired.map(path=>expect(readFile(join(path,'.git','config'))).rejects.toMatchObject({code:'ENOENT'})));
       await host.filesForPointer({sourceId:source.id,itemId:'selected',version:commit});
       expect(acquired).toHaveLength(2);
+      const listed=await host.fetchRequest({op:'list',sourceId:source.id,kind:'skill'});
+      expect(listed).toMatchObject({op:'list',page:{status:{state:'ok'},items:[{itemId:'selected',version:commit}]}});
+      expect(acquired).toHaveLength(3);
+      if(filterSupported)expect(objectCounts.get(acquired.at(-1)!)).toBeLessThan(objects);
+      const item=await host.readRegistryItem({sourceId:source.id,itemId:'selected',version:commit});
+      const git=createRegistryGitProtocolV1({});
+      await expect(git.files({...item.payload.skill,files:item.payload.skill.files.map(file=>({...file,blobSha:'0'.repeat(40)}))},source))
+        .rejects.toThrow('registry_blob_sha_mismatch');
+      await expect(git.files({...item.payload.skill,ref:{...item.payload.skill.ref,treeSha:'0'.repeat(40)}},source))
+        .rejects.toThrow('registry_tree_sha_mismatch');
+      const controller=new AbortController();controller.abort();
+      const cancelled=createRegistryHostV1({host:'node',git:createRegistryGitProtocolV1({signal:controller.signal}),signal:controller.signal,
+        http:{getJson:forbidden,getText:forbidden,getBytes:forbidden},readSources:async()=>[source]});
+      const beforeCancel=acquired.length;
+      await expect(cancelled.filesForPointer({sourceId:source.id,itemId:'selected',version:commit})).rejects.toMatchObject({name:'AbortError'});
+      expect(acquired).toHaveLength(beforeCancel);
     }finally{restore();await rm(cwd,{recursive:true,force:true});}
   });
   it('sends a custom token header only to the configured HTTPS destination, never a redirect',async()=>{

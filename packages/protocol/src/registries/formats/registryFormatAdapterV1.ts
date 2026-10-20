@@ -15,6 +15,8 @@ export type RegistryFetchContextV1 = Readonly<{ http: RegistryHttpV1; signal?: A
   readTargetItem?: (request: Readonly<{ source: RegistrySourceV1; kind: RegistryKindV1; itemId: string; version?: string }>) => Promise<RegistryItemV1 | null>;
   /** Non-HTTP git transports are supplied by the Node SCM owner. */
   git?: Readonly<Pick<RegistrySkillFormatAdapterV1, 'list' | 'read' | 'latest'> & {
+    /** One request shares temporary acquisitions; the transport retires them when consumption settles. */
+    withOperation?: <T>(consume: (git: NonNullable<RegistryFetchContextV1['git']>) => Promise<T>) => Promise<T>;
     files:(skill:import('../registryItemsV1.js').RegistrySkillSourceV1,source:RegistrySourceV1)=>Promise<readonly import('../registryGitTreeV1.js').RegistrySkillFileBytesV1[]>;
   }>;
 }>;
