@@ -98,8 +98,6 @@ export function usageDimensionLabel(dimension: UsageAnalyticsBreakdownDimension,
     if (!key || key === 'unknown') return label && label !== key ? label : t('usage.board.page.unattributed');
     const display = label?.trim();
     if (display && display !== key && display !== formatUsageDimensionLabel('source', key)) return display;
-    // A newer model may not be in the static catalog yet. Keep its numeric version
-    // together so generic humanization cannot collapse repeated digits (e.g. 5-5).
-    const fallback = dimension === 'model' ? key.replace(/-(\d+)-(\d+)$/, ' $1.$2') : key;
-    return formatUsageDimensionLabel('source', fallback);
+    // An unknown model id is its exact fallback, not a name invented by title casing.
+    return dimension === 'model' ? key : formatUsageDimensionLabel('source', key);
 }
