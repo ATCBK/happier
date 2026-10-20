@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { readFile, rm, stat } from 'node:fs/promises';
 
@@ -9,6 +8,7 @@ import type { ModelPackManifest } from '@happier-dev/protocol';
 import {
   assertManifestUrlsAllowed,
   assertModelPackUrlAllowed,
+  hashModelPackManifest,
   installModelPackWithHost,
   resolveModelPackManifestUrl,
   type ModelPackDownloadStream,
@@ -57,12 +57,8 @@ export function resolveVoiceModelPackManifestUrl(packId: string, env: NodeJS.Pro
   return resolveModelPackManifestUrl({ packId: normalizedPackId, manifestMapRaw });
 }
 
-function serializeVoiceModelPackManifest(manifest: ModelPackManifest): string {
-  return JSON.stringify(manifest, null, 2);
-}
-
 export function hashVoiceModelPackManifest(manifest: ModelPackManifest): string {
-  return createHash('sha256').update(serializeVoiceModelPackManifest(manifest), 'utf8').digest('hex').toLowerCase();
+  return hashModelPackManifest(manifest);
 }
 
 async function fetchJson(params: Readonly<{

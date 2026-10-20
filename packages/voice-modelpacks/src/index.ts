@@ -53,7 +53,7 @@ export {
 
 export { defaultModelPackManifestUrl, resolveModelPackManifestUrl } from './manifestUrl.js';
 
-export { createSha256Hasher } from './sha256.js';
+export { createSha256Hasher, hashModelPackManifest } from './sha256.js';
 
 export {
   normalizeVoiceModelPackSha256DigestV1,

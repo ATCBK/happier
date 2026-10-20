@@ -1,6 +1,6 @@
 import { parseModelPackManifest, type ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { getOptionalHappierSherpaNativeModule } from '@happier-dev/sherpa-native';
-import { installModelPackWithHost, type ModelPackCoreProgress, type ModelPackPromotionPriorInstallV1 } from '@happier-dev/voice-modelpacks';
+import { hashModelPackManifest, installModelPackWithHost, type ModelPackCoreProgress, type ModelPackPromotionPriorInstallV1 } from '@happier-dev/voice-modelpacks';
 
 import { uriToFilePath } from '@/platform/fileUri';
 import { forgetSpeakerCountForAssetsDir } from '@/voice/kokoro/runtime/kokoroSpeakerCountCache';
@@ -50,18 +50,6 @@ function getInvalidatePackRuntime(overrides: InstallerOverrides): InvalidatePack
     }
     await sherpa.releaseAssetsDir({ assetsDir });
   });
-}
-
-function manifestsEqual(a: ModelPackManifest, b: ModelPackManifest): boolean {
-  if (a.packId !== b.packId) return false;
-  if (a.files.length !== b.files.length) return false;
-  const mapA = new Map(a.files.map((f) => [f.path, f.sha256.toLowerCase()]));
-  for (const f of b.files) {
-    const sha = mapA.get(f.path);
-    if (!sha) return false;
-    if (sha !== f.sha256.toLowerCase()) return false;
-  }
-  return true;
 }
 
 async function installViaHost(opts: {
@@ -133,7 +121,7 @@ export async function ensureModelPackInstalled(
       });
       if (remote.packId !== id) throw new Error('model_pack_manifest_packid_mismatch');
       assertManifestPathsSafe(remote);
-      if (manifestsEqual(remote, installedManifest)) {
+      if (hashModelPackManifest(remote) === hashModelPackManifest(installedManifest)) {
         return { packDirUri: rootDir.uri, manifest: installedManifest };
       }
 
@@ -240,7 +228,7 @@ export async function checkModelPackUpdateAvailable(
 
   return {
     installed: true,
-    updateAvailable: !manifestsEqual(remote, installedManifest),
+    updateAvailable: hashModelPackManifest(remote) !== hashModelPackManifest(installedManifest),
     installedManifest,
     remoteManifest: remote,
   };

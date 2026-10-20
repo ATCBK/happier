@@ -1,7 +1,13 @@
 import { sha256 } from '@noble/hashes/sha2';
-import { bytesToHex } from '@noble/hashes/utils';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
+import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
 import type { ModelPackHasher } from './installerCore.js';
+
+/** Complete manifest currentness, retaining the daemon's persisted hash encoding. */
+export function hashModelPackManifest(manifest: ModelPackManifest): string {
+  return bytesToHex(sha256(utf8ToBytes(JSON.stringify(manifest, null, 2)))).toLowerCase();
+}
 
 /**
  * Shared incremental SHA-256 implementation for host adapters that do not have
