@@ -4,6 +4,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createTempFixture } from './testkit/core/temp_fixture.mjs';
+import { sanitizeStackTestRunnerEnv } from './utils/test/test_env.mjs';
 
 import {
   cleanupFailedRestartAttempt,
@@ -136,6 +139,55 @@ test('background readiness still awaits an ordinarily requested daemon', async (
     await server.close();
   }
 });
+
+for (const scriptPath of ['run.mjs', 'dev.mjs']) {
+  test(`background ${scriptPath} readiness accepts the supervised remote daemon without local daemon state`, async t => {
+    const fixture = await createTempFixture(t, { prefix: 'hstack-background-remote-ready-' });
+    const runtimeStatePath = fixture.path('stack.runtime.json');
+    const runtimeModule = new URL('./utils/stack/runtime_state.mjs', import.meta.url).href;
+    // The disposable process stands in for a target/controller lifecycle. Real
+    // HTTP and runtime publication feed the real outer readiness consumer.
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import http from 'node:http';
+      import { recordStackRuntimeStart, recordStackRuntimeUpdate } from ${JSON.stringify(runtimeModule)};
+      const statePath = ${JSON.stringify(runtimeStatePath)};
+      const started = await recordStackRuntimeStart(statePath, {
+        stackName: 'remote-ready', script: ${JSON.stringify(scriptPath)}, ownerPid: process.pid,
+        runtimeMode: 'source-snapshot', placement: { daemon: 'target' },
+        sourceRuntimeIdentities: {},
+      });
+      await recordStackRuntimeUpdate(statePath, {
+        sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } },
+        remoteTargets: { target: { services: { daemon: true }, status: 'running',
+          serviceStatus: { daemon: 'running' }, runtimeMode: 'source-snapshot',
+          sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } } } },
+      });
+      const server = http.createServer((_req, res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ status: 'ok', service: 'happier-server' }));
+      });
+      server.listen(0, '127.0.0.1', () => process.send({ port: server.address().port, started }));
+    `], { env: sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    t.after(async () => {
+      if (child.exitCode != null || child.signalCode != null) return;
+      const closed = once(child, 'close');
+      child.kill('SIGKILL');
+      await closed;
+    });
+    const [published] = await Promise.race([
+      once(child, 'message'),
+      once(child, 'exit').then(() => { throw new Error('disposable target exited before publication'); }),
+    ]);
+    await waitForBackgroundStackReadiness({
+      stackName: 'remote-ready', scriptPath,
+      env: { HAPPIER_STACK_CLI_HOME_DIR: fixture.path('cli'), HAPPIER_STACK_REPO_DIR: fixture.root },
+      runtimeStatePath, internalServerUrl: `http://127.0.0.1:${published.port}`, timeoutMs: 750,
+      sourceDaemonLaunchAttempt: { ownerPid: child.pid, ownerStartedAt: published.started.startedAt },
+      isRunnerAlive: () => child.exitCode == null && child.signalCode == null,
+    });
+  });
+}
 
 test('background dev readiness follows the selected external Home, not its unused allocated port', async () => {
   const unusedPort = await reserveUnusedPort();
