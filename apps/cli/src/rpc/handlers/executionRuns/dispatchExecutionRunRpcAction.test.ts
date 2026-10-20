@@ -653,7 +653,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
     }));
   });
 
-  it('admits attached deferred input and carries the Workflow request identity only to the Run manager', async () => {
+  it.each(['execution.run.start', 'execution.run.ensure_or_start'] as const)('carries the trusted Workflow identity through %s instead of caller input', async actionId => {
     const start = vi.fn(async () => ({
       runId: 'run_workflow_1',
       callId: 'call_workflow_1',
@@ -669,24 +669,27 @@ describe('createExecutionRunRpcActionExecutor', () => {
       },
     };
 
-    const result = await executor.execute('execution.run.start', {
+    const input = {
       ...AGENT_EXECUTION_RUN_START_REQUEST,
+      actionRequestId: 'caller-selected-host-key',
       intent: 'agent',
       backendTarget: CURRENT_AGENT_TARGET,
       instructions: undefined,
-      initialInput: { kind: 'deferred_session_pending' },
+      initialInput: { kind: 'deferred_session_pending' as const },
       permissionMode: 'safe-yolo',
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'streaming',
-    }, {
+    };
+    const result = await executor.execute(actionId,
+      actionId === 'execution.run.start' ? input : { sessionId: 'sess_1', start: input }, {
       ...APPROVED_INTERNAL_RUNTIME_ACTION_CONTEXT,
       actionCaller,
       agentStartContext: { ...CURRENT_SESSION_AGENT_START_CONTEXT,
         caller: { kind: 'originless', runId: actionCaller.runId, runDepth: 0, runOriginSessionId: 'sess_1' } },
       actionRequestId: 'workflow-input-v2:stable:execution-run-start',
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       result: {
         runId: 'run_workflow_1',

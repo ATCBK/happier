@@ -45,7 +45,6 @@ describe('native Session Run parity', () => {
                 localAgentId: 'default', occurrenceId: 'cause-fixture', isCurrent: () => true },
             options: { cwd: '/repo', runId: 'run-cause', scope: 'session_owned', backendId: 'acme.cause/default',
                 permissionMode: 'read_only', start: { intent: 'delegate', runClass: 'bounded', retentionPolicy: 'resumable' } },
-            supportsResume: true,
             sessionCapabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: false },
             createSessionContext: ({ services, signal, readActiveTurnAdmissionWitness }) => {
                 readWitness = readActiveTurnAdmissionWitness;

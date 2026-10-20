@@ -862,7 +862,53 @@ describe('startExecutionRun', () => {
     }
   });
 
-  it('rejoins the Run allocated for one host-stamped Action request without repeating start effects', async () => {
+  it.each([
+    SESSION_RPC_METHODS.EXECUTION_RUN_START,
+    SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START,
+  ])('ignores caller retry identity through the registered %s Action/RPC path', async method => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    const sessionId = `public-run-identity-${method}`;
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const captured: { manager?: ExecutionRunHostBridge } = {};
+    // Only daemon admission and native Agent execution are replaced. Registration,
+    // both public schemas, the Action executor and Run allocation remain real.
+    const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockResolvedValue({ admitted: true });
+    const registration = registerExecutionRunRpcHandlers(rpc, {
+      sessionId, cwd: tmpdir(), parentProvider: TEST_BACKEND_ID, sendAcp: async () => {},
+      resolveRunReportPolicy: async () => ({ preset: 'important' }),
+      resolveAccountSettings: async () => ({}),
+      executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
+      onManagerCreated: manager => { captured.manager = manager; },
+    });
+    const start = async (instructions: string, actionRequestId: string) => {
+      const input = {
+        intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        instructions, modelSelection: null, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response',
+        actionRequestId: 'caller-selected-host-key',
+      };
+      const response = await rpc.invokeLocal(method,
+        method === SESSION_RPC_METHODS.EXECUTION_RUN_START ? input : { start: input }, {
+          signal: new AbortController().signal,
+          localActionContext: { authority: 'present_user', actionRequestId },
+        });
+      return ExecutionRunStartResponseSchema.parse(response);
+    };
+    try {
+      const first = await start('First execution.', 'public-action-1');
+      const second = await start('Second execution.', 'public-action-2');
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.callId).not.toBe(first.callId);
+      expect(captured.manager?.get(first.runId)?.instructions).toBe('First execution.');
+      expect(captured.manager?.get(second.runId)?.instructions).toBe('Second execution.');
+    } finally {
+      registration.dispose();
+      await captured.manager?.dispose();
+      admission.mockRestore();
+    }
+  });
+
+  it.each(['sequential', 'overlapping'] as const)('rejoins %s starts for one host-stamped Action request without repeating start effects', async timing => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
     const runtime = createProvisioningRuntime();
@@ -870,6 +916,10 @@ describe('startExecutionRun', () => {
     const enqueueMarkerWrite = vi.fn(async () => {});
     const sendAcp = vi.fn(async () => {});
     const send = vi.fn(async () => ({ ok: true as const }));
+    const occurrences: ExecutionRunController[] = [];
+    let admissionCalls = 0;
+    let releaseFinalAdmission!: () => void;
+    const finalAdmission = new Promise<void>(resolve => { releaseFinalAdmission = resolve; });
     const voiceAgentManager = new VoiceAgentManager({
       createRuntime: () => {
         throw new Error('voice runtime should not be used by agent runs');
@@ -903,18 +953,28 @@ describe('startExecutionRun', () => {
       executeBoundedRun: async () => {},
       send,
       voiceAgentManager,
+      registerRunOccurrence: ({ controller }) => { occurrences.push(controller); },
+      admitStart: async () => {
+        if (timing !== 'overlapping') return;
+        admissionCalls += 1;
+        if (admissionCalls < 3) return;
+        if (admissionCalls === 4) releaseFinalAdmission();
+        await finalAdmission;
+      },
     } satisfies StartExecutionRunArgs;
 
     try {
-      const first = await startExecutionRun(args);
-      const second = await startExecutionRun(args);
-      await (controllers.get(first.runId) as (ExecutionRunController & {
-        provisioningPromise?: Promise<void>;
-      }) | undefined)?.provisioningPromise;
+      const [first, second] = timing === 'overlapping'
+        ? await Promise.all([startExecutionRun(args), startExecutionRun(args)])
+        : [await startExecutionRun(args), await startExecutionRun(args)];
+      await Promise.all(occurrences.map(controller => controller.kind === 'backend' ? controller.provisioningPromise : undefined));
 
       expect(second).toEqual(first);
       expect(first.runId).toMatch(/^run_request_/);
       expect(runs.size).toBe(1);
+      expect(controllers.size).toBe(1);
+      expect(occurrences).toHaveLength(1);
+      expect(runs.get(first.runId)).toMatchObject({ callId: first.callId, sidechainId: first.sidechainId });
       expect(projectRetainedExecutionRunState(runs.get(first.runId)!).launch)
         .toMatchObject({ allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
       expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({ start: {
@@ -925,6 +985,8 @@ describe('startExecutionRun', () => {
       expect(sendAcp).not.toHaveBeenCalled();
       expect(send).toHaveBeenCalledTimes(1);
     } finally {
+      releaseFinalAdmission();
+      await runtime.dispose();
       await voiceAgentManager.dispose();
     }
   });
