@@ -1,4 +1,6 @@
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
+import { splitMarkdownIntoBlockSources } from '../streaming/splitMarkdownIntoBlockSources';
+import { resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import {
     buildMarkdownInlineReferenceHref,
     type MarkdownInlineReference,
@@ -23,6 +25,8 @@ function isLocalPathLikeMarkdownTarget(value: string): boolean {
         || pathCandidate.startsWith('\\\\')
         || /^[A-Za-z]:[\\/]/.test(pathCandidate)
         || /[\\/]/.test(pathCandidate)
+        || pathCandidate.startsWith('#')
+        || resolveWorkspaceFileReference({ url: pathCandidate, workspacePath: null }) !== null
     );
 }
 
@@ -34,6 +38,7 @@ function isExternallyOpenableMarkdownLink(value: string): boolean {
 export function normalizeMarkdownLinkUrl(raw: string): string | null {
     const trimmed = String(raw ?? '').trim();
     if (!trimmed) return null;
+    if (isStreamingIncompleteLinkHref(trimmed)) return null;
 
     const lowerTrimmed = trimmed.toLowerCase();
     const candidate = lowerTrimmed.startsWith('www.') ? `https://${trimmed}` : trimmed;
@@ -192,11 +197,21 @@ function normalizeExplicitMarkdownLinks(
 }
 
 /**
- * Transcript Markdown images fail closed. Structured session media is the only
- * image path with an authenticated owner, size bounds, and an explicit preview
- * grant, so arbitrary Markdown destinations never reach the package renderer.
+ * Transcript Markdown images fail closed by default. An opted-in document moves
+ * standalone images to the host's resolver-backed special blocks; inline images
+ * remain alt text, so arbitrary destinations never reach the package renderer.
  */
-export function applyEnrichedMarkdownImagePolicy(markdown: string): string {
+export function applyEnrichedMarkdownImagePolicy(markdown: string, options: Readonly<{ imagesEnabled?: boolean }> = {}): string {
+    if (options.imagesEnabled) {
+        let cursor = 0;
+        let withoutStandaloneImages = '';
+        for (const source of splitMarkdownIntoBlockSources(markdown)) {
+            if (!source.imageBlock) continue;
+            withoutStandaloneImages += markdown.slice(cursor, source.sourceStart);
+            cursor = source.sourceStart + source.source.length;
+        }
+        return applyEnrichedMarkdownImagePolicy(withoutStandaloneImages + markdown.slice(cursor));
+    }
     const closingDelimiters = indexClosingMarkdownDelimiters(markdown);
     const chunks: string[] = [];
     const frames: Array<{

@@ -17,6 +17,10 @@ export type MarkdownBlock = ({
     type: 'text'
     content: MarkdownSpan[]
 } | {
+    type: 'image',
+    alt: string,
+    destination: string,
+} | {
     type: 'header'
     level: 1 | 2 | 3 | 4 | 5 | 6
     content: MarkdownSpan[]
@@ -51,6 +55,6 @@ export type MarkdownSpan = {
     url: string | null
 }
 
-export function parseMarkdown(markdown: string) {
-    return parseMarkdownBlock(markdown);
+export function parseMarkdown(markdown: string, options: Readonly<{ imagesEnabled?: boolean }> = {}) {
+    return parseMarkdownBlock(markdown, options);
 }

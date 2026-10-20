@@ -23,6 +23,8 @@ import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { MarkdownFindDecorationContext, projectLeafRanges } from './rendering/MarkdownFindDecorationContext';
 import { projectMarkdownFindSpans } from '@/components/markdown/rendering/markdownFindProjection';
+import type { MarkdownImageResolver, MarkdownImageDocument } from './markdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 // Option type for callback
 export type Option = {
@@ -48,6 +50,10 @@ type MarkdownBlockViewProps = {
     findRanges?: readonly FindTextRange[];
     findOptionRanges?: readonly (readonly FindTextRange[])[];
     findTableRanges?: Readonly<{ headers: readonly (readonly FindTextRange[])[]; rows: readonly (readonly (readonly FindTextRange[])[])[] }>;
+    images?: MarkdownImageResolver;
+    imageScope?: WorkspaceScopeBase;
+    imageDocument?: MarkdownImageDocument;
+    imageSourceStart?: number;
 };
 
 type MarkdownSpanStyleId = MarkdownSpan['styles'][number];
@@ -69,7 +75,11 @@ function areMarkdownBlockViewPropsEqual(prev: MarkdownBlockViewProps, next: Mark
         && prev.agentTexMath === next.agentTexMath
         && prev.findRanges === next.findRanges
         && prev.findOptionRanges === next.findOptionRanges
-        && prev.findTableRanges === next.findTableRanges;
+        && prev.findTableRanges === next.findTableRanges
+        && prev.images === next.images
+        && prev.imageScope === next.imageScope
+        && prev.imageDocument === next.imageDocument
+        && prev.imageSourceStart === next.imageSourceStart;
 }
 
 export const MarkdownBlockView = React.memo((props: MarkdownBlockViewProps) => {

@@ -9,6 +9,8 @@ import { usePreparedStreamingMarkdown, type MarkdownStreamingMode } from '../str
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
+import { buildMarkdownImageDocument, type MarkdownImageResolver } from '../markdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { MarkdownSegmentView } from './MarkdownSegmentView';
 import { MarkdownCodeBlockWrapKeyProvider } from '../MarkdownCodeBlockWrapState';
 import {
@@ -47,12 +49,15 @@ type MarkdownViewRendererProps = Readonly<{
     findActive?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
+    images?: MarkdownImageResolver;
+    imageScope?: WorkspaceScopeBase;
 }>;
 
 function buildMarkdownRenderSegmentsCacheKey(params: Readonly<{
     renderCacheKey?: string;
     sourceRangeInteractionsActive: boolean;
     streamingMode: MarkdownStreamingMode;
+    imagesEnabled?: boolean;
 }>): string | null {
     const renderCacheKey = params.renderCacheKey?.trim();
     if (!renderCacheKey) return null;
@@ -61,10 +66,12 @@ function buildMarkdownRenderSegmentsCacheKey(params: Readonly<{
     return [
         'stream',
         renderCacheKey,
+        params.imagesEnabled ? 'images' : 'text',
     ].join('\u0000');
 }
 
 export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps) => {
+    const imagesEnabled = Boolean(props.images);
     const preparedMarkdown = usePreparedStreamingMarkdown({
         markdown: props.markdown,
         mode: props.streamingMode,
@@ -81,6 +88,7 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
             renderCacheKey: props.renderCacheKey,
             sourceRangeInteractionsActive,
             streamingMode: props.streamingMode,
+            imagesEnabled,
         });
         if (cacheKey) {
             const cached = readMarkdownRenderSegmentsCache(cacheKey, preparedMarkdown);
@@ -91,10 +99,14 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
             streamingMode: props.streamingMode,
             streamingRepair: 'prepared',
             splitEnrichedSourceRanges: sourceRangeInteractionsActive,
+            imagesEnabled,
         });
         if (cacheKey) writeMarkdownRenderSegmentsCache(cacheKey, preparedMarkdown, next);
         return next;
-    }, [preparedMarkdown, props.renderCacheKey, props.streamingMode, sourceRangeInteractionsActive]);
+    }, [preparedMarkdown, props.renderCacheKey, props.streamingMode, sourceRangeInteractionsActive, imagesEnabled]);
+    const imageDocument = React.useMemo(() => props.images
+        ? buildMarkdownImageDocument({ markdown: preparedMarkdown, images: props.images, segments })
+        : undefined, [preparedMarkdown, props.images, segments]);
     const segmentKeys = React.useMemo(() => {
         if (!props.sourceRangeLayoutObserver) return segments.map((segment) => segment.key);
         const occurrences = new Map<string, number>();
@@ -173,6 +185,9 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
                             findActive={props.findActive}
                             agentTexMath={props.agentTexMath}
                             inlineReferences={props.inlineReferences}
+                            images={props.images}
+                            imageScope={props.imageScope}
+                            imageDocument={imageDocument}
                         />
                     </MarkdownCodeBlockWrapKeyProvider>
                 ))}

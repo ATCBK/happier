@@ -959,6 +959,8 @@ export {
   type HappierMarkdownRenderInput,
   type MarkdownInlineReference,
   type MarkdownInlineReferences,
+  type MarkdownImageSource,
+  type MarkdownImageResolver,
 } from './content/Markdown.js';
 export {
   normalizeHappierCodeLanguage,

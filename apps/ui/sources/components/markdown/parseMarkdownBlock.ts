@@ -1,5 +1,7 @@
 import type { MarkdownBlock, MarkdownTableAlignment } from "./parseMarkdown";
 import { parseMarkdownSpans } from "./parseMarkdownSpans";
+import { splitMarkdownIntoBlockSources } from './streaming/splitMarkdownIntoBlockSources';
+import { applyEnrichedMarkdownImagePolicy } from './enriched/enrichedMarkdownLinkHandling';
 
 const MIN_CODE_FENCE_LENGTH = 3;
 const MAX_CODE_FENCE_INDENT = 3;
@@ -200,15 +202,15 @@ export function readMarkdownOption(line: string): string | null {
     return line.trim().match(/^<option>(.*?)<\/option>$/)?.[1] ?? null;
 }
 
-export function parseMarkdownBlock(markdown: string) {
-    return parseMarkdownBlockContent(markdown).blocks;
+export function parseMarkdownBlock(markdown: string, options: Readonly<{ imagesEnabled?: boolean }> = {}) {
+    return parseMarkdownBlockContent(markdown, options).blocks;
 }
 
 export function parseMarkdownCodeSources(markdown: string): ReadonlyMap<number, MarkdownCodeSource> {
     return parseMarkdownBlockContent(markdown, { includeCodeSources: true }).codeSources;
 }
 
-export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ includeCodeSources?: boolean }> = {}): Readonly<{
+export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ includeCodeSources?: boolean; imagesEnabled?: boolean }> = {}): Readonly<{
     blocks: MarkdownBlock[];
     tableSources: ReadonlyMap<number, MarkdownTableSource>;
     codeSources: ReadonlyMap<number, MarkdownCodeSource>;
@@ -223,6 +225,11 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
         sourceOffset += line.length + 1;
         return offset;
     });
+    const imageSources = options.imagesEnabled ? new Map(splitMarkdownIntoBlockSources(markdown)
+        .filter(source => source.imageBlock).map(source => [source.sourceStart, source])) : null;
+    const parseSpans = (text: string, header: boolean) => parseMarkdownSpans(
+        options.imagesEnabled ? applyEnrichedMarkdownImagePolicy(text) : text, header,
+    );
     let index = 0;
     outer: while (index < lines.length) {
         const line = lines[index];
@@ -231,13 +238,20 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
         // Headers
         for (let i = 1; i <= 6; i++) {
             if (line.startsWith(`${'#'.repeat(i)} `)) {
-                blocks.push({ type: 'header', level: i as 1 | 2 | 3 | 4 | 5 | 6, content: parseMarkdownSpans(line.slice(i + 1).trim(), true) });
+                blocks.push({ type: 'header', level: i as 1 | 2 | 3 | 4 | 5 | 6, content: parseSpans(line.slice(i + 1).trim(), true) });
                 continue outer;
             }
         }
 
         // Trim
         const trimmed = line.trim();
+
+        const imageSource = imageSources?.get(lineOffsets[index - 1]!);
+        if (imageSource?.imageBlock) {
+            blocks.push(imageSource.imageBlock);
+            index += imageSource.source.split('\n').length - 1;
+            continue;
+        }
 
         // Code block
         const openingCodeFence = parseOpeningCodeFence(line);
@@ -324,7 +338,7 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
             }
             blocks.push({
                 type: 'numbered-list',
-                items: allLines.map((l) => ({ depth: l.depth, number: l.number, spans: parseMarkdownSpans(l.content, false) })),
+                items: allLines.map((l) => ({ depth: l.depth, number: l.number, spans: parseSpans(l.content, false) })),
             });
             continue;
         }
@@ -342,7 +356,7 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
             }
             blocks.push({
                 type: 'list',
-                items: allLines.map((l) => ({ depth: l.depth, spans: parseMarkdownSpans(l.content, false) })),
+                items: allLines.map((l) => ({ depth: l.depth, spans: parseSpans(l.content, false) })),
             });
             continue;
         }
@@ -360,7 +374,7 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
 
         // Fallback
         if (trimmed.length > 0) {
-            blocks.push({ type: 'text', content: parseMarkdownSpans(trimmed, false) });
+            blocks.push({ type: 'text', content: parseSpans(trimmed, false) });
         }
     }
     return { blocks, tableSources, codeSources };

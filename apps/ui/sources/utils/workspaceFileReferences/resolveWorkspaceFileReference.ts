@@ -5,6 +5,8 @@ import {
     resolvePathRelativeToRoot,
 } from '@/utils/path/resolvePathRelativeToRoot';
 import type { ReviewCommentAnchor, ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import type { MarkdownImageSource } from '@happier-dev/plugin-ui/components';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 
 export type WorkspaceFileReferenceAnchor = Extract<ReviewCommentAnchor, { kind: 'line' | 'range' }>;
 
@@ -84,7 +86,7 @@ function withOptionalAnchor(
 }
 
 function readUrlPath(rawUrl: string): string | null {
-    const trimmed = String(rawUrl ?? '').trim();
+    const trimmed = unquoteGitPath(String(rawUrl ?? '').trim());
     if (!trimmed) return null;
 
     if (/^file:\/\//i.test(trimmed)) {
@@ -115,10 +117,21 @@ function readUrlPath(rawUrl: string): string | null {
     }
 
     try {
-        return decodeURIComponent(trimmed);
+        return decodeURIComponent(trimmed.replace(/\?[^#]*/, ''));
     } catch {
         return trimmed;
     }
+}
+
+function unquoteGitPath(value: string): string {
+    if (!value.startsWith('"') || !value.endsWith('"')) return value;
+    return value.slice(1, -1).replace(/((?:\\[0-7]{3})+)|\\([\\"tnr])/g, (_match, encoded: string | undefined, escaped: string | undefined) => {
+        if (encoded) return new TextDecoder().decode(Uint8Array.from(encoded.match(/[0-7]{3}/g)!.map(octal => Number.parseInt(octal, 8))));
+        if (escaped === 't') return '\t';
+        if (escaped === 'n') return '\n';
+        if (escaped === 'r') return '\r';
+        return escaped ?? '';
+    });
 }
 
 export function isWorkspaceFileReferenceAnchorForFile(params: Readonly<{
@@ -155,7 +168,8 @@ export function resolveWorkspaceFileReference(params: Readonly<{
     const rawPath = readUrlPath(params.url);
     if (!rawPath) return null;
 
-    const parsed = splitLineSuffix(rawPath);
+    const location = splitLineSuffix(rawPath);
+    const parsed = { ...location, path: location.path.replace(/#.*$/, '') };
     const normalizedCandidate = normalizeLocalPathForComparison(parsed.path);
     if (!normalizedCandidate) return null;
 
@@ -168,8 +182,91 @@ export function resolveWorkspaceFileReference(params: Readonly<{
     const workspacePath = typeof params.workspacePath === 'string' ? normalizeLocalPathForComparison(params.workspacePath) : null;
     if (!workspacePath) return null;
 
-    const relative = resolvePathRelativeToRoot({ path: normalizedCandidate, root: workspacePath });
+    const relative = resolvePathRelativeToRoot({ path: parsed.path, root: workspacePath, preservePathSpelling: true });
     if (relative === null) return null;
     if (!isSafeWorkspaceRelativePath(relative)) return null;
     return withOptionalAnchor(relative, parsed);
+}
+
+type WorkspaceMarkdownReferenceInput = Readonly<{
+    destination: string;
+    workspacePath: string | null | undefined;
+    sourceFilePath: string;
+}>;
+
+/** URL's standard dot-segment resolution is platform-independent; containment stays path-owner controlled. */
+function normalizeJoinedLocalPath(path: string): string {
+    const unc = path.startsWith('//');
+    const windowsDrive = /^\/?[A-Za-z]:\//.test(path);
+    const encoded = path.replace(/^\/(?=[A-Za-z]:\/)/, '').split('/').map(encodeURIComponent).join('/');
+    const normalized = decodeURIComponent(new URL(`/${encoded.replace(/^\/+/, '')}`, 'https://workspace.invalid/').pathname);
+    return unc ? `/${normalized}` : windowsDrive ? normalized.slice(1) : normalized;
+}
+
+function resolveMarkdownLocalReference(input: WorkspaceMarkdownReferenceInput): ResolvedWorkspaceFileReference | null {
+    const raw = input.destination.trim();
+    if (!raw || /^(?:data|javascript|vbscript|mailto):/i.test(raw)
+        || /^[a-z][a-z\d+.-]*:\/\//i.test(raw) && !/^file:\/\//i.test(raw)) return null;
+    if ((raw.startsWith('//') || raw.startsWith('\\\\'))
+        && resolvePathRelativeToRoot({ path: raw, root: input.workspacePath ?? '' }) === null) return null;
+    const path = readUrlPath(raw);
+    const root = normalizeLocalPathForComparison(input.workspacePath ?? '');
+    if (!path || !root) return null;
+    const rootPrefix = root.endsWith('/') ? root : `${root}/`;
+    const parsed = splitLineSuffix(path);
+    const candidate = parsed.path.replace(/#.*$/, '').replace(/\\/g, '/');
+    if (!candidate || candidate.includes('\0') || candidate.startsWith('~')) return null;
+    const absolute = isAbsoluteLocalPath(candidate);
+    let joined: string;
+    if (/^file:\/\//i.test(raw) || /^[A-Za-z]:\//.test(candidate) || candidate.startsWith('//')) {
+        joined = candidate;
+    } else if (absolute) {
+        // Existing absolute workspace paths retain their meaning; other slash-prefixed Markdown paths are root-relative.
+        const contained = resolvePathRelativeToRoot({ path: candidate, root });
+        joined = contained === null ? `${rootPrefix}${candidate.replace(/^\/+/, '')}` : candidate;
+    } else {
+        const source = resolveWorkspaceFileReference({ url: input.sourceFilePath, workspacePath: root });
+        if (!source) return null;
+        const directory = source.filePath.includes('/') ? source.filePath.slice(0, source.filePath.lastIndexOf('/')) : '';
+        joined = `${rootPrefix}${directory ? `${directory}/` : ''}${candidate}`;
+    }
+    const normalized = normalizeJoinedLocalPath(joined);
+    const relative = resolvePathRelativeToRoot({ path: normalized, root, preservePathSpelling: true });
+    if (!relative || !isSafeWorkspaceRelativePath(relative)) return null;
+    return withOptionalAnchor(relative, parsed);
+}
+
+export function resolveWorkspaceMarkdownImage(input: WorkspaceMarkdownReferenceInput): MarkdownImageSource {
+    const destination = input.destination.trim();
+    if (/^https?:\/\//i.test(destination)) {
+        try {
+            const url = new URL(destination);
+            if (url.protocol === 'http:' || url.protocol === 'https:') return { kind: 'remote', url: destination };
+        } catch { /* Invalid URLs stay inert. */ }
+        return { kind: 'blocked' };
+    }
+    if (/^(?:data|javascript|mailto):/i.test(destination)) return { kind: 'blocked' };
+    const resolved = resolveMarkdownLocalReference(input);
+    return resolved ? { kind: 'workspace', path: resolved.filePath } : { kind: 'blocked' };
+}
+
+export type ResolvedWorkspaceMarkdownLink = Readonly<
+    | { kind: 'anchor'; anchor: string }
+    | { kind: 'external'; url: string }
+    | { kind: 'markdown' | 'file'; path: string; line?: number; column?: number }
+    | { kind: 'blocked' }
+>;
+
+export function resolveWorkspaceMarkdownLink(input: WorkspaceMarkdownReferenceInput): ResolvedWorkspaceMarkdownLink {
+    const destination = input.destination.trim();
+    if (destination.startsWith('#')) return { kind: 'anchor', anchor: destination.slice(1) };
+    if (/^(?:https?:\/\/|mailto:)/i.test(destination)) return { kind: 'external', url: destination };
+    const resolved = resolveMarkdownLocalReference(input);
+    if (!resolved) return { kind: 'blocked' };
+    return {
+        kind: resolveFileViewerKind({ path: resolved.filePath }).kind === 'markdown' ? 'markdown' : 'file',
+        path: resolved.filePath,
+        ...(resolved.line ? { line: resolved.line } : {}),
+        ...(resolved.column ? { column: resolved.column } : {}),
+    };
 }

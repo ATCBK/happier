@@ -9,6 +9,9 @@ import {
 } from './rendering/MarkdownRenderingProfile';
 import { MarkdownViewRenderer } from './rendering/MarkdownViewRenderer';
 import type { MarkdownInlineReferences } from './markdownInlineReferences';
+import type { MarkdownImageResolver } from './markdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+export type { MarkdownImageResolver } from './markdownImages';
 export type { MarkdownInlineReference, MarkdownInlineReferences } from './markdownInlineReferences';
 import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
 import type { MarkdownStreamingMode } from './streaming/usePreparedStreamingMarkdown';
@@ -82,6 +85,10 @@ export const MarkdownView = React.memo((props: {
     agentTexMath?: boolean;
     /** Citations the caller owns, drawn inline where the author placed them (`[text](scheme:target)`). */
     inlineReferences?: MarkdownInlineReferences;
+    /** Image rendering is opt-in; transcript destinations remain stripped when absent. */
+    images?: MarkdownImageResolver;
+    /** Explicit Machine context for workspace image bytes; never inferred from a Session. */
+    imageScope?: WorkspaceScopeBase;
 }) => {
     const profile = normalizeMarkdownRenderingProfile({
         profile: props.profile,
@@ -116,6 +123,8 @@ export const MarkdownView = React.memo((props: {
             findActive={props.findActive}
             agentTexMath={props.agentTexMath === true}
             inlineReferences={props.inlineReferences}
+            images={props.images}
+            imageScope={props.imageScope}
         />
     );
 });

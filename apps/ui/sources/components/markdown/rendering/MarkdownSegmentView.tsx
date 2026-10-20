@@ -9,6 +9,8 @@ import type { MarkdownSelectionAction, MarkdownSourceRange, MarkdownSourceRangeA
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
+import type { MarkdownImageResolver, MarkdownImageDocument } from '../markdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { MarkdownRenderSegment } from './markdownRenderSegmentTypes';
 import { SpecialMarkdownBlockView } from './SpecialMarkdownBlockView';
 import { MarkdownContainerView } from './MarkdownContainerView';
@@ -42,6 +44,9 @@ type MarkdownSegmentViewProps = Readonly<{
     findActive?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
+    images?: MarkdownImageResolver;
+    imageScope?: WorkspaceScopeBase;
+    imageDocument?: MarkdownImageDocument;
 }>;
 
 export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) => {
@@ -108,6 +113,9 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
         ) : (
             <SpecialMarkdownBlockView
                 blocks={props.segment.blocks}
+                images={props.images}
+                imageScope={props.imageScope}
+                imageDocument={props.imageDocument}
                 findSourceRanges={props.findSourceRanges}
                 sourceStart={props.segment.sourceStart}
                 markdown={props.segment.markdown}

@@ -61,7 +61,8 @@ function locateSources(markdown: string, sources: readonly MarkdownBlockSource[]
     });
 }
 
-function isSpecialSource(source: LocatedMarkdownBlockSource): boolean {
+function isSpecialSource(source: LocatedMarkdownBlockSource, imagesEnabled = false): boolean {
+    if (imagesEnabled && source.imageBlock) return true;
     if (source.container || source.codeBlock) return true;
     if (source.incompleteKind) return true;
     return source.blockType === 'FencedCode'
@@ -136,8 +137,9 @@ export function splitMarkdownRenderSegments(params: Readonly<{
     streamingMode: 'static' | 'streaming';
     streamingRepair?: 'sync' | 'prepared';
     splitEnrichedSourceRanges?: boolean;
+    imagesEnabled?: boolean;
 }>): MarkdownRenderSegment[] {
-    if (params.streamingMode === 'static' && params.splitEnrichedSourceRanges !== true) {
+    if (params.streamingMode === 'static' && params.splitEnrichedSourceRanges !== true && !params.imagesEnabled) {
         const cached = readStaticSegmentCache(params.markdown);
         if (cached) return cached;
     }
@@ -174,7 +176,7 @@ export function splitMarkdownRenderSegments(params: Readonly<{
     };
 
     for (const source of locatedSources) {
-        if (!isSpecialSource(source)) {
+        if (!isSpecialSource(source, params.imagesEnabled)) {
             if (params.splitEnrichedSourceRanges === true) {
                 flushPendingEnrichedSources();
                 segments.push(buildEnrichedSegment(source, nextSegmentKey));
@@ -206,13 +208,13 @@ export function splitMarkdownRenderSegments(params: Readonly<{
             sourceHash: source.sourceHash,
             sourceRange: source.sourceRange,
             markdown: source.source,
-            blocks: parseMarkdownBlockSource(source),
+            blocks: params.imagesEnabled && source.imageBlock ? [source.imageBlock] : parseMarkdownBlockSource(source),
         });
     }
 
     flushPendingEnrichedSources();
     const result = applyFirstLast(segments);
-    if (params.streamingMode === 'static' && params.splitEnrichedSourceRanges !== true) {
+    if (params.streamingMode === 'static' && params.splitEnrichedSourceRanges !== true && !params.imagesEnabled) {
         writeStaticSegmentCache(params.markdown, result);
     }
     return result;

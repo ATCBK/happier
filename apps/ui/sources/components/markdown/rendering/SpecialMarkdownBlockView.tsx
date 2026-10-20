@@ -11,6 +11,8 @@ import type { StreamingTextRevealPreset } from '../streaming/streamingTextReveal
 import { markdownProfileToLegacyVariant, type MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
+import type { MarkdownImageResolver, MarkdownImageDocument } from '../markdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 type SpecialMarkdownBlockViewProps = Readonly<{
     blocks: readonly MarkdownBlock[];
@@ -29,6 +31,9 @@ type SpecialMarkdownBlockViewProps = Readonly<{
     codeFindRanges?: readonly FindTextRange[];
     sourceStart?: number;
     markdown?: string;
+    images?: MarkdownImageResolver;
+    imageScope?: WorkspaceScopeBase;
+    imageDocument?: MarkdownImageDocument;
 }>;
 
 export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockViewProps) => {
@@ -73,6 +78,10 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
                 <MarkdownBlockView
                     key={`${block.type}:${index}`}
                     block={block}
+                    images={props.images}
+                    imageScope={props.imageScope}
+                    imageDocument={props.imageDocument}
+                    imageSourceStart={props.sourceStart}
                     first={props.first && index === 0}
                     last={props.last && index === props.blocks.length - 1}
                     selectable={props.selectable}
