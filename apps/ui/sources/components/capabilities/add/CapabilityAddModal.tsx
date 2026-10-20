@@ -481,6 +481,11 @@ function AddCollection<Item>(
     [items, itemKey],
   );
 
+  // Details whose row left the list (another registry, a narrower search, a new find) close instead of standing empty.
+  React.useEffect(() => {
+    if (openKey !== null && !props.loading && !itemsByKey.has(openKey)) onOpenChange(null);
+  }, [itemsByKey, onOpenChange, openKey, props.loading]);
+
   const renderDetail = (
     key: string,
     context: CollectionDetailRenderContext,
