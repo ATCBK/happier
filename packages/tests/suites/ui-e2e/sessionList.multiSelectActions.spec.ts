@@ -337,7 +337,7 @@ test.describe('ui e2e: session list multi-select actions', () => {
     await dismissSelectionResult(page);
   });
 
-  test('selects a Shift range and archives it with progress and result state', async ({ page }) => {
+  test('selects a Shift range and archives it with progress and result state', { tag: '@smoke' }, async ({ page }) => {
     test.setTimeout(180_000);
     if (!server || !uiBaseUrl || !token) throw new Error('missing server/ui fixtures');
 
