@@ -540,10 +540,14 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const repairs = draft?.check?.prerequisites?.filter(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction) ?? [];
     // Nothing to choose from yet is not "no choices" while the recipe still waits on a required field: the field says what it needs.
     const awaitsRequiredInput = recipeFields.some(field => field.required && isBlankInput(readInputPath(fieldInput, field.path)));
-    const choiceState = !draft ? null : facts?.optionStatus === 'unavailable' ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.options.unavailable')} />
+    // A failed check is the cause: its own words say why and what to do ("Not installed · get it from …"), ahead of the option
+    // reads that fail because of it. The generic line only fills the gap when the check named nothing.
+    const choiceState = !draft ? null
+        : draft.check?.available === false ? <SurfaceStateCard kind="warning" size="line" testID="managed-config.unavailable" title={t('managedMachines.providers.unavailable')}
+            reason={draft.check.status ? localized(provisioner.contribution.pluginId, draft.check.status) : undefined} />
+        : facts?.optionStatus === 'unavailable' ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.options.unavailable')} />
         : draft.optionStatus === 'loading' ? <SurfaceStateCard kind="loading" size="line" title={t('managedMachines.options.loading', { provider: title })} />
         : draft.optionStatus === 'current' && draft.choices.length === 0 ? (awaitsRequiredInput ? null : <SurfaceStateCard kind="empty" size="line" title={t('managedMachines.options.empty', { provider: title })} />)
-        : draft.check?.available === false ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.providers.unavailable')} />
         : null;
     const kindTitle = presentation.kindTitle;
     const pageTitle = props.presetOnly || !kindTitle ? title : t('managedMachines.config.newKind', { provider: title, kind: kindTitle });

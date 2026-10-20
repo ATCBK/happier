@@ -56,6 +56,26 @@ const provisioner = { contribution: { pluginId: 'custom.compute', localId: 'vm' 
 } };
 
 describe('mounted managed configurator', () => {
+    it('says why an unavailable provisioner cannot create here in the check\u2019s own words, with its next step', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://unavailable-check.example',
+            serverIdentityId: 'srv_unavailable_check', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const local = { ...provisioner, descriptor: { ...provisioner.descriptor, billing: { location: 'local', stoppedBilling: 'not-billed' } } };
+        const status = { key: 'custom.compute.status.notInstalled', fallback: 'Not installed \u00b7 install the tool' };
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [local] }],
+            ['machines.provisioners.check', { available: false, code: 'tool_unavailable', status }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(local.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.unavailable')).not.toBeNull());
+        expect(screen.getTextContent()).toContain(status.fallback);
+        await screen.unmount();
+    });
     it('refuses a schema-less options Action without probing native options or losing the configurator', async () => {
         const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://missing-options-schema.example',
             serverIdentityId: 'srv_missing_options_schema', accountId: 'owner', currentAccount: true });
