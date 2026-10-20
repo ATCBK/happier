@@ -164,15 +164,15 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
         const resolved = ts.resolveModuleName(fileName, file, context.parsed.options, ts.sys, moduleCache(context)).resolvedModule;
         return resolved && authored(resolved) ? [resolve(resolved.resolvedFileName)] : [];
       });
-      dependencies.push(...info.referencedFiles.map(({ fileName }) => resolve(dirname(file), fileName)));
-      dependencies.push(...info.typeReferenceDirectives.flatMap(({ fileName }) => {
+      for (const { fileName } of info.referencedFiles) dependencies.push(resolve(dirname(file), fileName));
+      for (const { fileName } of info.typeReferenceDirectives) {
         // A program's primary type directive wins over a dependency's secondary
         // reference, just as in the canonical producer compiler environment.
         const primary = primaryTypes(context);
         const resolved = primary.has(fileName) ? primary.get(fileName)
           : ts.resolveTypeReferenceDirective(fileName, file, context.parsed.options, ts.sys).resolvedTypeReferenceDirective;
-        return resolved ? [resolve(resolved.resolvedFileName)] : [];
-      }));
+        if (resolved) dependencies.push(resolve(resolved.resolvedFileName));
+      }
       cache.set(file, dependencies);
     }
     return cache.get(file);
@@ -186,7 +186,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
       found.add(file);
       const dependencies = dependenciesFor(file, compilerContext ?? sourceContext(file));
       if (!compilerContext) imports.set(file, dependencies);
-      pending.push(...dependencies);
+      for (const dependency of dependencies) pending.push(dependency);
     }
     return [...found];
   };
@@ -226,7 +226,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
       if (visited.has(file)) continue;
       visited.add(file);
       component.push(file);
-      pending.push(...reverse.get(file) ?? []);
+      for (const parent of reverse.get(file) ?? []) pending.push(parent);
     }
     components.push(component);
     const weight = component.filter(file => implementations.has(file)).length;
@@ -241,7 +241,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   let prerequisiteGroup = 0;
   let assignedWeight = 0;
   for (const component of prerequisiteComponents) {
-    prerequisiteGroups[prerequisiteGroup].push(...component);
+    for (const file of component) prerequisiteGroups[prerequisiteGroup].push(file);
     assignedWeight += component.filter(file => implementations.has(file)).length;
     if (assignedWeight >= targetWeight * (prerequisiteGroup + 1) && prerequisiteGroup < prerequisiteGroups.length - 1) prerequisiteGroup++;
   }

@@ -292,6 +292,31 @@ test('dependency partitions keep cycles whole and prerequisites before their con
   await assert.rejects(deriveTypecheckProjects(root, { sourceNames: names.slice(0, -1), testNames: ['test'], check: true }), /need regeneration/);
 });
 
+test('large dependency edge lists retain exact compiler ownership without variadic calls', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-compiler-large-edges-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'src'), { recursive: true });
+  // Repeated edges reproduce the VM argument ceiling with a small real file graph.
+  await writeFile(join(root, 'src/entry.ts'), 'import "./leaf";\n'.repeat(200_000));
+  await writeFile(join(root, 'src/leaf.ts'), 'import "./entry"; export const leaf = true;');
+  await writeFile(join(root, 'src/entry.test.ts'), 'import "./entry";');
+  await writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { module: 'esnext', moduleResolution: 'bundler', types: [] }, include: ['src/**/*.ts'],
+  }));
+  const names = ['foundation', 'core', 'source', 'test'];
+  for (const name of names) await writeFile(join(root, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.json', include: [], files: [name === 'test' ? 'src/entry.test.ts' : 'src/entry.ts'],
+  }));
+  const inventory = await deriveTypecheckProjects(root, { sourceNames: names.slice(0, -1), testNames: ['test'] });
+  const configs = await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8'))));
+  for (const path of ['src/entry.ts', 'src/leaf.ts', 'src/entry.test.ts']) {
+    assert.equal(configs.filter(config => config.files.includes(join(root, path))).length, 1, path);
+  }
+  assert.ok(configs[names.indexOf('core')].files.includes(join(root, 'src/leaf.ts')));
+  assert.ok(configs[names.indexOf('core')].files.includes(join(root, 'src/entry.ts')));
+  assert.ok(configs[names.indexOf('test')].files.includes(join(root, 'src/entry.test.ts')));
+});
+
 test('explicit legacy test membership cannot re-add excluded cross-app composition', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-compiler-composition-'));
   t.after(() => rm(root, { recursive: true, force: true }));
