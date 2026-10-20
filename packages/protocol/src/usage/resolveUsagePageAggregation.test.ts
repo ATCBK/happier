@@ -9,6 +9,7 @@ import { projectUsagePlanInsights } from './usagePlanInsights.js';
 import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
 import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
 import { readUsageScopeOptions } from './usageFilterOptions.js';
+import { projectSessionUsageWorkEvidence } from './usageWorkEvidence.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -16,6 +17,24 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('publishes one answered-approval population from opened Session evidence to Coach and Human loop', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const completion = { tool: 'Bash', createdAt: 110, completedAt: 140, status: 'approved' };
+    const detail = projectSessionUsageWorkEvidence({ id: 'session', metadata: null, agentState: { completedRequests: {
+      within: completion, earlier: { ...completion, createdAt: 90 },
+      immediate: { ...completion, createdAt: 150, completedAt: 150 },
+    } } });
+    const result = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, detail }],
+    });
+    const slice = result.results[0]!;
+    expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 3, decisionLatencyMs: 80 });
+    expect(slice.coach?.findings.find(row => row.detectorId === 'approval_friction')?.measurements)
+      .toEqual(expect.arrayContaining([{ metric: 'permission_requests', value: 3, unit: 'count' },
+        { metric: 'permission_wait', value: 80, unit: 'milliseconds' }]));
+    expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
+  });
   it('carries admitted Session coverage independently of accounting and interval facts through retry and retirement', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
     const project = (selected: number, admitted: number) => resolveUsagePageAggregation({ queries: [query],

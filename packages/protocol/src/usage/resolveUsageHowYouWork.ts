@@ -3,7 +3,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { resolveUsageCalendarInstant } from './usageCalendar.js';
 import { projectUsageFootprint, UsageFootprintProjectionSchema } from './usageFootprint.js';
-import { isUsageNightHour, projectUsageWorkIntervals, UsageNightHoursV1Schema, UsageWorkIntervalsProjectionSchema, type UsageWorkIntervalFact,
+import { isUsageNightHour, projectUsageWorkIntervals, selectUsageWorkPermissions, UsageNightHoursV1Schema, UsageWorkIntervalsProjectionSchema, type UsageWorkIntervalFact,
     type UsageWorkPermissionFact, type UsageWorkIntervalsInput } from './usageWorkIntervals.js';
 import type { UsageCoachReadEvidence } from './coach/coachFinding.js';
 
@@ -134,21 +134,16 @@ export function resolveUsageHowYouWork(input: Readonly<{
             decisionLatencyMs: null, unknownRequestTimeCount: 0, unknownDecisionTimeCount: 0,
             byAnsweringClient: { ios: 0, android: 0, web: 0, desktop: 0, unknown: 0 }, byTool: [] };
         const tools = new Map<string | null, NonNullable<UsageHowYouWork['permissions']>['byTool'][number]>();
-        const seenPermissions = new Set<string>();
-        for (const fact of detail.permissions ?? []) {
-            const key = JSON.stringify([fact.workId, fact.requestId]);
-            if (seenPermissions.has(key)) continue;
-            seenPermissions.add(key);
-            if (!(fact.requestedAtMs !== null && inPeriod(fact.requestedAtMs))
-                && !(fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs))) continue;
+        const selectedPermissions = selectUsageWorkPermissions(detail.permissions ?? [], input.period);
+        const pairedPermissions = new Set(selectedPermissions.paired);
+        for (const fact of selectedPermissions.requests) {
             permissions.requestCount += 1;
             if (fact.requestedAtMs === null) permissions.unknownRequestTimeCount += 1;
             if (fact.decidedAtMs === null) permissions.unknownDecisionTimeCount += 1;
             if (fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs)) permissions.byAnsweringClient[fact.answeringClientCategory ?? 'unknown'] += 1;
             const tool = tools.get(fact.toolId) ?? { toolId: fact.toolId, requestCount: 0, pairedDecisionCount: 0, decisionLatencyMs: null };
             tool.requestCount += 1;
-            if (fact.requestedAtMs !== null && fact.decidedAtMs !== null && fact.decidedAtMs >= fact.requestedAtMs
-                && Number.isSafeInteger(fact.requestedAtMs) && inPeriod(fact.decidedAtMs)) {
+            if (pairedPermissions.has(fact) && fact.requestedAtMs !== null && fact.decidedAtMs !== null) {
                 permissions.pairedDecisionCount += 1;
                 permissions.decisionLatencyMs = (permissions.decisionLatencyMs ?? 0) + fact.decidedAtMs - fact.requestedAtMs;
                 tool.pairedDecisionCount += 1;
