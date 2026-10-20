@@ -1,4 +1,4 @@
-import { isValidElement, useContext, useState, type ReactNode } from 'react';
+import { isValidElement, useContext, useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
@@ -193,15 +193,67 @@ export function HappierFreshnessLine(props: Readonly<{
       minWidth: chip ? 0 : undefined,
       paddingLeft: plain ? 0 : metrics.paddingStartPx,
       paddingRight: plain ? 0 : metrics.paddingEndPx,
+      paddingVertical: chip ? 0 : metrics.paddingVerticalPx,
       backgroundColor: plain ? 'transparent' : props.colors.background,
       borderTopWidth: plain ? 0 : StyleSheet.hairlineWidth,
       borderBottomWidth: plain ? 0 : StyleSheet.hairlineWidth,
       borderColor: props.colors.border,
+      // A line whose recoveries no longer fit beside its words moves them beneath (time over reason over
+      // actions), never squeezing the sentence to an ellipsis.
+      flexWrap: chip ? undefined : 'wrap',
     }}>
       {chip ? props.lead ?? null : null}
-      {props.icon}
-      <View style={chip ? { flexShrink: 1, minWidth: 0 } : { flex: 1, minWidth: 0 }}>{props.children}</View>
-      {props.action ?? null}
+      {chip ? (
+        <>
+          {props.icon}
+          <View style={{ flexShrink: 1, minWidth: 0 }}>{props.children}</View>
+          {props.action ?? null}
+        </>
+      ) : (
+        <>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: metrics.gapPx, flexGrow: 1, flexShrink: 1, minWidth: 0,
+            flexBasis: props.action ? LINE_TEXT_BASIS_PX : 'auto' }}>
+            {props.icon}
+            <View style={{ flex: 1, minWidth: 0 }}>{props.children}</View>
+          </View>
+          {props.action ? <View style={{ flexShrink: 0, marginLeft: 'auto' }}>{props.action}</View> : null}
+        </>
+      )}
+    </View>
+  );
+}
+
+/**
+ * The words of a freshness line as two clauses (L4, FB1o): "As of 14:02 · MacBook Pro isn't answering"
+ * on one line when both fit, otherwise the time over the reason. The dot belongs to the line, not to the
+ * reason: it rides the end of the first clause and is not drawn once the reason starts a line of its own
+ * (it keeps its width, so hiding it never re-flows the clauses). Each realm binds its own text.
+ */
+export function HappierFreshnessClauses(props: Readonly<{
+  asOf: ReactNode | null;
+  reason: ReactNode | null;
+  separator: (hidden: boolean) => ReactNode;
+}>) {
+  const [stacked, setStacked] = useState(false);
+  const tops = useRef<{ first: number | null; reason: number | null }>({ first: null, reason: null });
+  const measure = (clause: 'first' | 'reason', y: number) => {
+    tops.current[clause] = y;
+    const { first, reason } = tops.current;
+    if (first === null || reason === null) return;
+    const next = reason > first + 1;
+    setStacked((current) => current === next ? current : next);
+  };
+  if (props.asOf === null || props.reason === null) return <>{props.asOf ?? props.reason}</>;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', minWidth: 0 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', flexShrink: 0 }}
+        onLayout={(event) => measure('first', event.nativeEvent.layout.y)}>
+        {props.asOf}
+        {props.separator(stacked)}
+      </View>
+      <View style={{ flexShrink: 1, minWidth: 0 }} onLayout={(event) => measure('reason', event.nativeEvent.layout.y)}>
+        {props.reason}
+      </View>
     </View>
   );
 }
@@ -327,6 +379,8 @@ export const HAPPIER_FRESHNESS_LINE_METRICS = Object.freeze({
   minHeightPx: 32,
   paddingStartPx: 16,
   paddingEndPx: 12,
+  /** Block padding: a stacked line keeps air above and below; one line still makes the 32 pt minimum. */
+  paddingVerticalPx: 6,
   gapPx: 8,
   glyphPx: 13,
   text: Object.freeze({ fontSize: 12, lineHeight: 16 }),

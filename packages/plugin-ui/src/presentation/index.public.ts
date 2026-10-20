@@ -793,6 +793,7 @@ export {
   HappierStateLine,
   HappierStateDetails,
   HappierFreshnessLine,
+  HappierFreshnessClauses,
   resolveHappierStateAnnouncement,
   resolveHappierStateFailureGlyph,
   type HappierSurfaceStateKind,

@@ -15,6 +15,7 @@ import {
   HappierInfoState,
   HappierInfoTile,
   HappierFreshnessLine,
+  HappierFreshnessClauses,
   HappierSurfaceStateFrame,
   HappierStateLine,
   resolveHappierStateAnnouncement,
@@ -617,11 +618,12 @@ export function FreshnessLine(props: FreshnessLineProps): ReactElement {
   const translate = usePluginTranslation();
   const surfaceActivity = usePluginSurfaceActivity();
   const palette = useOptionalHappierUiPalette(theme);
-  const text = resolveHappierFreshnessText({
+  const parts = resolveHappierFreshnessText({
     asOf: props.asOf,
     now: props.now,
     reason: resolveAuthorText(translate, props.reason, props.reasonKey) ?? '',
     formatAsOf: (time) => translate(STATE_AS_OF_TRANSLATION_KEY, 'As of {time}').replace('{time}', time),
+    parts: true,
   });
   const metrics = HAPPIER_FRESHNESS_LINE_METRICS;
   const glyphColor = props.tone === 'warning' ? theme.colors.warning : theme.colors.mutedText;
@@ -650,7 +652,15 @@ export function FreshnessLine(props: FreshnessLineProps): ReactElement {
         </HappierPressable>
       ) : null}
     >
-      <HappierText tone="secondary" numberOfLines={2} tabularNumbers style={metrics.text}>{text}</HappierText>
+      <View accessible accessibilityLabel={parts.text}>
+        <HappierFreshnessClauses
+          asOf={parts.asOf === null ? null : <HappierText tone="secondary" numberOfLines={1} tabularNumbers style={metrics.text}>{parts.asOf}</HappierText>}
+          reason={parts.reason ? <HappierText tone="secondary" numberOfLines={2} tabularNumbers style={metrics.text}>{parts.reason}</HappierText> : null}
+          separator={(hidden) => (
+            <HappierText tone="secondary" accessible={false} tabularNumbers style={[metrics.text, hidden ? { opacity: 0 } : null]}>{' · '}</HappierText>
+          )}
+        />
+      </View>
     </HappierFreshnessLine>
   );
 }

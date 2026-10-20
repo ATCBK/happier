@@ -1301,6 +1301,7 @@ export {
   HAPPIER_STATE_LINE_METRICS,
   HAPPIER_STATE_SIZE_METRICS,
   HappierFreshnessLine,
+  HappierFreshnessClauses,
   HappierInfoState,
   HappierInfoTile,
   HappierStateDetails,
