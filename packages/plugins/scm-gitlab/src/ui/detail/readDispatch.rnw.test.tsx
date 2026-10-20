@@ -27,13 +27,17 @@ function launchInput() {
       observedAtMs: 1_760_000_700_000, locator: { v: 1, routingToken: 'group/project' },
       snapshot: { v: 1, title: 'Read dispatch', scopeLabel: 'group/project', state: { presentation: 'active', nativeLabel: 'Opened' }, facts: [] }, viewer: { involvement: [] } }, linkedSessions: [] });
 }
-async function mountRegisteredChanges(misbind = false) {
+async function mountRegisteredChanges(misbind: false | 'approvals' | 'comparison' = false) {
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   const transport = createStubGitlabTransport({ respond: request => {
     if (request.url.includes('/diffs')) return { status: 200, body: [{ old_path: 'src/dispatch.ts', new_path: 'src/dispatch.ts', new_file: false, renamed_file: false, deleted_file: false }] };
     if (request.url.endsWith('/approvals')) return { status: 200, body: { approvals_required: 1, approvals_left: 1, approved_by: [] } };
     if (request.url.endsWith('/approval_rules')) return { status: 200, body: [] };
+    if (request.url.endsWith('/merge_requests/412')) return { status: 200, body: {
+      project_id: 3, iid: 412, references: { full: 'group/project!412' }, sha: 'c'.repeat(40), changes_count: '1',
+      diff_refs: { base_sha: 'a'.repeat(40), start_sha: 'b'.repeat(40), head_sha: 'c'.repeat(40) },
+    } };
     throw new Error(`Unexpected GitLab route: ${request.url}`);
   } });
   const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
@@ -58,8 +62,9 @@ async function mountRegisteredChanges(misbind = false) {
         if (typeof action === 'string' || action.pluginId !== GITLAB_PLUGIN_ID || input === undefined) throw new Error('Wrong Action owner');
         const changes = action.localId === GITLAB_TRIAGE_DETAIL_ACTION_IDS.listChanges;
         const request = misbind && changes ? GitlabChangesInputV1Schema.parse(input) : null;
-        const result = await plugin.invokeAction(request === null ? action.localId : GITLAB_TRIAGE_DETAIL_ACTION_IDS.readApprovals,
-          request === null ? input : { v: 1, instance: request.instance, localRef: request.localRef, routingToken: request.routingToken }, { surface: 'ui' });
+        const result = await plugin.invokeAction(request === null || misbind === 'comparison' ? action.localId : GITLAB_TRIAGE_DETAIL_ACTION_IDS.readApprovals,
+          request === null ? input : misbind === 'comparison' ? { ...request, comparison: true }
+            : { v: 1, instance: request.instance, localRef: request.localRef, routingToken: request.routingToken }, { surface: 'ui' });
         if (changes) producerResults.push(result);
         return result;
       } },
@@ -80,11 +85,11 @@ describe('registered GitLab detail read dispatch', () => {
     await expect(detail.getByText('src/dispatch.ts')).resolves.toBeDefined();
     expect(producerResults).toHaveLength(1);
   });
-  it('rejects a mis-bound registered producer', async () => {
-    const { detail, producerResults, release } = await mountRegisteredChanges(true);
+  it.each(['approvals', 'comparison'] as const)('rejects a mis-bound registered %s producer', async (mode) => {
+    const { detail, producerResults, release } = await mountRegisteredChanges(mode);
     await act(async () => { release(); });
     expect(producerResults).toHaveLength(1);
-    expect(GitlabChangesResultV1Schema.safeParse(producerResults[0]).success).toBe(false);
+    expect(GitlabChangesResultV1Schema.safeParse(producerResults[0]).success).toBe(mode === 'comparison');
     await expect(detail.getByText(describeTriageSourceFailureV1({ class: 'unsupportedContract', code: 'gitlab-detail-result-unreadable' }, 'GitLab could not complete this read.'))).resolves.toBeDefined();
   });
 });

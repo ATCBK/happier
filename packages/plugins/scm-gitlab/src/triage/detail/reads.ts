@@ -26,8 +26,11 @@ import {
   type GitlabAuthorizedInvocation,
   type GitlabHttpFetcher,
 } from '../http/gitlabClient.js';
-import { selectGitlabNextPageUrl } from '../http/gitlabLink.js';
+import { isGitlabPageWithinResource, selectGitlabNextPageUrl } from '../http/gitlabLink.js';
 import type { GitlabFailure } from '../types.js';
+import { buildGitlabEntryIdentity } from '../identity.js';
+import { readGitlabComparisonEndpoints, type GitlabComparisonEndpoints } from '../mapping/mergeRequestHead.js';
+import type { GitlabComparisonFileV1 } from './contracts.js';
 
 import {
   GITLAB_DETAIL_BOUNDS_V1,
@@ -54,6 +57,7 @@ import {
   buildGitlabApprovalRulesUrl,
   buildGitlabApprovalsUrl,
   buildGitlabDiffsUrl,
+  buildGitlabItemUrl,
   buildGitlabRawDiffsUrl,
   buildGitlabDiscussionsUrl,
   buildGitlabMergeRequestPipelinesUrl,
@@ -227,11 +231,24 @@ export async function readGitlabDiscussionsPage(
 
 /* ------------------------------------------------------------------- changes */
 
+type GitlabChangesPageInput = Readonly<{
+  route: GitlabDetailRouteInputV1;
+  perPage: number;
+  position: GitlabDetailPagePositionV1;
+}>;
+
+export function readGitlabChangesPage(
+  input: GitlabChangesPageInput & Readonly<{ comparison: true }>, dependencies: GitlabDetailReadDependenciesV1,
+): Promise<GitlabDetailReadResultV1<GitlabChangedFilesProjectionV1<GitlabComparisonFileV1> & GitlabWalkPositionV1>>;
+export function readGitlabChangesPage(
+  input: GitlabChangesPageInput, dependencies: GitlabDetailReadDependenciesV1,
+): Promise<GitlabDetailReadResultV1<GitlabChangedFilesProjectionV1 & GitlabWalkPositionV1>>;
 export async function readGitlabChangesPage(
   input: Readonly<{
     route: GitlabDetailRouteInputV1;
     perPage: number;
     position: GitlabDetailPagePositionV1;
+    comparison?: true;
   }>,
   dependencies: GitlabDetailReadDependenciesV1,
 ): Promise<GitlabDetailReadResultV1<GitlabChangedFilesProjectionV1 & GitlabWalkPositionV1>> {
@@ -242,10 +259,35 @@ export async function readGitlabChangesPage(
     () => buildGitlabDiffsUrl(input.route, 1, input.perPage),
   );
   if (!url.ok) return failed(url.failure);
-  return readPagedCollection<GitlabChangedFilesProjectionV1>(dependencies, {
+  const resource = buildGitlabDiffsUrl(input.route, 1, input.perPage);
+  if (!isGitlabPageWithinResource(url.url, resource)) return failed(REQUEST_INVALID);
+  const page = await readPagedCollection<GitlabChangedFilesProjectionV1>(dependencies, {
     url: url.url,
-    project: (body) => projectGitlabChangedFileRows(body, GITLAB_DETAIL_BOUNDS_V1, input.perPage),
+    project: (body) => input.comparison === true
+      ? projectGitlabChangedFileRows(body, GITLAB_DETAIL_BOUNDS_V1, input.perPage, true)
+      : projectGitlabChangedFileRows(body, GITLAB_DETAIL_BOUNDS_V1, input.perPage),
   });
+  if (!page.ok || page.value.nextUrl === null || isGitlabPageWithinResource(page.value.nextUrl, resource)) return page;
+  return succeeded({ ...page.value, nextUrl: null, incomplete: 'pagination' });
+}
+
+/** Brackets each diff page with the same identity-checked metadata read. */
+export async function readGitlabComparisonMetadata(
+  route: GitlabDetailRouteInputV1,
+  collisionScope: string,
+  dependencies: GitlabDetailReadDependenciesV1,
+): Promise<GitlabDetailReadResultV1<GitlabComparisonEndpoints>> {
+  const result = await requestGitlabJson({ invocation: dependencies.invocation, url: buildGitlabItemUrl(route),
+    fetcher: dependencies.fetcher, signal: dependencies.signal, nowMs: dependencies.nowMs });
+  if (result.kind === 'failed') return failed(result.failure);
+  const body = result.response.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return failed(RESPONSE_SHAPE_INVALID);
+  const identity = buildGitlabEntryIdentity({ kindId: 'merge-request', origin: route.origin,
+    row: body as Readonly<Record<string, unknown>> });
+  if (identity.kind !== 'built' || identity.identity.collisionScope !== collisionScope
+    || identity.identity.entryId !== route.iid || identity.locator.repositoryKey !== route.repositoryKey) return failed(RESPONSE_SHAPE_INVALID);
+  const endpoints = readGitlabComparisonEndpoints(body);
+  return endpoints === null ? failed({ class: 'unsupportedContract', code: 'gitlab-comparison-endpoints-unavailable' }) : succeeded(endpoints);
 }
 
 /**

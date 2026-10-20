@@ -9,11 +9,8 @@
  *
  * Three refusals are deliberate:
  *
- * - **a diff body never crosses this boundary.** A changed-file row publishes
- *   the file's identity, its change counts, and GitLab's own truncation
- *   evidence. The rich diff body is held at the 03b catalog under `B6`, and
- *   shipping diff bytes to a surface with no renderer for them would pay the
- *   cost of a feature that does not exist yet;
+ * - **display reads carry metadata only.** Explicit comparison reads also
+ *   project exact patches and their availability for the shared code reader;
  * - **an absent provider field is never projected as `false`.** GitLab added the
  *   per-file `collapsed` and `too_large` fields in 18.4. A response that omits
  *   them said nothing about truncation, and saying "not truncated" on its behalf
@@ -37,6 +34,7 @@ import {
 } from '@happier-dev/triage-protocol/v1';
 
 import { readGitlabDiscussionResolution } from '../mapping/discussionResolution.js';
+import type { GitlabComparisonFileV1, GitlabPatchEvidenceV1 } from './contracts.js';
 import {
   GITLAB_MAX_DETAIL_PAGE_SIZE_V1,
   type GitlabActivityEventSourceV1,
@@ -588,23 +586,32 @@ export type GitlabProjectedChangedFileRowV1 = Readonly<{
  */
 export type GitlabDiffLimitStatusV1 = 'reported' | 'unknown';
 
-export type GitlabChangedFilesProjectionV1 =
-  GitlabPageProjectionV1<GitlabProjectedChangedFileRowV1> & Readonly<{
+export type GitlabChangedFilesProjectionV1<TRow = GitlabProjectedChangedFileRowV1> =
+  GitlabPageProjectionV1<TRow> & Readonly<{
     diffLimitStatus: GitlabDiffLimitStatusV1;
   }>;
 
 export function projectGitlabChangedFileRows(
+  body: unknown, bounds: GitlabDetailBoundsV1, maxRows: number, comparison: true,
+): GitlabChangedFilesProjectionV1<GitlabComparisonFileV1>;
+export function projectGitlabChangedFileRows(
+  body: unknown, bounds: GitlabDetailBoundsV1, maxRows?: number,
+): GitlabChangedFilesProjectionV1;
+export function projectGitlabChangedFileRows(
   body: unknown,
   bounds: GitlabDetailBoundsV1,
   maxRows: number = GITLAB_MAX_DETAIL_PAGE_SIZE_V1,
+  comparison = false,
 ): GitlabChangedFilesProjectionV1 {
   let everyRowReported = true;
   const projected = projectRows<GitlabProjectedChangedFileRowV1>(body, maxRows, (raw) => {
-    const path = normalizedOrNull(raw.new_path ?? raw.old_path);
+    // Repository paths are code identities, not single-line display prose.
+    const pathValue = raw.new_path ?? raw.old_path;
+    const path = typeof pathValue === 'string' && pathValue.length > 0 ? { value: pathValue, truncated: false } : null;
     if (path === null) return null;
     const previousPath = raw.old_path === raw.new_path
       ? null
-      : normalizedOrNull(raw.old_path);
+      : typeof raw.old_path === 'string' && raw.old_path.length > 0 ? { value: raw.old_path, truncated: false } : null;
     // Read as booleans ONLY when GitLab supplied booleans. `?? false` here is
     // exactly the defect this projector exists to prevent.
     const collapsed = typeof raw.collapsed === 'boolean' ? raw.collapsed : null;
@@ -621,6 +628,12 @@ export function projectGitlabChangedFileRows(
         ...(collapsed === null ? {} : { collapsed }),
         ...(tooLarge === null ? {} : { tooLarge }),
         ...(truncated ? { truncated: true as const } : {}),
+        ...(comparison ? {
+          status: raw.new_file === true ? 'added' : raw.deleted_file === true ? 'removed'
+            : raw.renamed_file === true ? 'renamed' : 'modified',
+          diffAvailable: typeof raw.diff === 'string' && raw.diff.length > 0,
+          evidence: projectGitlabPatchEvidence(raw),
+        } : {}),
       }),
       truncated,
     };
@@ -633,4 +646,12 @@ export function projectGitlabChangedFileRows(
       ? ('reported' as const)
       : ('unknown' as const),
   });
+}
+
+function projectGitlabPatchEvidence(raw: JsonRecord): GitlabPatchEvidenceV1 {
+  if (typeof raw.diff !== 'string' || raw.diff.length === 0) return { state: 'unavailable', reason: 'provider_patch_missing' };
+  const reason = raw.too_large === true ? 'provider_patch_truncated'
+    : raw.collapsed === true ? 'provider_patch_collapsed'
+      : typeof raw.collapsed !== 'boolean' || typeof raw.too_large !== 'boolean' ? 'provider_patch_completeness_unknown' : null;
+  return reason === null ? { state: 'available', patch: raw.diff } : { state: 'truncated', patch: raw.diff, reason };
 }

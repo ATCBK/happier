@@ -126,6 +126,11 @@ export function buildGitlabProjectCollisionScope(origin: GitlabConfiguredOrigin,
   return `gitlab:${encodeGitlabConfiguredOriginScope(origin)}:${projectId}`;
 }
 
+/** Comparison repository identity includes the deployment, as native entry identity does. */
+export function buildGitlabComparisonRepositoryKey(origin: GitlabConfiguredOrigin, repositoryKey: string): string {
+  return `${origin.normalized}/${repositoryKey}`;
+}
+
 /**
  * Rejects an identity that did not come from the exact invoked binding. A read
  * answered by another origin is a confidently wrong list, and a scope built from a

@@ -75,6 +75,7 @@ import {
 import { projectGitlabSourceFailure } from './sourceFailure.js';
 import { createGitlabHttpFetcher, readGitlabConnectedAccounts } from './invocation.js';
 import { readGitlabTriageEntryForOverview } from './sourceGet.js';
+import { readGitlabComparisonPage } from './detail/comparison.js';
 
 const INVALID_INPUT_FAILURE: TriageSourceFailureV1 = Object.freeze({
   class: 'unsupportedContract',
@@ -645,6 +646,11 @@ async function listGitlabChangesUnbounded(
   const provenance = detailContinuationProvenance(request, admitted.route, 'changes');
   const position = resolvePosition(request.continuation, admitted.route, request.limit, provenance);
   if (!position.ok) return unavailable(CONTINUATION_UNREADABLE_FAILURE);
+  if (request.comparison === true) return readGitlabComparisonPage(request, admitted, provenance, position.position);
+  if (request.continuation !== undefined && decodeGitlabDetailContinuation({ token: request.continuation,
+    origin: admitted.route.origin, limit: request.limit, provenance })?.comparison !== undefined) {
+    return unavailable(CONTINUATION_UNREADABLE_FAILURE);
+  }
 
   const page = await readGitlabChangesPage({
     route: admitted.route,

@@ -603,6 +603,7 @@ export function useGitlabChanges(
     if (parsed.data.kind === 'unavailable') {
       return { kind: 'failed' as const, failure: parsed.data.failure };
     }
+    if (parsed.data.kind !== 'changes') return { kind: 'failed' as const, failure: UNREADABLE_RESULT };
     const page = parsed.data;
     setDiffLimitStatus((current) => (
       // A first page starts the walk at whatever it reported; any later page

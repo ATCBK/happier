@@ -29,7 +29,10 @@ import {
   admitGitlabItemIdentity,
   resolveGitlabItemRoute,
 } from './admission.js';
-import { GITLAB_TRIAGE_KIND_IDS } from './contribution.js';
+import { GITLAB_PLUGIN_ID, GITLAB_TRIAGE_DETAIL_ACTION_IDS, GITLAB_TRIAGE_KIND_IDS } from './contribution.js';
+import { GITLAB_CHANGES_PAGE_SIZE_V1 } from './detail/routes.js';
+import { readGitlabComparisonEndpoints } from './mapping/mergeRequestHead.js';
+import { buildGitlabComparisonRepositoryKey } from './identity.js';
 import {
   requestGitlabJson,
   type GitlabConnectedAccounts,
@@ -163,7 +166,17 @@ async function executeGitlabTriageEntry(
     subscribed: entry.viewer.involvement.includes('subscribed'),
   });
 
-  return projectGitlabPresentObservation({ ...entry, viewer: { involvement } });
+  const projected = projectGitlabPresentObservation({ ...entry, viewer: { involvement } });
+  const endpoints = kindId === 'merge-request' ? readGitlabComparisonEndpoints(item.response.body) : null;
+  const number = Number(entry.identity.entryId);
+  if (endpoints === null || !Number.isSafeInteger(number)) return projected;
+  return { ...projected, comparisonSource: { kind: 'pullRequest', locator: {
+    providerId: 'gitlab', repository: buildGitlabComparisonRepositoryKey(origin, entry.locator.repositoryKey), number,
+    baseOid: endpoints.baseOid, headOid: endpoints.headOid,
+    sourceAction: { action: { pluginId: GITLAB_PLUGIN_ID, localId: GITLAB_TRIAGE_DETAIL_ACTION_IDS.listChanges },
+      input: { v: 1, instance: input.get.instance, localRef, routingToken: entry.locator.routingToken,
+        limit: GITLAB_CHANGES_PAGE_SIZE_V1, comparison: true } },
+  } } };
 }
 
 export async function getGitlabTriageEntry(

@@ -25,7 +25,7 @@ const PageSchema = z.looseObject({
   comparison: z.looseObject({ beforeOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)),
     baseOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)), headOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)),
     locator: z.optional(z.strictObject({ providerId: z.string().check(z.minLength(1)), repository: z.string().check(z.minLength(1)), number: z.number().check(z.int(), z.positive()) })),
-    totalFileCount: z.number().check(z.int(), z.nonnegative()), enumeratedFileCount: z.number().check(z.int(), z.nonnegative()),
+    totalFileCount: z.nullable(z.number().check(z.int(), z.nonnegative())), enumeratedFileCount: z.number().check(z.int(), z.nonnegative()),
     freshness: z.enum(['current', 'stale', 'unverified']), inventory: z.enum(['complete', 'incomplete']),
     content: z.enum(['complete', 'incomplete']), reasons: z.array(z.string()), failure: z.optional(z.unknown()),
   }),
@@ -75,7 +75,7 @@ export async function readPullRequestComparison(input: Readonly<{
   let before: string | undefined; let after: string | undefined;
   let pullRequest: ScmComparison['pullRequest'];
   let freshness: ScmComparison['freshness'] = 'unknown';
-  let continuation: string | undefined; let totalFileCount: number | undefined;
+  let continuation: string | undefined; let totalFileCount: number | null | undefined;
   const continuations = new Set<string>(); const paths = new Set<string>();
   let deliveredCount = 0; let completed = false;
   if (!input.source.locator.sourceAction || !input.readPage) return { files, reasons: ['Configured pull-request source Action is unavailable'], state: 'unavailable', freshness };

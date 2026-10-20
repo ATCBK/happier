@@ -24,6 +24,7 @@
 import { admitForgeRequestUrl } from '@happier-dev/triage-sources/runtime';
 
 import type { GitlabConfiguredOrigin } from '../origin.js';
+import { GitlabComparisonContinuationV1Schema, type GitlabComparisonContinuationV1 } from './contracts.js';
 
 const CONTINUATION_VERSION = 1;
 const ROOT_KEYS = Object.freeze(['v', 'nextUrl', 'limit', 'provenance'] as const);
@@ -57,6 +58,7 @@ export type GitlabDetailFrontierV1 = Readonly<{
   /** The window this cursor was minted under. */
   limit: number;
   provenance: GitlabDetailContinuationProvenanceV1;
+  comparison?: GitlabComparisonContinuationV1;
 }>;
 
 export function encodeGitlabDetailContinuation(
@@ -68,6 +70,7 @@ export function encodeGitlabDetailContinuation(
     nextUrl: frontier.nextUrl,
     limit: frontier.limit,
     provenance: frontier.provenance,
+    ...(frontier.comparison === undefined ? {} : { comparison: GitlabComparisonContinuationV1Schema.parse(frontier.comparison) }),
   });
 }
 
@@ -92,7 +95,7 @@ export function decodeGitlabDetailContinuation(input: Readonly<{
   }
   if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return null;
   const raw = decoded as Readonly<Record<string, unknown>>;
-  if (!hasExactKeys(raw, ROOT_KEYS)) return null;
+  if (!hasExactKeys(raw, raw['comparison'] === undefined ? ROOT_KEYS : [...ROOT_KEYS, 'comparison'])) return null;
   if (raw['v'] !== CONTINUATION_VERSION) return null;
   const nextUrl = raw['nextUrl'];
   const limit = raw['limit'];
@@ -105,7 +108,10 @@ export function decodeGitlabDetailContinuation(input: Readonly<{
   }
   const admitted = admitForgeRequestUrl(nextUrl, input.origin.normalized);
   if (admitted === null) return null;
-  return Object.freeze({ v: 1 as const, nextUrl: admitted, limit, provenance: input.provenance });
+  const comparison = raw['comparison'] === undefined ? undefined : GitlabComparisonContinuationV1Schema.safeParse(raw['comparison']);
+  if (comparison !== undefined && !comparison.success) return null;
+  return Object.freeze({ v: 1 as const, nextUrl: admitted, limit, provenance: input.provenance,
+    ...(comparison?.success ? { comparison: comparison.data } : {}) });
 }
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
