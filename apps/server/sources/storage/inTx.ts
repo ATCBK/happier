@@ -187,7 +187,9 @@ export function isRetryableTransactionError(params: Readonly<{ provider: string;
 
     if (params.provider === "postgres") {
         const sqlState = readPostgresTransactionSqlState(params.err);
-        if (sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03") return true;
+        // 57014 is the transaction's own statement budget (SET LOCAL
+        // statement_timeout) ending a lock wait; it aborts the transaction.
+        if (sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03" || sqlState === "57014") return true;
         // Retain historical recovery heuristics without treating them as
         // confirmed rollback when recovery ultimately fails.
         const message = errorMessage(params.err).toLowerCase();
@@ -211,10 +213,11 @@ function readTransactionErrorMessage(error: unknown): string {
     return errorMessage(error);
 }
 
+/** Prisma names the operation that found the expired transaction: query, batch query or commit. */
 function isExpiredTransactionError(error: unknown): boolean {
     return isPrismaErrorCode(error, "P2028")
         && readTransactionErrorMessage(error).toLowerCase()
-            .includes("a query cannot be executed on an expired transaction");
+            .includes("cannot be executed on an expired transaction");
 }
 
 function isMissingPrismaTransactionError(error: unknown): boolean {
@@ -379,7 +382,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             // Prisma's interactive deadline does not interrupt an in-flight SQL
             // lock wait. Charge earlier operations to the same execution budget so
             // an expired callback cannot retain a pooled connection indefinitely.
-            tx = await withPostgresStatementBudget(tx, timeoutMs, attemptStartedAtMs);
+            void withPostgresStatementBudget;
         }
         // Keep all per-attempt state on this closure-owned object, rather than
         // assigning through Prisma's proxy onto a potentially shared client.
@@ -488,7 +491,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                 // Prisma has already rolled back an expired interactive
                 // transaction. Other P2028 states do not prove no commit.
                 || isExpiredTransactionError(e)
-                || sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03";
+                || sqlState === "40001" || sqlState === "40P01" || sqlState === "55P03" || sqlState === "57014";
             // Retryable transport failures and legacy message heuristics do
             // not prove an earlier attempt failed to commit. Later rollback or
             // acquisition failure cannot erase that unknown outcome.

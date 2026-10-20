@@ -512,7 +512,6 @@ describe("inTx", () => {
 
     it.each([
         { provider: "postgres", code: "42601" },
-        { provider: "postgres", code: "57014" },
         { provider: "mysql", code: "40001" },
         { provider: "sqlite", code: "40P01" },
     ])("does not retry unrelated raw-query failures on $provider ($code)", async ({ provider, code }) => {
@@ -527,6 +526,51 @@ describe("inTx", () => {
         })).rejects.toBe(failure);
         expect(published).not.toHaveBeenCalled();
         expect(delayMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        "A query cannot be executed on an expired transaction.",
+        "A batch query cannot be executed on an expired transaction.",
+        "A commit cannot be executed on an expired transaction.",
+    ])("replays a transaction that Prisma expired whichever operation found it (%s)", async operation => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const expired = new PrismaClientKnownRequestError("Expired", {
+            code: "P2028", clientVersion: "6.19.2",
+            meta: { error: `Transaction already closed: ${operation} The timeout for this transaction was 15000 ms, however 31000 ms passed since the start of the transaction.` },
+        });
+        let attempts = 0;
+        const published: number[] = [];
+        await expect(inTx(async tx => {
+            const attempt = ++attempts;
+            afterTx(tx, () => published.push(attempt));
+            if (attempt === 1) throw expired;
+            return "committed";
+        })).resolves.toBe("committed");
+        expect(published).toEqual([2]);
+
+        applyEnvValues({ HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        await expect(inTx(async () => { throw expired; })).rejects.toBeInstanceOf(inTxModule.TransactionConflictExhaustedError);
+    });
+
+    it("classifies a statement the transaction budget cancelled as a rolled-back conflict and replays it", async () => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const cancelled = new PrismaClientKnownRequestError("Raw query failed", {
+            code: "P2010", clientVersion: "6.19.2", meta: { code: "57014", message: "canceling statement due to statement timeout" },
+        });
+        let attempts = 0;
+        const published: number[] = [];
+        await expect(inTx(async tx => {
+            const attempt = ++attempts;
+            afterTx(tx, () => published.push(attempt));
+            if (attempt === 1) throw cancelled;
+            return "committed";
+        })).resolves.toBe("committed");
+        expect(published).toEqual([2]);
+
+        applyEnvValues({ HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        await expect(inTx(async () => { throw cancelled; })).rejects.toBeInstanceOf(inTxModule.TransactionConflictExhaustedError);
+        expect(logMock).toHaveBeenCalledWith(expect.objectContaining({ event: "transaction-rollback", sqlState: "57014" }),
+            "Database transaction rollback recovery exhausted");
     });
 
     it("retries repeated postgres P2034 conflicts until a later attempt succeeds", async () => {
