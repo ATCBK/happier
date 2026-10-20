@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createPluginUiHostApiClient } from '@happier-dev/plugin-sdk/ui/client';
+import { PluginError, isPluginError } from '@happier-dev/plugin-sdk';
 import type { PluginUiHostApi, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import {
     buildQualifiedPluginContributionKey,
@@ -25,7 +26,7 @@ import {
     type PluginSourceCustodyV1,
 } from '@happier-dev/protocol';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
-import type { PluginClientActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginClientActionHandler, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
     defineProtocolLiteral,
@@ -105,6 +106,7 @@ import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeG
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
 import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
     requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
+import { manifest as authoredAccountManifest, activate as activateAuthoredAccount } from '../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
 // system boundary that terminates this UI-side transport path.
@@ -286,7 +288,7 @@ function clientActionIdentity(
     return Object.freeze({
         pluginId,
         contributionId: localId,
-        artifactId: CLIENT_ACTION_TARGET.artifactId,
+        artifactId: artifactGraph.artifactId,
         artifactDigest: artifactGraph.digest,
         hostAppVersion: '2.0.0',
         hostUiApiVersion: '1.0.0',
@@ -314,6 +316,7 @@ function createClientTargetAction(input: Readonly<{
     identity: PluginContributionIdentityV1;
     dangerLevel?: 'safe' | 'writesRemote';
     surfaces?: PluginProjectedActionV2['surfaces'];
+    accountPlacement?: boolean;
 }>): PluginProjectedActionV2 {
     const dangerLevel = input.dangerLevel ?? 'safe';
     const executionOrigin = clientActionExecutionOrigin(input.identity.pluginId);
@@ -325,7 +328,9 @@ function createClientTargetAction(input: Readonly<{
         scopes: ['global'],
         surfaces: input.surfaces ?? ['ui'],
         placementBindings: ['detailsPanel'],
-        execution: {
+        execution: input.accountPlacement ? { target: 'account', account: {
+            artifactId: CLIENT_ACTION_TARGET.artifactId, exportName: CLIENT_ACTION_TARGET.exportName,
+        } } : {
             target: 'client',
             client: {
                 artifactId: CLIENT_ACTION_TARGET.artifactId,
@@ -333,7 +338,7 @@ function createClientTargetAction(input: Readonly<{
             },
             platforms: [CLIENT_ACTION_TARGET.platform],
         },
-        executionOrigin,
+        ...(input.accountPlacement ? {} : { executionOrigin }),
         dangerLevel,
         ...(dangerLevel === 'safe'
             ? {}
@@ -355,12 +360,17 @@ function createClientActionActivation(input: Readonly<{
     surfaces?: PluginProjectedActionV2['surfaces'];
     inputSchema?: object;
     outputSchema?: object;
-    handler: PluginClientActionHandler;
+    handler?: PluginClientActionHandler;
+    accountHandler?: PluginAccountActionHandler;
     accountLifetime?: ActiveServerAccountScopeLifetime;
     occurrenceId?: string;
     artifactGraph?: PluginUiArtifactsManifestEntryV2;
+    accountPlacement?: boolean;
+    authoredAccount?: boolean;
+    accountAvailability?: { when: { fact: 'session.exists'; operator: 'equals'; value: boolean } };
 }>) {
-    const pluginId = input.pluginId ?? CALLER_PLUGIN_ID;
+    const pluginId = input.authoredAccount ? authoredAccountManifest.id : input.pluginId ?? CALLER_PLUGIN_ID;
+    const pluginVersion = input.authoredAccount ? authoredAccountManifest.version : '1.2.3';
     const localId = input.localId ?? 'refresh-index';
     const executionOrigin = clientActionExecutionOrigin(pluginId);
     const hostOrigin = Object.freeze({
@@ -368,17 +378,41 @@ function createClientActionActivation(input: Readonly<{
         machineId: executionOrigin.materializationRef.machineId,
         executionOrigin,
     });
-    const action = createClientTargetAction({
+    const baseAction = createClientTargetAction({
         identity: { pluginId, localId },
         dangerLevel: input.dangerLevel,
         surfaces: input.surfaces,
+        accountPlacement: input.accountPlacement,
     });
+    const authoredDeclaration = input.authoredAccount ? authoredAccountManifest.contributes?.actions?.find(row => row.id === localId) : undefined;
+    if (input.authoredAccount && !authoredDeclaration) throw new Error('Authored Account Action missing');
+    const action = authoredDeclaration ? PluginProjectedActionV2Schema.parse({ ...baseAction,
+        title: authoredDeclaration.title, scopes: authoredDeclaration.scopes, surfaces: authoredDeclaration.surfaces,
+        execution: authoredDeclaration.execution, placementBindings: authoredDeclaration.placementBindings,
+        dangerLevel: authoredDeclaration.dangerLevel, confirmation: authoredDeclaration.confirmation,
+    }) : baseAction;
     clientActionSchemasByQualifiedId.set(`${pluginId}/${localId}`, {
         inputSchema: input.inputSchema ?? {},
         ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
     });
-    const artifactGraph = input.artifactGraph ?? CLIENT_ACTION_ARTIFACT_GRAPH;
+    const artifactGraph = input.artifactGraph ?? (input.authoredAccount ? PluginUiArtifactsManifestEntryV2Schema.parse({
+        ...CLIENT_ACTION_ARTIFACT_GRAPH, artifactId: 'account-runtime', executable: { exports: ['activate'] },
+        entry: 'react-native/account-runtime/entry.cjs.bundle',
+        files: CLIENT_ACTION_ARTIFACT_GRAPH.files.map(file => ({ ...file, relativePath: 'react-native/account-runtime/entry.cjs.bundle' })),
+    }) : CLIENT_ACTION_ARTIFACT_GRAPH);
     const identity = clientActionIdentity(localId, pluginId, artifactGraph);
+    const accountOrigin = input.accountPlacement ? { serverId: 'server-client-action', accountId: 'test-account',
+        custodyId: input.occurrenceId ?? `occurrence-${pluginId}`,
+        sourceCustody: { kind: 'account_release', pluginId, version: pluginVersion, archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+    } : undefined;
+    const accountDeclaration = input.authoredAccount ? authoredAccountManifest : input.accountPlacement ? {
+        schemaVersion: 2, id: pluginId, version: '1.2.3', displayName: 'Account author fixture', runtime: { apiVersion: 1 },
+        contributes: { actions: [{ id: action.id, title: action.title, scopes: action.scopes, surfaces: action.surfaces,
+            execution: action.execution, dangerLevel: action.dangerLevel, placementBindings: action.placementBindings,
+            ...(action.confirmation ? { confirmation: action.confirmation } : {}), inputSchema: input.inputSchema ?? {},
+            ...(input.accountAvailability ? { availability: input.accountAvailability } : {}),
+            ...(input.outputSchema ? { resultSchema: input.outputSchema } : {}) }] },
+    } : undefined;
     const projectedAction = Object.freeze({
         ...action,
         occurrenceId: input.occurrenceId ?? `occurrence-${pluginId}`,
@@ -390,10 +424,16 @@ function createClientActionActivation(input: Readonly<{
                 appliedGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
             },
         },
-        executionOrigin,
-        [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
+        ...(accountOrigin ? { hostAccountOrigin: accountOrigin, hostAccountDeclaration: accountDeclaration }
+            : { executionOrigin, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin }),
     });
     const bundleId = `reactNativeBundle:${pluginId}:${localId}`;
+    const projectedActions = input.authoredAccount ? Object.fromEntries((authoredAccountManifest.contributes?.actions ?? []).map(declaration => [
+        `${pluginId}/${declaration.id}`, Object.freeze({ ...projectedAction, id: declaration.id,
+            title: declaration.title, scopes: declaration.scopes, surfaces: declaration.surfaces,
+            execution: declaration.execution, placementBindings: declaration.placementBindings,
+            dangerLevel: declaration.dangerLevel, confirmation: declaration.confirmation }),
+    ])) : { [`${pluginId}/${localId}`]: projectedAction };
     const projection = Object.freeze({
         ...EMPTY_PLUGIN_UI_PROJECTION,
         generation: CLIENT_ACTION_GENERATION,
@@ -401,21 +441,20 @@ function createClientActionActivation(input: Readonly<{
             [pluginId]: PluginProjectionInstalledPackageV2Schema.parse({
                 id: pluginId,
                 displayName: 'Happier Inspector',
-                version: '1.2.3',
+                version: pluginVersion,
                 enabled: true,
                 source: { kind: 'localPath', locator: pluginId },
             }),
         }),
-        actionsById: Object.freeze({
-            [`${pluginId}/${localId}`]: projectedAction,
-        }),
-        reactNativeBundlesById: Object.freeze({
-            [bundleId]: Object.freeze({
-                id: bundleId,
+        actionsById: Object.freeze(projectedActions),
+        reactNativeBundlesById: Object.freeze(Object.fromEntries(Object.values(projectedActions).map(projected => {
+            const id = input.authoredAccount ? `reactNativeBundle:${pluginId}:${projected.id}` : bundleId;
+            return [id, Object.freeze({
+                id,
                 pluginId,
                 occurrenceId: projectedAction.occurrenceId,
                 contributionKind: 'reactNativeBundle' as const,
-                contributionId: localId,
+                contributionId: projected.id,
                 generatedOwnerKind: 'clientContribution' as const,
                 artifactGraph,
                 runtime: Object.freeze({
@@ -423,9 +462,10 @@ function createClientActionActivation(input: Readonly<{
                     loadPolicy: Object.freeze({ source: 'installedArtifact' }),
                     cacheIdentity: Object.freeze({ artifactDigest: artifactGraph.digest }),
                 }),
-                [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
-            }),
-        }),
+                ...(accountOrigin ? { hostAccountOrigin: accountOrigin }
+                    : { [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin }),
+            })];
+        }))),
     }) satisfies PluginUiProjectionModel;
     const resolved = resolveProjectedPluginUiClientExecutables({
         actionProjection: Object.freeze({ projection }),
@@ -441,10 +481,13 @@ function createClientActionActivation(input: Readonly<{
         bytes: new Uint8Array([47, 47, 32, 99, 108, 105, 101, 110, 116]),
         format: 'plainJs',
     });
-    const activate = vi.fn((api: PluginClientApi) => {
+    const activate = vi.fn(input.authoredAccount ? activateAuthoredAccount : (api: PluginClientApi) => {
         // The registration transaction is real: only the artifact loader is a
         // system-boundary test double.
-        api.actions.register(localId, input.handler);
+        if (input.accountHandler) {
+            // The selected Account realm is checked by the real registration scope.
+            (api as unknown as import('@happier-dev/plugin-sdk').PluginAccountApi).actions.register(localId, input.accountHandler);
+        } else api.actions.register(localId, input.handler ?? (() => { throw new Error('Handler fixture missing'); }));
     });
     const backend: PluginReactNativeLoaderBackend = Object.freeze({
         backendId: 'commonJs',
@@ -499,6 +542,209 @@ function resolveDaemonTargetAction(
         available: true,
     };
 }
+
+describe('Account Action placement through the executable dispatcher', () => {
+    it('does not adopt a replacement contributor for an admitted source occurrence', async () => {
+        const accountLifetime = clientAccountLifetime();
+        let effects = 0;
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async () => { effects += 1; return null; } });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            const dispatch = (expectedContributorOccurrenceId: string) => dispatchPluginSurfaceAction({
+                action: { pluginId: activation.action.pluginId, localId: activation.action.id }, input: {},
+                expectedContributorOccurrenceId, clientAction: {}, pluginUiProjection: activation.projection,
+                resolveContributedAction: resolveExactClientAction(activation.action),
+            });
+            expect(await dispatch('previous-admitted-source')).toMatchObject({ ok: false });
+            expect(effects).toBe(0);
+            expect(await dispatch(activation.action.occurrenceId)).toEqual({ ok: true, result: null });
+            expect(effects).toBe(1);
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it('preserves the public failure metadata of a nested Account Action', async () => {
+        const accountLifetime = clientAccountLifetime();
+        const target = createClientActionActivation({ pluginId: 'acme.account-failure', accountPlacement: true,
+            artifactGraph: PluginUiArtifactsManifestEntryV2Schema.parse({ ...CLIENT_ACTION_ARTIFACT_GRAPH,
+                digest: `sha256:${'b'.repeat(64)}` }),
+            accountLifetime, surfaces: ['plugin'], accountHandler: async () => { throw new PluginError({
+                code: 'source_temporarily_unavailable', message: 'Try again after reconnecting', retryable: true,
+            }); } });
+        const parent = createClientActionActivation({ accountPlacement: true, accountLifetime, accountHandler: async (_input, context) => {
+            try { await context.services.actions.execute({ pluginId: target.action.pluginId, localId: target.action.id }, {}); }
+            catch (error) {
+                if (!isPluginError(error)) throw error;
+                return { code: error.code, retryable: error.retryable, message: error.message };
+            }
+            throw new Error('The nested Action must fail');
+        } });
+        const projection = { ...parent.projection,
+            actionsById: { ...parent.projection.actionsById, ...target.projection.actionsById },
+            reactNativeBundlesById: { ...parent.projection.reactNativeBundlesById, ...target.projection.reactNativeBundlesById },
+        };
+        await parent.composition.unload();
+        try {
+            expect((await parent.composition.reconcile([parent.activation, target.activation])).map(attempt => attempt.result))
+                .toEqual([{ ok: true }, { ok: true }]);
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: parent.action.pluginId, localId: parent.action.id }, input: {}, clientAction: {},
+                pluginUiProjection: projection,
+                resolveContributedAction: identity => projection.actionsById[`${identity.pluginId}/${identity.localId}`] ?? null,
+            })).toEqual({ ok: true, result: { code: 'source_temporarily_unavailable', retryable: true, message: 'Try again after reconnecting' } });
+        } finally { await parent.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it('keeps Account execution local when an optional Machine transport is present', async () => {
+        const accountLifetime = clientAccountLifetime();
+        const machine = vi.fn<PluginSurfaceContributedActionTransport>(async () => { throw new Error('Account handler must not be sent to a Machine'); });
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async () => ({ host: 'invoking-process' }) });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {},
+                clientAction: {}, contributedAction: { machineId: 'optional-provider-machine', serverId: 'server-client-action', execute: machine },
+                pluginUiProjection: activation.projection, resolveContributedAction: resolveExactClientAction(activation.action),
+            })).toEqual({ ok: true, result: { host: 'invoking-process' } });
+            expect(machine).not.toHaveBeenCalled();
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it('uses the selected Machine only for a nested provider Action from the Account semantic entry', async () => {
+        const accountLifetime = clientAccountLifetime();
+        const sourceId = 'acme.provider-source';
+        const provider = PluginProjectedActionV2Schema.parse({ ...resolveDaemonTargetAction({ pluginId: sourceId, localId: 'list' }), surfaces: ['plugin'] });
+        const machine = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({ supported: true, result: { ok: true, result: { rows: ['provider'] } } }));
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async (_value, context) => context.services.actions.execute({ pluginId: sourceId, localId: 'list' }, {}) });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            expect(await dispatchPluginResolvedSemanticCommand({
+                projection: { ...activation.projection, actionsById: { ...activation.projection.actionsById, [`${sourceId}/list`]: provider } },
+                callerPluginId: CALLER_PLUGIN_ID, command: { kind: 'executeAction', action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {} },
+                scopedLaunchFacts: { serverId: 'server-client-action', machineId: 'provider-machine', interactionEnabled: true },
+                execute: machine, accountLifetime, scopeIsCurrent: () => accountLifetime.isCurrent(),
+            })).toEqual({ ok: true, result: { rows: ['provider'] } });
+            expect(machine).toHaveBeenCalledOnce();
+            expect(machine.mock.calls[0]?.[1]).toMatchObject({ qualifiedActionId: `${sourceId}/list`, invocation: { kind: 'clientPluginAction', clientActionBinding: {
+                pluginId: CALLER_PLUGIN_ID, sourceCustody: { kind: 'account_release' },
+            } } });
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it('uses current invocation facts for a session-conditioned Account Action', async () => {
+        const accountLifetime = clientAccountLifetime();
+        let effects = 0;
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountAvailability: { when: { fact: 'session.exists', operator: 'equals', value: true } },
+            handler: async () => { effects += 1; return null; } });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            const dispatch = (sessionId?: string) => dispatchPluginSurfaceAction({
+                action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {},
+                clientAction: { ...(sessionId ? { sessionId } : {}) }, pluginUiProjection: activation.projection,
+                resolveContributedAction: resolveExactClientAction(activation.action),
+            });
+            expect(await dispatch()).toMatchObject({ ok: false });
+            expect(effects).toBe(0);
+            expect(await dispatch('session-account')).toEqual({ ok: true, result: null });
+            expect(effects).toBe(1);
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it('invokes the separately authored public Account plugin without a Machine', async () => {
+        const accountLifetime = clientAccountLifetime();
+        const activation = createClientActionActivation({ accountPlacement: true, authoredAccount: true, localId: 'echo',
+            accountLifetime, handler: async () => { throw new Error('Author implementation must be used'); } });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            machineRpcWithServerScopeMock.mockClear();
+            const dispatch = (value: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
+                action: { pluginId: authoredAccountManifest.id, localId: 'echo' }, input: value,
+                invocationSurface: 'ui', clientAction: {}, pluginUiProjection: activation.projection,
+                resolveContributedAction: resolveExactClientAction(activation.action),
+            });
+            expect(await dispatch({ key: 42 })).toMatchObject({ ok: false, reason: 'plugin_action_input_schema_invalid' });
+            expect(await dispatchPluginResolvedSemanticCommand({
+                projection: activation.projection, callerPluginId: authoredAccountManifest.id,
+                command: { kind: 'executeAction', action: { pluginId: authoredAccountManifest.id, localId: 'echo' }, input: { key: 'public path' } },
+                scopedLaunchFacts: { machineId: null, serverId: 'server-client-action', interactionEnabled: true },
+                accountLifetime, scopeIsCurrent: () => accountLifetime.isCurrent(),
+            })).toEqual({ ok: true, result: { key: 'public path', surface: 'ui' } });
+            expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it.each(['decline', 'disable', 'release-retired'] as const)('refuses Account effects after %s at the ordinary approval gate', async (decision) => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const accountLifetime = clientAccountLifetime();
+        let effects = 0;
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime, dangerLevel: 'writesRemote',
+            handler: async () => { effects += 1; return { applied: true }; } });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            const result = await dispatchPluginSurfaceAction({
+                action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {},
+                invocationSurface: 'ui', clientAction: {}, pluginUiProjection: activation.projection,
+                resolveContributedAction: resolveExactClientAction(activation.action),
+                requestCurrentIntent: async ({ fingerprint }) => {
+                    if (decision === 'decline') return { status: 'unavailable', code: 'plugin_action_current_intent_rejected' };
+                    if (decision === 'disable') storage.setState(state => ({ ...state, settings: { ...state.settings,
+                        actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                            [`${CALLER_PLUGIN_ID}/actions/${activation.action.id}`]: { enabled: false },
+                        } }),
+                    } }));
+                    else await activation.composition.unload();
+                    return { status: 'approved', fingerprint };
+                },
+            });
+            expect(result).toMatchObject({ ok: false });
+            expect(effects).toBe(0);
+        } finally { storage.setState(previous); await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it.each(['ui', 'agent', 'mcp', 'cli'] as const)('validates and preserves an uncertain result without a Machine on %s', async (surface) => {
+        let effects = 0;
+        const accountLifetime = clientAccountLifetime();
+        const activation = createClientActionActivation({
+            accountPlacement: true, accountLifetime, surfaces: ['ui', 'agent', 'mcp', 'cli'],
+            inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false },
+            handler: async (value, context) => {
+                expect(context).toHaveProperty('surface', surface);
+                expect(context).toHaveProperty('services.storage.account');
+                expect(context).not.toHaveProperty('services.fs');
+                effects += 1;
+                return { kind: 'uncertain', value };
+            },
+        });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            machineRpcWithServerScopeMock.mockClear();
+            const dispatch = (value: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
+                action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: value,
+                invocationSurface: surface, clientAction: {}, pluginUiProjection: activation.projection,
+                resolveContributedAction: resolveExactClientAction(activation.action),
+            });
+            expect(await dispatch({ value: 1 })).toMatchObject({ ok: false });
+            expect(effects).toBe(0);
+            expect(await dispatch({ value: 'one write' })).toEqual({ ok: true, result: { kind: 'uncertain', value: { value: 'one write' } } });
+            expect(effects).toBe(1);
+            expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+            accountLifetime.retire();
+            expect(await dispatch({ value: 'retired' })).toMatchObject({ ok: false });
+            expect(effects).toBe(1);
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+});
 
 /** Test-only raw projection producer for pre-existing daemon-arm cases. */
 function dispatchPluginSurfaceAction(input: DispatchPluginSurfaceActionInput) {
@@ -1785,7 +2031,7 @@ describe('plugin-surface action branch selection', () => {
         }
     });
 
-    it('projects post-handler client cancellation without a non-start proof as outcome unknown', async () => {
+    it.each([false, true])('projects post-handler cancellation without a non-start proof as outcome unknown (Account=%s)', async (accountPlacement) => {
         const cancellation = new AbortController();
         let handlerEntered!: () => void;
         const handlerEnteredPromise = new Promise<void>((resolve) => { handlerEntered = resolve; });
@@ -1794,7 +2040,8 @@ describe('plugin-surface action branch selection', () => {
             return new Promise<never>(() => {});
         });
         const clientHandler: PluginClientActionHandler = () => handler();
-        const activation = createClientActionActivation({ handler: clientHandler });
+        const accountLifetime = accountPlacement ? clientAccountLifetime() : undefined;
+        const activation = createClientActionActivation({ handler: clientHandler, accountPlacement, accountLifetime });
         const action = activation.action;
         await activation.composition.unload();
         try {
@@ -1815,8 +2062,10 @@ describe('plugin-surface action branch selection', () => {
                 code: 'timeout',
                 reason: 'plugin_ui_action_outcome_unknown',
             });
+            expect(handler).toHaveBeenCalledOnce();
         } finally {
             await activation.composition.unload();
+            accountLifetime?.retire();
         }
     });
 

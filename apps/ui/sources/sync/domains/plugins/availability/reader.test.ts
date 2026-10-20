@@ -113,6 +113,77 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('projects current portable Account Actions and exact graphs without a Machine, retiring disabled and replaced custody', () => {
+        const artifactGraph = PluginUiArtifactsManifestEntryV2Schema.parse({
+            artifactId: 'account-actions', tier: 'reactNative', entry: 'react-native/account-actions/entry.cjs.bundle',
+            digest: artifactDigest,
+            files: [{ relativePath: 'react-native/account-actions/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+        });
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({
+            ...intentRead().release!.normalizedManifest,
+            contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui', 'cli'],
+                placementBindings: [], dangerLevel: 'safe', execution: {
+                    target: 'account', account: { artifactId: artifactGraph.artifactId, exportName: 'activate' },
+                }, inputSchema: { type: 'object', additionalProperties: false }, resultSchema: { type: 'object' } }] },
+        });
+        const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+            ...intentRead(), release: { ...intentRead().release!, normalizedManifest: manifest,
+                uiSlots: [{ contributionId: 'read', artifactId: artifactGraph.artifactId, tier: artifactGraph.tier,
+                    platform: 'web', artifactDigest, hostUiApiRange: artifactGraph.hostUiApiRange, artifactGraph }] },
+            uiArtifacts: [],
+        });
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response }], materializations: [], snapshots: [] }) });
+        const reader = store.bind(scope);
+        const first = reader.readAccountUiProjection();
+        const action = first?.actionsById[`${manifest.id}/read`];
+        expect(action).toMatchObject({ pluginId: manifest.id, id: 'read', execution: manifest.contributes.actions![0]!.execution,
+            hostAccountDeclaration: manifest, hostAccountOrigin: { ...scope, sourceCustody: { kind: 'account_release' } },
+            authorization: { generation: { appliedGeneration: null } } });
+        const custodyId = action?.occurrenceId;
+        expect(custodyId).toBeTypeOf('string');
+        expect(first?.reactNativeBundlesById[`reactNativeBundle:${manifest.id}:read`])
+            .toMatchObject({ artifactGraph, generatedOwnerKind: 'clientContribution', contributionId: 'read',
+                occurrenceId: custodyId, runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' } } });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', manifest, custodyId });
+        const changed = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...response,
+            intent: { ...response.intent!, desiredVersion: '2.0.0', revision: 'intent-2' },
+            release: { ...response.release!, ref: { ...response.release!.ref, version: '2.0.0' },
+                normalizedManifest: { ...manifest, version: '2.0.0' } },
+        });
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response: changed }], materializations: [], snapshots: [] }) });
+        expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.occurrenceId).not.toBe(custodyId);
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id,
+            response: { ...changed, intent: { ...changed.intent!, enabled: false } } }], materializations: [], snapshots: [] }) });
+        expect(reader.readAccountUiProjection()).toBeNull();
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'unavailable' });
+    });
+    it('admits bundled Account Action bytes and declared Account KV without a Machine claim', () => {
+        const graph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'portable', tier: 'reactNative',
+            entry: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest,
+            files: [{ relativePath: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0' });
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({
+            schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture', runtime: { apiVersion: 1 },
+            hostAccess: { required: [{ id: 'account-storage', capability: 'storage.account', reason: 'Store notes', scope: { enabled: true } }], optional: [] },
+            contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui', 'cli'], placementBindings: [],
+                dangerLevel: 'safe', hostAccess: ['account-storage'], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }] },
+        });
+        const reader = createPluginAccountAvailabilityReader({ scope,
+            snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
+            hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+                packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [graph],
+                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [graph]) }],
+        });
+        expect(reader.readCurrentAccountExecutionDeclarations()).toMatchObject([{ kind: 'available', manifest,
+            sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle' } } }]);
+        expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
+            .toMatchObject({ kind: 'available', artifact: { artifactId: graph.artifactId, digest: graph.digest } });
+        expect(reader.readCurrentAccountKvCapability({ pluginId: manifest.id })).toMatchObject({ kind: 'available' });
+        expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.authorization?.serviceAvailability)
+            .toEqual([{ id: 'account-storage', required: true, status: 'available' }]);
+    });
     it('admits a current daemon-selected source only after Account hydration and without portable intent', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const reader = store.bind(scope);

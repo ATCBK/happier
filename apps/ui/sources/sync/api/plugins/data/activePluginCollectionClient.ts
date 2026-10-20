@@ -265,6 +265,8 @@ export type PreparedCollectionOperation = Readonly<{
     material: AccountScopedCryptoMaterial | null;
     headers: Headers;
     signal: AbortSignal;
+    /** Caller/invocation cancellation, distinct from Account retirement. */
+    callerSignal?: AbortSignal;
     release(): Promise<void>;
 }>;
 
@@ -306,7 +308,8 @@ function isScopeAndServerCurrent(
 export function getPreparedCollectionOperationCurrentness(
     operation: PreparedCollectionOperation,
 ): ActivePluginCollectionUnavailableReasonV1 | null {
-    return isScopeAndServerCurrent(operation.lifetime, operation.serverSnapshot);
+    return operation.callerSignal?.aborted ? 'operation-cancelled'
+        : isScopeAndServerCurrent(operation.lifetime, operation.serverSnapshot);
 }
 
 function resolveCurrentAccountMaterial(input: Readonly<{
@@ -343,8 +346,9 @@ function resolveCurrentAccountMaterial(input: Readonly<{
 export async function prepareCollectionOperation(
     options: ActivePluginCollectionOperationOptionsV1 | undefined,
     accountLifetime?: ActiveServerAccountScopeLifetime,
+    invocationSignal?: AbortSignal,
 ): Promise<PreparedCollectionOperationOutcome> {
-    if (options?.signal?.aborted) return unavailable('operation-cancelled');
+    if (options?.signal?.aborted || invocationSignal?.aborted) return unavailable('operation-cancelled');
     const lifetime = accountLifetime ?? captureActiveServerAccountScopeLifetime();
     if (!lifetime) return unavailable('no-active-account-scope');
     if (!lifetime.isCurrent()) return unavailable('account-scope-changed');
@@ -359,17 +363,20 @@ export async function prepareCollectionOperation(
     );
     if (compatibility.status === 'unavailable') return compatibility;
 
+    const callerCancellation = mergeAbortSignals([options?.signal, invocationSignal]);
+    const callerSignal = callerCancellation.signal;
     const controller = new AbortController();
     const abort = () => controller.abort();
     const retirement = lifetime.onRetire(abort);
-    options?.signal?.addEventListener('abort', abort, { once: true });
+    callerSignal?.addEventListener('abort', abort, { once: true });
     let authority: Awaited<ReturnType<typeof captureServerRequestAuthorityForServerAccountScope>> | null = null;
     const release = async (): Promise<void> => {
         await authority?.release?.();
-        options?.signal?.removeEventListener('abort', abort);
+        callerSignal?.removeEventListener('abort', abort);
+        callerCancellation.dispose();
         retirement.dispose();
     };
-    if (options?.signal?.aborted) {
+    if (callerSignal?.aborted) {
         await release();
         return unavailable('operation-cancelled');
     }
@@ -386,7 +393,7 @@ export async function prepareCollectionOperation(
         }
         if (controller.signal.aborted) {
             await release();
-            return unavailable(options?.signal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
+            return unavailable(callerSignal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
         }
 
         const credentials = capturedAuthority.context.credentials ?? { token: capturedAuthority.context.token };
@@ -403,7 +410,7 @@ export async function prepareCollectionOperation(
         }
         if (controller.signal.aborted) {
             await release();
-            return unavailable(options?.signal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
+            return unavailable(callerSignal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
         }
         const material = resolveCurrentAccountMaterial({
             mode: currentness.mode,
@@ -424,13 +431,14 @@ export async function prepareCollectionOperation(
                 material,
                 headers: compatibility.headers,
                 signal: controller.signal,
+                callerSignal,
                 release,
             },
         };
     } catch {
         await release();
         return unavailable(controller.signal.aborted
-            ? (options?.signal?.aborted ? 'operation-cancelled' : 'account-scope-changed')
+            ? (callerSignal?.aborted ? 'operation-cancelled' : 'account-scope-changed')
             : 'account-currentness-unavailable');
     }
 }
@@ -469,7 +477,7 @@ export async function requestCollectionOperation(input: Readonly<{
     const cancellation = mergeAbortSignals([input.operation.signal, input.options?.signal]);
     try {
         if (cancellation.signal.aborted) {
-            return unavailable(input.options?.signal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
+            return unavailable(input.options?.signal?.aborted || input.operation.callerSignal?.aborted ? 'operation-cancelled' : 'account-scope-changed');
         }
         const response = await input.operation.authority.request(
             input.path,
@@ -481,7 +489,7 @@ export async function requestCollectionOperation(input: Readonly<{
             }, PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION),
         );
         if (input.kind !== 'mutation' && cancellation.signal.aborted) {
-            return unavailable(input.options?.signal?.aborted
+            return unavailable(input.options?.signal?.aborted || input.operation.callerSignal?.aborted
                 ? 'operation-cancelled'
                 : 'account-scope-changed');
         }
@@ -492,7 +500,7 @@ export async function requestCollectionOperation(input: Readonly<{
         if (input.kind !== 'mutation' && currentness) return unavailable(currentness);
         const body = await response.json().catch(() => null);
         if (input.kind !== 'mutation' && cancellation.signal.aborted) {
-            return unavailable(input.options?.signal?.aborted
+            return unavailable(input.options?.signal?.aborted || input.operation.callerSignal?.aborted
                 ? 'operation-cancelled'
                 : 'account-scope-changed');
         }
@@ -506,7 +514,7 @@ export async function requestCollectionOperation(input: Readonly<{
         // An interrupted mutation stays outcome-unknown: cancelling the request
         // cannot establish that the server did not apply it.
         if (input.kind === 'mutation') return unavailable('mutation-outcome-unknown');
-        return unavailable(input.options?.signal?.aborted
+        return unavailable(input.options?.signal?.aborted || input.operation.callerSignal?.aborted
             ? 'operation-cancelled'
             : input.operation.lifetime.isCurrent()
                 ? 'transport-unavailable'
@@ -668,12 +676,16 @@ export async function createActivePluginCollectionClientForContractRef<
     options?: ActivePluginCollectionOperationOptionsV1;
     /** Preserve a facade's sole pre-captured Account lifetime across nested operations. */
     accountLifetime?: ActiveServerAccountScopeLifetime;
+    /** The bound facade's current release admission, rechecked before effects. */
+    assertAdmitted?: () => void;
+    signal?: AbortSignal;
 }>): Promise<ActivePluginCollectionClientForContractRefOutcomeV1<TValue>> {
     const request = PluginCollectionContractReadRequestV1Schema.safeParse({ ref: input.ref });
     if (!request.success) return rejected('collection_query_invalid');
-    const prepared = await prepareCollectionOperation(input.options, input.accountLifetime);
+    const prepared = await prepareCollectionOperation(input.options, input.accountLifetime, input.signal);
     if (prepared.status === 'unavailable') return prepared;
     try {
+        input.assertAdmitted?.();
         const response = await requestCollectionOperation({
             operation: prepared.operation,
             path: PLUGIN_COLLECTION_CONTRACT_HTTP_PATH_V1,
@@ -694,6 +706,8 @@ export async function createActivePluginCollectionClientForContractRef<
                 contract: result.data.contract,
                 access: result.data.access,
                 accountLifetime: input.accountLifetime,
+                assertAdmitted: input.assertAdmitted,
+                signal: input.signal,
             }),
         };
     } finally {
@@ -714,9 +728,25 @@ export function createActivePluginCollectionClient<
     access?: 'readOnly' | 'writable';
     /** A resolved facade retains this existing scope instead of recapturing globally. */
     accountLifetime?: ActiveServerAccountScopeLifetime;
+    /** Reuse the caller's Availability authority across asynchronous preparation. */
+    assertAdmitted?: () => void;
+    signal?: AbortSignal;
 }>): ActivePluginCollectionClientV1<TValue> {
     const validate = compilePluginJsonSchema(params.contract.schema);
     const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(params.contract.schema));
+    const prepare = async (options?: ActivePluginCollectionOperationOptionsV1) => {
+        params.assertAdmitted?.();
+        const prepared = await prepareCollectionOperation(options, params.accountLifetime, params.signal);
+        if (prepared.status === 'ready') {
+            try {
+                params.assertAdmitted?.();
+            } catch (error) {
+                await prepared.operation.release();
+                throw error;
+            }
+        }
+        return prepared;
+    };
 
     const get = async (
         rowId: string,
@@ -734,7 +764,7 @@ export function createActivePluginCollectionClient<
             rowId,
         });
         if (!request.success) return rejected('collection_query_invalid');
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             const response = await requestCollectionOperation({
@@ -785,7 +815,7 @@ export function createActivePluginCollectionClient<
             ...input,
         });
         if (!request.success) return rejected('collection_query_invalid');
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             const response = await requestCollectionOperation({
@@ -882,7 +912,7 @@ export function createActivePluginCollectionClient<
         }
         const absence = await readAbsenceEpochForOperations(operations, options);
         if (absence.status !== 'ready') return absence;
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             const sealed = prepareMutationRequest(operations, prepared.operation, absence.absenceEpoch);
@@ -934,7 +964,7 @@ export function createActivePluginCollectionClient<
             expectedRevision,
         });
         if (!body.success) return rejected('collection_mutation_invalid');
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             const response = await requestCollectionOperation({
@@ -977,7 +1007,7 @@ export function createActivePluginCollectionClient<
         request: Readonly<{ field: string; components: readonly string[] }>,
         options?: ActivePluginCollectionOperationOptionsV1,
     ): Promise<ActivePluginCollectionIdentityTagOutcomeV1> => {
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             const resolved = resolvePluginCollectionIdentityTagV1({
@@ -1026,7 +1056,7 @@ export function createActivePluginCollectionClient<
         if (operations.length < 1) return rejected('collection_mutation_invalid');
         const absence = await readAbsenceEpochForOperations(operations, options);
         if (absence.status !== 'ready') return absence;
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime);
+        const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
             // A caller measures precisely because its candidates do not fit one

@@ -1,4 +1,5 @@
 import { PluginDomainChangeEntrySchema } from '@happier-dev/protocol/changes';
+import type { PluginCollectionInvalidation } from '@happier-dev/plugin-sdk/collections';
 
 import {
     captureActiveServerAccountScopeLifetime,
@@ -10,7 +11,7 @@ export type PluginCollectionChangeWatchV1 = Readonly<{ dispose(): void }>;
 export type WatchActivePluginCollectionChangesInput = Readonly<{
     pluginId: string;
     collectionId: string;
-    onInvalidated(): void;
+    onInvalidated(invalidation?: PluginCollectionInvalidation): void;
     accountLifetime?: ActiveServerAccountScopeLifetime;
 }>;
 
@@ -18,7 +19,7 @@ type ActivePluginCollectionChangeWatch = Readonly<{
     pluginId: string;
     collectionId: string;
     lifetime: ActiveServerAccountScopeLifetime;
-    onInvalidated: () => void;
+    onInvalidated: (invalidation?: PluginCollectionInvalidation) => void;
 }>;
 
 const activeWatches = new Set<ActivePluginCollectionChangeWatch>();
@@ -27,7 +28,7 @@ export function registerActivePluginCollectionChangeWatch(input: Readonly<{
     pluginId: string;
     collectionId: string;
     lifetime: ActiveServerAccountScopeLifetime;
-    onInvalidated(): void;
+    onInvalidated(invalidation?: PluginCollectionInvalidation): void;
 }>): PluginCollectionChangeWatchV1 {
     const watch: ActivePluginCollectionChangeWatch = Object.freeze({ ...input });
     let disposed = false;
@@ -45,11 +46,11 @@ export function registerActivePluginCollectionChangeWatch(input: Readonly<{
     return Object.freeze({ dispose });
 }
 
-function notifyWatches(watches: Iterable<ActivePluginCollectionChangeWatch>): void {
+function notifyWatches(watches: Iterable<ActivePluginCollectionChangeWatch>, invalidation?: PluginCollectionInvalidation): void {
     for (const watch of watches) {
         if (!activeWatches.has(watch) || !watch.lifetime.isCurrent()) continue;
         try {
-            watch.onInvalidated();
+            watch.onInvalidated(invalidation);
         } catch {
             // Presentation callbacks cannot affect canonical Account changes.
         }
@@ -65,16 +66,20 @@ export function watchActivePluginCollectionChanges(
 }
 
 export function publishActivePluginCollectionChanges(changes: readonly unknown[]): void {
-    const affected = new Set<ActivePluginCollectionChangeWatch>();
+    const affected = new Map<ActivePluginCollectionChangeWatch, number>();
     for (const rawChange of changes) {
         const parsed = PluginDomainChangeEntrySchema.safeParse(rawChange);
         if (!parsed.success || parsed.data.hint.pluginDomain !== 'dataCollection') continue;
         const { pluginId, collectionId } = parsed.data.hint;
         for (const watch of activeWatches) {
-            if (watch.pluginId === pluginId && watch.collectionId === collectionId) affected.add(watch);
+            if (watch.pluginId === pluginId && watch.collectionId === collectionId) {
+                affected.set(watch, Math.max(affected.get(watch) ?? parsed.data.cursor, parsed.data.cursor));
+            }
         }
     }
-    notifyWatches(affected);
+    for (const [watch, changeCursor] of affected) {
+        notifyWatches([watch], Object.freeze({ kind: 'changed', changeCursor }));
+    }
 }
 
 export function resetActivePluginCollectionChanges(): void {

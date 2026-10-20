@@ -8,14 +8,16 @@ import {
 import { projectPluginAccountCollectionDeclaration } from '@happier-dev/plugin-sdk/host/registration';
 import type {
     PluginAccountCollectionDefinition,
+    PluginAccountCollectionForDefinition,
     PluginAccountCollectionValue,
 } from '@happier-dev/plugin-sdk/collections';
 import type {
-    PluginUiAccountCollectionForDefinition,
     PluginUiDataClient,
     PluginUiCollectionQueryInput,
     PluginUiCollectionQueryPager,
 } from '@happier-dev/plugin-ui/data';
+import type { PluginAccountStorageScope } from '@happier-dev/plugin-sdk/storage';
+import { mergeAbortSignals } from '@happier-dev/plugin-sdk/async';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
@@ -24,11 +26,15 @@ import {
 } from './activePluginAccountKvClient';
 import {
     createActivePluginCollectionClientForContractRef,
+    prepareCollectionOperation,
     type ActivePluginCollectionClientForContractRefOutcomeV1,
     type ActivePluginCollectionRejectedV1,
     type ActivePluginCollectionUnavailableReasonV1,
 } from './activePluginCollectionClient';
 import { createActivePluginCollectionUiQueryPager } from './queryPluginCollectionUiQuery';
+import { registerActivePluginCollectionChangeWatch } from './pluginCollectionChangeWatch';
+import { fetchCurrentChangesCursor } from '@/sync/api/session/apiChanges';
+import { ensureActivePluginAccountCollectionContract } from '@/sync/api/plugins/availability/ensureActivePluginAccountCollectionContract';
 
 const ACCOUNT_STORAGE_UNAVAILABLE_CODE = 'plugin_account_storage_unavailable';
 const COLLECTION_UNDECLARED_CODE = 'plugin_collection_undeclared';
@@ -170,23 +176,30 @@ type ResolvedCollection<TValue extends PluginAccountCollectionValue<PluginAccoun
 >;
 
 /**
- * The RN/RNW direct Data adapter for one mounted surface. Availability admits
+ * The RN/RNW direct Data adapter for a surface or Account Action. Availability admits
  * only an immutable current-release ref, the existing Data client reads that
  * ref through its authenticated route, and all row/query semantics remain in
  * the Data owner. This adapter keeps neither a contract cache nor an Account
  * epoch; every operation rechecks the captured lifetime and current admission.
  */
-export function createPluginUiDataClient(input: Readonly<{
+type PluginUiDataBindingInput = Readonly<{
     pluginId: string;
     accountLifetime: ActiveServerAccountScopeLifetime;
     readAvailability: () => PluginAccountAvailabilityReader;
-}>): PluginUiDataClient {
-    const resolve = async <TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
-        requested: PluginCollectionContractRefV1,
-        signal?: AbortSignal,
-        pending?: Map<AbortSignal | undefined, Promise<ResolvedCollection<TValue>>>,
-    ): Promise<ResolvedCollection<TValue>> => {
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
+}>;
+
+function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
+    const assertBindingCurrent = (signal?: AbortSignal) => {
+        assertCurrent(input.accountLifetime, input.signal);
         assertCurrent(input.accountLifetime, signal);
+        if (input.isCurrent?.() === false) {
+            throw dataError(ACCOUNT_STORAGE_UNAVAILABLE_CODE, 'Account storage invocation is no longer current');
+        }
+    };
+    const admit = (requested: PluginCollectionContractRefV1, signal?: AbortSignal) => {
+        assertBindingCurrent(signal);
         const admission = input.readAvailability().readCurrentCollectionContract({
             pluginId: requested.pluginId,
             collectionId: requested.collectionId,
@@ -199,29 +212,56 @@ export function createPluginUiDataClient(input: Readonly<{
                 : COLLECTION_UNDECLARED_CODE;
             throw dataError(
                 code,
-                code === ACCOUNT_STORAGE_UNAVAILABLE_CODE
-                    ? 'Plugin Account Collection availability is not loaded for this Account'
-                    : 'The requested Account Collection is not admitted by the current release',
+                'The requested Account Collection is not admitted by the current release',
                 code === ACCOUNT_STORAGE_UNAVAILABLE_CODE,
             );
         }
-        if (
-            admission.ref.pluginId !== requested.pluginId
+        if (admission.ref.pluginId !== requested.pluginId
             || admission.ref.collectionId !== requested.collectionId
             || admission.ref.schemaVersion !== requested.schemaVersion
-            || admission.ref.contractDigest !== requested.contractDigest
-        ) {
+            || admission.ref.contractDigest !== requested.contractDigest) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not admitted by the current release');
         }
+        return admission;
+    };
+    const ensureCollectionAdmitted = async (
+        request: Readonly<{ ref: PluginCollectionContractRefV1 }> | Readonly<{ collectionId: string }>,
+        signal?: AbortSignal,
+    ) => {
+        assertBindingCurrent(signal);
+        const cancellation = mergeAbortSignals([input.signal, signal]);
+        try {
+            return await ensureActivePluginAccountCollectionContract({
+                ...request,
+                pluginId: input.pluginId,
+                accountLifetime: input.accountLifetime,
+                signal: cancellation.signal,
+                isCurrent: input.isCurrent,
+                readAvailability: input.readAvailability,
+            });
+        } finally {
+            cancellation.dispose();
+        }
+    };
+    const resolve = async <TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
+        requested: PluginCollectionContractRefV1,
+        signal?: AbortSignal,
+        pending?: Map<AbortSignal | undefined, Promise<ResolvedCollection<TValue>>>,
+    ): Promise<ResolvedCollection<TValue>> => {
+        assertBindingCurrent(signal);
         const incumbent = pending?.get(signal);
         if (incumbent) return await incumbent;
         const result = (async () => {
+            await ensureCollectionAdmitted({ ref: requested }, signal);
+            const admission = admit(requested, signal);
             const outcome = await createActivePluginCollectionClientForContractRef<TValue>({
                 ref: admission.ref,
                 ...(signal ? { options: { signal } } : {}),
                 accountLifetime: input.accountLifetime,
+                assertAdmitted: () => { admit(requested, signal); },
+                signal: input.signal,
             });
-            assertCurrent(input.accountLifetime, signal);
+            admit(requested, signal);
             return resolvedClient(outcome);
         })();
         pending?.set(signal, result);
@@ -234,7 +274,7 @@ export function createPluginUiDataClient(input: Readonly<{
 
     const collection = <TDefinition extends PluginAccountCollectionDefinition>(
         definition: TDefinition,
-    ): PluginUiAccountCollectionForDefinition<TDefinition> => {
+    ): PluginAccountCollectionForDefinition<TDefinition> => {
         const requested = normalizeCollectionDefinitionRef(input.pluginId, definition);
         if (!requested) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not declared');
@@ -244,10 +284,73 @@ export function createPluginUiDataClient(input: Readonly<{
         // the direct client still admits Account currentness for each operation.
         const pending = new Map<AbortSignal | undefined, Promise<ResolvedCollection<PluginAccountCollectionValue<TDefinition>>>>();
         return Object.freeze({
+            watch(request, listener) {
+                admit(requested);
+                if (!('kind' in request) && !definition.indexes.some(index => index.id === request.index)) {
+                    throw dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection watch names an undeclared index');
+                }
+                const controller = new AbortController();
+                let disposed = false;
+                let retirement: Readonly<{ dispose(): void }> | undefined;
+                let watch: Readonly<{ dispose(): void }> | undefined;
+                const dispose = () => {
+                    if (disposed) return;
+                    disposed = true;
+                    controller.abort();
+                    input.signal?.removeEventListener('abort', dispose);
+                    watch?.dispose();
+                    retirement?.dispose();
+                };
+                const notify = (invalidation: Parameters<typeof listener>[0]) => {
+                    if (disposed) return;
+                    try {
+                        admit(requested);
+                    } catch {
+                        dispose();
+                        return;
+                    }
+                    listener(invalidation);
+                };
+                watch = registerActivePluginCollectionChangeWatch({
+                    pluginId: requested.pluginId,
+                    collectionId: requested.collectionId,
+                    lifetime: input.accountLifetime,
+                    onInvalidated(invalidation) {
+                        if (disposed) return;
+                        try {
+                            admit(requested);
+                        } catch {
+                            dispose();
+                            return;
+                        }
+                        if (invalidation) { notify(invalidation); return; }
+                        // Snapshot repair supplies a wakeup without a cursor. Read
+                        // the existing authenticated cursor owner once; never
+                        // manufacture an AccountChange cursor from a row revision.
+                        void (async () => {
+                            const prepared = await prepareCollectionOperation({ signal: controller.signal }, input.accountLifetime, input.signal);
+                            if (prepared.status !== 'ready') return;
+                            try {
+                                const authority = prepared.operation.authority;
+                                const cursor = await fetchCurrentChangesCursor({
+                                    credentials: authority.context.credentials ?? { token: authority.context.token },
+                                    request: (path, init) => authority.request(path, { ...init, signal: prepared.operation.signal }),
+                                });
+                                if (cursor.status === 'ok') notify({ kind: 'reset', changeCursor: Number(cursor.cursor) });
+                            } finally { await prepared.operation.release(); }
+                        })().catch(() => undefined);
+                    },
+                });
+                retirement = input.accountLifetime.onRetire(dispose);
+                input.signal?.addEventListener('abort', dispose, { once: true });
+                if (input.signal?.aborted) dispose();
+                if (!input.accountLifetime.isCurrent()) dispose();
+                return Object.freeze({ dispose });
+            },
             async identityTag(request, options) {
                 const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.identityTag(request, options);
-                assertCurrent(input.accountLifetime, options?.signal);
+                admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.tag;
                 if (outcome.status === 'rejected') throw rejectedError(outcome);
                 throw unavailableError(outcome.reason);
@@ -255,7 +358,7 @@ export function createPluginUiDataClient(input: Readonly<{
             async get(rowId, options) {
                 const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.get(rowId, options);
-                assertCurrent(input.accountLifetime, options?.signal);
+                admit(requested, options?.signal);
                 if (outcome.status === 'ready') {
                     return outcome.row;
                 }
@@ -339,7 +442,7 @@ export function createPluginUiDataClient(input: Readonly<{
                     ...(request.cursor ? { cursor: request.cursor } : {}),
                     ...(request.limit ? { limit: request.limit } : {}),
                 }, options);
-                assertCurrent(input.accountLifetime, options?.signal);
+                admit(requested, options?.signal);
                 if (outcome.status === 'ready') {
                     return Object.freeze({
                         rows: outcome.rows.map((row) => Object.freeze({
@@ -368,14 +471,14 @@ export function createPluginUiDataClient(input: Readonly<{
             async limits(options) {
                 const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.limits(options);
-                assertCurrent(input.accountLifetime, options?.signal);
+                admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.limits;
                 throw unavailableError(outcome.reason);
             },
             async measureBatch(operations, options) {
                 const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
                 const outcome = await active.client.measureBatch(operations, options);
-                assertCurrent(input.accountLifetime, options?.signal);
+                admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.measurement;
                 if (outcome.status === 'rejected') {
                     throw rejectedError(outcome);
@@ -388,6 +491,7 @@ export function createPluginUiDataClient(input: Readonly<{
     const openCollectionQuery = async (
         query: PluginUiCollectionQueryInput,
     ): Promise<PluginUiCollectionQueryPager> => {
+        await ensureCollectionAdmitted({ collectionId: query.collectionId }, query.signal);
         const admission = input.readAvailability().readCurrentCollectionContract({
             pluginId: input.pluginId,
             collectionId: query.collectionId,
@@ -403,7 +507,7 @@ export function createPluginUiDataClient(input: Readonly<{
                 'The requested Account Account Data is not declared',
             );
         }
-        assertCurrent(input.accountLifetime, query.signal);
+        assertBindingCurrent(query.signal);
         return createActivePluginCollectionUiQueryPager({
             descriptor: descriptors[0]!,
             contract: active.contract,
@@ -432,6 +536,18 @@ export function createPluginUiDataClient(input: Readonly<{
             pluginId: input.pluginId,
             accountLifetime: input.accountLifetime,
             readAvailability: input.readAvailability,
+            signal: input.signal,
+            isCurrent: input.isCurrent,
         }),
     });
+}
+
+/** Both surface data and Account Actions bind the same Account data owner. */
+export function createPluginUiDataClient(input: PluginUiDataBindingInput): PluginUiDataClient {
+    return createPluginUiDataBindings(input);
+}
+
+export function createPluginUiAccountStorageScope(input: PluginUiDataBindingInput): PluginAccountStorageScope {
+    const bindings = createPluginUiDataBindings(input);
+    return Object.freeze({ kv: bindings.accountKv, collection: bindings.collection });
 }

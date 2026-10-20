@@ -7,6 +7,7 @@ import {
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
 
 import { createPluginReactNativeBundleCache } from './bundleCache';
+import { createPluginUiCommonJsLoaderBackend } from './commonJsLoaderBackend';
 import {
     createPluginUiClientExecutableComposition,
     createPluginUiClientExecutableRegistrationIndex,
@@ -28,7 +29,7 @@ import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugin
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
 
 const pluginId = 'acme.preview';
-const target = Object.freeze({
+    const target = Object.freeze({
     artifactId: 'client-runtime',
     exportName: 'activate',
     platform: 'web' as const,
@@ -57,6 +58,75 @@ const authority = Object.freeze({
 });
 const moduleReference = Object.freeze({
     exportName: target.exportName,
+});
+
+it('activates separately authored Account code through the existing host and retires its registration', async () => {
+    const accountOrigin = { kind: 'account' as const, serverId: 'home', accountId: 'account', custodyId: 'release-1' };
+    const accountTarget = { ...target, realm: 'account' as const };
+    const contributes = { actions: [{ ...projectedClientAction(), execution: {
+        target: 'account' as const, account: { artifactId: target.artifactId, exportName: target.exportName },
+    } }] };
+    const cache = createPluginReactNativeBundleCache();
+    cache.putInstalledArtifact({ identity, format: 'plainJs', bytes: new TextEncoder().encode(
+        "exports.activate = function(api) { api.actions.register('open-preview', async function(input) { return { accountValue: input.value }; }); };",
+    ) });
+    const composition = createPluginUiClientExecutableComposition();
+    const activation = { pluginId, contributes, target: accountTarget, executionOrigin: null, occurrenceId: accountOrigin.custodyId,
+        hostUiApiRange, pluginVersion: '1.0.0', cache, identity, moduleReference,
+        backend: createPluginUiCommonJsLoaderBackend(), authority: accountOrigin, isCurrent: () => true };
+    try {
+        expect(await composition.reconcile([activation])).toMatchObject([{ result: { ok: true } }]);
+        const registration = composition.read({ family: 'actions', pluginId, localId: 'open-preview', target: accountTarget,
+            executionOrigin: null, occurrenceId: accountOrigin.custodyId });
+        expect(registration?.right.target.realm).toBe('account');
+        const handler = registration?.registration.value;
+        expect(typeof handler).toBe('function');
+        if (typeof handler !== 'function') throw new Error('missing Account handler');
+        // This fixture's authored callback takes only its input. Invoke the
+        // opaque executable ABI without fabricating a host context.
+        expect(await Reflect.apply(handler, undefined, [{ value: 'portable' }])).toEqual({ accountValue: 'portable' });
+        const successor = { ...activation, authority: { ...accountOrigin, custodyId: 'release-2' }, occurrenceId: 'release-2' };
+        expect(await composition.reconcile([successor])).toMatchObject([{ result: { ok: true } }]);
+        expect(registration?.lifecycle.signal.aborted).toBe(true);
+        expect(composition.read({ family: 'actions', pluginId, localId: 'open-preview', target: accountTarget,
+            executionOrigin: null, occurrenceId: accountOrigin.custodyId })).toBeNull();
+        expect(composition.read({ family: 'actions', pluginId, localId: 'open-preview', target: accountTarget,
+            executionOrigin: null, occurrenceId: successor.occurrenceId })).not.toBeNull();
+        await composition.retain([]);
+        expect(composition.read({ family: 'actions', pluginId, localId: 'open-preview', target: accountTarget,
+            executionOrigin: null, occurrenceId: accountOrigin.custodyId })).toBeNull();
+    } finally {
+        await composition.unload();
+    }
+});
+
+it('keeps registration rights separate when two plugins use the same executable bytes', async () => {
+    const accountTarget = { ...target, realm: 'account' as const };
+    const contributes = PluginContributesV2Schema.parse({ actions: [{ id: 'run', title: 'Run', scopes: ['global'],
+        surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe', execution: { target: 'account', account: {
+            artifactId: target.artifactId, exportName: target.exportName,
+        } } }] });
+    const bytes = new TextEncoder().encode("exports.activate = function(api) { api.actions.register('run', async function() { return 'ran'; }); };");
+    const cache = createPluginReactNativeBundleCache();
+    const activations = ['acme.first-portable', 'acme.second-portable'].map(pluginId => {
+        const exactIdentity = { ...identity, pluginId };
+        cache.putInstalledArtifact({ identity: exactIdentity, bytes, format: 'plainJs' });
+        const authority = { kind: 'account' as const, serverId: 'home', accountId: 'account', custodyId: `custody-${pluginId}` };
+        return { pluginId, contributes, target: accountTarget, executionOrigin: null, occurrenceId: authority.custodyId,
+            hostUiApiRange, pluginVersion: '1.0.0', cache, identity: exactIdentity, moduleReference,
+            backend: createPluginUiCommonJsLoaderBackend(), authority, isCurrent: () => true };
+    });
+    const composition = createPluginUiClientExecutableComposition();
+    try {
+        const attempts = await composition.reconcile(activations);
+        expect(attempts.map(attempt => attempt.result)).toEqual([{ ok: true }, { ok: true }]);
+        for (const activation of activations) {
+            expect(composition.read({ family: 'actions', pluginId: activation.pluginId, localId: 'run', target: accountTarget,
+                executionOrigin: null, occurrenceId: activation.occurrenceId })).not.toBeNull();
+        }
+    } finally {
+        await composition.unload();
+    }
 });
 
 describe('getPluginUiClientExecutableTargetAddressKey', () => {

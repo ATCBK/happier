@@ -2320,21 +2320,24 @@ describe('external Voice provider host composition', () => {
         machineId: 'machine-packed-voice',
       }),
       isCurrent: () => true,
-      createScope: (registrationScope) => createProductionExternalVoiceProviderActivationScope({
-        pluginId: 'acme.packed-voice',
-        occurrenceId: 'packed-voice-occurrence-12',
-        declarations: conversationDeclarations,
-        hostPlatform: 'web',
-        registrationScope,
-        runtimeHost,
-        isRuntimeHostCurrent: () => true,
-        hostBindingsByLocalId: {
-          'conversation-mediated': {
-            descriptor: 'external',
-            createInvocationAccountOperations,
+      createScope: (registrationScope) => {
+        if (!('voiceProviders' in registrationScope.api)) throw new Error('Voice requires a client registration scope');
+        return createProductionExternalVoiceProviderActivationScope({
+          pluginId: 'acme.packed-voice',
+          occurrenceId: 'packed-voice-occurrence-12',
+          declarations: conversationDeclarations,
+          hostPlatform: 'web',
+          registrationScope: { ...registrationScope, api: registrationScope.api },
+          runtimeHost,
+          isRuntimeHostCurrent: () => true,
+          hostBindingsByLocalId: {
+            'conversation-mediated': {
+              descriptor: 'external',
+              createInvocationAccountOperations,
+            },
           },
-        },
-      }),
+        });
+      },
     } satisfies PluginUiClientExecutableActivation);
 
     const previousSettings = storage.getState().settings;

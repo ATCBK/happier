@@ -1,4 +1,5 @@
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
+import type { PluginAccountApi, PluginClientApi } from '@happier-dev/plugin-sdk';
 
 import {
     getInstalledPluginReactNativeBundleCache,
@@ -36,7 +37,7 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
  */
 export type PluginUiClientExecutableDerivedScopeFactory = (input: Readonly<{
     target: PluginUiProjectedClientExecutableTarget;
-    registrationScope: PluginUiClientExecutableRegistrationScope;
+    registrationScope: PluginUiClientExecutableRegistrationScope<PluginClientApi | PluginAccountApi>;
 }>) => PluginUiClientExecutableDerivedScope | null | undefined;
 
 export type PluginUiClientExecutableReconciliationAttempt = PluginUiClientExecutableCompositionAttempt;
@@ -108,6 +109,8 @@ async function createProjectedClientExecutableActivation(input: Readonly<{
     const { accountLifetime, reader, target } = input;
     const serverId = target.authority.serverId;
     if (!reader || !accountLifetime || !serverId || !isCurrent(input)) return null;
+    if ('kind' in target.authority && (target.authority.accountId !== accountLifetime.scope.accountId
+        || target.authority.serverId !== accountLifetime.scope.serverId)) return null;
     let claimedByComposition = false;
     let activation: PluginUiClientExecutableActivation;
     const scopeIsCurrent = () => accountLifetime.isCurrent() && (
@@ -122,12 +125,12 @@ async function createProjectedClientExecutableActivation(input: Readonly<{
         artifactGraph: target.artifactGraph,
         cacheIdentity: target.cacheIdentity,
         accountLifetime,
-        // The projecting daemon is the byte route for every selection,
-        // including an originless bundled/development one.
-        daemon: {
+        // Machine contributions retain their daemon byte route; Account
+        // custody uses the same Availability owner's hosted/bundled sources.
+        ...(!('kind' in target.authority) ? { daemon: {
             machineId: target.authority.machineId,
             serverId,
-        },
+        } } : {}),
         ...(target.artifactSelectionOwner === 'daemonProjection' && target.pluginVersion
             ? {
                 daemonProjectionSelection: {

@@ -6,6 +6,7 @@ import type {
 import { loadPluginReactNativeBundleExport } from './loader';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import { log } from '@/log';
+import { PluginSourceCustodyV1Schema, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 
 export type PluginUiExecutableActivationScope<TApi> = Readonly<{
     api: TApi;
@@ -14,10 +15,54 @@ export type PluginUiExecutableActivationScope<TApi> = Readonly<{
     isCurrent?: () => boolean;
 }>;
 
-export type PluginUiExecutableAuthority = Readonly<{
+export type PluginUiMachineExecutableAuthority = Readonly<{
     serverId: string | null;
     machineId: string;
 }>;
+export type PluginUiAccountExecutableAuthority = Readonly<{
+    kind: 'account';
+    serverId: string;
+    accountId: string;
+    custodyId: string;
+}>;
+export type PluginUiExecutableAuthority = PluginUiMachineExecutableAuthority | PluginUiAccountExecutableAuthority;
+
+export type PluginUiAccountExecutableOrigin = Omit<PluginUiAccountExecutableAuthority, 'kind'> & Readonly<{
+    sourceCustody: Extract<PluginSourceCustodyV1, Readonly<{ kind: 'account_release' | 'bundled_first_party' }>>;
+    declarationDigest?: string;
+}>;
+
+/** Availability supplies custody; this shared adapter validates its host-private carrier. */
+export function readPluginUiAccountExecutableOrigin(entry: unknown): PluginUiAccountExecutableOrigin | null {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const record = entry as Readonly<Record<string, unknown>>;
+    const stamp = record.hostAccountOrigin;
+    if (!stamp || typeof stamp !== 'object' || Array.isArray(stamp)) return null;
+    const origin = stamp as Readonly<Record<string, unknown>>;
+    if (typeof origin.serverId !== 'string' || !origin.serverId.trim()
+        || typeof origin.accountId !== 'string' || !origin.accountId.trim()
+        || typeof origin.custodyId !== 'string' || !origin.custodyId.trim()
+        || (origin.declarationDigest !== undefined && (typeof origin.declarationDigest !== 'string' || !origin.declarationDigest.trim()))) return null;
+    const custody = PluginSourceCustodyV1Schema.safeParse(origin.sourceCustody);
+    if (!custody.success || (custody.data.kind !== 'bundled_first_party' && custody.data.kind !== 'account_release')
+        || (custody.data.kind === 'account_release' && custody.data.pluginId !== record.pluginId)) return null;
+    return Object.freeze({ serverId: origin.serverId, accountId: origin.accountId, custodyId: origin.custodyId,
+        sourceCustody: custody.data,
+        ...(typeof origin.declarationDigest === 'string' ? { declarationDigest: origin.declarationDigest } : {}) });
+}
+
+export function getPluginUiExecutableAuthorityKey(authority: PluginUiExecutableAuthority): string {
+    return JSON.stringify('kind' in authority ? ['account', authority.serverId, authority.accountId, authority.custodyId]
+        : ['machine', authority.serverId, authority.machineId]);
+}
+
+export function arePluginUiExecutableAuthoritiesEqual(left: PluginUiExecutableAuthority, right: PluginUiExecutableAuthority): boolean {
+    if ('kind' in left || 'kind' in right) {
+        return 'kind' in left && 'kind' in right && left.serverId === right.serverId
+            && left.accountId === right.accountId && left.custodyId === right.custodyId;
+    }
+    return left.serverId === right.serverId && left.machineId === right.machineId;
+}
 
 export type PluginUiExecutableModuleActivationResult =
     | Readonly<{ ok: true }>
@@ -82,8 +127,7 @@ export function createPluginUiExecutableModuleHost(): PluginUiExecutableModuleHo
     ): boolean => (
         left === right
         || (left !== null && right !== null
-            && left.serverId === right.serverId
-            && left.machineId === right.machineId)
+            && arePluginUiExecutableAuthoritiesEqual(left, right))
     );
 
     const activationKey = (input: Readonly<{

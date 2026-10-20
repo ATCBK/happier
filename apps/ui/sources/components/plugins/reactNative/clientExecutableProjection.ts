@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 
 import type { PluginReactNativeExecutableModuleReference } from './loader';
+import { arePluginUiExecutableAuthoritiesEqual, readPluginUiAccountExecutableOrigin } from './executableModuleHost';
 import {
     getPluginUiClientExecutableTargetAddressKey,
     type PluginUiClientExecutableActivation,
@@ -168,6 +169,12 @@ function readCurrentProjectedExecutableOrigin(input: Readonly<{
     entry: unknown;
     source: PluginUiClientExecutableProjectionSource;
 }>): ProjectedExecutableOrigin | null {
+    if (asRecord(input.entry)?.hostAccountOrigin !== undefined) {
+        const account = readPluginUiAccountExecutableOrigin(input.entry);
+        return account ? Object.freeze({ executionOrigin: null, projectionGeneration: 0,
+            authority: Object.freeze({ kind: 'account' as const, serverId: account.serverId,
+                accountId: account.accountId, custodyId: account.custodyId }) }) : null;
+    }
     const directMachineAuthority = input.source.directMachineAuthority;
     if (!directMachineAuthority) {
         const unionOrigin = readPluginUiContributionOrigin(input.entry);
@@ -207,8 +214,7 @@ function areProjectedExecutableOriginsEqual(
     left: ProjectedExecutableOrigin,
     right: ProjectedExecutableOrigin,
 ): boolean {
-    return left.authority.serverId === right.authority.serverId
-        && left.authority.machineId === right.authority.machineId
+    return arePluginUiExecutableAuthoritiesEqual(left.authority, right.authority)
         && (left.executionOrigin === null || right.executionOrigin === null
             ? left.executionOrigin === right.executionOrigin
             : arePluginMachineExecutionOriginsEqual(left.executionOrigin, right.executionOrigin));
@@ -271,10 +277,10 @@ function readActionCandidate(input: Readonly<{
     platform: PluginContributionClientPlatform;
 }>): ResolvedProjectedClientExecutableContribution | null {
     const { action } = input;
-    if (!isPluginProjectedActionExecutable(action) || action.execution.target !== 'client') return null;
-    if (!action.execution.platforms.includes(input.platform)) return null;
+    if (!isPluginProjectedActionExecutable(action) || action.execution.target === 'daemon') return null;
+    if (action.execution.target === 'client' && !action.execution.platforms.includes(input.platform)) return null;
     return readClientContributionCandidate({ ...input, family: 'actions', entry: action, localId: action.id,
-        contributionId: action.id, client: action.execution.client, action });
+        contributionId: action.id, client: action.execution.target === 'account' ? action.execution.account : action.execution.client, action });
 }
 
 /** The same artifact/currentness admission serves every client callback family. */
@@ -293,6 +299,9 @@ function readClientContributionCandidate(input: Readonly<{
     if (!entry.occurrenceId) return null;
     const origin = readCurrentProjectedExecutableOrigin({ entry, source: input.source });
     if (!origin || !originServesPlugin(origin, entry.pluginId)) return null;
+    const account = input.action?.execution.target === 'account';
+    if (account !== ('kind' in origin.authority)
+        || (account && 'kind' in origin.authority && entry.occurrenceId !== origin.authority.custodyId)) return null;
     const bundle = input.source.projection.reactNativeBundlesById[
         `reactNativeBundle:${entry.pluginId}:${contributionId}`
     ];
@@ -336,6 +345,7 @@ function readClientContributionCandidate(input: Readonly<{
         return null;
     }
     const target = Object.freeze({
+        ...(account ? { realm: 'account' as const } : {}),
         artifactId: client.artifactId,
         exportName: client.exportName,
         platform: input.platform,

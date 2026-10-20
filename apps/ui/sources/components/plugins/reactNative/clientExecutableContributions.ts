@@ -2,13 +2,13 @@ import * as React from 'react';
 
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { buildQualifiedPluginContributionKey, createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
-import { derivePluginClientContributionRegistrationRights, type PluginContributionClientPlatform, type PluginContributionRegistrationRight } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { derivePluginAccountContributionRegistrationRights, derivePluginClientContributionRegistrationRights, type PluginContributionClientPlatform, type PluginContributionRegistrationRight } from '@happier-dev/protocol/plugins/contributions/catalog';
 import type { PluginProjectedActionV2, PluginProjectedDragSourceEntryV1, PluginProjectedDropTargetEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import type { PluginClientApi } from '@happier-dev/plugin-sdk';
+import type { PluginAccountApi, PluginClientApi } from '@happier-dev/plugin-sdk';
 import type { PluginDragSourceRuntime, PluginDropTargetRuntime } from '@happier-dev/plugin-sdk';
 import type { PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
-import type { PluginClientActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginAccountActionHandler, PluginClientActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     createPluginRegistrationScope,
     type PluginRuntimeRegistration,
@@ -18,6 +18,8 @@ import type { PluginReactNativeBundleCache } from './bundleCache';
 import {
     createPluginUiExecutableModuleHost,
     getInstalledPluginUiExecutableModuleHost,
+    getPluginUiExecutableAuthorityKey,
+    readPluginUiAccountExecutableOrigin,
     type PluginUiExecutableAuthority,
     type PluginUiExecutableModuleActivationResult,
     type PluginUiExecutableModuleHost,
@@ -35,6 +37,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 type PluginWorkItemsRuntime = Parameters<PluginClientApi['workItems']['register']>[1];
 
 export type PluginUiClientExecutableTarget = Readonly<{
+    realm?: 'account';
     artifactId: string;
     exportName: string;
     platform: PluginContributionClientPlatform;
@@ -86,13 +89,13 @@ export type PluginUiClientExecutableRegistrationReader = Readonly<{
 export type PluginUiClientActionRegistration = Readonly<{
     registration: PluginUiClientExecutableRegistration;
     pluginVersion: string;
-    handler: PluginClientActionHandler;
+    handler: PluginClientActionHandler | PluginAccountActionHandler;
     authorization: NonNullable<PluginProjectedActionV2['authorization']>;
 }>;
 
-export type PluginUiClientExecutableRegistrationScope = Readonly<{
-    /** The client realm exposes no daemon-only activation capabilities. */
-    api: PluginClientApi;
+export type PluginUiClientExecutableRegistrationScope<TApi = PluginClientApi> = Readonly<{
+    /** Portable realms expose no daemon-only activation capabilities. */
+    api: TApi;
     commit(): void;
     registrations(): readonly PluginRuntimeRegistration[];
     /** Current both before and after commit until this exact scope retires. */
@@ -108,8 +111,7 @@ export type PluginUiClientExecutableDerivedScope = Readonly<{
     isCurrent?: () => boolean;
 }>;
 
-export type PluginUiClientExecutableRegistrationIndex = Readonly<{
-    createScope(input: Readonly<{
+type PluginUiClientExecutableRegistrationScopeInput = Readonly<{
         pluginId: string;
         /** Every compatible declaration the shared module must register. */
         contributes: Readonly<Record<string, unknown>>;
@@ -126,7 +128,14 @@ export type PluginUiClientExecutableRegistrationIndex = Readonly<{
         accountLifetime?: ActiveServerAccountScopeLifetime;
         authority?: PluginUiExecutableAuthority;
         lifecycle: PluginUiClientExecutableRegistrationLifecycle;
-    }>): PluginUiClientExecutableRegistrationScope;
+    }>;
+type PluginUiExecutableRegistrationApi = PluginClientApi | PluginAccountApi;
+type PluginUiExecutableRegistrationScope = PluginUiClientExecutableRegistrationScope<PluginUiExecutableRegistrationApi>;
+
+export type PluginUiClientExecutableRegistrationIndex = Readonly<{
+    createScope(input: PluginUiClientExecutableRegistrationScopeInput & Readonly<{ target: PluginUiClientExecutableTarget & { realm: 'account' } }>): PluginUiClientExecutableRegistrationScope<PluginAccountApi>;
+    createScope(input: PluginUiClientExecutableRegistrationScopeInput & Readonly<{ target: PluginUiClientExecutableTarget & { realm?: undefined } }>): PluginUiClientExecutableRegistrationScope;
+    createScope(input: PluginUiClientExecutableRegistrationScopeInput): PluginUiExecutableRegistrationScope;
     read(address: PluginUiClientExecutableRegistrationAddress): PluginUiClientExecutableRegistration | null;
     revision(): number;
     subscribe(listener: () => void): () => void;
@@ -141,6 +150,7 @@ type RegistrationSnapshot = Readonly<Record<string, IndexedRegistration>>;
 
 function freezeTarget(target: PluginUiClientExecutableTarget): PluginUiClientExecutableTarget {
     return Object.freeze({
+        ...(target.realm ? { realm: target.realm } : {}),
         artifactId: target.artifactId,
         exportName: target.exportName,
         platform: target.platform,
@@ -173,7 +183,7 @@ function sameTarget(
     left: PluginUiClientExecutableTarget,
     right: PluginUiClientExecutableTarget,
 ): boolean {
-    return left.artifactId === right.artifactId
+    return left.realm === right.realm && left.artifactId === right.artifactId
         && left.exportName === right.exportName
         && left.platform === right.platform;
 }
@@ -270,32 +280,25 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
             : null;
     };
 
-    const createScope = (input: Readonly<{
-        pluginId: string;
-        contributes: Readonly<Record<string, unknown>>;
-        publishedContributes?: Readonly<Record<string, unknown>>;
-        target: PluginUiClientExecutableTarget;
-        executionOrigin: PluginMachineExecutionOriginV1 | null;
-        occurrenceId: string;
-        pluginVersion?: string;
-        accountLifetime?: ActiveServerAccountScopeLifetime;
-        authority?: PluginUiExecutableAuthority;
-        lifecycle: PluginUiClientExecutableRegistrationLifecycle;
-    }>): PluginUiClientExecutableRegistrationScope => {
+    function createScope(input: PluginUiClientExecutableRegistrationScopeInput & Readonly<{ target: PluginUiClientExecutableTarget & { realm: 'account' } }>): PluginUiClientExecutableRegistrationScope<PluginAccountApi>;
+    function createScope(input: PluginUiClientExecutableRegistrationScopeInput & Readonly<{ target: PluginUiClientExecutableTarget & { realm?: undefined } }>): PluginUiClientExecutableRegistrationScope;
+    function createScope(input: PluginUiClientExecutableRegistrationScopeInput): PluginUiExecutableRegistrationScope;
+    function createScope(input: PluginUiClientExecutableRegistrationScopeInput): PluginUiExecutableRegistrationScope {
         const exact = validateScopeInput(input);
-        const rights = derivePluginClientContributionRegistrationRights(input.contributes, exact.target);
+        const deriveRights = exact.target.realm === 'account' ? derivePluginAccountContributionRegistrationRights : derivePluginClientContributionRegistrationRights;
+        const rights = deriveRights(input.contributes, exact.target);
         if (rights.length === 0) {
             throw new Error('client_executable_target_has_no_registration_rights');
         }
-        const publishedRights = derivePluginClientContributionRegistrationRights(
+        const publishedRights = deriveRights(
             input.publishedContributes ?? input.contributes,
             exact.target,
         );
-        const registrationScope = createPluginRegistrationScope({
-            pluginId: input.pluginId,
-            target: Object.freeze({ realm: 'client' as const, ...exact.target }),
-            rights,
-        });
+        const registrationScope = exact.target.realm === 'account'
+            ? createPluginRegistrationScope({ pluginId: input.pluginId, rights,
+                target: Object.freeze({ realm: 'account' as const, artifactId: exact.target.artifactId, exportName: exact.target.exportName }) })
+            : createPluginRegistrationScope({ pluginId: input.pluginId, rights,
+                target: Object.freeze({ ...exact.target, realm: 'client' as const }) });
         const ownerToken = Object.freeze({});
         const rightsByKey = new Map(rights.map((right) => [registrationIndexKey({
             family: right.family,
@@ -415,7 +418,7 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
                 return registrationScope.dispose();
             },
         });
-    };
+    }
 
     return Object.freeze({
         createScope,
@@ -448,7 +451,7 @@ export type PluginUiClientExecutableActivation = Readonly<{
     isCurrent(): boolean;
     /** A derived family may compose runtime state but cannot replace the ABI/index owner. */
     createScope?(
-        registrationScope: PluginUiClientExecutableRegistrationScope,
+        registrationScope: PluginUiExecutableRegistrationScope,
     ): PluginUiClientExecutableDerivedScope;
 }>;
 
@@ -503,10 +506,7 @@ type ExecutableAuthorityLeaf = Readonly<{
 }>;
 
 function clientExecutableAuthorityKey(authority: PluginUiExecutableAuthority): string {
-    return JSON.stringify([
-        authority.serverId,
-        authority.machineId,
-    ]);
+    return getPluginUiExecutableAuthorityKey(authority);
 }
 
 /**
@@ -519,6 +519,7 @@ export function getPluginUiClientExecutableTargetAddressKey(input: Pick<
 >): string {
     return [
         input.pluginId,
+        input.target.realm ?? 'client',
         input.target.artifactId,
         input.target.exportName,
         input.target.platform,
@@ -528,13 +529,15 @@ export function getPluginUiClientExecutableTargetAddressKey(input: Pick<
 }
 
 /**
- * Rights may be shared only by the same installed executable bytes. Authority
+ * Rights may be shared only within one plugin's installed executable bytes. Authority
  * and plugin occurrence intentionally do not participate: they select exact
  * index publication and currentness, not what one module is allowed to register.
  */
 function clientExecutableModuleKey(activation: PluginUiClientExecutableAdmission): string {
     return [
+        activation.pluginId,
         activation.identity.artifactDigest,
+        activation.target.realm ?? 'client',
         activation.moduleReference.exportName,
         activation.identity.platform,
         activation.hostUiApiRange,
@@ -577,7 +580,7 @@ function clientExecutableActivationFingerprint(
         activation.hostUiApiRange,
         activation.moduleReference.exportName,
         clientExecutableAuthorityKey(activation.authority),
-        derivePluginClientContributionRegistrationRights(registrationContributes, activation.target)
+        (activation.target.realm === 'account' ? derivePluginAccountContributionRegistrationRights : derivePluginClientContributionRegistrationRights)(registrationContributes, activation.target)
             .map((right) => `${right.family}\u0000${right.localId}`)
             .sort((left, right) => left.localeCompare(right))
             .join('\u0001'),
@@ -618,7 +621,10 @@ function isClientExecutableActivationCoherent(
     return activation.identity.pluginId === activation.pluginId
         && activation.identity.platform === activation.target.platform
         && activation.moduleReference.exportName === activation.target.exportName
+        && (activation.target.realm === 'account' ? 'kind' in activation.authority && activation.executionOrigin === null
+            && activation.occurrenceId === activation.authority.custodyId : !('kind' in activation.authority))
         && (activation.executionOrigin === null || (
+            !('kind' in activation.authority) &&
             activation.authority.machineId === getPluginMachineExecutionOriginRef(activation.executionOrigin).machineId
             && getPluginMachineExecutionOriginRef(activation.executionOrigin).pluginId === activation.pluginId
         ))
@@ -1047,22 +1053,27 @@ export function resolvePluginUiClientActionRegistration(input: Readonly<{
 }>): PluginUiClientActionRegistration | null {
     const { action, platform } = input;
     if (
-        action.execution.target !== 'client'
+        action.execution.target === 'daemon'
         || !isPluginProjectedActionExecutable(action)
         || !action.authorization
     ) {
         return null;
     }
-    const producer = readProjectedClientRegistrationOrigin(action);
+    const accountOrigin = action.execution.target === 'account' ? readPluginUiAccountExecutableOrigin(action) : null;
+    const producer = action.execution.target === 'account'
+        ? accountOrigin && action.occurrenceId === accountOrigin.custodyId ? { origin: null } : null
+        : readProjectedClientRegistrationOrigin(action);
     if (!producer) return null;
-    if (!action.execution.platforms.includes(platform)) return null;
+    if (action.execution.target === 'client' && !action.execution.platforms.includes(platform)) return null;
+    const executable = action.execution.target === 'account' ? action.execution.account : action.execution.client;
     const address = Object.freeze({
         family: 'actions' as const,
         pluginId: action.pluginId,
         localId: action.id,
         target: freezeTarget({
-            artifactId: action.execution.client.artifactId,
-            exportName: action.execution.client.exportName,
+            ...(accountOrigin ? { realm: 'account' as const } : {}),
+            artifactId: executable.artifactId,
+            exportName: executable.exportName,
             platform,
         }),
         executionOrigin: producer.origin ? freezeExecutionOrigin(producer.origin) : null,
@@ -1080,11 +1091,16 @@ export function resolvePluginUiClientActionRegistration(input: Readonly<{
         || registration.contribution.pluginId !== action.pluginId
         || registration.contribution.localId !== action.id
         || registration.right.family !== 'actions'
+        || registration.right.target.realm !== action.execution.target
         || registration.registration.family !== 'actions'
         || registration.occurrenceId !== action.occurrenceId
         || typeof registration.registration.value !== 'function'
         || typeof pluginVersion !== 'string'
         || pluginVersion.trim().length === 0
+        || (accountOrigin && (!registration.authority || !('kind' in registration.authority)
+            || registration.authority.serverId !== accountOrigin.serverId
+            || registration.authority.accountId !== accountOrigin.accountId
+            || registration.authority.custodyId !== accountOrigin.custodyId))
     ) {
         return null;
     }
@@ -1093,7 +1109,7 @@ export function resolvePluginUiClientActionRegistration(input: Readonly<{
     return Object.freeze({
         registration,
         pluginVersion,
-        handler: registration.registration.value as unknown as PluginClientActionHandler,
+        handler: registration.registration.value as unknown as PluginClientActionHandler | PluginAccountActionHandler,
         // The daemon supplies desired occurrence and access facts. Application
         // in the client realm is proven by this exact committed SDK registration,
         // independently of whether the plugin's daemon entrypoint was demanded.

@@ -189,7 +189,7 @@ export async function dispatchPluginResolvedSemanticCommand(
                 },
             }
             : {}),
-        ...(projectedAction.execution.target === 'client'
+        ...(projectedAction.execution.target !== 'daemon'
             ? {
                 clientAction: {
                     ...(input.execute ? { execute: input.execute } : {}),

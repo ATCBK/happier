@@ -1,6 +1,7 @@
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonPluginUiTargetedContributionsReadRequestSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsSetResponseSchema, DaemonPluginSecretStatusRequestSchema, DaemonPluginSecretStatusResponseSchema, DaemonPluginSecretSetRequestSchema, DaemonPluginSecretSetResponseSchema, DaemonPluginSecretDeleteRequestSchema, DaemonPluginSecretDeleteResponseSchema, DaemonPluginStructuredMessageActionExecuteResponseSchema, DaemonPluginActionFormConnectedAccountOptionsResolveRequestSchema, DaemonPluginActionFormConnectedAccountOptionsResolveResponseSchema, DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema, DaemonPluginUiResourceReadRequestSchema, DaemonPluginUiResourceReadResponseSchema, DaemonPluginUiResourceWatchOpenRequestSchema, DaemonPluginUiResourceWatchOpenResponseSchema, DaemonPluginUiResourceWatchNextRequestSchema, DaemonPluginUiResourceWatchNextResponseSchema, DaemonPluginUiResourceWatchCloseRequestSchema, DaemonPluginUiResourceWatchCloseResponseSchema, type DaemonPluginSettingsSnapshot, type DaemonPluginSettingsMutation, type DaemonPluginSettingsSetResponse, type DaemonPluginSecretStatusResponse, type DaemonPluginSecretSetResponse, type DaemonPluginSecretDeleteResponse, type DaemonPluginStructuredMessageActionExecuteResponse, type DaemonPluginActionFormConnectedAccountOptionsResolveRequest, type DaemonPluginActionFormConnectedAccountOptionsResolveResponse, type DaemonPluginActionSchemasReadRequest, type DaemonPluginActionSchemasReadResponse, type DaemonPluginUiResourceReadRequest, type DaemonPluginUiResourceReadResponse, type DaemonPluginUiResourceWatchOpenRequest, type DaemonPluginUiResourceWatchOpenResponse, type DaemonPluginUiResourceWatchNextRequest, type DaemonPluginUiResourceWatchNextResponse, type DaemonPluginUiResourceWatchCloseRequest, type DaemonContributionRegistryProjectionAutomationEligibleEventsV1, type DaemonPluginUiComposerSurfaceCatalogEntryV1, type DaemonPluginUiTargetedSurfaceMountV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { DaemonPluginStructuredMessageActionExecuteRequestSchema, type DaemonPluginStructuredMessageActionExecuteRequest } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
+import type { DaemonPluginTargetedSourceDeclarationV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import {
     DaemonPluginSettingsWatchRequestSchema,
     DaemonPluginSettingsWatchResponseSchema,
@@ -86,6 +87,17 @@ export type MachinePluginUiTargetedContributionsReadResult =
         /** The daemon's own code when it answered `unavailable`. */
         code?: string;
     }>;
+
+export type MachinePluginTargetedSourceDeclarationsReadResult =
+    | Readonly<{ supported: true; sourceDeclarations: readonly DaemonPluginTargetedSourceDeclarationV1[] }>
+    | Extract<MachinePluginUiTargetedContributionsReadResult, Readonly<{ supported: false }>>;
+
+type MachinePluginTargetedReadOptions = Readonly<{
+    serverId?: string | null;
+    pluginId: string;
+    signal?: AbortSignal;
+    accountLifetime?: ProjectionReadAccount | null;
+}>;
 
 export type MachinePluginSettingsResult =
     | Readonly<{ supported: true; snapshot: DaemonPluginSettingsSnapshot }>
@@ -372,21 +384,25 @@ export async function machineContributionRegistryProjectionDescribe(
  * Reads the current contributions to one mounted target. The daemon answers
  * with its current occurrence of that target; it never fences the read.
  */
+export function machinePluginUiTargetedContributionsRead(
+    machineId: string,
+    opts: MachinePluginTargetedReadOptions & Readonly<{ readMode: 'sourceDeclarations' }>,
+): Promise<MachinePluginTargetedSourceDeclarationsReadResult>;
+export function machinePluginUiTargetedContributionsRead(
+    machineId: string,
+    opts: MachinePluginTargetedReadOptions,
+): Promise<MachinePluginUiTargetedContributionsReadResult>;
 export async function machinePluginUiTargetedContributionsRead(
     machineId: string,
-    opts: Readonly<{
-        serverId?: string | null;
-        pluginId: string;
-        signal?: AbortSignal;
-        accountLifetime?: ProjectionReadAccount | null;
-    }>,
-): Promise<MachinePluginUiTargetedContributionsReadResult> {
+    opts: MachinePluginTargetedReadOptions & Readonly<{ readMode?: 'sourceDeclarations' }>,
+): Promise<MachinePluginUiTargetedContributionsReadResult | MachinePluginTargetedSourceDeclarationsReadResult> {
     if (opts.signal?.aborted) return { supported: false, reason: 'aborted' };
     let payload: ReturnType<typeof DaemonPluginUiTargetedContributionsReadRequestSchema.parse>;
     try {
         payload = DaemonPluginUiTargetedContributionsReadRequestSchema.parse({
             ...(await readProjectionClientContext(machineId)),
             pluginId: opts.pluginId,
+            ...(opts.readMode === undefined ? {} : { readMode: opts.readMode }),
         });
     } catch {
         return { supported: false, reason: 'error' };
@@ -395,7 +411,7 @@ export async function machinePluginUiTargetedContributionsRead(
         machineId: payload.machineId,
         serverId: opts.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
-    const request = shareProjectionRead(scope, payload, opts.accountLifetime, async (signal): Promise<MachinePluginUiTargetedContributionsReadResult> => {
+    const request = shareProjectionRead(scope, payload, opts.accountLifetime, async (signal): Promise<MachinePluginUiTargetedContributionsReadResult | MachinePluginTargetedSourceDeclarationsReadResult> => {
         try {
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
@@ -414,6 +430,13 @@ export async function machinePluginUiTargetedContributionsRead(
             if (parsed.status === 'unavailable') {
                 return { supported: false, reason: 'unavailable', code: parsed.code };
             }
+            if (opts.readMode === 'sourceDeclarations') {
+                if (parsed.status !== 'sourceDeclarations' || parsed.pluginId !== payload.pluginId) {
+                    return { supported: false, reason: 'invalid-response' };
+                }
+                return { supported: true, sourceDeclarations: parsed.sourceDeclarations };
+            }
+            if (parsed.status !== 'current') return { supported: false, reason: 'invalid-response' };
             // A snapshot for another plugin, or mounts for another target,
             // answers a different question: it is never shown for this one.
             const target = parsed.targetedContributions.target;
@@ -439,6 +462,14 @@ export async function machinePluginUiTargetedContributionsRead(
         }
     });
     return await waitForSharedRead(request, opts.signal, () => ({ supported: false, reason: 'aborted' }));
+}
+
+/** The same target-read transport, requesting current Machine sources for an invoking Account target. */
+export function machinePluginTargetedSourceDeclarationsRead(
+    machineId: string,
+    opts: MachinePluginTargetedReadOptions,
+): Promise<MachinePluginTargetedSourceDeclarationsReadResult> {
+    return machinePluginUiTargetedContributionsRead(machineId, { ...opts, readMode: 'sourceDeclarations' });
 }
 
 export async function machinePluginSettingsGet(

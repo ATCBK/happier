@@ -4,6 +4,7 @@ import type { PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plu
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import type { PluginUiDeclaredExecution } from '../ui/projection';
+import type { PluginPortableReleaseManifestV1 } from '@happier-dev/protocol/plugins/availability';
 
 export type PluginHostBundledUiDeclaration = Readonly<{
     pluginId: string;
@@ -12,6 +13,10 @@ export type PluginHostBundledUiDeclaration = Readonly<{
     packageName: string;
     displayName: string;
     entriesById: PluginDeclaredUiEntriesV1;
+    /** Validated authored facts retained by the existing bundled declaration producer. */
+    normalizedManifest?: PluginPortableReleaseManifestV1;
+    /** Exact compiler output, including portable Account activation exports. */
+    artifactGraphs?: readonly PluginUiArtifactsManifestEntryV2[];
     /** Static requirements remain known before a Machine publishes its runtime catalog. */
     declaredExecution?: PluginUiDeclaredExecution;
     /** Reader identities compiled from this app's bundled manifest, never daemon writer refs. */

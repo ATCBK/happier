@@ -70,6 +70,34 @@ network = await installSessionOpsNetworkBoundary();
 await import('./machineContributionRegistryProjection');
 
 describe('machine contribution registry projection ops', () => {
+    it('reads exact Machine source declarations for an Account target through the existing target RPC', async () => {
+        const { PluginContributesV2Schema } = await import('@happier-dev/protocol');
+        const contributes = PluginContributesV2Schema.parse({
+                targetedPluginContributions: [{ id: 'external-source', target: { pluginId: mountedTarget.pluginId, pointId: 'sources' },
+                    protocol: { id: 'external-source', version: 1 }, descriptor: {}, operations: {} }],
+        });
+        const row = {
+            manifest: { id: 'acme.source', contributes: {
+                actions: contributes.actions, pluginContributionPoints: [],
+                targetedPluginContributions: contributes.targetedPluginContributions,
+                ui: { renderers: contributes.ui.renderers },
+            } },
+            occurrenceId: 'source-current',
+            sourceCustody: { kind: 'development', registeredRootId: 'source-root' },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            status: 'sourceDeclarations', pluginId: mountedTarget.pluginId, sourceDeclarations: [row],
+        });
+        const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', {
+            serverId: serverAId, pluginId: mountedTarget.pluginId, readMode: 'sourceDeclarations',
+        })).resolves.toEqual({ supported: true, sourceDeclarations: [row] });
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
+            payload: expect.objectContaining({ pluginId: mountedTarget.pluginId, readMode: 'sourceDeclarations' }),
+        }));
+    });
+
     async function configureNetworkForCase() {
         network.resetRequests();
         const homes = await Promise.all([

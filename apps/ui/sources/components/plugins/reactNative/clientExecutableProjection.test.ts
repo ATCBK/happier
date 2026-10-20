@@ -194,6 +194,30 @@ function resolve(projectionInput: PluginUiProjectionModel) {
     });
 }
 
+it('admits an Account Action and its exact custody without a Machine projection', () => {
+    const accountOrigin = { serverId: 'home', accountId: 'account', custodyId: 'release:1',
+        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'current-app' } } };
+    const current = singleActionProjection();
+    const accountAction = { ...action(firstActionId), occurrenceId: accountOrigin.custodyId,
+        execution: { target: 'account' as const, account: { artifactId: target.artifactId, exportName: target.exportName } },
+        hostAccountOrigin: accountOrigin, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: undefined,
+    };
+    const accountBundle = { ...bundle(firstActionId), hostAccountOrigin: accountOrigin, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: undefined };
+    const accountProjection = { ...current, generation: null, actionsById: { [firstActionKey]: accountAction },
+        reactNativeBundlesById: { [firstBundleKey]: accountBundle } };
+    const result = resolve(accountProjection);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ occurrenceId: 'release:1', executionOrigin: null,
+        authority: { kind: 'account', serverId: 'home', accountId: 'account', custodyId: 'release:1' } });
+    expect(resolve({ ...accountProjection, reactNativeBundlesById: { [firstBundleKey]: {
+        ...accountBundle, hostAccountOrigin: { ...accountOrigin, custodyId: 'release:2' },
+    } } })).toEqual([]);
+    expect(resolve({ ...accountProjection, actionsById: { [firstActionKey]: {
+        ...accountAction, hostAccountOrigin: { ...accountOrigin,
+            sourceCustody: { kind: 'development', registeredRootId: 'machine-only-source' } },
+    } } })).toEqual([]);
+});
+
 function firstAction(projectionInput: ClientActionProjectionFixture) {
     const current = projectionInput.actionsById[firstActionKey];
     if (!current) throw new Error('first projected Action missing');

@@ -113,8 +113,9 @@ type AccountKvSnapshot = Readonly<{
 async function prepare(
     accountLifetime: ActiveServerAccountScopeLifetime,
     options?: ActivePluginCollectionOperationOptionsV1,
+    invocationSignal?: AbortSignal,
 ): Promise<PreparedCollectionOperation> {
-    const outcome = await prepareCollectionOperation(options, accountLifetime);
+    const outcome = await prepareCollectionOperation(options, accountLifetime, invocationSignal);
     if (outcome.status !== 'ready') throw unavailableError(outcome.reason);
     return outcome.operation;
 }
@@ -259,8 +260,14 @@ export function createActivePluginAccountKvClient(input: Readonly<{
     pluginId: string;
     accountLifetime: ActiveServerAccountScopeLifetime;
     readAvailability: () => PluginAccountAvailabilityReader;
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
 }>): AccountKvService {
     const assertAccountKvAdmitted = (): void => {
+        assertSignalActive(input.signal);
+        if (input.isCurrent?.() === false) {
+            throw kvError(ACCOUNT_STORAGE_UNAVAILABLE_CODE, 'Account storage invocation is no longer current');
+        }
         const admission = input.readAvailability().readCurrentAccountKvCapability({
             pluginId: input.pluginId,
         });
@@ -283,7 +290,7 @@ export function createActivePluginAccountKvClient(input: Readonly<{
         options?: Readonly<{ signal?: AbortSignal }>,
     ): Promise<T> => {
         assertAccountKvAdmitted();
-        const prepared = await prepare(input.accountLifetime, options);
+        const prepared = await prepare(input.accountLifetime, options, input.signal);
         try {
             const snapshot = await readSnapshot({
                 pluginId: input.pluginId,
@@ -428,7 +435,7 @@ export function createActivePluginAccountKvClient(input: Readonly<{
         ) {
             const normalized = inRowAlgebra(() => normalizePluginAccountKvLogicalKeyV1(key));
             assertAccountKvAdmitted();
-            const prepared = await prepare(input.accountLifetime, options);
+            const prepared = await prepare(input.accountLifetime, options, input.signal);
             try {
                 const snapshot = await readSnapshot({
                     pluginId: input.pluginId,
@@ -478,7 +485,7 @@ export function createActivePluginAccountKvClient(input: Readonly<{
                 ...(options.limit === undefined ? {} : { limit: options.limit }),
             }));
             assertAccountKvAdmitted();
-            const prepared = await prepare(input.accountLifetime, options);
+            const prepared = await prepare(input.accountLifetime, options, input.signal);
             try {
                 const snapshot = await readSnapshot({
                     pluginId: input.pluginId,

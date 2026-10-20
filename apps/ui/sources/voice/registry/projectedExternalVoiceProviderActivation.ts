@@ -3,6 +3,7 @@ import type { RecipientContractV1 } from '@happier-dev/protocol/plugins/recipien
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol/plugins/contributions/catalog';
 import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
 import type { PluginSettingsActionInput } from '@happier-dev/plugin-sdk/settings';
+import type { PluginAccountApi, PluginClientApi } from '@happier-dev/plugin-sdk';
 
 import {
   type PluginUiClientExecutableDerivedScopeFactory,
@@ -234,7 +235,7 @@ export async function withdrawProjectedExternalVoiceProviders(
 
 function createVoiceDerivedScope(input: Readonly<{
   target: PluginUiProjectedClientExecutableTarget;
-  registrationScope: PluginUiClientExecutableRegistrationScope;
+  registrationScope: PluginUiClientExecutableRegistrationScope<PluginClientApi | PluginAccountApi>;
   resolveContributedAction: PluginUiProjectedActionResolver;
   readNavigationBinding?: () => PluginSurfaceDestinationNavigationBinding | null | undefined;
   createInvocationUi?: typeof createAppShellPluginUiInvocationHost;
@@ -242,13 +243,15 @@ function createVoiceDerivedScope(input: Readonly<{
   pluginUiProjection?: PluginUiProjectionModel | null;
 }>): ReturnType<PluginUiClientExecutableDerivedScopeFactory> {
   if (input.target.voiceProviders.length === 0) return null;
+  if ('kind' in input.target.authority || !('voiceProviders' in input.registrationScope.api)) return null;
+  const authority = input.target.authority;
   const declarations: readonly VoiceConversationProviderContribution[] = input.target.voiceProviders
     .map((provider) => provider.declaration);
   const scope = createExternalVoiceProviderActivationScope({
     pluginId: input.target.pluginId,
     occurrenceId: input.target.occurrenceId,
     declarations,
-    registrationScope: input.registrationScope,
+    registrationScope: { ...input.registrationScope, api: input.registrationScope.api },
     clientRuntimeIdentitiesByLocalId: Object.freeze(Object.fromEntries(
       input.target.voiceProviders.map((provider) => [provider.declaration.id, provider.cacheIdentity] as const),
     )),
@@ -260,8 +263,8 @@ function createVoiceDerivedScope(input: Readonly<{
     hostPlatform: input.target.target.platform,
     createInvocationUi: (operation) => (input.createInvocationUi ?? createAppShellPluginUiInvocationHost)({
       ...operation,
-      machineId: input.target.authority.machineId,
-      serverId: input.target.authority.serverId,
+      machineId: authority.machineId,
+      serverId: authority.serverId,
       resolveContributedAction: input.resolveContributedAction,
       readNavigationBinding: input.readNavigationBinding,
       pluginUiProjection: input.pluginUiProjection,
