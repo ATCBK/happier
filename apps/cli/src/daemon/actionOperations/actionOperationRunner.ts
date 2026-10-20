@@ -46,16 +46,18 @@ type ActiveInvocation = Readonly<{
 }>;
 
 function terminalResult(snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1): ActionExecuteResult | null {
-  if (snapshot.state === 'succeeded') return { ok: true, result: snapshot.result };
+  const metadata = snapshot.operationCredentialUses ? { operationCredentialUses: snapshot.operationCredentialUses } : {};
+  if (snapshot.state === 'succeeded') return { ok: true, result: snapshot.result, ...metadata };
   if (snapshot.state === 'failed') {
     return {
       ok: false,
       errorCode: snapshot.error?.errorCode ?? 'action_operation_failed',
       error: snapshot.error?.error ?? 'action_operation_failed',
       ...(snapshot.error?.details ? { details: snapshot.error.details } : {}),
+      ...metadata,
     };
   }
-  if (snapshot.state === 'cancelled') return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+  if (snapshot.state === 'cancelled') return { ok: false, errorCode: 'cancelled', error: 'cancelled', ...metadata };
   return null;
 }
 
@@ -233,6 +235,9 @@ export function createActionOperationRunner(deps: Readonly<{
               else accept({ ok: true, result });
             } },
           });
+          if (executionResult.operationCredentialUses) {
+            deps.store.updateCredentialUses(operationId, executionResult.operationCredentialUses);
+          }
           if (isRecoverableIndeterminateHandoff(action.actionId, executionResult)) {
             return executionResult;
           }

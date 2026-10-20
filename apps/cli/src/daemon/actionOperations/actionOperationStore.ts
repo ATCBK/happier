@@ -11,6 +11,7 @@ import type { ActionOperationQueryScope, ActionOperationScope } from './actionOp
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 import type { LiveWorkCategoryV1, LiveWorkItemV1, LiveWorkInventoryV1 } from '@/daemon/lifecycle/managedActivity';
 import { isDeepStrictEqual } from 'node:util';
+import { ActionOperationCredentialUseV1Schema, type ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const SETTLED_RETENTION_LIMIT = 50;
 const SETTLED_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -275,6 +276,16 @@ export function createActionOperationStore(options?: Readonly<{
         const { setupReview: _review, ...live } = current;
         return { ...live, revision: current.revision + 1, ...(setupReview ? { setupReview } : {}) };
       });
+    },
+
+    /** Retain exact host result metadata before terminal or uncertain owner projection. */
+    updateCredentialUses(operationId: string, uses: readonly ActionOperationCredentialUseV1[]): ActionOperationSnapshotV1 | null {
+      const operationCredentialUses = uses.map(use => ActionOperationCredentialUseV1Schema.parse(use));
+      return mutate(operationId, current => isDeepStrictEqual(current.operationCredentialUses, operationCredentialUses) ? current : ({
+        ...current,
+        revision: current.revision + 1,
+        operationCredentialUses,
+      }));
     },
 
     succeed(operationId: string, result: unknown): ActionOperationSnapshotV1 | null {

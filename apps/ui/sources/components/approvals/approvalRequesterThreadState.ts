@@ -1,4 +1,5 @@
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
+import type { ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { DiscussionRequesterApproval } from '@/sync/domains/artifacts/approvalArtifacts';
 
@@ -9,8 +10,9 @@ import type { DiscussionRequesterApproval } from '@/sync/domains/artifacts/appro
  */
 export type ApprovalRequesterThreadState =
     | Readonly<{ kind: 'open' }>
-    | Readonly<{ kind: 'confirmed_pending' | 'done' | 'uncertain' | 'declined'; decidingAccountId: string | null }>
-    | Readonly<{ kind: 'failed'; decidingAccountId: string | null; errorCode: string | null }>
+    | Readonly<{ kind: 'confirmed_pending' | 'declined'; decidingAccountId: string | null }>
+    | Readonly<{ kind: 'done' | 'uncertain'; decidingAccountId: string | null; operationCredentialUses?: readonly ActionOperationCredentialUseV1[] }>
+    | Readonly<{ kind: 'failed'; decidingAccountId: string | null; errorCode: string | null; operationCredentialUses?: readonly ActionOperationCredentialUseV1[] }>
     | Readonly<{ kind: 'canceled' }>;
 
 const OUTCOME_UNKNOWN = 'approval_execution_outcome_unknown';
@@ -35,14 +37,21 @@ export function resolveApprovalRequesterThreadState(
         case 'failed': {
             const execution = request.execution;
             if (!execution) return { kind: 'confirmed_pending', decidingAccountId };
-            if (execution.errorCode === OUTCOME_UNKNOWN) return { kind: 'uncertain', decidingAccountId };
+            // Only admitted receipt metadata describes actual use; Action result JSON and the
+            // execution Account cannot establish the selected credential or its currentness.
+            const currentExecution = parsed.family === 'target_action' ? parsed.request.execution
+                : parsed.request.v === 2 ? parsed.request.execution : undefined;
+            const uses = currentExecution?.effectAttempted !== false ? currentExecution?.operationCredentialUses : undefined;
+            const credentialUse = uses?.length ? { operationCredentialUses: uses } : {};
+            if (execution.errorCode === OUTCOME_UNKNOWN) return { kind: 'uncertain', decidingAccountId, ...credentialUse };
             const failure = !execution.ok ? { errorCode: execution.errorCode ?? null }
                 : parsed.family === 'built_in' ? (() => {
                     const domainFailure = readApprovalExecutionFailure(parsed.request);
                     return domainFailure ? { errorCode: domainFailure.errorCode ?? null } : null;
                 })() : null;
-            if (failure?.errorCode === OUTCOME_UNKNOWN) return { kind: 'uncertain', decidingAccountId };
-            return failure ? { kind: 'failed', decidingAccountId, errorCode: failure.errorCode } : { kind: 'done', decidingAccountId };
+            if (failure?.errorCode === OUTCOME_UNKNOWN) return { kind: 'uncertain', decidingAccountId, ...credentialUse };
+            return failure ? { kind: 'failed', decidingAccountId, errorCode: failure.errorCode, ...credentialUse }
+                : { kind: 'done', decidingAccountId, ...credentialUse };
         }
         default:
             // Approved or executing: consent is given, the effect has not reported.

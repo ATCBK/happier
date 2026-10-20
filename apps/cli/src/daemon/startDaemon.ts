@@ -1427,6 +1427,7 @@ export async function startDaemon(
       },
     });
     const connectedAccountPurposeBindingRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+      credentialOwnerAccountId: readAccountIdFromToken(credentials.token) ?? undefined,
       coordinatorInventoryIsObserved: () => apiMachine?.hasCurrentAccountChangesObserver() === true,
       workerMachineId: machineId,
       establishedRuntimeOwner: establishedConnectedAccountRuntimeOwner,

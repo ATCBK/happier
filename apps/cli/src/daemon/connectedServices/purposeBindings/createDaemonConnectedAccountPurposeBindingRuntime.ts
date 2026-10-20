@@ -402,6 +402,7 @@ function assertCurrentRegistry(
 }
 
 export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readonly<{
+  credentialOwnerAccountId?: string;
   establishedRuntimeOwner: QualifiedConnectedAccountMaterializationOwner;
   openTeamDirect?: TeamCredentialDirectMaterialClient['open'];
   workerMachineId?: string;
@@ -1096,6 +1097,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const bindingStore =
     params.store ?? createActiveAccountSettingsConnectedAccountPurposeBindingStore();
   const bindingOwner = createConnectedAccountPurposeBindingOwner({
+    credentialOwnerAccountId: params.credentialOwnerAccountId,
     store: bindingStore,
     selectTarget,
     resolveTarget,
@@ -1182,6 +1184,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       input.credentialRevisionBasis?.captureCredentialRevision(
         input.origin.resourceId as ConnectedServiceCredentialRevisionV1,
       );
+      input.captureAdmittedResource?.({
+        teamId: opened.payload.teamId,
+        displayName: opened.admittedResource?.displayName ?? null,
+        resourceRevision: opened.payload.resourceRevision,
+      });
       return materialization;
     },
     projectTargetAccounts,

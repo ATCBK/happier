@@ -19,6 +19,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { handleActionsCommand } from '@/cli/commands/actions';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 const externalActionTargetResolverMocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -62,6 +63,7 @@ import {
   type TargetActionApprovalRequestV1,
   type WorkflowDefinitionV1,
   type PluginActionContributionV2,
+  type PluginHostAccessRequestV2,
 } from '@happier-dev/protocol';
 import {
   createActionExecutor,
@@ -227,6 +229,7 @@ function createExternalActionRuntime(
     inputHints?: { fields: readonly { path: string; title: string; widget: 'secret' }[] };
     onInput?: (input: JsonValue) => void;
     confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
+    hostAccess?: readonly PluginHostAccessRequestV2[];
   }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
   const localId = actionOptions.localId ?? 'inspect';
@@ -250,6 +253,7 @@ function createExternalActionRuntime(
       engines: { happier: '^1.0.0' },
       runtime: { apiVersion: 1 },
       entrypoints: { daemon: './daemon.mjs' },
+      ...(actionOptions.hostAccess ? { hostAccess: { required: actionOptions.hostAccess } } : {}),
       contributes: {
         actions: (actionOptions.overlappingTool ? ['inspect', 'actions/inspect'] : [localId]).map((id) => ({
           id,
@@ -259,6 +263,7 @@ function createExternalActionRuntime(
           surfaces: actionOptions.surfaces ?? ['cli'],
           execution: { target: 'daemon' },
           dangerLevel,
+          ...(actionOptions.hostAccess ? { hostAccess: actionOptions.hostAccess.map(request => request.id) } : {}),
           ...(actionOptions.inputSchema === undefined ? {} : { inputSchema: actionOptions.inputSchema }),
           ...(actionOptions.resultSchema === undefined ? {} : { resultSchema: actionOptions.resultSchema }),
           ...(actionOptions.inputHints === undefined ? {} : { inputHints: actionOptions.inputHints }),
@@ -675,6 +680,92 @@ describe('createDaemonExternalActionContributedInvoker', () => {
           externalActionExecutionAuthorization: source.context.externalActionExecutionAuthorization } });
       expect(effects).toBe(0);
     } finally { await owners.dispose(); }
+  });
+
+  it('settles a shared contributed approval with the credential admitted through its real Plugin service', async () => {
+    const source = createSharedBotContributedContext('session');
+    const service = { pluginId: 'acme.external', localId: 'credentials' };
+    const purpose = { consumer: { pluginId: 'acme.external', localId: 'inspect' }, purpose: 'release' };
+    const account = { service, accountId: 'private-connected-profile' };
+    let materializations = 0;
+    const credentialOwner = createConnectedAccountPurposeBindingOwner({
+      credentialOwnerAccountId: 'alice',
+      store: {
+        read: async () => ({ v: 1, bindings: [{ purpose, target: { kind: 'account', account } }] }),
+        update: async () => { throw new Error('Replay cannot change the saved credential'); },
+        subscribe: () => ({ dispose() {} }),
+      },
+      selectTarget: async () => { throw new Error('No credential prompt during replay'); },
+      resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: 'Release GitHub' } : null,
+      materializeAccount: async () => {
+        materializations += 1;
+        return { kind: 'environment', env: { RELEASE_TOKEN: 'private-release-token' } };
+      },
+      projectTargetAccounts: async () => { throw new Error('No account listing'); },
+      assertTargetAccountMaterializable: async () => { throw new Error('No listed account selection'); },
+    });
+    const owners = createProductionPluginInvocationServiceOwners({ connectedAccounts: credentialOwner });
+    let effects = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', async context => {
+      const material = await context.services.connectedAccounts.materialize('release', { kind: 'environment', keys: ['RELEASE_TOKEN'] });
+      expect(material).toEqual({ kind: 'environment', env: { RELEASE_TOKEN: 'private-release-token' } });
+      effects += 1;
+    }, undefined, undefined, undefined, owners, 'writesRemote', undefined, { surfaces: ['agent'], hostAccess: [{
+      id: 'release', capability: 'connectedAccounts', reason: 'Publish the approved release',
+      scope: { serviceRefs: ['credentials'], operations: ['use'], materializationKinds: ['environment'] },
+    }] });
+    const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'ephemeral',
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    let stored: TargetActionApprovalRequestV1 | null = null;
+    const invoker = createDaemonExternalActionContributedInvoker({ acquireRuntimeRegistryLease: async () => lease,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'credential-write' }; },
+        read: async () => stored,
+      }),
+    });
+    const attribution = { requestRef: 'bob-original-request', requester: { serverId: 'server-external', accountId: 'bob' },
+      persona: { serverId: 'server-external', sessionId: 'original-manager-session' }, origin: null };
+    try {
+      const created = await createExternalActionExecutor(invoker).execute('action.invoke', {
+        action: { pluginId: 'acme.external', localId: 'inspect' }, input: { title: 'Approved release' },
+      }, { ...source.context, actionRequestAttributionV1: attribution });
+      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'credential-write' } });
+      expect(materializations).toBe(0);
+      const replay = createDaemonExternalActionContributedApprovalReplay({
+        readInstallationIdentity: source.readInstallationIdentity,
+        credentials: { token: 'alice-token', encryption: null } as never,
+        isApprovalExecutionOriginCurrent: source.isApprovalExecutionOriginCurrent,
+        acquireRuntimeRegistryLease: async () => lease,
+        targetActionApprovals: {
+          targetActionApprovalsGet: async () => stored,
+          targetActionApprovalsUpdate: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
+        },
+      });
+      const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+        requesterApprovalDecision: { sessionId: 'bot-session',
+          actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true } };
+      const result = await replay({ artifactId: 'credential-write', decision: 'approve', context });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(effects).toBe(1);
+      expect(materializations).toBe(1);
+      const operationCredentialUses = [{ v: 1, kind: 'connected_account', label: 'Release GitHub',
+        owner: { kind: 'account', accountId: 'alice' }, service,
+        why: { kind: 'purpose_binding', purpose, target: 'account' }, currentness: { kind: 'current_at_materialization' } }];
+      expect(stored).toMatchObject({ status: 'executed', decision: { decidingAccountId: 'bob' },
+        executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: attribution },
+        execution: { operationCredentialUses } });
+      expect(result).toMatchObject({ result: { execution: { operationCredentialUses } } });
+      const repeated = await replay({ artifactId: 'credential-write', decision: 'approve', context });
+      expect(repeated).toMatchObject({ result: { execution: { operationCredentialUses } } });
+      expect(materializations).toBe(1);
+      expect(effects).toBe(1);
+      for (const privateValue of ['private-release-token', 'private-connected-profile']) {
+        expect(JSON.stringify(stored)).not.toContain(privateValue);
+        expect(JSON.stringify(result)).not.toContain(privateValue);
+      }
+    } finally {
+      await owners.dispose();
+    }
   });
 
   it('rechecks the live requester after confirming confidential contributed operands', async () => {

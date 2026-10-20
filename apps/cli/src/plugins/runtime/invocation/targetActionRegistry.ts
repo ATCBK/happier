@@ -320,6 +320,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
         correlationId: string;
         signal: AbortSignal;
         isCurrent(): boolean;
+        recordOperationCredentialUse?: import('@happier-dev/protocol').ActionExecutorContext['recordOperationCredentialUse'];
     }>): Promise<TargetActionConnectedAccountOperationBinding | TargetActionPreDispatchResult | null>;
 }>): Readonly<{
     expects(pluginId: string, localId: string): boolean;
@@ -603,6 +604,9 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         localId: registration.localId,
                         input,
                         correlationId,
+                        ...(seed.approvalContext?.recordOperationCredentialUse
+                            ? { recordOperationCredentialUse: seed.approvalContext.recordOperationCredentialUse }
+                            : {}),
                         signal: lifetime.signal,
                         isCurrent: () => (
                             !signal.aborted
