@@ -5,10 +5,36 @@ import {
     defineProtocolObject,
     defineProtocolString,
     defineProtocolUnion,
+    encodeBase64,
+    decodeBase64,
 } from '@happier-dev/plugin-sdk/protocol';
 
 import { ConversationProviderFailureV1ProtocolSchema } from '../diagnostics.js';
 import { ConversationProviderConnectionInputV1Fields } from './connection.js';
+
+/** One portable encoding for provider-native references; no paths, URLs or bytes in observations. */
+export function createConversationAttachmentIdV1(providerId: string, parts: readonly (string | number | null)[]): string {
+    return `${providerId}-file:v1:${encodeBase64(new TextEncoder().encode(JSON.stringify(parts)), 'base64url')}`;
+}
+
+export function readConversationAttachmentIdV1(value: string, providerId: string): readonly (string | number | null)[] | null {
+    const prefix = `${providerId}-file:v1:`;
+    if (!value.startsWith(prefix)) return null;
+    const encoded = value.slice(prefix.length);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+    try {
+        const bytes = decodeBase64(encoded, 'base64url');
+        if (encodeBase64(bytes, 'base64url') !== encoded) return null;
+        const parts: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        return Array.isArray(parts) && parts.every(part => part === null || typeof part === 'string'
+            || (typeof part === 'number' && Number.isSafeInteger(part))) ? parts : null;
+    } catch { return null; }
+}
+
+/** The existing fetch wire carries padded base64, independently of descriptor identities. */
+export function encodeConversationAttachmentBytesV1(bytes: Uint8Array): string {
+    return encodeBase64(bytes);
+}
 
 /** Provider-local immutable file identity; observations never carry file bytes or paths. */
 export const ConversationMessageAttachmentV1Schema = defineProtocolObject({

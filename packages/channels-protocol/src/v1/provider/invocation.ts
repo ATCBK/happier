@@ -19,8 +19,8 @@ export function assertConversationChannelsCoreCallerV1(
 }
 
 /** Cancellation and retired generations must never become provider retry work. */
-export function rethrowConversationProviderLifecycleFailureV1(error: unknown, signal: AbortSignal): void {
-    if (signal.aborted || (isPluginError(error) && error.code === 'plugin_final_generation_retired')) {
+export function rethrowConversationProviderLifecycleFailureV1(error: unknown, signal?: AbortSignal): void {
+    if (signal?.aborted || (isPluginError(error) && error.code === 'plugin_final_generation_retired')) {
         throw error;
     }
 }

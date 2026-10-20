@@ -69,7 +69,7 @@ export const ConversationBindingManagementRowV1Schema = defineProtocolObject({
     bindingId: ConversationBindingIdV1Schema, parentBindingId: ConversationBindingIdV1Schema.optional(), revision,
     connectionId: ConversationConnectionIdV1Schema,
     endpoint: defineProtocolObject({ audience: values(['direct', 'shared']), label: defineProtocolString().optional() }, closed),
-    target: defineProtocolObject({ kind: values(['session', 'automation', 'threadRouter']), summary: text }, closed),
+    target: defineProtocolObject({ kind: values(['session', 'automation', 'threadRouter']), summary: text, sessionId: text.optional() }, closed),
     inputMode: values(['directMentionsOnly', 'addressedMessages', 'allAllowedMessages']),
     deliveryMode: values(['repliesOnly', 'mirrorSession', 'finalResult', 'none']),
     approval: defineProtocolUnion([

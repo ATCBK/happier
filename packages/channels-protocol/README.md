@@ -29,6 +29,26 @@ independently. Compatible separately installed copies interoperate by
 serialized protocol id/version and runtime validation, never by JavaScript
 object identity.
 
+### Outbound text formatting (development, unreleased)
+
+Channels alone splits outbound text: paragraph, then line, then word, then
+grapheme boundaries. A fenced code block that fits stays intact; an oversized
+block closes and reopens its original fence and language tag between messages.
+Fence overhead counts toward the provider's native limit. A grapheme or fence
+header that cannot fit is refused before sending any chunk.
+
+In setup, declare `outboundTextLimit: { maximum, unit,
+formatting: 'preservesNativeUnits' }`. The unit is `unicodeCodePoints`,
+`utf16CodeUnits` or `utf8Bytes`; the maximum comes from the native API.
+Formatting, escaping, entities and mention suppression must preserve that
+unit's count, so core measures exactly the eventual native text length.
+For example, Telegram and GitHub replace `@` with `＠` while counting code
+points; Discord sends unchanged text and disables mentions in native metadata.
+A provider must choose a rendering that satisfies its declared measure and
+must not split again or expand the text after core splits it. Omitted
+`formatting` retains the same measure-preservation obligation. Omit the whole
+limit when the provider has no native text ceiling (Email); do not invent one.
+
 ## What a Channels provider is
 
 A provider is a trusted plugin that adapts one external conversation service
@@ -110,7 +130,7 @@ export const { manifest, activate } = definePlugin({
         recommendedTransport: 'socket',
         overlapSafety: 'safe',
         replayContinuity: 'sessionBound',
-        outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
       }),
     },
     [actionIds.connectionTest]: {
