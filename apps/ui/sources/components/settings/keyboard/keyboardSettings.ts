@@ -12,6 +12,12 @@ import {
 import { commandStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 
 export const KEYBOARD_COMMAND_GROUP_TITLE_KEYS: Readonly<Record<KeyboardShortcutCommandGroupId, TranslationKeyNoParams>> = {
+    panes: 'settingsKeyboard.paneGroups.panes',
+    terminal: 'settingsKeyboard.paneGroups.terminal',
+    search: 'settingsKeyboard.paneGroups.search',
+    files: 'settingsKeyboard.paneGroups.files',
+    code: 'settingsKeyboard.paneGroups.code',
+    review: 'settingsKeyboard.groupReview',
     general: 'settingsKeyboard.groupApp',
     sessions: 'settingsKeyboard.groupSessions',
     composer: 'settingsKeyboard.groupComposer',

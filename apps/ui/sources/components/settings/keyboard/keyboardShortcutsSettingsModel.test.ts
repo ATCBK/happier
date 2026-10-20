@@ -70,8 +70,8 @@ describe('keyboardShortcutsSettingsModel', () => {
             surface: 'native',
         });
 
-        expect(model.commandGroups.map((group) => group.id)).toEqual([
-            'general', 'sessions', 'composer', 'transcript', 'splitView', 'browser',
+        expect(model.commandGroups.map((group) => group.id).slice(0, 10)).toEqual([
+            'general', 'panes', 'sessions', 'composer', 'transcript', 'review', 'splitView', 'browser', 'terminal', 'search',
         ]);
         const groupOf = (commandId: string) => model.commandGroups
             .find((group) => group.rows.some((row) => row.commandId === commandId))?.id;
@@ -83,6 +83,9 @@ describe('keyboardShortcutsSettingsModel', () => {
         expect(groupOf('transcript.scroll.top')).toBe('transcript');
         expect(groupOf('workspace.splitRight')).toBe('splitView');
         expect(groupOf('browser.reload')).toBe('browser');
+        expect(groupOf('find.open')).toBe('search');
+        expect(groupOf('terminal.jump')).toBe('terminal');
+        expect(groupOf('panes.main.toggle')).toBe('panes');
         const grouped = model.commandGroups.flatMap((group) => group.rows.map((row) => row.commandId));
         expect([...grouped].sort()).toEqual(model.commandRows.map((row) => row.commandId).sort());
     });

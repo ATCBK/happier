@@ -15,6 +15,7 @@ import {
     createKeyboardShortcutDispatcher,
     hasAnyAvailableKeyboardHandler,
     isFindKeyboardCommand,
+    isKeyboardTargetHidden,
     normalizeKeyboardEvent,
     normalizeNativeHardwareKeyboardEvent,
     readKeyboardContextFromEventTarget,
@@ -29,6 +30,8 @@ import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { createFindSurfaceRegistry, type FindSurfaceRegistration, type FindSurfaceRegistry } from './findSurfaceRegistry';
 import { registerFindActionRuntime } from './findActionRuntime';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from './escape';
+import { focusPaneRegion } from '@/components/appShell/panes/paneRegionFocus';
+import { selectEmbeddedKeyboardHandlers } from './embeddedKeyboard';
 
 type NativeKeyboardBridgeModule = typeof nativeKeyboardBridge & Readonly<{
     subscribeToNativeHardwareKeyboardEvents?: (
@@ -50,7 +53,14 @@ type NativeKeyboardInputRegistration = Readonly<{
 }>;
 
 const KeyboardShortcutRegistrationContext = React.createContext<KeyboardShortcutRegistrationContextValue | null>(null);
-const EmbeddedFindKeyboardContext = React.createContext<Readonly<{ signatures: readonly string[]; dispatch(event: NativeHardwareKeyboardEventLike): boolean }> | null>(null);
+type EmbeddedKeyboardChannel = Readonly<{
+    signatures: readonly string[];
+    dispatch(event: NativeHardwareKeyboardEventLike): boolean;
+}>;
+const EmbeddedKeyboardContext = React.createContext<Readonly<{
+    find: EmbeddedKeyboardChannel;
+    editor: EmbeddedKeyboardChannel;
+}> | null>(null);
 
 export type KeyboardShortcutContextSnapshot = Readonly<{
     registration: KeyboardShortcutRegistrationContextValue | null;
@@ -188,9 +198,14 @@ export function useEmbeddedFindKeyboard(): Readonly<{
     signatures: readonly string[];
     dispatch(event: NativeHardwareKeyboardEventLike): boolean;
 }> {
-    return React.useContext(EmbeddedFindKeyboardContext) ?? EMPTY_EMBEDDED_FIND_KEYBOARD;
+    return React.useContext(EmbeddedKeyboardContext)?.find ?? EMPTY_EMBEDDED_KEYBOARD;
 }
-const EMPTY_EMBEDDED_FIND_KEYBOARD = { signatures: [] as readonly string[], dispatch: () => false };
+
+/** Code editors forward configured Find, Save and Ask chords through the same host dispatcher. */
+export function useEmbeddedEditorKeyboard(): EmbeddedKeyboardChannel {
+    return React.useContext(EmbeddedKeyboardContext)?.editor ?? EMPTY_EMBEDDED_KEYBOARD;
+}
+const EMPTY_EMBEDDED_KEYBOARD: EmbeddedKeyboardChannel = { signatures: [], dispatch: () => false };
 
 function buildHelpBody(shortcutLabels: Partial<Record<string, string>>): string {
     const lines = [
@@ -274,6 +289,8 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         isComposing: false,
     }), []);
     const rootHandlers = React.useMemo<KeyboardShortcutHandlers>(() => ({
+        'panes.region.next': () => focusPaneRegion('next') ? 'handled' : 'pass',
+        'panes.region.previous': () => focusPaneRegion('previous') ? 'handled' : 'pass',
         ...(surface === 'web' || find.resolve() ? {
             'find.open': (event) => find.command('find.open', event),
         } satisfies KeyboardShortcutHandlers : {}),
@@ -377,21 +394,22 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             modifiers: { shift: false, ctrl: false, meta: false, alt: false },
         }));
     }, [find]);
-    const embeddedFindKeyboard = React.useMemo(() => {
-        const { 'find.open': open, 'find.next': next, 'find.previous': previous } = dispatcherOptions.handlers;
-        const options = { ...dispatcherOptions, handlers: { 'find.open': open, 'find.next': next, 'find.previous': previous } };
-        const signatures = [...resolveNativeHardwareKeyboardConsumableEventSignatures(options)];
-        if (find.resolve()?.isOpen()) signatures.push('Escape|shift=false|ctrl=false|meta=false|alt=false');
-        return { signatures, dispatch: (nativeEvent: NativeHardwareKeyboardEventLike) => {
-            const event = normalizeNativeHardwareKeyboardEvent(nativeEvent);
-            if (find.closeFromKeyboard(event) === 'handled') return true;
-            const current = dispatcherOptionsRef.current;
-            const { 'find.open': open, 'find.next': next, 'find.previous': previous } = current.handlers;
-            return createKeyboardShortcutDispatcher({ ...current,
-                handlers: { 'find.open': open, 'find.next': next, 'find.previous': previous },
-                getContext: () => ({ isEditableTarget: true, isComposing: event.isComposing, findInputFocused: find.resolve()?.isInputFocused() === true }),
-            })(event);
-        } };
+    const embeddedKeyboard = React.useMemo(() => {
+        const channel = (surface: 'find' | 'editor'): EmbeddedKeyboardChannel => {
+            const options = { ...dispatcherOptions, handlers: selectEmbeddedKeyboardHandlers(dispatcherOptions.handlers, surface) };
+            const signatures = [...resolveNativeHardwareKeyboardConsumableEventSignatures(options)];
+            if (find.resolve()?.isOpen()) signatures.push('Escape|shift=false|ctrl=false|meta=false|alt=false');
+            return { signatures, dispatch: (nativeEvent: NativeHardwareKeyboardEventLike) => {
+                const event = normalizeNativeHardwareKeyboardEvent(nativeEvent);
+                if (find.closeFromKeyboard(event) === 'handled') return true;
+                const current = dispatcherOptionsRef.current;
+                return createKeyboardShortcutDispatcher({ ...current,
+                    handlers: selectEmbeddedKeyboardHandlers(current.handlers, surface),
+                    getContext: () => ({ isEditableTarget: true, isComposing: event.isComposing, findInputFocused: find.resolve()?.isInputFocused() === true }),
+                })(event);
+            } };
+        };
+        return { find: channel('find'), editor: channel('editor') };
     }, [dispatcherOptions, find, findAvailabilityVersion]);
     const registrationContextValue = React.useMemo<KeyboardShortcutRegistrationContextValue>(
         () => ({ registerHandlers, executeCommand, submitFindInput, find, refreshFindAvailability }),
@@ -433,15 +451,24 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
 
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
-        const dispatchEvent = (event: KeyboardEvent, captureFind: boolean) => {
+        const dispatchEvent = (event: KeyboardEvent, captureEditor: boolean) => {
             if (event.defaultPrevented === true) return;
             const currentOptions = dispatcherOptionsRef.current;
-            const { 'find.open': open, 'find.next': next, 'find.previous': previous, ...ordinaryHandlers } = currentOptions.handlers;
+            const editorHandlers = selectEmbeddedKeyboardHandlers(currentOptions.handlers, 'editor');
+            const hiddenReviewTarget = captureEditor && isKeyboardTargetHidden(event.target);
+            if (hiddenReviewTarget) {
+                for (const id of Object.keys(currentOptions.handlers) as KeyboardCommandId[]) {
+                    if (id.startsWith('review.')) editorHandlers[id] = currentOptions.handlers[id];
+                }
+            }
+            const ordinaryHandlers = { ...currentOptions.handlers };
+            for (const id of Object.keys(editorHandlers) as KeyboardCommandId[]) delete ordinaryHandlers[id];
             const dispatcher = createKeyboardShortcutDispatcher({
                 ...currentOptions,
-                handlers: captureFind ? { 'find.open': open, 'find.next': next, 'find.previous': previous } : ordinaryHandlers,
+                handlers: captureEditor ? editorHandlers : ordinaryHandlers,
                 getContext: () => ({
                     ...readKeyboardContextFromEventTarget(event.target),
+                    ...(hiddenReviewTarget ? { isEditableTarget: false, isInteractiveTarget: false } : {}),
                     isComposing: event.isComposing === true,
                 }),
             });
@@ -449,16 +476,16 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             if (!dispatcher(normalized)) return;
             event.preventDefault();
             event.stopPropagation();
-            if (captureFind) event.stopImmediatePropagation();
+            if (captureEditor) event.stopImmediatePropagation();
         };
-        const captureFind = (event: KeyboardEvent) => dispatchEvent(event, true);
+        const captureEditor = (event: KeyboardEvent) => dispatchEvent(event, true);
         const handleKeyDown = (event: KeyboardEvent) => dispatchEvent(event, false);
-        window.addEventListener('keydown', captureFind, true);
+        window.addEventListener('keydown', captureEditor, true);
         window.addEventListener('keydown', handleKeyDown);
         window.addEventListener('focusin', refreshFindAvailability);
         window.addEventListener('focusout', refreshFindAvailability);
         return () => {
-            window.removeEventListener('keydown', captureFind, true);
+            window.removeEventListener('keydown', captureEditor, true);
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('focusin', refreshFindAvailability);
             window.removeEventListener('focusout', refreshFindAvailability);
@@ -502,11 +529,11 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
 
     return (
         <KeyboardShortcutRegistrationContext.Provider value={registrationContextValue}>
-            <EmbeddedFindKeyboardContext.Provider value={embeddedFindKeyboard}>
+            <EmbeddedKeyboardContext.Provider value={embeddedKeyboard}>
             <KeyboardShortcutLabelsContext.Provider value={keyboardShortcutsV2Enabled === true ? shortcutLabels : NO_KEYBOARD_SHORTCUT_LABELS}>
                 <FocusReturnProvider>{props.children}</FocusReturnProvider>
             </KeyboardShortcutLabelsContext.Provider>
-            </EmbeddedFindKeyboardContext.Provider>
+            </EmbeddedKeyboardContext.Provider>
         </KeyboardShortcutRegistrationContext.Provider>
     );
 }

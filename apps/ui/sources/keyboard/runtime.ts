@@ -67,6 +67,8 @@ export type NativeHardwareKeyboardEventLike = Readonly<{
 
 function isSingleKeyRule(rule: KeybindingRule): boolean {
     const parsed = parseKeybindingRule(rule);
+    // Function keys are navigation keys, independent of single-character review shortcuts.
+    if (/^F\d+$/.test(parsed.key ?? parsed.code ?? '')) return false;
     return parsed.mod !== true
         && parsed.alt !== true
         && parsed.ctrl !== true
@@ -147,6 +149,7 @@ function resolveNativeConsumableKey(
     if (parsed.code === 'BracketLeft') return '[';
     if (parsed.code === 'BracketRight') return ']';
     if (parsed.code === 'Slash') return '/';
+    if (/^F\d+$/.test(parsed.key ?? parsed.code ?? '')) return parsed.key ?? parsed.code ?? null;
     if (parsed.key?.length === 1) return parsed.key.toLowerCase();
     return null;
 }
@@ -345,6 +348,19 @@ export function resolveKeyboardPlatform(): KeyboardPlatform {
     // for list selection in one window, so this reads that single answer.
     if (Platform.OS === 'web') return resolveHappierPointerPlatform('web');
     return 'linux';
+}
+
+/** A retained hidden column may still own document.activeElement after its panel is maximized. */
+export function isKeyboardTargetHidden(target: EventTarget | null): boolean {
+    let element = target as HTMLElement | null;
+    const view = element?.ownerDocument?.defaultView;
+    while (element?.nodeType === 1) {
+        if (element.hidden || element.getAttribute('aria-hidden') === 'true' || element.hasAttribute('inert')) return true;
+        const style = view?.getComputedStyle(element);
+        if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') return true;
+        element = element.parentElement;
+    }
+    return false;
 }
 
 export function readKeyboardContextFromEventTarget(target: EventTarget | null): KeyboardContext {

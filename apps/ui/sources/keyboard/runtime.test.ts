@@ -30,6 +30,19 @@ function keyEvent(event: Partial<NormalizedKeyboardEvent>): NormalizedKeyboardEv
 }
 
 describe('createKeyboardShortcutDispatcher', () => {
+    it.each(['macos', 'windows', 'linux', 'ios', 'android'] as const)('opens Files and Symbols from editable focus on %s without consuming IME', (platform) => {
+        for (const [id, key, shiftKey] of [['search.files', 'p', false], ['search.symbols', 'o', true]] as const) {
+            const open = vi.fn();
+            const options = { enabled: true, platform, surface: 'native' as const, singleKeyShortcutsEnabled: false,
+                disabledCommandIds: [], overrides: {}, handlers: { [id]: open }, getContext: () => ({ ...context, isEditableTarget: true }) };
+            const chord = keyEvent({ key, code: `Key${key.toUpperCase()}`, shiftKey,
+                metaKey: platform === 'macos' || platform === 'ios', ctrlKey: platform !== 'macos' && platform !== 'ios' });
+            expect(createKeyboardShortcutDispatcher(options)(chord)).toBe(true);
+            expect(open).toHaveBeenCalledOnce();
+            expect(createKeyboardShortcutDispatcher(options)({ ...chord, isComposing: true })).toBe(false);
+            expect(createKeyboardShortcutDispatcher({ ...options, disabledCommandIds: [id] })(chord)).toBe(false);
+        }
+    });
     it('admits literal Ctrl+R for prompt picking on macOS web and every desktop/native host', () => {
         for (const platform of ['macos', 'windows', 'linux', 'ios', 'android'] as const) {
             const options = { enabled: true, platform, singleKeyShortcutsEnabled: false,

@@ -29,7 +29,7 @@ export type KeyboardShortcutSettingsCommandRow = Readonly<{
 }>;
 
 /** The part of the app a command acts on; settings list commands under these headings. */
-export type KeyboardShortcutCommandGroupId = 'general' | 'sessions' | 'composer' | 'transcript' | 'splitView' | 'browser';
+export type KeyboardShortcutCommandGroupId = 'general' | 'panes' | 'sessions' | 'composer' | 'transcript' | 'splitView' | 'browser' | 'review' | 'terminal' | 'search' | 'files' | 'code';
 
 export type KeyboardShortcutSettingsCommandGroup = Readonly<{
     id: KeyboardShortcutCommandGroupId;
@@ -37,13 +37,27 @@ export type KeyboardShortcutSettingsCommandGroup = Readonly<{
 }>;
 
 export const KEYBOARD_SHORTCUT_COMMAND_GROUP_ORDER: readonly KeyboardShortcutCommandGroupId[] = [
-    'general', 'sessions', 'composer', 'transcript', 'splitView', 'browser',
+    'general', 'panes', 'sessions', 'composer', 'transcript', 'review', 'splitView', 'browser', 'terminal', 'search', 'files', 'code',
 ];
 
 /** Commands are grouped by their id's area; anything new and unrecognised lands under General. */
 export function resolveKeyboardShortcutCommandGroupId(commandId: KeyboardCommandId): KeyboardShortcutCommandGroupId {
+    if (commandId.startsWith('review.') || commandId === 'editor.selection.ask' || commandId === 'files.track.toggle') return 'review';
     const area = commandId.split('.')[0];
     switch (area) {
+        case 'shell':
+        case 'panes':
+            return 'panes';
+        case 'terminal':
+            return 'terminal';
+        case 'find':
+        case 'search':
+            return 'search';
+        case 'files':
+        case 'media':
+            return 'files';
+        case 'code':
+            return 'code';
         case 'session':
         case 'sessions':
             return 'sessions';
