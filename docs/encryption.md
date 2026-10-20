@@ -3858,6 +3858,17 @@ is introduced. HTML Artifacts use the opaque sandbox described below;
 neither view has authenticated-app or host-bridge authority. This development contract
 is not a claim of released availability or completed live validation.
 
+Authenticated in-app Artifact previews in 0.3 development source use the same
+preview-bytes owner as workspace files. Image, SVG and PDF bytes are admitted by
+the canonical file classifier, then materialized as a local Blob URL on web or
+a private cache file on native. That owner releases temporary URIs, including a
+load retired before it completes. Artifact previews also obey the existing web
+whole-file buffering budget (50 MB); Download remains available when a preview
+cannot fit. PDFs render through the host's pdf.js implementation rather than a
+browser PDF frame. SVG is rendered as an image, with the native validator
+rejecting active content. This authenticated-app path does not change the
+isolated-origin or main-origin public-share policy described above.
+
 The existing owner-only publication access log is also exposed through
 `artifact.public_link.audit` in 0.3 development source. It remains a read Action
 with the catalog's egress approval floor: the keyholding host verifies the

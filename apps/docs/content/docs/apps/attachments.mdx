@@ -87,9 +87,13 @@ The preview modal is designed for quick confirmation before send:
 - if multiple images are attached, you can move between them from the same modal
 - opening the preview keeps you inside the current session or new-session flow instead of sending you to a separate screen
 
-On **web**, the previous/next controls appear when you hover the image.
-
-On **touch/native** surfaces, the navigation controls stay directly available because there is no hover state.
+In unreleased 0.3 development source, the larger preview is the shared Media
+stage used by Files, Review and Artifacts. Images support pinch, double-tap and
+pointer zoom, pan, and drag-to-dismiss. The gallery stays fixed while it is open,
+even if new transcript content arrives. Tap the image to toggle immersive
+viewing; Close or Esc returns focus to the thumbnail. On web, arrow keys move
+between items, `0` fits the image and `1` shows actual size. Staged and transcript
+video tiles open the same stage with playback controls.
 
 ## What happens when you send attachments
 
