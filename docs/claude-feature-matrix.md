@@ -105,7 +105,8 @@ stops to wait on backgrounded work it still owns (SDK `task_started` rows carryi
 active, but its SDK query keeps observing, and only the Agent's own typed
 `task_progress` after it wakes reactivates it until its next terminal. `SubagentStop`
 cannot reactivate it; a later failure or stop settles an awaiting Agent, and a
-stopped provider releases any awaiting Agent.
+stopped provider releases any awaiting Agent. A completed TaskOutput preserves the
+pending wake; a confirmed TaskStop settles its target as stopped.
 
 Historical observations reconstruct correlation without fresh activity admission
 or foreground prompt acceptance. Ordered source import retains raw child facts
