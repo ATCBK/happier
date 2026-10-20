@@ -24,8 +24,17 @@ export function createComputerRoutes(input: Readonly<{machineId: string; machine
   const nativeFailure = (error: unknown) => failure(error && typeof error === 'object' && 'code' in error
     && typeof error.code === 'string' ? error.code : 'native_capture_failed');
   const selected = (sessionId: string) => input.registry.list().find(entry => entry.computer?.sessionId === sessionId)?.computer;
+  const inputDisplayKey = (displayId: string) => {
+    // X11 :N and :N.0 address the same screen. Wire source identities stay exact,
+    // but aliases cannot admit a second controller for the same physical input.
+    const x11 = process.platform === 'linux' ? /^:(\d+)(?:\.(\d+))?$/.exec(displayId) : null;
+    return x11 ? JSON.stringify([Number(x11[1]), Number(x11[2] ?? 0)]) : displayId;
+  };
   const conflictingSelection = (sessionId: string, target: ComputerTargetV1) => input.registry.list()
-    .some(entry => entry.computer && entry.computer.sessionId !== sessionId && computerTargetKey(entry.computer.target) === computerTargetKey(target));
+    .some(entry => entry.computer && entry.computer.sessionId !== sessionId
+      && inputDisplayKey(entry.computer.target.displayId) === inputDisplayKey(target.displayId)
+      && (entry.computer.target.kind === 'display' || target.kind === 'display'
+        || (entry.computer.target.pid === target.pid && entry.computer.target.windowId === target.windowId)));
   const selection = (sessionId: string) => {
     const source = selected(sessionId);
     return { consentGranted: source?.consentGranted() ?? false,
@@ -185,7 +194,7 @@ export function createComputerRoutes(input: Readonly<{machineId: string; machine
           const action = ComputerInputRequestV1Schema.parse(parsed.data);
           return await source.input(action.captureId, action.operation, context.authority === 'present_user' ? 'human' : 'agent', context.signal);
         }
-        if (actionId === 'computer.control.status') return source.status();
+        if (actionId === 'computer.control.status') return await source.readStatus();
         if (actionId === 'computer.control.interrupt') {
           const result = await source.interrupt();
           return { ...identity, status: 'interrupted', completion: result.completion };

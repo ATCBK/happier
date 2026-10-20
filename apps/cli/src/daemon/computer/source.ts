@@ -101,7 +101,7 @@ export function createComputerCaptureSource(input: Readonly<{
     }
   }
 
-  async function execute(captureId: string, operation: ComputerInputOperationV1, requestedBy: 'agent' | 'human', signal?: AbortSignal): Promise<ComputerActionResultV1> {
+  async function execute(captureId: string | null, operation: ComputerInputOperationV1, requestedBy: 'agent' | 'human', signal?: AbortSignal): Promise<ComputerActionResultV1> {
     const identity = { target: input.target, sourceId };
     if (requestedBy === 'agent' && access === 'see') return { ...identity, status: 'failed', code: 'computer_access_read_only' };
     if (requestedBy === 'agent' && captureId !== modelCaptureId) return { ...identity, status: 'failed', code: 'stale_capture' };
@@ -191,12 +191,16 @@ export function createComputerCaptureSource(input: Readonly<{
           pendingInput = pendingInput.then(async () => {
             const drain = await takeover;
             if (stopped) return;
-            if (drain.completion === 'unknown') failInput('human_input_interruption_uncertain');
-            const epoch = control.getStatus().controlEpoch;
-            const observation = await (await getDriver()).capture(input.target);
-            control.observe(epoch);
-            if (JSON.stringify(observation.geometry) !== JSON.stringify(viewedGeometry)) { failInput('stale_capture'); return; }
-            const outcome = await execute(observation.captureId, operation, 'human');
+            if (drain.completion === 'unknown') { failInput('human_input_interruption_uncertain'); return; }
+            let captureId: string | null = null;
+            if (operation.kind === 'click') {
+              const epoch = control.getStatus().controlEpoch;
+              const observation = await (await getDriver()).capture(input.target);
+              control.observe(epoch);
+              if (JSON.stringify(observation.geometry) !== JSON.stringify(viewedGeometry)) { failInput('stale_capture'); return; }
+              captureId = observation.captureId;
+            }
+            const outcome = await execute(captureId, operation, 'human');
             if (outcome.status === 'failed') failInput(outcome.code);
             else if (outcome.status === 'interrupted') failInput(outcome.completion === 'unknown'
               ? 'human_input_interruption_uncertain' : 'human_input_failed');
@@ -228,6 +232,18 @@ export function createComputerCaptureSource(input: Readonly<{
     observe,
     input: (captureId: string, operation: ComputerInputOperationV1, requestedBy: 'agent' | 'human', signal?: AbortSignal) => execute(captureId, operation, requestedBy, signal),
     status,
+    async readStatus(): Promise<ComputerControlStatusResponseV1> {
+      // Quarantine cannot read fresh OS grants, but its unsettled-input fact
+      // must remain readable so the existing recovery can retire the source.
+      if (control.getStatus().uncertain) return status();
+      try {
+        const grants = await (await getDriver()).checkPermissions();
+        return { ...status(), grants };
+      } catch (error) {
+        if (control.getStatus().uncertain) return status();
+        throw error;
+      }
+    },
     interrupt: () => control.takeOver(),
     handBack: () => control.handBack(),
     async close() {

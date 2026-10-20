@@ -565,6 +565,10 @@ export type ComputerControlActionResultById = {
             displayId: string;
         };
         sourceId: string;
+        grants?: {
+            capture: 'unknown' | 'granted' | 'denied';
+            input: 'unknown' | 'granted' | 'denied';
+        } | undefined;
         activity?: {
             kind: 'type' | 'capture' | 'click' | 'press';
             targetLabel?: string | undefined;

@@ -22,7 +22,8 @@ export type ManagedComputerDriver = Readonly<{
   checkPermissions(): Promise<Readonly<{ capture: 'granted' | 'denied' | 'unknown'; input: 'granted' | 'denied' | 'unknown' }>>;
   capture(target: ComputerTargetV1): Promise<ComputerDriverCapture>;
   captureFrame(target: ComputerTargetV1, options?: Readonly<{ maxImageDimension: number }>): Promise<Readonly<{ png: Buffer; geometry: ComputerCaptureGeometryV1 }>>;
-  input(target: ComputerTargetV1, captureId: string, operation: ComputerInputOperationV1, context?: Readonly<{ signal?: AbortSignal }>): Promise<ComputerDriverInputResult>;
+  /** Only host-admitted viewer keys/text omit capture grounding; pointer input always requires it. */
+  input(target: ComputerTargetV1, captureId: string | null, operation: ComputerInputOperationV1, context?: Readonly<{ signal?: AbortSignal }>): Promise<ComputerDriverInputResult>;
   close(): Promise<void>;
 }>;
 
@@ -67,11 +68,9 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
     const adapter = getArchiveDownloadInstallableAdapter(COMPUTER_CUA_DRIVER_INSTALLABLE_KEY);
     if (!adapter) throw new ComputerDriverError('driver_unavailable');
     executablePath = await adapter.resolveInstalledExecutable() ?? undefined;
-    if (!executablePath) {
-      const installed = await adapter.installOrUpgrade();
-      if (!installed.ok) throw new ComputerDriverError('driver_install_failed');
-      executablePath = installed.executablePath;
-    }
+    // Installation belongs to the admitted capability Action, including the
+    // descriptor's required consent; discovery may only resolve existing bytes.
+    if (!executablePath) throw new ComputerDriverError('driver_unavailable');
   }
   if (!executablePath || !isAbsolute(executablePath)) throw new ComputerDriverError('driver_executable_invalid');
   const resolvedExecutablePath = executablePath;
@@ -146,15 +145,16 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
       ...(target.kind === 'display' ? { nativeScale: process.platform === 'darwin' ? desktopStateSchema.parse(result.structuredContent).scale_factor : 1 } : {}) };
     return observation;
   };
-  const performInput = async (target: ComputerTargetV1, captureId: string, operation: ComputerInputOperationV1,
+  const performInput = async (target: ComputerTargetV1, captureId: string | null, operation: ComputerInputOperationV1,
     context?: Readonly<{ signal?: AbortSignal }>): Promise<ComputerDriverInputResult> => {
     if (context?.signal?.aborted) return { status: 'interrupted', completion: 'known' };
     try { assertTarget(target); } catch (error) { return { status: 'failed', code: error instanceof ComputerDriverError ? error.code : 'driver_unavailable' }; }
-    const observation = captureBinding;
-    if (!observation || observation.captureId !== captureId || computerTargetKeyV1(observation.target) !== computerTargetKeyV1(target)) return { status: 'failed', code: 'stale_capture' };
-    if (operation.kind === 'click' && (!Number.isFinite(operation.x) || !Number.isFinite(operation.y) || operation.x < 0 || operation.y < 0
+    const observation = captureId === null ? undefined : captureBinding;
+    if ((captureId !== null || operation.kind === 'click') && (!observation || observation.captureId !== captureId
+      || computerTargetKeyV1(observation.target) !== computerTargetKeyV1(target))) return { status: 'failed', code: 'stale_capture' };
+    if (operation.kind === 'click' && (!observation || !Number.isFinite(operation.x) || !Number.isFinite(operation.y) || operation.x < 0 || operation.y < 0
       || operation.x >= observation.geometry.captureWidth || operation.y >= observation.geometry.captureHeight)) return { status: 'failed', code: 'point_outside_capture' };
-    captureBinding = undefined;
+    if (observation) captureBinding = undefined;
     const nativeTarget = target.kind === 'display' ? { target: { kind: 'desktop', display_id: 'primary' } }
       : { pid: target.pid, window_id: target.windowId };
     // Pinned desktop input is foreground-only; background delivery is a window capability.
@@ -166,7 +166,7 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         if (context?.signal?.aborted) return { status: 'interrupted', completion: 'known' };
         if (grant !== 'granted') return { status: 'failed', code: grant === 'denied' ? 'input_permission_denied' : 'input_permission_unknown' };
       }
-      if (target.kind === 'display') {
+      if (observation && target.kind === 'display') {
         const current = await native.call('get_screen_size', {});
         if (context?.signal?.aborted) return { status: 'interrupted', completion: 'known' };
         if (current.isError) return { status: 'failed', code: nativeRefusalCode(current) };
@@ -174,7 +174,7 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         if (!size.success) return { status: 'failed', code: 'driver_result_invalid' };
         if (size.data.width !== observation.geometry.nativeWidth || size.data.height !== observation.geometry.nativeHeight
           || size.data.scale_factor !== observation.nativeScale) return { status: 'failed', code: 'stale_capture' };
-      } else {
+      } else if (observation && target.kind === 'window') {
         const current = await native.call('get_window_state', { ...nativeTarget, include_screenshot: false, include_accessibility_tree: true, full_output: true });
         if (context?.signal?.aborted) return { status: 'interrupted', completion: 'known' };
         if (current.isError) return { status: 'failed', code: nativeRefusalCode(current) };
@@ -200,8 +200,10 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         const code = nativeRefusalCode(result);
         // These pinned codes arise before native input. A generic tool error
         // may instead follow a press, so it cannot establish no effect.
-        if (code === 'capture_action_refused' || code === 'capture_id_invalid' || code === 'capture_not_found'
-          || code === 'capture_target_mismatch' || code === 'point_outside_window') return { status: 'failed', code };
+        if ((operation.kind === 'click' && (code === 'capture_action_refused' || code === 'capture_id_invalid' || code === 'capture_not_found'
+          || code === 'capture_target_mismatch' || code === 'point_outside_window' || code === 'capture_expired'
+          || code === 'capture_generation_mismatch' || code === 'capture_frame_mismatch' || code === 'capture_coordinate_invalid'))
+          || (operation.kind === 'type' && code === 'browser_field_needs_keystrokes')) return { status: 'failed', code };
         native.quarantine();
         return { status: 'interrupted', completion: 'unknown' };
       }

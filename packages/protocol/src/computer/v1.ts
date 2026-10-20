@@ -205,6 +205,8 @@ export const ComputerControlStatusResponseV1Schema = lazyZodSchema(() => z.stric
   controlEpoch: z.number().check(z.int(), z.nonnegative()),
   stopping: z.boolean(),
   uncertain: z.boolean(),
+  /** A current native read, omitted by stream metadata and quarantined sources. */
+  grants: z.optional(ComputerGrantStatusV1Schema),
   activity: z.optional(z.strictObject({ kind: z.enum(['capture', 'click', 'type', 'press']), targetLabel: TargetLabelSchema })),
   activeTarget: z.optional(BrowserActiveTargetV1Schema),
 }));
