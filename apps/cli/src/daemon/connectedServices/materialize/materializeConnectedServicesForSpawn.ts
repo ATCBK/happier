@@ -17,7 +17,8 @@ import {
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { logger } from '@/utils/logger';
-import { readRetainedExecutionRunRecord, readRetainedExecutionRunRecords } from '@/daemon/executionRunRegistry';
+import { readRetainedExecutionRunRecords } from '@/daemon/executionRunRegistry';
+import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { AgentSpawnQualifiedPurposeBindingSnapshot } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -184,6 +185,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   activeServerDir: string;
   rootDir: string;
   probePurpose?: 'probe';
@@ -447,22 +449,24 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
             try { return (await lstat(join(nativeRoot, entry.path))).isSymbolicLink(); }
             catch (error) { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false; throw error; }
           }));
-          const retained = borrowedEntries.some(Boolean)
-            ? await readRetainedExecutionRunRecord(params.materializationKey) : null;
-          if (retained) {
+          if (borrowedEntries.some(Boolean)) {
             let complete = true;
             const records = await readRetainedExecutionRunRecords(() => { complete = false; });
             // Unknown retained custody cannot authorize detaching its source.
             if (!complete) throw new Error('retained_conversation_inventory_unavailable');
+            const retained = records.find(record => record.state.runId === params.materializationKey);
+            // The home transition owns preservation for every caller, including
+            // an ordinary Session with no Run at its materialization key.
+            const owner = params.requesterWorkAttributionV1 ?? retained?.requesterWorkAttributionV1;
+            const sessionId = params.purposeBindingSessionId ?? retained?.state.sessionId;
             for (const record of records) {
               if (record.state.retentionPolicy !== 'resumable' || record.state.backendId !== params.agentId
                 || record.state.resumeHandle?.kind !== 'provider_session.v1') continue;
-              const owner = retained.requesterWorkAttributionV1;
               const candidateOwner = record.requesterWorkAttributionV1;
               const sameAccount = Boolean(owner && candidateOwner
                 && owner.serverId === candidateOwner.serverId && owner.accountId === candidateOwner.accountId);
-              const sameSession = retained.state.sessionId !== null && record.state.sessionId === retained.state.sessionId;
-              if ((!sameSession && !sameAccount) || (owner && candidateOwner && !sameAccount)) continue;
+              const sameSession = Boolean(sessionId && record.state.sessionId === sessionId);
+              if (owner && ((!sameSession && !sameAccount) || (candidateOwner && !sameAccount))) continue;
               const bindings = record.state.launch?.connectedServicesSelection;
               if (bindings) {
                 const retainedSnapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
@@ -473,6 +477,9 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
                   snapshot: retainedSnapshot, expectedAccountsByPurposeKey,
                 }) !== nativeRoot) continue;
               } else if (!sameSession) continue;
+              // Without this home's requester identity, do not sever a link
+              // that may still be the only reachable state of a retained Run.
+              if (!owner && !sameSession) throw new Error('retained_conversation_owner_unavailable');
               resumeIds.add(record.state.resumeHandle.providerSessionId);
             }
           }
@@ -725,6 +732,8 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  /** Existing admitted requester identity for shared native-home preservation. */
+  requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   probePurpose?: 'probe';
   runtimeDescriptorV1?: RuntimeDescriptorV1;
   vendorResumeId?: string | null;
@@ -762,6 +771,7 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   probePurpose?: 'probe';
   runtimeDescriptorV1?: RuntimeDescriptorV1;
   vendorResumeId?: string | null;

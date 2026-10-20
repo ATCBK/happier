@@ -3161,6 +3161,7 @@ export class ConnectedServiceRefreshCoordinator {
         await this.runCurrentAccountOperation(() => materializeConnectedServicesForSpawn({
           agentId: target.agentId,
           materializationKey: target.materializationKey,
+          requesterWorkAttributionV1: target.requesterWorkAttributionV1,
           activeServerDir: this.params.activeServerDir,
           baseDir: this.params.baseDir,
           recordsByServiceId: records,

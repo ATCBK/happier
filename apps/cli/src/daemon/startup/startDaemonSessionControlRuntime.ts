@@ -13317,6 +13317,7 @@ export async function startDaemonSessionControlRuntime(
                 ? {
                     allowNativeAccountState: false,
                     connectedAccountsOwner: context.connectedAccountsOwner,
+                    requesterWorkAttributionV1: context.bootstrap.attribution,
                     isAccountRuntimeCurrent: async () => {
                       await assertPreparationCurrent();
                       return true;

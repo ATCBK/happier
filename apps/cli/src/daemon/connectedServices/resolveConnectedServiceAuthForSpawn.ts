@@ -1103,6 +1103,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  requesterWorkAttributionV1?: Parameters<typeof materializeConnectedServicesForSpawn>[0]['requesterWorkAttributionV1'];
   probePurpose?: 'probe';
   activeServerDir: string;
   baseDir: string;
@@ -1127,6 +1128,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
     retainCleanup: params.retainCleanup,
     agentId: params.agentId,
     materializationKey: params.materializationKey,
+    requesterWorkAttributionV1: params.requesterWorkAttributionV1,
     probePurpose: params.probePurpose,
     activeServerDir: params.activeServerDir,
     baseDir: params.baseDir,
@@ -1183,6 +1185,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   modelId?: string;
   connectedServicesBindingsRaw: unknown;
   materializationKey: string;
+  requesterWorkAttributionV1?: Parameters<typeof materializeConnectedServicesForSpawn>[0]['requesterWorkAttributionV1'];
   probePurpose?: 'probe';
   activeServerDir: string;
   baseDir: string;
@@ -1390,6 +1393,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         retainCleanup: params.retainCleanup,
         agentId: params.agentId,
         materializationKey: params.materializationKey,
+        requesterWorkAttributionV1: params.requesterWorkAttributionV1,
         probePurpose: params.probePurpose,
         activeServerDir: params.activeServerDir,
         baseDir: params.baseDir,

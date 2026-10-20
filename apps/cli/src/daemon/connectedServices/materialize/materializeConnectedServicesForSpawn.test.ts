@@ -7,12 +7,13 @@ import { performance } from 'node:perf_hooks';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { buildConnectedServiceCredentialRecord, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
+import { AccountSettingsSchema, buildConnectedServiceCredentialRecord, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
 import { ApiClient } from '@/api/api';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { reloadConfiguration } from '@/configuration';
 import { logger } from '@/utils/logger';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
+import { prepareDaemonConnectedServices } from '@/daemon/spawn/prepareDaemonConnectedServices';
 import { resolveExecutionRunConnectedServicesEnv } from '@/agent/runtime/bridges/executionRun/runtime/connectedServicesEnv';
 import { resolveRequesterSessionRuntimeDirectories } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
 import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
@@ -699,7 +700,10 @@ describe('materializeConnectedServicesForSpawn', () => {
     { displacedPrefix: true, missingState: false, siblingSessionId: 'parent' },
     { displacedPrefix: false, missingState: true, siblingSessionId: 'parent' },
     { displacedPrefix: false, missingState: false, siblingSessionId: 'other-owned-session' },
-  ])('prepares the retained thread after Stop and resume ($displacedPrefix prefix, $missingState missing, $siblingSessionId sibling)', async ({ displacedPrefix, missingState, siblingSessionId }) => {
+    { displacedPrefix: false, missingState: false, siblingSessionId: 'other-owned-session', freshSessionFirst: true },
+    { displacedPrefix: true, missingState: false, siblingSessionId: 'parent', freshSessionFirst: true },
+    { displacedPrefix: false, missingState: false, siblingSessionId: 'parent', freshSessionFirst: true, missingRequester: true },
+  ])('prepares the retained thread after Stop and resume ($displacedPrefix prefix, $missingState missing, $siblingSessionId sibling, ordinary Session=$freshSessionFirst, missing requester=$missingRequester)', async ({ displacedPrefix, missingState, siblingSessionId, freshSessionFirst = false, missingRequester = false }) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-retained-run-link-'));
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
     try {
@@ -766,19 +770,30 @@ describe('materializeConnectedServicesForSpawn', () => {
           requesterWorkAttributionV1,
           resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: siblingVendorResumeId },
         });
-        // A sealed Run from another Session does not authorize importing that
-        // Account's history, even when its bytes are in the borrowed store.
-        await retainExecutionRunState({
-          runId: 'foreign-run', callId: 'foreign-call', sidechainId: 'foreign-side', sessionId: 'another-account-session', depth: 0,
-          intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
-          instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
-          ioMode: 'streaming', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2,
-          launch: { connectedServicesSelection: bindings },
-          requesterWorkAttributionV1: { ...requesterWorkAttributionV1, accountId: 'another-owner' },
-          resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb0' },
-        });
-        await writeFile(join(nativeHome, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'),
-          `${JSON.stringify({ type: 'session_meta', payload: { id: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb0' } })}\n`);
+        // Valid histories behind the borrowed link still require the exact
+        // requester Home, Account and Connected Account destination.
+        for (const excluded of [
+          { runId: 'foreign-run', accountId: 'another-owner', serverId: 'home', profileId: record.profileId,
+            providerSessionId: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb0' },
+          { runId: 'foreign-home-run', accountId: 'owner', serverId: 'another-home', profileId: record.profileId,
+            providerSessionId: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb1' },
+          { runId: 'other-connected-account-run', accountId: 'owner', serverId: 'home', profileId: 'other-connected-account',
+            providerSessionId: '019fea40-8040-7d00-9b7e-9b8f3b5cfcb2' },
+        ]) {
+          await retainExecutionRunState({
+            runId: excluded.runId, callId: 'foreign-call', sidechainId: 'foreign-side', sessionId: excluded.runId, depth: 0,
+            intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+            instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
+            ioMode: 'streaming', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2,
+            launch: { connectedServicesSelection: { v: 2, bindingsByServiceId: {
+              'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: excluded.profileId },
+            } } },
+            requesterWorkAttributionV1: { ...requesterWorkAttributionV1, accountId: excluded.accountId, serverId: excluded.serverId },
+            resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, providerSessionId: excluded.providerSessionId },
+          });
+          await writeFile(join(nativeHome, 'sessions', `rollout-2026-09-07T12-00-00-${excluded.providerSessionId}.jsonl`),
+            `${JSON.stringify({ type: 'session_meta', payload: { id: excluded.providerSessionId } })}\n`);
+        }
       }
       await published!.cleanupOnExit!();
       if (missingState) await rm(join(nativeHome, 'sessions', rolloutName));
@@ -799,6 +814,40 @@ describe('materializeConnectedServicesForSpawn', () => {
         revisionSemantics: 'revisioned', credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
         configurationReady: true, configurationRevision: null, kind: 'oauth', expiresAt: null, scopes: [],
       }] });
+      if (freshSessionFirst) {
+        // Ordinary Session preparation has no sealed Run at its materialization key.
+        // Keep the real spawn/auth/home/registry path; only Account I/O is supplied.
+        const fresh = await prepareDaemonConnectedServices({
+          options: { directory: root, connectedServices: bindings,
+            ...(!missingRequester ? { requesterWorkAttributionV1 } : {}) },
+          normalizedExistingSessionId: '', requestedSessionId: 'ordinary-session', effectiveResume: '',
+          catalogAgentId: 'codex', credentials, api, activeServerDir: params.activeServerDir,
+          connectedServicesMaterializationBaseDir: params.baseDir,
+          connectedServiceRefreshCoordinator: null, connectedAccountsOwner: purposeOwner,
+          isAccountRuntimeCurrent: async () => true, processEnv: params.processEnv!,
+          pluginRuntimeRegistry: runtimeFixture!.registry,
+          activatePurposeBindings: input => purposeOwner.activatePurposeBindings(input),
+          qualifiedConnectedAccountApi: { listAccounts: async () => accounts,
+            readGroup: async () => { throw new Error('A profile-bound Session must not read a group'); } },
+          accountSettingsSnapshot: { source: 'network', settingsVersion: 1, loadedAtMs: 1,
+            settingsSecretsReadKeys: [], settings: AccountSettingsSchema.parse({
+              connectedServicesProviderStateSharingSettingsV1: { v: 1,
+                defaults: { configMode: 'isolated', stateMode: 'isolated' },
+                byAgentId: {}, acknowledgedRisksByAgentId: {} },
+            }) },
+        });
+        if (missingRequester) {
+          expect(fresh).toMatchObject({ ok: false, result: { errorCode: 'SPAWN_VALIDATION_FAILED' } });
+          expect((await lstat(join(home, 'sessions'))).isSymbolicLink()).toBe(true);
+          expect(await readFile(join(home, 'sessions', siblingRolloutName), 'utf8')).toBe(siblingHistory);
+        } else {
+          expect(fresh).toMatchObject({ ok: true, auth: { env: { CODEX_HOME: home } } });
+          if (!fresh.ok) throw new Error('Ordinary Session preparation refused');
+          expect(existsSync(join(home, 'sessions', 'unrelated-session.jsonl'))).toBe(false);
+          expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'))).toBe(false);
+          await fresh.auth?.cleanupOnExit?.();
+        }
+      }
       const bridge = createExecutionRunConnectedServicesBridge({
         // Account credential retrieval is the external boundary; retain the
         // spawn auth gate, home, catalog, purpose owner and Run registry.
@@ -831,6 +880,14 @@ describe('materializeConnectedServicesForSpawn', () => {
         createRedactionLease: () => ({ add() {}, close() {} }),
         clearTerminalCleanupReceipt: async () => undefined,
       });
+      if (freshSessionFirst) {
+        const siblingActivationId = randomUUID();
+        const sibling = await bridge.materialize({ activationId: siblingActivationId,
+          runId: siblingRunId, runnerPid: process.pid, agentId: 'codex', connectedServices: bindings, cwd: root });
+        expect(sibling).toMatchObject({ ok: true, env: { CODEX_HOME: home } });
+        expect(await readFile(join(home, 'sessions', siblingRolloutName), 'utf8')).toBe(siblingHistory);
+        await bridge.release({ activationId: siblingActivationId, runId: siblingRunId, runnerPid: process.pid });
+      }
       const activationId = randomUUID();
       const resumed = await bridge.materialize({ activationId, runId: params.materializationKey,
         runnerPid: process.pid, agentId: 'codex', connectedServices: bindings, cwd: root });
@@ -855,6 +912,8 @@ describe('materializeConnectedServicesForSpawn', () => {
         .toMatchObject({ ok: true });
       expect(existsSync(join(home, 'sessions', 'unrelated-session.jsonl'))).toBe(false);
       expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'))).toBe(false);
+      expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb1.jsonl'))).toBe(false);
+      expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb2.jsonl'))).toBe(false);
       // The source remains available to its original owner.
       expect(await readFile(join(nativeHome, 'sessions', rolloutName), 'utf8')).toContain(vendorResumeId);
       expect(await readFile(join(nativeHome, 'sessions', siblingRolloutName), 'utf8')).toBe(siblingHistory);

@@ -236,6 +236,8 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
                 agentId: input.catalogAgentId,
                 connectedServicesBindingsRaw: options.connectedServices,
                 materializationKey,
+                requesterWorkAttributionV1: options.requesterSessionBootstrap?.attribution
+                    ?? options.requesterWorkAttributionV1,
                 activeServerDir: input.activeServerDir ?? configuration.activeServerDir,
                 baseDir: input.connectedServicesMaterializationBaseDir,
                 sessionDirectory: options.directory,
