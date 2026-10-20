@@ -11,6 +11,19 @@ type SessionMutationResult = Readonly<{
     recovery?: SessionStopRecovery;
 }>;
 
+/** Read the Session stop owner's result from the Action's JSON output. */
+export function readSessionStopActionResponse(value: unknown): SessionMutationResult | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || !('success' in value) || typeof value.success !== 'boolean') return null;
+    const recovery = 'recovery' in value ? value.recovery : undefined;
+    return {
+        success: value.success,
+        ...('message' in value && typeof value.message === 'string' ? { message: value.message } : {}),
+        ...('code' in value && typeof value.code === 'string' ? { code: value.code } : {}),
+        ...(recovery === 'wait_for_inactive' || recovery === 'retry_when_runtime_available' ? { recovery } : {}),
+    };
+}
+
 export type StopSessionAndMaybeArchiveParams = Readonly<{
     address: SessionAddress;
     hideInactiveSessions: boolean;

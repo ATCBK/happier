@@ -11,17 +11,17 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ExecutionRunRow } from '@/components/sessions/runs/ExecutionRunRow';
 import { readExecutionRunSessionAssociation } from '@/components/sessions/runs/readExecutionRunSessionAssociation';
+import { isAcceptedPendingSessionStop, readSessionStopActionResponse } from '@/components/sessions/sessionStopArchiveFlow';
 import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { tryShowDaemonUnavailableAlertForRpcFailure } from '@/utils/errors/daemonUnavailableAlert';
+import { showDaemonUnavailableAlert, tryShowDaemonUnavailableAlertForRpcFailure } from '@/utils/errors/daemonUnavailableAlert';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
 import { filterVisibleMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { machineExecutionRunsList } from '@/sync/ops/machineExecutionRuns';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
-import { machineStopSession } from '@/sync/ops/machines';
 import { isExecutionRunMutationCancelled } from '@/sync/ops/sessionExecutionRuns';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
@@ -313,24 +313,30 @@ export default function RunsScreen() {
                           let issued = false;
                           let refreshRuns = false;
                           const stopSessionProcess = async () => {
-                                    if (!execution.isCurrent() || !execution.binding) return;
-                                    const stopResult = await machineStopSession(machineId, sessionId, {
-                                        serverId, scope: execution.binding.scope, signal: execution.getSignal(),
-                                    });
-                                    if (!execution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
-                            if (stopResult.ok) return;
+                            if (!execution.isCurrent()) return;
+                            const stopResult = await execution.execute('session.stop', { sessionId });
+                            if (!execution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
+                            const response = stopResult.ok ? readSessionStopActionResponse(stopResult.result) : null;
+                            if (response && (response.success || isAcceptedPendingSessionStop(response))) return;
+                            const error = stopResult.ok ? response?.message : stopResult.error;
+                            const retryPresentation = {
+                              machine,
+                              onRetry: () => { void stopSessionProcess(); },
+                              shouldContinue,
+                            };
+                            if (response?.recovery === 'retry_when_runtime_available') {
+                              showDaemonUnavailableAlert({ ...retryPresentation,
+                                titleKey: 'errors.daemonUnavailableTitle', bodyKey: 'errors.daemonUnavailableBody' });
+                              return;
+                            }
 
                             const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForRpcFailure({
-                              rpcErrorCode: stopResult.errorCode ?? null,
-                              message: stopResult.error ?? null,
-                              machine,
-                              onRetry: () => {
-                                void stopSessionProcess();
-                              },
-                              shouldContinue,
+                              ...retryPresentation,
+                              rpcErrorCode: stopResult.ok ? response?.code ?? null : stopResult.errorCode,
+                              message: error ?? null,
                             });
                             if (!shownDaemonUnavailable) {
-                              Modal.alert(t('common.error'), stopResult.error || t('runs.stop.failedToStopSession'));
+                              Modal.alert(t('common.error'), error || t('runs.stop.failedToStopSession'));
                             }
                           };
                           const showStopFailure = async (error: string) => {
@@ -339,14 +345,17 @@ export default function RunsScreen() {
                               Modal.alert(t('common.error'), error);
                               return;
                             }
-                            const confirmed = await Modal.confirm(
+                            let stopSessionRequested = false;
+                            await Modal.alertAsync(
                               t('runs.stop.stopRunFailedTitle'),
                               t('runs.stop.stopRunFailedBody'),
-                              { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
+                              [
+                                { text: t('common.cancel'), style: 'cancel' },
+                                { text: t('runs.stop.stopSession'), onPress: () => { stopSessionRequested = true; } },
+                              ],
                             );
                             if (!execution.isCurrent()) return;
-                            if (confirmed) await stopSessionProcess();
-                            else Modal.alert(t('common.error'), error);
+                            if (stopSessionRequested) await stopSessionProcess();
                           };
                           try {
                             const res = await execution.execute('execution.run.stop', { sessionId, runId: run.runId },
