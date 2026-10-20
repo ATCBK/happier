@@ -78,21 +78,38 @@ describe('installModelPackWithHost (shared core)', () => {
     if (prefixLength) host.seedPartialDownload('example/model.onnx', bytes.slice(0, prefixLength), deriveModelPackStagingPlan(manifest).key);
     const baseHost = host.host;
     const loaded: number[] = [];
+    const progress: Array<{ loaded: number; verified: number }> = [];
+    let beforeReplacementRead: { loaded: number; verified: number } | undefined;
     await installModelPackWithHost({
       host: {
         ...baseHost,
         openDownload: async (request) => {
           request.onProgress?.(bytes.length);
           // The server ignores Range and sends a complete replacement response.
-          return baseHost.openDownload({ ...request, rangeStart: undefined });
+          const stream = await baseHost.openDownload({ ...request, rangeStart: undefined });
+          let firstRead = true;
+          return { ...stream, read: async () => {
+            if (firstRead) {
+              firstRead = false;
+              beforeReplacementRead = progress.at(-1);
+            }
+            return stream.read();
+          } };
         },
       },
       packId: manifest.packId, manifest, signal: new AbortController().signal,
-      onProgress: (progress) => { loaded.push(progress.loaded); expect(progress.total).toBe(bytes.length); },
+      onProgress: (event) => {
+        loaded.push(event.loaded);
+        progress.push({ loaded: event.loaded, verified: event.verified });
+        expect(event.total).toBe(bytes.length);
+      },
     });
+    // A full native transfer already arrived, but its replacement hash starts
+    // at zero after the Range prefix and its hasher are discarded.
+    expect(beforeReplacementRead).toEqual({ loaded: bytes.length, verified: 0 });
     expect(loaded[prefixLength ? 1 : 0]).toBe(bytes.length);
     expect(loaded.every((value, index) => value <= bytes.length && value >= (loaded[index - 1] ?? 0))).toBe(true);
-    expect(loaded.at(-1)).toBe(bytes.length);
+    expect(progress.at(-1)).toEqual({ loaded: bytes.length, verified: bytes.length });
     expect(host.read('example/model.onnx')).toEqual(bytes);
   });
 
