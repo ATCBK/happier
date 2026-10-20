@@ -1,78 +1,31 @@
-import { calculateUnifiedDiff } from '@/components/ui/code/model/diff/calculateDiff';
+import { formatPatch, structuredPatch } from 'diff';
 
 import type { CodeLine } from './codeLineTypes';
-import type { IntraLineDiffSegment } from './codeLineTypes';
+import { buildCodeLinesFromUnifiedDiff } from './buildCodeLinesFromUnifiedDiff';
 
 export function buildCodeLinesFromTextDiff(params: {
     oldText: string;
     newText: string;
     contextLines: number;
 }): CodeLine[] {
-    const result = calculateUnifiedDiff(params.oldText, params.newText, params.contextLines);
+    const patch = structuredPatch('diff', 'diff', params.oldText, params.newText, undefined, undefined, {
+        context: params.contextLines,
+    });
+    const lines = buildCodeLinesFromUnifiedDiff({
+        unifiedDiff: formatPatch(patch),
+        intraLineDiff: { enabled: true, maxLines: Number.POSITIVE_INFINITY, maxLineLength: 0 },
+    });
     const out: CodeLine[] = [];
-
-    for (let h = 0; h < result.hunks.length; h++) {
-        const hunk = result.hunks[h];
-        out.push({
-            id: `th:${h}`,
-            sourceIndex: out.length,
-            kind: 'header',
-            oldLine: null,
-            newLine: null,
-            renderPrefixText: '',
-            renderCodeText: `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
-            renderIsHeaderLine: true,
-            selectable: false,
-        });
-
-        for (let i = 0; i < hunk.lines.length; i++) {
-            const line = hunk.lines[i];
-            if (line.type === 'add') {
-                const segments: readonly IntraLineDiffSegment[] | null = Array.isArray(line.tokens)
-                    ? line.tokens.map((t) => ({ text: t.value, kind: t.added ? 'added' : 'context' }))
-                    : null;
-                out.push({
-                    id: `ta:${h}:${i}`,
-                    sourceIndex: out.length,
-                    kind: 'add',
-                    oldLine: null,
-                    newLine: line.newLineNumber ?? null,
-                    renderPrefixText: '+',
-                    renderCodeText: line.content,
-                    renderIntraLineDiffSegments: segments,
-                    renderIsHeaderLine: false,
-                    selectable: true,
-                });
-            } else if (line.type === 'remove') {
-                const segments: readonly IntraLineDiffSegment[] | null = Array.isArray(line.tokens)
-                    ? line.tokens.map((t) => ({ text: t.value, kind: t.removed ? 'removed' : 'context' }))
-                    : null;
-                out.push({
-                    id: `tr:${h}:${i}`,
-                    sourceIndex: out.length,
-                    kind: 'remove',
-                    oldLine: line.oldLineNumber ?? null,
-                    newLine: null,
-                    renderPrefixText: '-',
-                    renderCodeText: line.content,
-                    renderIntraLineDiffSegments: segments,
-                    renderIsHeaderLine: false,
-                    selectable: true,
-                });
-            } else {
-                out.push({
-                    id: `tc:${h}:${i}`,
-                    sourceIndex: out.length,
-                    kind: 'context',
-                    oldLine: line.oldLineNumber ?? null,
-                    newLine: line.newLineNumber ?? null,
-                    renderPrefixText: ' ',
-                    renderCodeText: line.content,
-                    renderIntraLineDiffSegments: null,
-                    renderIsHeaderLine: false,
-                    selectable: false,
-                });
-            }
+    let bodyIndex = 0;
+    for (const line of lines) {
+        if (line.hunkIndex === null) continue;
+        if (line.kind === 'header') {
+            bodyIndex = 0;
+            out.push({ ...line, id: `th:${line.hunkIndex}`, sourceIndex: out.length });
+        } else if (line.renderPrefixText) {
+            // Text-mode ids count source lines, excluding unified-diff newline marker rows.
+            const prefix = line.kind === 'add' ? 'ta' : line.kind === 'remove' ? 'tr' : 'tc';
+            out.push({ ...line, id: `${prefix}:${line.hunkIndex}:${bodyIndex++}`, sourceIndex: out.length });
         }
     }
 

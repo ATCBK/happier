@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
+import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
+import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -119,6 +121,29 @@ async function findPierreHoverUtilityButtonProps(utility: any): Promise<any> {
 await import('./PierreDiffViewer.web');
 
 describe('PierreDiffViewer (web)', () => {
+    it('maps a reversed cross-side range through the same row selection as the Happier renderer', async () => {
+        fileDiffSpy.mockClear();
+        const onPressLineRange = vi.fn();
+        const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -4,3 +9,3 @@\n context\n-before\n+after\n tail\n';
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true });
+        const before = lines.find(line => line.kind === 'remove')!;
+        const after = lines.find(line => line.kind === 'add')!;
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
+            selectedLineIds={new Set([before.id, after.id])} onPressLineRange={onPressLineRange} />);
+        const call = fileDiffSpy.mock.calls.at(-1)?.[0];
+        expect(call.options.enableLineSelection).toBe(true);
+        expect(call.options.controlledSelection).toBe(true);
+        expect(call.selectedLines).toEqual({ start: 5, side: 'deletions', end: 10, endSide: 'additions' });
+        await renderer.act(async () => {
+            call.options.onLineSelected({ start: 10, side: 'additions', end: 5, endSide: 'deletions' });
+        });
+        expect(onPressLineRange.mock.calls[0]?.[0]).toEqual(resolveCodeLineRangeSelection({
+            lines, startLineId: after.id, endLineId: before.id,
+        }));
+        await renderer.act(async () => { call.options.onLineSelected(null); });
+        expect(onPressLineRange).toHaveBeenCalledTimes(1);
+    });
     it('uses the surface evidence fallback if the external renderer fails', async () => {
         fileDiffSpy.mockImplementation(() => { throw new Error('renderer failed'); });
         const error = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -762,13 +787,13 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        expect(typeof call?.renderHoverUtility).toBe('function');
-        expect(call?.options?.unsafeCSS).toContain('[data-hover-slot]');
+        expect(typeof call?.renderGutterUtility).toBe('function');
+        expect(call?.options?.unsafeCSS).toContain('[data-gutter-utility-slot]');
         expect(call?.options?.unsafeCSS).toContain('left: 0');
         expect(call?.options?.unsafeCSS).toContain('right: auto');
         expect(call?.options?.unsafeCSS).toContain('padding-left: calc(var(--happier-review-comment-affordance-width) + 2ch)');
 
-        const utility = call.renderHoverUtility(() => ({ lineNumber: 1, side: 'additions' }));
+        const utility = call.renderGutterUtility(() => ({ lineNumber: 1, side: 'additions' }));
         const buttonProps = await findPierreHoverUtilityButtonProps(utility);
         expect(buttonProps.testID ?? buttonProps['data-testid']).toBe('review-comment-line-affordance');
         expect(buttonProps['data-active']).toBeUndefined();
@@ -809,9 +834,9 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        expect(typeof call?.renderHoverUtility).toBe('function');
+        expect(typeof call?.renderGutterUtility).toBe('function');
 
-        const utility = call.renderHoverUtility(() => undefined);
+        const utility = call.renderGutterUtility(() => undefined);
         const buttonProps = await findPierreHoverUtilityButtonProps(utility);
 
         expect(buttonProps.testID ?? buttonProps['data-testid']).toBe('review-comment-line-affordance');
@@ -843,7 +868,7 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        const utility = call.renderHoverUtility(() => undefined);
+        const utility = call.renderGutterUtility(() => undefined);
         const buttonProps = await findPierreHoverUtilityButtonProps(utility);
 
         expect(typeof buttonProps.onClick).toBe('function');
@@ -876,11 +901,11 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        expect(typeof call?.renderHoverUtility).toBe('function');
+        expect(typeof call?.renderGutterUtility).toBe('function');
 
         let hovered = { lineNumber: 1, side: 'additions' as const };
         const getHoveredLine = () => hovered;
-        const utility = call.renderHoverUtility(getHoveredLine);
+        const utility = call.renderGutterUtility(getHoveredLine);
         hovered = { lineNumber: 2, side: 'additions' };
 
         await renderer.act(async () => {
@@ -920,7 +945,7 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        expect(typeof call?.renderHoverUtility).toBe('function');
+        expect(typeof call?.renderGutterUtility).toBe('function');
 
         const numberElement = {
             getAttribute: (name: string) => {
@@ -931,7 +956,7 @@ describe('PierreDiffViewer (web)', () => {
             closest: () => null,
             getBoundingClientRect: () => ({ left: 0, width: 10 }),
         };
-        const utility = call.renderHoverUtility(() => undefined);
+        const utility = call.renderGutterUtility(() => undefined);
 
         await renderer.act(async () => {
             clickPierreHoverUtility(utility, {
@@ -972,7 +997,7 @@ describe('PierreDiffViewer (web)', () => {
         });
 
         const call = fileDiffSpy.mock.calls[0]?.[0];
-        expect(typeof call?.renderHoverUtility).toBe('function');
+        expect(typeof call?.renderGutterUtility).toBe('function');
 
         const numberElement = {
             getAttribute: (name: string) => {
@@ -983,7 +1008,7 @@ describe('PierreDiffViewer (web)', () => {
             closest: () => null,
             getBoundingClientRect: () => ({ left: 0, width: 10 }),
         };
-        const utility = call.renderHoverUtility(() => ({ lineNumber: 1, side: 'additions' }));
+        const utility = call.renderGutterUtility(() => ({ lineNumber: 1, side: 'additions' }));
 
         await renderer.act(async () => {
             clickPierreHoverUtility(utility, {

@@ -64,7 +64,7 @@ describe('useCodeLinesReviewComments', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 1,
@@ -120,7 +120,7 @@ describe('useCodeLinesReviewComments', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 1,
@@ -131,7 +131,7 @@ describe('useCodeLinesReviewComments', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 2,
@@ -142,7 +142,7 @@ describe('useCodeLinesReviewComments', () => {
             },
             {
                 id: 'f:3',
-                sourceIndex: 2,
+                sourceIndex: 2, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 3,
@@ -223,7 +223,7 @@ describe('useCodeLinesReviewComments', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 1,
@@ -291,7 +291,7 @@ describe('useCodeLinesReviewComments', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 1,
@@ -302,7 +302,7 @@ describe('useCodeLinesReviewComments', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 2,
@@ -361,7 +361,7 @@ describe('useCodeLinesReviewComments', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file',
                 oldLine: null,
                 newLine: 1,

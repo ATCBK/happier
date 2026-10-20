@@ -106,6 +106,12 @@ describe('buildPatchFromSelectedDiffLines', () => {
 });
 
 describe('extractSelectedDiffLineKeysFromPatch', () => {
+    it('treats content starting with file-header markers as changed lines inside a hunk', () => {
+        const diff = '--- a/a\n+++ b/a\n@@ -1 +1 @@\n---old\n+++new\n';
+        expect(extractSelectedDiffLineKeysFromPatch(diff)).toEqual(new Set(['deletions:1', 'additions:1']));
+        const patch = buildPatchFromSelectedDiffLines(diff, new Set(['deletions:1', 'additions:1']));
+        expect(patch).toContain('\n---old\n+++new\n');
+    });
     it('recovers selected addition and deletion keys from a generated patch', () => {
         const patch = buildPatchFromSelectedDiffLines(sampleDiff, new Set(['deletions:2', 'additions:2']));
         expect(patch).toBeTruthy();

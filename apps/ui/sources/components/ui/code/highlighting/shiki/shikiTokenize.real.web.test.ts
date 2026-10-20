@@ -3,6 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { clearShikiCacheForKey, resolveHappierShikiThemeId, shikiTokenizeLines } from './shikiTokenize.web';
 
 describe('shikiTokenizeLines with the real highlighter', () => {
+    it('exposes grammar tokens independently of color-token merging', async () => {
+        const owner = await import('./shikiTokenize.web');
+        expect(owner).toHaveProperty('shikiTokenizeScopeLines');
+        const { shikiTokenizeScopeLines } = owner;
+        const rows = await shikiTokenizeScopeLines({ isDark: false, language: 'typescript', lines: ['export class Box {', '    read(): void {}', '}'] });
+        expect(rows[0]?.find(token => token.text === 'Box')).toMatchObject({
+            column: 13, scopes: expect.arrayContaining(['entity.name.type.class.ts']),
+        });
+        expect(rows[1]?.find(token => token.text === 'read')).toMatchObject({
+            column: 4, scopes: expect.arrayContaining(['meta.definition.method.ts']),
+        });
+    });
+
     it('preserves text, custom syntax colors and unknown-language fallback through lazy initialization', async () => {
         const colors = {
             surface: { base: '#ffffff', inset: '#f6f8fa' },

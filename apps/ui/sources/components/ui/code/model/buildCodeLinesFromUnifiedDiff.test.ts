@@ -3,6 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { buildCodeLinesFromUnifiedDiff } from './buildCodeLinesFromUnifiedDiff';
 
 describe('buildCodeLinesFromUnifiedDiff', () => {
+    it('keeps header-shaped context inside its original hunk', () => {
+        const diff = '@@ -1,2 +1,2 @@\n @@ -9 +9 @@\n-old\n+new\n@@ -20 +20 @@\n-last\n+next\n';
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff });
+        expect(lines.filter(line => line.kind === 'header').map(line => [line.id, line.hunkIndex])).toEqual([['h:0', 0], ['h:4', 1]]);
+        expect(lines.find(line => line.id === 'c:1')).toMatchObject({ renderCodeText: '@@ -9 +9 @@', hunkIndex: 0, oldLine: 1, newLine: 1 });
+    });
+    it('keeps canonical hunk ordinals and source ids across newline markers and multiple hunks', () => {
+        const diff = '--- a/a\n+++ b/a\n@@ -1 +1 @@\n-\ufeffold\r\n+\ufeffnew\r\n\\ No newline at end of file\n@@ -9 +9 @@\n-last\n+next\n';
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff });
+        expect(lines.map(line => [line.id, line.hunkIndex])).toEqual([
+            ['h:2', 0], ['r:3', 0], ['a:4', 0], ['x:5', 0],
+            ['h:6', 1], ['r:7', 1], ['a:8', 1],
+        ]);
+        expect(lines.find(line => line.id === 'a:4')?.renderCodeText).toBe('\ufeffnew');
+    });
     it('hides the file prelude by default when hunks exist', () => {
         const diff = [
             'diff --git a/src/a.ts b/src/a.ts',

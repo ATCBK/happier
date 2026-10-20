@@ -1,17 +1,12 @@
-const HUNK_HEADER_REGEX = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
+import { parseUnifiedDiffHunks, type Hunk } from '@happier-dev/protocol/diff/hunks';
+
 const NO_NEWLINE_MARKER = '\\ No newline at end of file';
 
-type ParsedHunkLine = {
-    index: number;
+type SelectionLine = {
     text: string;
-    kind: 'context' | 'add' | 'delete' | 'marker' | 'other';
+    kind: 'context' | 'add' | 'delete' | 'marker';
     oldRef: number | null;
     newRef: number | null;
-};
-
-type ParsedHunk = {
-    sectionHeading: string;
-    lines: ParsedHunkLine[];
 };
 
 type EmittedHunkLine = {
@@ -34,61 +29,43 @@ export function extractSelectedDiffLineKeysFromPatch(unifiedDiff: string): Set<s
     const selectedLineKeys = new Set<string>();
     if (!unifiedDiff) return selectedLineKeys;
 
-    const lines = unifiedDiff.split('\n');
-    let oldCursor = 0;
-    let newCursor = 0;
-    for (const line of lines) {
-        const header = parseHunkHeader(line);
-        if (header) {
-            oldCursor = header.oldStart;
-            newCursor = header.newStart;
-            continue;
-        }
-
-        if (line.startsWith(' ') && !line.startsWith('---') && !line.startsWith('+++')) {
-            oldCursor += 1;
-            newCursor += 1;
-            continue;
-        }
-        if (line.startsWith('+') && !line.startsWith('+++')) {
-            const key = buildSelectedDiffLineKey('additions', newCursor);
+    for (const hunk of parseUnifiedDiffHunks(unifiedDiff)) {
+        for (const line of selectionLines(hunk)) {
+            const key = line.kind === 'add' && line.newRef !== null
+                ? buildSelectedDiffLineKey('additions', line.newRef)
+                : line.kind === 'delete' && line.oldRef !== null
+                    ? buildSelectedDiffLineKey('deletions', line.oldRef) : null;
             if (key) selectedLineKeys.add(key);
-            newCursor += 1;
-            continue;
-        }
-        if (line.startsWith('-') && !line.startsWith('---')) {
-            const key = buildSelectedDiffLineKey('deletions', oldCursor);
-            if (key) selectedLineKeys.add(key);
-            oldCursor += 1;
         }
     }
 
     return selectedLineKeys;
 }
 
-function parseHunkHeader(line: string): {
-    oldStart: number;
-    newStart: number;
-    sectionHeading: string;
-} | null {
-    const match = HUNK_HEADER_REGEX.exec(line);
-    if (!match) return null;
-    return {
-        oldStart: Number(match[1] ?? 0),
-        newStart: Number(match[3] ?? 0),
-        sectionHeading: (match[5] ?? '').trim(),
-    };
+/** Selection projection only: canonical lines gain their old/new coordinates and patch markers. */
+function selectionLines(hunk: Hunk): SelectionLine[] {
+    let oldRef = hunk.oldStart;
+    let newRef = hunk.newStart;
+    return hunk.lines.flatMap((line): SelectionLine[] => {
+        const kind = line.kind === 'remove' ? 'delete' : line.kind;
+        const projected: SelectionLine[] = [{ kind, oldRef, newRef,
+            text: `${kind === 'context' ? ' ' : kind === 'add' ? '+' : '-'}${line.text}` }];
+        if (line.kind !== 'add') oldRef += 1;
+        if (line.kind !== 'remove') newRef += 1;
+        if (line.noEol) projected.push({ kind: 'marker', text: NO_NEWLINE_MARKER, oldRef: null, newRef: null });
+        return projected;
+    });
 }
 
 function emitHunk(
-    lines: ParsedHunkLine[],
+    lines: SelectionLine[],
     selectedLineKeys: Set<string>,
     mode: PatchSelectionMode
 ): EmittedHunkLine[] | null {
     const emitted: EmittedHunkLine[] = [];
     let hasSelectedChange = false;
 
-    const isSelected = (line: ParsedHunkLine): boolean => {
+    const isSelected = (line: SelectionLine): boolean => {
         if (line.kind === 'add') {
             if (typeof line.newRef !== 'number') return false;
             const key = buildSelectedDiffLineKey('additions', line.newRef);
@@ -164,15 +141,6 @@ function emitHunk(
                 }
                 break;
             }
-            case 'other': {
-                emitted.push({
-                    text: line.text,
-                    oldRef: line.oldRef,
-                    newRef: line.newRef,
-                    carriesChange: false,
-                });
-                break;
-            }
         }
     }
 
@@ -219,8 +187,10 @@ export function buildPatchFromSelectedDiffLines(
     }
 
     const lines = unifiedDiff.split('\n');
-    const firstHunkIndex = lines.findIndex((line) => HUNK_HEADER_REGEX.test(line));
-    if (firstHunkIndex < 0) {
+    const hunks = parseUnifiedDiffHunks(unifiedDiff);
+    // Locate the raw prelude for patch output; ranges and content come only from the engine.
+    const firstHunkIndex = lines.findIndex((line) => line.trimStart().startsWith('@@ '));
+    if (!hunks.length || firstHunkIndex < 0) {
         return null;
     }
 
@@ -239,98 +209,9 @@ export function buildPatchFromSelectedDiffLines(
         normalizedHeaderLines = [`diff --git a/${oldPath} b/${newPath}`, ...normalizedHeaderLines];
     }
 
-    const hunks: ParsedHunk[] = [];
-    let cursor = firstHunkIndex;
-    while (cursor < lines.length) {
-        const header = parseHunkHeader(lines[cursor] ?? '');
-        if (!header) {
-            cursor += 1;
-            continue;
-        }
-
-        const parsed: ParsedHunk = {
-            sectionHeading: header.sectionHeading,
-            lines: [],
-        };
-
-        let oldCursor = header.oldStart;
-        let newCursor = header.newStart;
-        cursor += 1;
-
-        while (cursor < lines.length) {
-            const line = lines[cursor] ?? '';
-            if (line.startsWith('diff --git ') || HUNK_HEADER_REGEX.test(line)) {
-                break;
-            }
-
-            if (line === NO_NEWLINE_MARKER) {
-                parsed.lines.push({
-                    index: cursor,
-                    text: line,
-                    kind: 'marker',
-                    oldRef: null,
-                    newRef: null,
-                });
-                cursor += 1;
-                continue;
-            }
-
-            if (line.startsWith(' ')) {
-                parsed.lines.push({
-                    index: cursor,
-                    text: line,
-                    kind: 'context',
-                    oldRef: oldCursor,
-                    newRef: newCursor,
-                });
-                oldCursor += 1;
-                newCursor += 1;
-                cursor += 1;
-                continue;
-            }
-
-            if (line.startsWith('-') && !line.startsWith('---')) {
-                parsed.lines.push({
-                    index: cursor,
-                    text: line,
-                    kind: 'delete',
-                    oldRef: oldCursor,
-                    newRef: newCursor,
-                });
-                oldCursor += 1;
-                cursor += 1;
-                continue;
-            }
-
-            if (line.startsWith('+') && !line.startsWith('+++')) {
-                parsed.lines.push({
-                    index: cursor,
-                    text: line,
-                    kind: 'add',
-                    oldRef: oldCursor,
-                    newRef: newCursor,
-                });
-                newCursor += 1;
-                cursor += 1;
-                continue;
-            }
-
-            parsed.lines.push({
-                index: cursor,
-                text: line,
-                kind: 'other',
-                oldRef: oldCursor,
-                newRef: newCursor,
-            });
-            cursor += 1;
-        }
-
-        hunks.push(parsed);
-    }
-
     const renderedHunks: string[] = [];
     for (const parsedHunk of hunks) {
-        const emitted = emitHunk(parsedHunk.lines, selectedLineKeys, mode);
+        const emitted = emitHunk(selectionLines(parsedHunk), selectedLineKeys, mode);
         if (!emitted) continue;
         const rendered = computeHunkHeaderLines(emitted);
         if (!rendered) continue;

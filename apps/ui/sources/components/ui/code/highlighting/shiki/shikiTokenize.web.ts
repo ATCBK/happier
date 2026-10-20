@@ -7,6 +7,7 @@ import {
     resolveHappierTextMateThemeId,
 } from '@/components/ui/code/highlighting/shiki/happierTextMateTheme';
 import { LruMap } from '@/utils/cache/lruMap';
+import type { ShikiScopeToken } from './shikiTokenTypes';
 
 export type ShikiInlineToken = Readonly<{ text: string; color: string }>;
 
@@ -136,6 +137,36 @@ async function ensureLanguageLoaded(params: Readonly<{ highlighter: ShikiHighlig
         await maybeLoad.call(params.highlighter, params.languageId);
     }
     params.loadedLanguageIds.add(params.languageId);
+}
+
+export async function shikiTokenizeScopeLines(params: Readonly<{
+    isDark: boolean;
+    language: string;
+    lines: readonly string[];
+    colors?: Record<string, unknown> | null;
+}>): Promise<readonly (readonly ShikiScopeToken[])[]> {
+    const languageId = resolveShikiLanguageId(params.language);
+    const themeId = resolveHappierShikiThemeId(params);
+    const { highlighter } = await getShikiHighlighterForTheme({ ...params, languageId, themeId });
+    const { tokens } = highlighter.codeToTokens(params.lines.join('\n'), {
+        lang: languageId,
+        theme: themeId as BundledTheme,
+        includeExplanation: 'scopeName',
+    });
+    let lineOffset = 0;
+    return params.lines.map((line, lineIndex) => {
+        const row = (tokens[lineIndex] ?? []).flatMap(token => {
+            let column = token.offset - lineOffset;
+            if (!token.explanation) return [{ text: token.content, column, scopes: [] }];
+            return token.explanation.map(part => {
+                const result = { text: part.content, column, scopes: part.scopes.map(scope => scope.scopeName) };
+                column += part.content.length;
+                return result;
+            });
+        });
+        lineOffset += line.length + 1;
+        return row;
+    });
 }
 
 export async function shikiTokenizeLines(params: Readonly<{

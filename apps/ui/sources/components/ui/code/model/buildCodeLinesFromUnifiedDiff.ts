@@ -1,13 +1,7 @@
 import type { CodeLine } from './codeLineTypes';
 import type { IntraLineDiffSegment } from './codeLineTypes';
 import { diffWordsWithSpace } from 'diff';
-
-function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
-    // @@ -a,b +c,d @@
-    const match = /^\s*@@\s+-([0-9]+)(?:,[0-9]+)?\s+\+([0-9]+)(?:,[0-9]+)?\s+@@/.exec(line);
-    if (!match) return null;
-    return { oldStart: Number(match[1]), newStart: Number(match[2]) };
-}
+import { parseUnifiedDiffHunks, type HunkLine } from '@happier-dev/protocol/diff/hunks';
 
 function isDiffHeaderLine(line: string): boolean {
     const trimmed = line.trimStart();
@@ -16,7 +10,6 @@ function isDiffHeaderLine(line: string): boolean {
         || trimmed.startsWith('index ')
         || trimmed.startsWith('--- ')
         || trimmed.startsWith('+++ ')
-        || trimmed.startsWith('@@')
     );
 }
 
@@ -34,11 +27,26 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
     // A diff that ends with a newline terminates its last line; it does not start an empty one.
     if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
 
+    const hunks = parseUnifiedDiffHunks(params.unifiedDiff);
+    // Raw header locations preserve the existing display ids. The engine owns all ranges and body parsing.
+    const headerIndexes: number[] = [];
+    const content = new Map<number, HunkLine>();
+    let sourceIndex = 0;
+    for (const hunk of hunks) {
+        while (sourceIndex < rawLines.length && !rawLines[sourceIndex]!.trimStart().startsWith('@@ ')) sourceIndex += 1;
+        headerIndexes[hunk.index] = sourceIndex++;
+        for (const line of hunk.lines) {
+            content.set(sourceIndex, line);
+            sourceIndex += line.noEol ? 2 : 1;
+        }
+    }
+    const headers = new Map(hunks.map(hunk => [headerIndexes[hunk.index], hunk]));
+
     const out: CodeLine[] = [];
 
     const shouldHidePrelude = params.hideFilePrelude !== false;
     const firstHunkIndex = shouldHidePrelude
-        ? rawLines.findIndex((l) => (l ?? '').trimStart().startsWith('@@'))
+        ? headerIndexes[0] ?? -1
         : -1;
     const skipPrelude = shouldHidePrelude && firstHunkIndex >= 0;
 
@@ -53,6 +61,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
     let oldLine = 0;
     let newLine = 0;
     let inHunk = false;
+    let hunkIndex: number | null = null;
 
     const pendingRemovals: Array<{ outIndex: number; text: string }> = [];
 
@@ -67,17 +76,17 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             continue;
         }
 
-        if (trimmed.startsWith('@@')) {
+        const header = headers.get(i);
+        if (header) {
             pendingRemovals.length = 0;
-            const header = parseHunkHeader(trimmed);
-            if (header) {
-                oldLine = header.oldStart;
-                newLine = header.newStart;
-                inHunk = true;
-            }
+            oldLine = header.oldStart;
+            newLine = header.newStart;
+            inHunk = true;
+            hunkIndex = header.index;
             out.push({
                 id: `h:${i}`,
                 sourceIndex: i,
+                hunkIndex,
                 kind: 'header',
                 oldLine: null,
                 newLine: null,
@@ -94,6 +103,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             out.push({
                 id: `hd:${i}`,
                 sourceIndex: i,
+                hunkIndex: null,
                 kind: 'header',
                 oldLine: null,
                 newLine: null,
@@ -111,6 +121,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             out.push({
                 id: `p:${i}`,
                 sourceIndex: i,
+                hunkIndex: null,
                 kind: 'header',
                 oldLine: null,
                 newLine: null,
@@ -122,10 +133,10 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             continue;
         }
 
-        const prefix = normalized.slice(0, 1);
-        const codeText = normalized.slice(1);
+        const hunkLine = content.get(i);
+        const codeText = hunkLine?.text.replace(/\r$/, '') ?? normalized.slice(1);
 
-        if (prefix === '+' && !normalized.startsWith('+++')) {
+        if (hunkLine?.kind === 'add') {
             let renderIntraLineDiffSegments: readonly IntraLineDiffSegment[] | null = null;
             if (intraLineEnabled && remainingIntraLinePairs > 0 && pendingRemovals.length > 0) {
                 const pending = pendingRemovals.shift()!;
@@ -168,6 +179,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             const line: CodeLine = {
                 id: `a:${i}`,
                 sourceIndex: i,
+                hunkIndex,
                 kind: 'add',
                 oldLine: null,
                 newLine,
@@ -182,10 +194,11 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             continue;
         }
 
-        if (prefix === '-' && !normalized.startsWith('---')) {
+        if (hunkLine?.kind === 'remove') {
             const line: CodeLine = {
                 id: `r:${i}`,
                 sourceIndex: i,
+                hunkIndex,
                 kind: 'remove',
                 oldLine,
                 newLine: null,
@@ -204,11 +217,12 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
         }
 
         // Context line (" ") or blank line inside hunk.
-        if (prefix === ' ') {
+        if (hunkLine?.kind === 'context') {
             pendingRemovals.length = 0;
             out.push({
                 id: `c:${i}`,
                 sourceIndex: i,
+                hunkIndex,
                 kind: 'context',
                 oldLine,
                 newLine,
@@ -227,6 +241,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
         out.push({
             id: `x:${i}`,
             sourceIndex: i,
+            hunkIndex,
             kind: 'context',
             oldLine,
             newLine,
