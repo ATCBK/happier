@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { compareTurnChangeSetChronology } from '@happier-dev/protocol/sessions/changes/mergeTurnChangeSets';
 import type { SessionChangeSet, TurnChangeSet } from '@happier-dev/protocol/sessions/changes/types';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
 
 import { useSession, useSessionMessages } from '@/sync/domains/state/storage';
 import { readStoredSessionMessagesForAddress } from '@/sync/domains/messages/readStoredSessionMessagesForAddress';
@@ -15,6 +16,7 @@ import { deriveLatestTurnScopedChangeSet } from '../derivation/deriveLatestTurnS
 import { deriveFileChangeDiff } from '../derivation/deriveFileChangeDiff';
 import { deriveSessionChangeSet } from '../derivation/deriveSessionChangeSet';
 import { deriveTurnChangeSetsFromMessages } from '../derivation/deriveTurnChangeSetsFromMessages';
+import { deriveTurnRequesters } from '../derivation/deriveTurnRequesters';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 type UseDerivedSessionChangeSetResult = Readonly<{
@@ -30,6 +32,8 @@ type UseDerivedSessionChangeSetResult = Readonly<{
     latestTurnAgentReportedDiffByPath: ReadonlyMap<string, string | null> | null;
     latestTurnCheckpointDiffByPath: ReadonlyMap<string, string | null> | null;
     providerDiffByPath: ReadonlyMap<string, string | null> | null;
+    turnRequestersById: ReadonlyMap<string, TranscriptAccountActor | null>;
+    hasOtherNamedCollaborator: boolean;
 }>;
 
 function buildDiffByPath(changeSet: SessionChangeSet | null): ReadonlyMap<string, string | null> | null {
@@ -82,6 +86,10 @@ export function useDerivedSessionChangeSet(
     const turnChangeSets = React.useMemo(() => {
         return deriveTurnChangeSetsFromMessages(messages);
     }, [messages]);
+
+    const turnRequestersById = React.useMemo(() => deriveTurnRequesters(
+        exactSession?.sessionTurns?.turns ?? [], messages,
+    ), [exactSession?.sessionTurns, messages]);
 
     const latestTurnChangeSet = React.useMemo(() => {
         if (presentedTurnId) return turnChangeSets.find((turn) => turn.turnId === presentedTurnId) ?? null;
@@ -159,5 +167,7 @@ export function useDerivedSessionChangeSet(
         latestTurnAgentReportedDiffByPath,
         latestTurnCheckpointDiffByPath,
         providerDiffByPath,
+        turnRequestersById,
+        hasOtherNamedCollaborator: exactSession?.hasOtherNamedCollaborator === true,
     };
 }

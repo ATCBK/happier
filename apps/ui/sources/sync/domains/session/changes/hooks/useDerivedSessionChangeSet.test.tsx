@@ -136,6 +136,21 @@ describe('useDerivedSessionChangeSet', () => {
         session = createSessionFixture({ id: 'session_1', serverId: 'home-b' });
     });
 
+    it('joins turn requesters only through the canonical initiating-message anchor', async () => {
+        const actor = { v: 1 as const, serverId: 'home-b', accountId: 'requester', profile: null };
+        transcriptMessages = [{ kind: 'user-text', id: 'u', seq: 7, localId: null, createdAt: 1, text: 'Fix', accountActor: actor }, message];
+        session = { ...session, hasOtherNamedCollaborator: true, sessionTurns: { v: 1, sessionId: 'session_1', updatedAt: 1,
+            turns: [{ turnId: 'turn_1', status: 'completed', startedAt: 1, updatedAt: 2, transcriptAnchors: { startUserMessageSeq: 7 } }] } };
+        const { useDerivedSessionChangeSet } = await import('./useDerivedSessionChangeSet');
+        const hook = await renderHook(() => useDerivedSessionChangeSet({ serverId: 'home-b', sessionId: 'session_1' }));
+        expect(hook.getCurrent().turnRequestersById.get('turn_1')).toEqual(actor);
+        expect(hook.getCurrent().hasOtherNamedCollaborator).toBe(true);
+        session = { ...session, serverId: 'other-home' };
+        await hook.rerender();
+        expect(hook.getCurrent().turnRequestersById.size).toBe(0);
+        expect(hook.getCurrent().hasOtherNamedCollaborator).toBe(false);
+    });
+
     it.each([
         { finalText: 'c\n', intermediateText: 'b\n', expected: '-a\n+c' },
         { finalText: 'a\n', intermediateText: 'b\n', expected: null },

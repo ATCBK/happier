@@ -2,7 +2,34 @@ import { describe, expect, it } from 'vitest';
 
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
 
-import { extractWorkspaceMutationsFromNormalizedMessages } from './extractWorkspaceMutations';
+import { extractWorkspaceMutationsFromNormalizedMessages, readToolCallMutationPaths } from './extractWorkspaceMutations';
+
+describe('readToolCallMutationPaths', () => {
+    it('shares canonical provider normalization and retains per-path mutation kinds', () => {
+        const result = readToolCallMutationPaths({ name: 'NativePatch', input: {
+            _happier: { canonicalToolName: 'Patch' },
+            changes: {
+                'src/new.ts': { type: 'add', content: 'new' },
+                'src/gone.ts': { type: 'delete', content: 'old' },
+                'src/moved.ts': { type: 'update', previous_file_path: 'src/old.ts', old_content: 'old', new_content: 'new' },
+            },
+        } });
+        expect([...result.paths]).toEqual(['src/new.ts', 'src/gone.ts', 'src/moved.ts', 'src/old.ts']);
+        expect([...result.mutations].map(([path, mutation]) => [path, mutation.kind])).toEqual([
+            ['src/new.ts', 'create'], ['src/gone.ts', 'delete'], ['src/moved.ts', 'rename'], ['src/old.ts', 'rename'],
+        ]);
+    });
+
+    it('reads raw apply_patch through the protocol patch normalizer and never guesses shell paths', () => {
+        const patch = readToolCallMutationPaths({ name: 'apply_patch', input: {
+            patch: '*** Begin Patch\n*** Add File: src/new.ts\n+hello\n*** End Patch',
+        } });
+        expect([...patch.paths]).toEqual(['src/new.ts']);
+        const shell = readToolCallMutationPaths({ name: 'Bash', input: { command: 'echo hi > fake.ts', path: 'fake.ts' } });
+        expect([...shell.paths]).toEqual([]);
+        expect(shell.hasUnknownMutations).toBe(true);
+    });
+});
 
 function toolCallMessage(toolName: string, toolInput: unknown): NormalizedMessage {
     return {
