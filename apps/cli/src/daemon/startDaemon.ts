@@ -1999,9 +1999,9 @@ export async function startDaemon(
               ...request,
               homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
               openBroker: async (request, signal) => await api.openAccountConnectionProviderBroker(request, { signal }),
-              admitConsumer: async (authority, signal) => await isCurrent()
+              admitConsumer: async (authority, signal) => await isCurrent(signal)
                 && (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok
-                && await isCurrent(),
+                && await isCurrent(signal),
               openTunnel: createProviderBrokerMachineCarrierTunnelOpen({
                 homeId: managedPolicyHomeId, accountId: externalActionAccountId, localMachineId: machineId,
                 runtime, resolveTrustRoots: resolvePeerMediationTrustRoots,

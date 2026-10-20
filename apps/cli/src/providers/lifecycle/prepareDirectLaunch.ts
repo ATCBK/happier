@@ -27,6 +27,7 @@ type CreateAuthorizationAttemptContext = Readonly<{
 /** Host-private acquisition for one already admitted exact consumer. The
  * source owner retains catalog/currentness and supplies only scoped access. */
 export type DirectManagedProviderEndpointPreparer = (input: Readonly<{
+  signal?: AbortSignal;
   scope: PluginExecutionScopeV1;
   authorization: Extract<ProviderSpawnAuthorization, { deployment: { kind: 'managedLocal' } }>;
   /** Retain acquired resources before any fallible endpoint preparation. */
@@ -34,7 +35,7 @@ export type DirectManagedProviderEndpointPreparer = (input: Readonly<{
 }>) => Promise<Readonly<{
   normalizedUrl: string;
   downstreamBearer: string | null;
-  revalidateBeforeCommit(): Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
+  revalidateBeforeCommit(signal?: AbortSignal): Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
   cleanup: ProviderLaunchCleanup;
 }>>;
 
@@ -73,6 +74,7 @@ export type DirectProviderLaunchResult =
  * exact-once transfer of every Provider resource into the runtime lifetime.
  */
 export async function prepareDirectProviderLaunch(input: Readonly<{
+  signal?: AbortSignal;
   selection?: SessionModelSelectionV1;
   backendTarget: BackendTargetRefV2Input;
   machineId?: string;
@@ -160,6 +162,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
       if (!current.ok) { await scope.release(); return current; }
       let endpointCleanupRegistered = false;
       const endpoint = await dependencies.prepareManagedEndpoint!({
+        signal: input.signal,
         scope: input.scope, authorization: attempt.authorization,
         registerCleanup: cleanup => { scope.register(cleanup); endpointCleanupRegistered = true; },
       });
@@ -177,7 +180,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
     scope.setSanitizer(sanitizeDiagnosticText);
 
     if (revalidateManagedEndpoint) {
-      const current = await revalidateManagedEndpoint();
+      const current = await revalidateManagedEndpoint(input.signal);
       if (!current.ok) { await scope.release(); return current; }
     }
     const commitAuthorization = await attempt.revalidateBeforeCommit();
@@ -214,7 +217,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
     >> => {
       try {
         if (revalidateManagedEndpoint) {
-          const current = await revalidateManagedEndpoint();
+          const current = await revalidateManagedEndpoint(signal ?? input.signal);
           if (!current.ok) { await cleanupOnExit?.(); return current; }
         }
         const authorization = await attempt.revalidateBeforeCommit(signal);
