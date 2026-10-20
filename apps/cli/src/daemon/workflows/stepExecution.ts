@@ -27,7 +27,7 @@ export type WorkflowSessionInputObservation = (
   | Readonly<{ kind: 'completed'; result: string; usage?: SessionInputUsageV1 }>
   | Readonly<{ kind: 'failed'; code: string; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
   | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'needs_attention'; code: 'session_input_result_unavailable' }>
+  | Readonly<{ kind: 'needs_attention'; code: 'session_input_result_unavailable'; usage?: SessionInputUsageV1 }>
 ) & Readonly<{ replyOutcome?: SessionMessageReplyOutcomeV1 }>;
 
 /** Classifies the exact Session outcome; cancellation custody stays with its caller. */

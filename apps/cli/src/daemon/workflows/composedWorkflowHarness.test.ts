@@ -2469,6 +2469,10 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
   it.each<Readonly<{ name: string; contract: WorkflowStep['result']; observed: Extract<WaitForSessionInputReplyResult, { ok: true }>['result']; valid: boolean }>>([
     { name: 'explicit pass without text', contract: { kind: 'text' }, valid: true,
       observed: { kind: 'fulfilled', outcome: { kind: 'pass' } } },
+    { name: 'missing text needs attention', contract: { kind: 'text' }, valid: false,
+      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } } },
+    { name: 'typed terminal-no-result needs attention', contract: { kind: 'text' }, valid: false,
+      observed: { kind: 'fulfilled', outcome: { kind: 'terminal_no_result' } } },
     { name: 'exact whitespace', contract: { kind: 'text' }, valid: true,
       observed: { kind: 'final_text', text: '  answer\n', usage: { inputTokens: 8 } } },
     { name: 'strict JSON', contract: { kind: 'json', schema: { type: 'object', required: ['answer'] } }, valid: true,
@@ -2561,7 +2565,7 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
       .toEqual({ result: ordinaryFact.result, usage: ordinaryFact.usage, reason: ordinaryFact.reason, replyOutcome: ordinaryFact.replyOutcome });
     expect(rowFor(restarted, 'successor', runCrypto)).toBeUndefined();
 
-    const replacementBoundary = sessionInputBoundary();
+    const replacementBoundary = sessionInputBoundary({ first: observed });
     await expect(workflowDaemonProcess({ storage: restarted, sessionInput: replacementBoundary, directory, encryption })({
       ...claim, expectedRevision: restarted.run().revision,
     })).resolves.toMatchObject({ state: valid ? 'succeeded' : 'interrupted' });

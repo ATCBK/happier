@@ -56,6 +56,7 @@ export type WorkflowInvocationRecoveryObservation = (
   | Readonly<{ kind: 'unresolved'; code?: string; waitForCompletion?: () => Promise<void>;
     setupConsentOutput?: Readonly<{ operation: ActionOperationSnapshotV1 }> }>
   | Readonly<{ kind: 'completed'; result: JsonValue; usage?: WorkflowUsageV1 }>
+  | Readonly<{ kind: 'needs_attention'; code: 'session_input_result_unavailable'; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'failed'; code: string; message?: string; runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1']; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'stopped'; code: string }>
@@ -254,6 +255,8 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
   ): Promise<ReconciledInvocationTransition | null> => {
     const { index: exactIndex, progress } = invocation;
     const currentLifecycle = exactIndex.lifecycle;
+    // An unavailable result cannot confirm or replace an outstanding Stop.
+    if (currentLifecycle === 'cancel_requested' && observed.kind === 'needs_attention') return null;
     if (params.expectedRevision !== undefined
       && (currentLifecycle === 'completed' || currentLifecycle === 'failed'
         || currentLifecycle === 'cancelled' || currentLifecycle === 'skipped')) return null;
@@ -466,6 +469,9 @@ async function recoverInvocationCustody(params: Readonly<{
         continue;
       }
       reconciled.push(transition);
+      // Attention is an observable fact, not terminal custody. The server's
+      // existing settlement contract keeps this original input recoverable.
+      if (transition.lifecycle === 'needs_attention') allResolved = false;
     }
     cursor = typeof pageBody.nextCursor === 'string' ? pageBody.nextCursor : undefined;
   } while (cursor && !params.signal?.aborted);

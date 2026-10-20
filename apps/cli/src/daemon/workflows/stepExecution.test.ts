@@ -603,17 +603,17 @@ describe('Workflow detached Execution Run step execution', () => {
     })).resolves.toEqual({ kind: 'completed', result: { changed: true } });
   });
 
-  it('returns the recoverable Workflow interaction capacity code from the exact failed Run input', async () => {
+  it.each([
+    { code: 'workflow_interaction_capacity_exceeded', message: 'Workflow interaction exceeds durable capacity' },
+    { code: 'ERR_BAD_REQUEST', message: 'Request failed with status code 409' },
+  ])('returns $code from the exact failed Run input instead of leaving it pending', async error => {
     const get = vi.fn(async () => ({
       run: {
         runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1', intent: 'agent',
         backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
         permissionMode: 'default', retentionPolicy: 'resumable', runClass: 'long_lived',
         ioMode: 'request_response', status: 'failed', startedAtMs: 1, finishedAtMs: 2,
-        error: {
-          code: 'workflow_interaction_capacity_exceeded',
-          message: 'Workflow interaction exceeds durable capacity',
-        },
+        error,
         inputTurns: {
           occurrenceId: 'occurrence-1',
           last: { turnId: 'turn-1', inputIds: ['workflow-input-1'], state: 'failed' },
@@ -623,8 +623,7 @@ describe('Workflow detached Execution Run step execution', () => {
 
     await expect(observeWorkflowDetachedExecutionRunInput({
       runId: 'run-1', localInputId: 'workflow-input-1', get,
-    })).resolves.toEqual({ kind: 'failed', code: 'workflow_interaction_capacity_exceeded',
-      message: 'Workflow interaction exceeds durable capacity' });
+    })).resolves.toEqual({ kind: 'failed', ...error });
   });
 
   it.each(['running', 'succeeded', 'failed'] as const)('does not treat another turn or %s Run status as exact input proof', async status => {

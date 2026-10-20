@@ -45,6 +45,7 @@ import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
 import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 const accountId = 'account-1';
 const machineId = 'machine-1';
@@ -696,11 +697,13 @@ describe('workflow Run startup/reconnect recovery', () => {
       }
     });
 
-  it.each(['cancelled_input', 'other_input', 'handled_input', 'unknown_launch', 'deleted_session', 'failed_detached', 'failed_quiet', 'cancelled_quiet', 'startup_queued', 'startup_discard_lost', 'startup_wrong_birth'] as const)('recovers exact discarded Session input custody without treating inactive or unknown work as stopped (%s)', async scenario => {
+  it.each(['cancelled_input', 'other_input', 'handled_input', 'unknown_launch', 'deleted_session', 'failed_detached', 'failed_quiet', 'cancelled_quiet', 'startup_queued', 'startup_discard_lost', 'startup_wrong_birth',
+    'missing_text', 'typed_no_result', 'late_typed_no_result', 'terminal_missing_text', 'cancelled_missing_text'] as const)('recovers exact discarded Session input custody without treating inactive or unknown work as stopped (%s)', async scenario => {
     const rootId = '33333333-3333-4333-8333-333333333333';
     const childId = '44444444-4444-4444-8444-444444444444';
     const sessionId = 'stopped-workflow-session';
-    const quiet = scenario === 'failed_quiet' || scenario === 'cancelled_quiet';
+    const missingResult = scenario.endsWith('missing_text') || scenario.endsWith('typed_no_result');
+    const quiet = scenario === 'failed_quiet' || scenario === 'cancelled_quiet' || missingResult;
     const startup = scenario.startsWith('startup_');
     const workflowInvocation = { runId, invocationRecordId: childId };
     const localId = quiet || startup ? deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', ...workflowInvocation }) : 'exact-workflow-input';
@@ -738,9 +741,12 @@ describe('workflow Run startup/reconnect recovery', () => {
     await kit.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope: checkpointEnvelope(rootId),
       invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
         lifecycle: scenario === 'failed_detached' ? 'outcome_uncertain' : 'running', contentEnvelope: seal(childId, false) }] });
-    kit.requestControl('cancelled');
+    if (missingResult && scenario !== 'cancelled_missing_text') await kit.execute({ operation: 'transition', runId,
+      expectedRevision: 2, state: scenario === 'terminal_missing_text' ? 'failed' : 'interrupted', checkpointEnvelope: checkpointEnvelope(rootId) });
+    else kit.requestControl('cancelled');
     expect(kit.run()).toMatchObject({ workflowCustodyState: 'pending', attentionRequired: false });
     const requests: { method: string; path: string }[] = [];
+    let replyAvailable = scenario !== 'late_typed_no_result';
     let discarded = false;
     let rejectDiscard = scenario === 'startup_discard_lost';
     const stopBoundary = vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async request => {
@@ -767,12 +773,17 @@ describe('workflow Run startup/reconnect recovery', () => {
         id: sessionId, active: false, encryptionMode: 'plain', machineId,
         metadata: JSON.stringify({ machineId, path: '/repo', ...(startup ? { sessionCreationCorrespondenceV1: correspondence } : {}) }),
       }) });
-      if (url.pathname.endsWith('/reply')) return reply({ v: 1, status: 'none' });
+      if (url.pathname.endsWith('/reply')) return reply(SessionMessageReplyReadResultV1Schema.parse(scenario.endsWith('typed_no_result')
+        ? { v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing',
+          acceptedTurnId: 'quiet-turn', ...(replyAvailable ? { outcome: { kind: 'terminal_no_result' } } : {}) } }
+        : { v: 1, status: 'none' }));
       if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return quiet
         ? reply({ message: hostInput }) : reply({ error: 'Message not found' }, 404);
       if (quiet && url.pathname === `/v1/sessions/${sessionId}/turns`) return reply({ v: 1, sessionId, updatedAt: 200,
-        turns: [parseStoredSessionTurn({ turnId: 'quiet-turn', status: scenario === 'failed_quiet' ? 'failed' : 'cancelled',
+        turns: [parseStoredSessionTurn({ turnId: 'quiet-turn', status: !replyAvailable ? 'in_progress' : missingResult ? 'completed' : scenario === 'failed_quiet' ? 'failed' : 'cancelled',
           startedAt: 100, updatedAt: 200, terminalAt: 200, initiator: 'workflow', workDepth: 1,
+          ...(missingResult ? { transcriptAnchorsJson: JSON.stringify({ startUserMessageSeq: 1, userMessageSeqs: [1],
+            startSeqInclusive: 1, endSeqInclusive: 1, finalAssistantMessageSeq: null }) } : {}),
           workflowInvocationJson: JSON.stringify(workflowInvocation) })] });
       if (quiet && url.pathname === `/v1/sessions/${sessionId}/messages`) return reply({ messages: [hostInput] });
       if (url.pathname === `/v2/sessions/${sessionId}/pending` && request.method === 'GET') {
@@ -794,9 +805,12 @@ describe('workflow Run startup/reconnect recovery', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('test_http_address_unavailable');
+    const observingSockets: EventEmitter[] = [];
     const socketBoundary = vi.spyOn(sessionSockets, 'createSessionScopedSocketConnection').mockImplementation(() => {
       // This fixture represents the untyped socket.io network adapter, not its host observer.
-      const socket = Object.assign(new EventEmitter(), { connected: false, connect() {}, disconnect() {}, close() {} }) as unknown as ReturnType<typeof sessionSockets.createSessionScopedSocketConnection>['socket'];
+      const events = new EventEmitter();
+      observingSockets.push(events);
+      const socket = Object.assign(events, { connected: false, connect() {}, disconnect() {}, close() {} }) as unknown as ReturnType<typeof sessionSockets.createSessionScopedSocketConnection>['socket'];
       return { socket, transport: createSocketTransportAdapter(socket) };
     });
     const controller = new AbortController();
@@ -824,6 +838,12 @@ describe('workflow Run startup/reconnect recovery', () => {
         reconcileInvocation: observe,
       });
       await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => recover('startup', controller.signal));
+      if (scenario === 'late_typed_no_result') {
+        expect(kit.rowById(childId)?.index.lifecycle).toBe('running');
+        replyAvailable = true;
+        for (const socket of observingSockets) socket.emit('connect');
+        await vi.waitFor(() => expect(kit.rowById(childId)?.index.lifecycle).toBe('needs_attention'));
+      }
       if (scenario === 'startup_discard_lost') {
         expect(kit.run().workflowCustodyState).toBe('pending');
         expect(discarded).toBe(false);
@@ -833,6 +853,20 @@ describe('workflow Run startup/reconnect recovery', () => {
         expect(discarded).toBe(scenario !== 'startup_wrong_birth');
         expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: scenario === 'startup_wrong_birth' ? 'pending' : 'settled' });
         expect(kit.rowById(childId)?.index.lifecycle).toBe(scenario === 'startup_wrong_birth' ? 'cancel_requested' : 'cancelled');
+        return;
+      }
+      if (missingResult) {
+        const cancelling = scenario === 'cancelled_missing_text';
+        expect(kit.rowById(childId)?.index.lifecycle).toBe(cancelling ? 'cancel_requested' : 'needs_attention');
+        expect(kit.run()).toMatchObject({ state: cancelling ? 'cancelled' : scenario === 'terminal_missing_text' ? 'failed' : 'interrupted',
+          workflowCustodyState: 'pending', attentionRequired: !cancelling });
+        const writer = createWorkflowInvocationRecoveryFactWriter({ accountId, run: kit.run(), parentAttempt: 0, storage: kit,
+          encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
+        const recovered = await writer.readInvocation(childId);
+        if (!cancelling) expect(recovered?.progress.reason).toEqual({ code: 'session_input_result_unavailable' });
+        expect(recovered?.progress.result).toBeUndefined();
+        expect(recovered?.progress.replyOutcome).toEqual(scenario.endsWith('typed_no_result') ? { kind: 'terminal_no_result' } : undefined);
+        expect(requests.every(request => request.method === 'GET')).toBe(true);
         return;
       }
       const cancelled = scenario === 'cancelled_input' || scenario === 'cancelled_quiet';

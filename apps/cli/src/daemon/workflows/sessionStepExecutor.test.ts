@@ -877,7 +877,7 @@ describe('workflow Session step executor', () => {
     expect(observed).toEqual(['exact-session:exact-input']);
   });
 
-  it.each([false, true])('treats the successful Session no-text reason as empty raw text (rejoin=%s)', async (rejoin) => {
+  it.each([false, true])('keeps a Session without reply text in result-unavailable attention (rejoin=%s)', async (rejoin) => {
     const execute = createWorkflowSessionStepExecutor({
       credentials: { token: 'token', encryption: null },
       prepareConversation: async () => ({ kind: 'workflow_session_conversation', existing: null }),
@@ -902,7 +902,7 @@ describe('workflow Session step executor', () => {
       executionTarget: { kind: 'session' },
       authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' }, beforeInputAdmission: async () => {}, onInputAccepted: async () => {},
-    })).resolves.toEqual({ kind: 'completed', result: '', usage: { inputTokens: 8 } });
+    })).resolves.toEqual({ kind: 'needs_attention', code: 'session_input_result_unavailable', usage: { inputTokens: 8 } });
   });
 
   it('fresh-agent recovery creates a replacement Session while same recovery retains the exact prior target', async () => {

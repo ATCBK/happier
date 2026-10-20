@@ -573,7 +573,7 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
             ...(input.signal ? { signal: input.signal } : {}),
           });
           if (!settled.ok || settled.sessionId !== execution.sessionId || settled.localId !== execution.localInputId
-            || ['pending', 'needs_attention'].includes(classifyWorkflowSessionInputResult(settled.result).kind)) {
+            || classifyWorkflowSessionInputResult(settled.result, settled.replyOutcome).kind === 'pending') {
             throw new Error('session_input_terminal_observation_unavailable');
           }
         },
@@ -582,7 +582,7 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
       switch (result.kind) {
         case 'completed': return result;
         case 'failed': return result;
-        case 'needs_attention': return { ...result, kind: 'unresolved' };
+        case 'needs_attention': return result;
         case 'pending':
           if (input.observationOnly || (!input.terminalParent && !input.cancellationRequested)) {
             return { kind: 'unresolved', code: 'session_input_pending', ...completion };
