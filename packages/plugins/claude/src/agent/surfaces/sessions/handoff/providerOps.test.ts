@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRuntimeHandoffSurface } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { claudeHandoffSurface } from './providerOps.js';
+import { importClaudeSessionBundle } from './bundle.js';
 
 const roots: string[] = [];
 
@@ -20,6 +21,31 @@ function invocation() {
 }
 
 describe('claudeHandoffSurface', () => {
+    it('preserves unset native authentication for bundle import and existing target state', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-claude-handoff-native-env-'));
+        roots.push(root);
+        const targetDirectory = join(root, 'project');
+        const env = { HOME: root, USERPROFILE: root };
+        const imported = await importClaudeSessionBundle({
+            bundle: {
+                agentId: 'claude', remoteSessionId: 'native-session',
+                transcriptBase64: Buffer.from('{"type":"user"}\n').toString('base64'),
+            },
+            targetPath: targetDirectory, env,
+        });
+        const result = await claudeHandoffSurface.resolveExistingState({
+            sessionId: 'native-session', metadata: {}, targetDirectory, environmentVariables: env,
+        }, invocation());
+
+        expect.soft(imported.launch.environmentVariables).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(result).toMatchObject({
+            ok: true, value: { providerSessionId: 'native-session', launch: { environmentVariables: {} } },
+        });
+        if (!result.ok) throw new Error(result.message);
+        expect(result.value.launch.environmentVariables).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+        expect(result.value.source).toEqual(imported.directSource);
+    });
+
     afterEach(async () => {
         vi.unstubAllEnvs();
         await Promise.all(roots.splice(0).map(async (root) => {

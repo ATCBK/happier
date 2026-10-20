@@ -13,6 +13,7 @@ import { resolveClaudeProjectId } from './path.js';
 import { readClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
 import { resolveClaudeJsonlSessionFile } from '../external/files.js';
 import { resolveCanonicalConfiguredClaudeConfigDir } from '../external/source.js';
+import { resolveClaudeConfigDirEnvOverlay } from '../../../environment.js';
 
 /** Canonicalizes the Happier-owned directory facts below; never a vendor id. */
 function readNonEmptyString(value: unknown): string | null {
@@ -66,7 +67,7 @@ export const claudeHandoffSurface = {
                 source: { kind: 'claudeConfig', configDir, projectId: file.projectId },
                 launch: {
                     directory: params.targetDirectory,
-                    environmentVariables: { CLAUDE_CONFIG_DIR: configDir },
+                    environmentVariables: resolveClaudeConfigDirEnvOverlay(env),
                     sessionStateUpdates: [{ fieldId: 'identity.providerSessionId', value: providerSessionId }],
                 },
             },
