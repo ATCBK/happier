@@ -144,12 +144,14 @@ export const CodeEditorAccessoryBar = React.memo(
           icon="arrow-left"
           label={t('files.editing.moveLeft')}
           onPress={() => run('moveLeft')}
+          repeat
         />
         <EditorAccessoryChip
           testID={`${testID}-right`}
           icon="arrow-right"
           label={t('files.editing.moveRight')}
           onPress={() => run('moveRight')}
+          repeat
         />
         <EditorAccessoryChip
           testID={`${testID}-redo`}

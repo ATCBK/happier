@@ -49,8 +49,8 @@ function mapTextOffsets<T>(values: readonly T[], text: (value: T) => string, ren
     });
 }
 
-function renderFindText(text: string, ranges?: readonly FindTextRange[]) {
-    return ranges?.length ? <FindHighlightedText text={text} ranges={ranges} /> : text;
+function renderFindText(text: string, ranges?: readonly FindTextRange[], selectable?: boolean) {
+    return ranges?.length ? <FindHighlightedText text={text} ranges={ranges} selectable={selectable} /> : text;
 }
 
 export function CodeLineRow(props: {
@@ -123,6 +123,8 @@ export function CodeLineRow(props: {
     const onPress = !line.renderIsHeaderLine && (line.selectable || pressLineWhenNotSelectable === true) && onPressLine
         ? (event: GestureResponderEvent) => onPressLine(line, event as CodeLinePressEvent)
         : undefined;
+    // Web reading keeps code text selectable (copy, Ask about selection); a line-range gesture owns the drag instead.
+    const textSelectable = isWeb && line.selectable && !line.renderIsHeaderLine && !(onPressInLine || onHoverLine || onPressOutLine);
     const onLongPress = !isWeb && onPressAddComment && !line.renderIsHeaderLine ? () => {
         longPressedRef.current = true;
         onPressAddComment(line);
@@ -301,14 +303,15 @@ export function CodeLineRow(props: {
                         onPressIn={canActivateToken ? () => { longPressedRef.current = false; } : undefined}
                         onPress={activateText}
                         onLongPress={canActivateToken ? onLongPress : undefined}
+                        selectable={textSelectable}
                         numberOfLines={wrapLines ? undefined : 1}
                         ellipsizeMode={wrapLines ? undefined : 'clip'}
                         style={[styles.codeText, webWhitespaceStyle, { color: textColor }, !wrapLines ? styles.noWrap : null]}
                     >
                         {(props.syntaxHighlighting?.mode === 'advanced' && props.advancedTokens && !line.renderIsHeaderLine)
                             ? mapTextOffsets(props.advancedTokens, (token) => token.text, (token, idx, offset) => (
-                                <Text key={idx} useDefaultTypography={false} style={{ color: token.color }}>
-                                    {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length))}
+                                <Text key={idx} useDefaultTypography={false} selectable={textSelectable} style={{ color: token.color }}>
+                                    {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable)}
                                 </Text>
                             ))
                             : intraLineTokensBySegment
@@ -329,7 +332,7 @@ export function CodeLineRow(props: {
                                         <Text
                                             key={segIndex}
                                             useDefaultTypography={false}
-                                            selectable={line.selectable}
+                                            selectable={textSelectable}
                                             style={segment.kind === 'context' ? null : { backgroundColor: glassSurfaceBackgroundColor(segmentBg, 'content'), borderRadius: 3 }}
                                         >
                                             {Array.isArray(tokens)
@@ -337,7 +340,7 @@ export function CodeLineRow(props: {
                                                     <Text
                                                         key={tokIndex}
                                                         useDefaultTypography={false}
-                                                        selectable={line.selectable}
+                                                        selectable={textSelectable}
                                                         style={{
                                                             color: resolveTokenColorWithFallback(segmentFg, tok.type),
                                                             fontWeight: tok.type === 'keyword' ? '600' : '400',
@@ -347,7 +350,7 @@ export function CodeLineRow(props: {
                                                     </Text>
                                                 ))
                                                 : (
-                                                    <Text useDefaultTypography={false} selectable={line.selectable} style={{ color: segmentFg }}>
+                                                    <Text useDefaultTypography={false} selectable={textSelectable} style={{ color: segmentFg }}>
                                                         {renderFindText(segment.text, sliceFindRanges(props.findRanges, segmentOffset, segment.text.length))}
                                                     </Text>
                                                 )}
@@ -359,15 +362,16 @@ export function CodeLineRow(props: {
                                     <Text
                                         key={idx}
                                         useDefaultTypography={false}
+                                        selectable={textSelectable}
                                         style={{
                                             color: renderTokenColor(token.type),
                                             fontWeight: token.type === 'keyword' ? '600' : '400',
                                         }}
                                     >
-                                        {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length))}
+                                        {renderFindText(token.text, sliceFindRanges(props.findRanges, offset, token.text.length), textSelectable)}
                                     </Text>
                                 ))
-                                : renderFindText(line.renderCodeText || ' ', props.findRanges)}
+                                : renderFindText(line.renderCodeText || ' ', props.findRanges, textSelectable)}
                     </Text>
                 </View>
             </Pressable>

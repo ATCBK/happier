@@ -14,6 +14,7 @@ import { ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/d
 import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { UserTextMessage } from "@happier-dev/session-core/messages";
+import type { MediaStageProps } from '@/components/ui/media/stage/mediaStageItems';
 import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
 import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import {
@@ -1223,7 +1224,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(screen.findAllByTestId(`message-attachments-inline-image-preview:${path}`)).toHaveLength(0);
     });
 
-    it('opens inline transcript images in the shared attachment preview modal', async () => {
+    it('opens inline transcript images in the shared Media stage', async () => {
         const { MessageView } = await import('./MessageView');
 
         const firstPath = '.happier/uploads/messages/m3/one.png';
@@ -1265,19 +1266,14 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
 
         expect(routerPushSpy).not.toHaveBeenCalled();
         expect(modalShowSpy).toHaveBeenCalledTimes(1);
-        const modalConfig = modalShowSpy.mock.calls[0]?.[0] as null | {
-            props?: Readonly<{
-                images?: ReadonlyArray<Readonly<{ kind: string; filePath?: string; title: string }>>;
-                initialIndex?: number;
-            }>;
-        };
-        expect(modalConfig?.props).toEqual(expect.objectContaining({
+        const modalConfig = modalShowSpy.mock.calls[0]?.[0] as { props?: MediaStageProps } | undefined;
+        expect(modalConfig?.props).toMatchObject({
             initialIndex: 0,
-            images: expect.arrayContaining([
-                expect.objectContaining({ kind: 'session-image', filePath: firstPath, title: 'one.png' }),
-                expect.objectContaining({ kind: 'session-image', filePath: secondPath, title: 'two.png' }),
-            ]),
-        }));
+            items: [
+                { kind: 'image', title: 'one.png', source: { source: { kind: 'session', sessionId: 's1', filePath: firstPath } } },
+                { kind: 'image', title: 'two.png', source: { source: { kind: 'session', sessionId: 's1', filePath: secondPath } } },
+            ],
+        });
 });
     it('keeps public structured file actions inert', async () => {
         const { MessageView } = await import('./MessageView');

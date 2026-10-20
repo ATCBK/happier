@@ -16,6 +16,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
     lineNumberDigits?: number;
     reviewLaneWidth?: number;
     fontFamily?: string;
+    /** The code view's canvas inset (`CodeLinesView` `contentPadding*`): the first line and the numbers sit where View drew them. */
+    contentPaddingHorizontal?: number;
+    contentPaddingVertical?: number;
 }>): string {
     const themeJson = JSON.stringify(params.theme);
     const wrapLines = params.wrapLines ? 'true' : 'false';
@@ -29,7 +32,10 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
     const fontSizePx = fontMetrics.fontSize;
     const lineHeightPx = fontMetrics.lineHeight;
     const numberFontSizePx = fontMetrics.lineNumberFontSize;
-    const gutterEnd = CODE_GUTTER_METRICS.numberPaddingRight - 1; // Existing gutter divider occupies the remaining pixel.
+    // No divider: the code view has none, so the text starts the number gap after the digits, as in View.
+    const gutterEnd = CODE_GUTTER_METRICS.numberPaddingRight;
+    const insetLeft = Math.max(0, params.contentPaddingHorizontal ?? 0);
+    const insetVertical = Math.max(0, params.contentPaddingVertical ?? 0);
     const markerLane = CODE_GUTTER_METRICS.numberPaddingRight / 3;
 
     const embeddedBundle = typeof CODEMIRROR_WEBVIEW_BUNDLE_JS === 'string'
@@ -82,7 +88,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
         line-height: ${lineHeightPx}px;
       }
       .cm-gutters {
-        border-right: 1px solid ${params.theme.dividerColor};
+        border-right: none;
         background: ${params.theme.backgroundColor};
         color: ${params.theme.lineNumberColor};
       }
@@ -494,7 +500,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           '.cm-content': {
             color: syntax.defaultColor,
             caretColor: theme.textColor,
-            padding: '0',
+            padding: '${insetVertical}px 0',
           },
           '.cm-line': { padding: '0' },
           '.cm-cursor, .cm-dropCursor': {
@@ -505,9 +511,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           },
           '.cm-gutters': {
             backgroundColor: theme.backgroundColor,
-            borderRight: '1px solid ' + theme.dividerColor,
+            borderRight: 'none',
             color: theme.lineNumberColor,
-            paddingLeft: 'calc(${CODE_GUTTER_METRICS.rowPadding + CODE_GUTTER_METRICS.numberPaddingLeft}px + var(--happier-review-lane-width, ${params.reviewLaneWidth ?? 0}px))',
+            paddingLeft: 'calc(${insetLeft + CODE_GUTTER_METRICS.rowPadding + CODE_GUTTER_METRICS.numberPaddingLeft}px + var(--happier-review-lane-width, ${params.reviewLaneWidth ?? 0}px))',
             paddingRight: '${gutterEnd}px',
           },
           '.cm-lineNumbers .cm-gutterElement': {

@@ -14,7 +14,7 @@ import { CodeLineRow, CODE_LINE_BASE_HEIGHT, type CodeLinePressEvent } from './C
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLinesReadingAnchor';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
-import type { EditorDecoration } from '../editor/codeEditorTypes';
+import type { EditorDecoration, Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 
 export type CodeLinesExternalScrollView = Readonly<{
@@ -78,8 +78,12 @@ export type CodeLinesViewProps = {
     liveTint?: Readonly<{ lineIds: ReadonlySet<string>; opacity: SharedValue<number> }>;
     findRangesByLineId?: ReadonlyMap<string, readonly FindTextRange[]>;
     intelligence?: Readonly<{
-        onPointerToken: (lineId: string, offset16: number) => void;
-        onActivateToken: (lineId: string, offset16: number) => void;
+        /** `rect` is the pointed line's box at the pointer (window space), for anchoring a card. */
+        onPointerToken: (lineId: string, offset16: number, rect: Rect | null) => void;
+        /** Modifier-click (desktop) or a plain tap (touch, outside a selection). */
+        onActivateToken: (lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => void;
+        /** The pointer left code text (whitespace past a line's end, the gutter, outside the view). */
+        onPointerAway?: () => void;
         markersByLineId?: ReadonlyMap<string, readonly EditorDecoration[]>;
     }>;
     testID?: string;
@@ -96,6 +100,15 @@ type PreventableEvent = Readonly<{
 }>;
 
 const EMPTY_LINE_ID_SET: ReadonlySet<string> = new Set();
+
+/** `data-code-line-kind/-old/-new` on each row: the one DOM fact selection readers use (`diffTextSelection`). */
+function codeLineDomDataSet(line: CodeLine): Readonly<Record<string, string>> {
+    return {
+        codeLineKind: line.kind,
+        ...(line.oldLine !== null ? { codeLineOld: String(line.oldLine) } : {}),
+        ...(line.newLine !== null ? { codeLineNew: String(line.newLine) } : {}),
+    };
+}
 const VIRTUALIZED_LIST_STYLE = { flex: 1, minHeight: 0 } as const;
 const LIST_FOOTER_STYLE = { height: 16 } as const;
 
@@ -132,7 +145,9 @@ function resolvePointerToken(event: CodePointerEvent, lines: ReadonlyMap<string,
     const range = document.createRange();
     range.selectNodeContents(code);
     range.setEnd(node, offset);
-    return { lineId: line.id, offset16: Math.min(line.renderCodeText.length, range.toString().length) };
+    const box = 'getBoundingClientRect' in code && typeof code.getBoundingClientRect === 'function' ? code.getBoundingClientRect() : null;
+    return { lineId: line.id, offset16: Math.min(line.renderCodeText.length, range.toString().length),
+        rect: box ? { x, y: box.top, width: 1, height: box.height } : null };
 }
 
 function preventNativeTextSelection(event?: PreventableEvent): void {
@@ -212,23 +227,30 @@ export function CodeLinesViewCore(
         ? new Map(props.lines.map((line) => [line.id, line])) : null, [intelligenceEnabled, props.lines]);
     const onPointerToken = props.intelligence?.onPointerToken;
     const onActivateToken = props.intelligence?.onActivateToken;
+    const onPointerAway = props.intelligence?.onPointerAway;
     const handlePointerMove = React.useCallback((event: CodePointerEvent) => {
+        if ((event.pointerType ?? event.nativeEvent?.pointerType) === 'touch') return;
         const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
-        if (token) onPointerToken?.(token.lineId, token.offset16);
-    }, [intelligenceLines, onPointerToken]);
+        if (token) onPointerToken?.(token.lineId, token.offset16, token.rect);
+        else onPointerAway?.();
+    }, [intelligenceLines, onPointerAway, onPointerToken]);
     const handleTokenClick = React.useCallback((event: CodePointerEvent) => {
         if (!(event.metaKey || event.ctrlKey || event.nativeEvent?.metaKey || event.nativeEvent?.ctrlKey)) return;
         const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
-        if (token) onActivateToken?.(token.lineId, token.offset16);
+        if (token) onActivateToken?.(token.lineId, token.offset16, { via: 'modifier', rect: token.rect });
     }, [intelligenceLines, onActivateToken]);
     const handleTokenTouch = React.useCallback((event: CodePointerEvent) => {
         if ((event.pointerType ?? event.nativeEvent?.pointerType) !== 'touch' || rangeGesturesEnabled) return;
         if (typeof window !== 'undefined' && window.getSelection?.()?.isCollapsed === false) return;
         const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
-        if (token) onActivateToken?.(token.lineId, token.offset16);
+        if (token) onActivateToken?.(token.lineId, token.offset16, { via: 'touch', rect: token.rect });
     }, [intelligenceLines, onActivateToken, rangeGesturesEnabled]);
+    // Native rows resolve a tap themselves (tap-to-name); they report no anchor rect.
+    const onRowActivateToken = React.useCallback((lineId: string, offset16: number) => {
+        onActivateToken?.(lineId, offset16, { via: 'touch', rect: null });
+    }, [onActivateToken]);
     const intelligenceEvents = Platform.OS === 'web' && props.intelligence
-        ? { onPointerMove: handlePointerMove, onPointerUp: handleTokenTouch, onClick: handleTokenClick } : {};
+        ? { onPointerMove: handlePointerMove, onPointerLeave: onPointerAway, onPointerUp: handleTokenTouch, onClick: handleTokenClick } : {};
     const lastPressedLineIdRef = React.useRef<string | null>(null);
     const explicitRangeStartLineIdRef = React.useRef<string | null>(null);
     const dragStartLineIdRef = React.useRef<string | null>(null);
@@ -318,6 +340,8 @@ export function CodeLinesViewCore(
         <View
             collapsable={false}
             nativeID={`${lineNativeIdPrefix}-${item.id}`}
+            // A text selection inside the row reads its line from here (Ask about a selection, web).
+            {...(Platform.OS === 'web' ? { dataSet: codeLineDomDataSet(item) } : {})}
             onLayout={props.externalScrollView ? () => measureExternalRow(item.id) : undefined}
             ref={(node) => {
                 if (node) lineRefs.current.set(item.id, node);
@@ -335,7 +359,7 @@ export function CodeLinesViewCore(
                 reviewed={props.reviewedLineIds?.has(item.id) === true}
                 liveTintOpacity={props.liveTint?.lineIds.has(item.id) ? props.liveTint.opacity : undefined}
                 findRanges={props.findRangesByLineId?.get(item.id)}
-                onActivateToken={rangeGesturesEnabled ? undefined : onActivateToken}
+                onActivateToken={rangeGesturesEnabled || !onActivateToken ? undefined : onRowActivateToken}
                 onPressLine={handlePressLine}
                 onPressInLine={rangeGesturesEnabled && Platform.OS === 'web' ? handlePressInLine : undefined}
                 onHoverLine={rangeGesturesEnabled && Platform.OS === 'web' ? handleHoverLine : undefined}
@@ -360,6 +384,7 @@ export function CodeLinesViewCore(
         props.externalScrollView,
         props.findRangesByLineId,
         onActivateToken,
+        onRowActivateToken,
         effectiveSyntaxHighlighting,
         handleHoverLine,
         handlePressInLine,

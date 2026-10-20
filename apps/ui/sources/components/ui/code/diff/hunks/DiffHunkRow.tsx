@@ -24,6 +24,16 @@ const ROW_TEXT_INSET = resolveCodeEditorGutterMetrics({
   columns: 2,
 }).textOffset;
 
+/**
+ * Where code text begins inside the row's own box. A renderer that places the row in its code column
+ * (Pierre's annotation slot, past its gutter) supplies its own text inset; the default spans the gutter.
+ */
+/** Below this the row drops its range and key hints so the change name and both buttons fit. */
+const NARROW_ROW_WIDTH = 320;
+
+/** A px inset, or a CSS length on web (Pierre's code column measures its text inset in `ch`). */
+export const DiffHunkRowTextInsetContext = React.createContext<number | `${number}ch`>(ROW_TEXT_INSET);
+
 const HoverView = View as unknown as React.ComponentType<
   React.ComponentPropsWithRef<typeof View> & {
     onMouseEnter?: () => void;
@@ -68,6 +78,13 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
   const { theme } = useUnistyles();
   const phone = useDeviceType() === 'phone';
   const [revealed, setRevealed] = React.useState(false);
+  // A narrow column (a side pane's code column) keeps the change name and both buttons; the range and
+  // key hints step aside (the keys still work, and their tooltips say them).
+  const [narrow, setNarrow] = React.useState(false);
+  const onRowLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+    const next = event.nativeEvent.layout.width < NARROW_ROW_WIDTH;
+    setNarrow((previous) => (previous === next ? previous : next));
+  }, []);
   const state = review.stateOf?.(hunk) ?? 'open';
   const current = review.currentIndex === hunk.index;
   const n = (review.numberOffset ?? 0) + hunk.index + 1;
@@ -83,6 +100,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
   const discardReason = discard ? reason('discard') : null;
   const keepReason = keep ? reason('keep') : null;
   const shownReason = current ? (discardReason ?? keepReason) : null;
+  const textInset = React.useContext(DiffHunkRowTextInsetContext);
   const reveal = React.useCallback(() => setRevealed(true), []);
   const conceal = React.useCallback(() => setRevealed(false), []);
   const hoverHandlers =
@@ -98,10 +116,13 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
   return (
     <HoverView
       testID={`diff-hunk-row-${hunk.index}`}
+      onLayout={onRowLayout}
       accessibilityState={{ busy }}
       {...(current ? { 'aria-current': true } : {})}
       style={[
         styles.row,
+        // RN's DimensionValue has no `ch`; only the web Pierre adapter supplies one, and RNW passes CSS lengths through.
+        { paddingLeft: textInset as number },
         current
           ? [
               styles.rowCurrent,
@@ -129,14 +150,16 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               color: theme.colors.text.tertiary,
               fontVariant: ['tabular-nums'],
             }}
-          >{`· ${range}`}</Text>
+          >{narrow ? '' : `· ${range}`}</Text>
         </View>
       ) : (
         <View style={styles.label}>
           <Text
             variant="micro"
             emphasis="semiBold"
+            numberOfLines={1}
             style={{
+              flexShrink: 0,
               color: current
                 ? theme.colors.text.primary
                 : theme.colors.text.secondary,
@@ -152,7 +175,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               color: theme.colors.text.tertiary,
               fontVariant: ['tabular-nums'],
             }}
-          >{`· ${range}`}</Text>
+          >{narrow ? '' : `· ${range}`}</Text>
         </View>
       )}
       <View style={styles.grow} />
@@ -176,7 +199,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               size="mini"
               display="inverted"
               title={t('hunkReview.discard')}
-              trailing={
+              trailing={narrow ? undefined :
                 <ShortcutHint
                   commandId="review.change.discard"
                   color={theme.colors.text.tertiary}
@@ -198,7 +221,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               size="mini"
               display={kept ? 'inverted' : 'secondary'}
               title={kept ? t('hunkReview.kept') : t('hunkReview.keep')}
-              trailing={
+              trailing={narrow ? undefined :
                 <ShortcutHint
                   commandId="review.change.keep"
                   color={theme.colors.text.tertiary}
@@ -263,6 +286,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   actions: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s6,

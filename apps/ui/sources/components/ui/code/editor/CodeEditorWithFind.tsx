@@ -134,6 +134,8 @@ function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
                 changeDebounceMs={props.changeDebounceMs}
                 bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
                 presentation={props.presentation}
+                contentPaddingHorizontal={props.contentPaddingHorizontal}
+                contentPaddingVertical={props.contentPaddingVertical}
                 onReady={props.onReady}
                 initialLine={props.initialLine}
                 lineNumberDigits={props.lineNumberDigits}

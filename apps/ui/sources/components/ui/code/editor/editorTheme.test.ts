@@ -18,7 +18,7 @@ describe('buildMonacoEditorThemeData', () => {
     it('hands Monaco hex colors only, because it paints any other expression solid red', () => {
         const theme = buildMonacoEditorThemeData(resolveCodeEditorTheme(createThemeFixture({ dark: false, colors })));
 
-        expect(theme.colors['editor.lineHighlightBorder']).toBe('#00000014');
+        expect(theme.colors['editorIndentGuide.background1']).toBe('#00000014');
         expect(theme.colors['editorLineNumber.foreground']).toBe('#3c3c4399');
         for (const value of Object.values(theme.colors)) expect(value).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/u);
     });

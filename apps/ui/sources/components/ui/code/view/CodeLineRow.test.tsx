@@ -78,6 +78,22 @@ describe('CodeLineRow', () => {
         expect(match[match.length - 1].children.join('')).toBe('target');
         expect(JSON.stringify(screen.tree.toJSON())).toContain('const');
     });
+    it('keeps web reading text selectable and leaves the drag to a line-range gesture', async () => {
+        const { CodeLineRow } = await import('./CodeLineRow');
+        const line = {
+            id: 'f:7', sourceIndex: 6, hunkIndex: null, kind: 'context' as const, oldLine: 7, newLine: 7,
+            renderPrefixText: ' ', renderCodeText: 'let lastError: unknown;', renderIsHeaderLine: false, selectable: true,
+        };
+        const codeTextSelectable = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.tree.root
+            .findAll((node) => node.props?.dataSet?.codeText === 'f:7')[0]?.props.selectable;
+
+        const reading = await renderScreen(<CodeLineRow line={line} selected={false} />);
+        expect(codeTextSelectable(reading)).toBe(true);
+
+        const ranging = await renderScreen(<CodeLineRow line={line} selected={false} onPressInLine={() => {}} onPressOutLine={() => {}} />);
+        expect(codeTextSelectable(ranging)).toBe(false);
+    });
+
     it('renders prefix and code segments', async () => {
         const { CodeLineRow } = await import('./CodeLineRow');
 

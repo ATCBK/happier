@@ -103,9 +103,9 @@ describe('CodeLinesView (web)', () => {
             const list = screen.tree.root.findByType('FlatList');
             expect(list.props.onPointerMove).toEqual(expect.any(Function));
             list.props.onPointerMove({ target, clientX: 10, clientY: 20 });
-            expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5);
+            expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5, null);
             list.props.onClick({ target, clientX: 10, clientY: 20, metaKey: true });
-            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5);
+            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5, { via: 'modifier', rect: null });
             pointer.mockClear(); activate.mockClear();
             await screen.update(<CodeLinesViewCore lines={[{ ...lines[0], kind: 'remove', newLine: null }]} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
             const updated = screen.tree.root.findByType('FlatList');

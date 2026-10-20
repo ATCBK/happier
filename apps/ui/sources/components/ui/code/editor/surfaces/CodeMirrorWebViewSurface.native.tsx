@@ -120,9 +120,13 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                 uiFontScale,
                 osFontScale: typeof PixelRatio.getFontScale === 'function' ? PixelRatio.getFontScale() : 1,
                 fontFamily: resolveCodeMonoFontFamily(),
+                contentPaddingHorizontal: props.contentPaddingHorizontal,
+                contentPaddingVertical: props.contentPaddingVertical,
             }),
         [
             changeDebounceMs,
+            props.contentPaddingHorizontal,
+            props.contentPaddingVertical,
             editorTheme,
             maxChunkBytes,
             showLineNumbers,

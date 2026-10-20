@@ -8,6 +8,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import type { DiffHunkInfo } from './diffViewerTypes';
 import { DiffHunksRenderer, getLineAnnotationName } from '@pierre/diffs';
 import type { FileDiffProps } from '@pierre/diffs/react';
+import { BrowserWorker } from './pierre/pierreWorkerTestHelpers';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -55,9 +56,9 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
     let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
     beforeEach(async () => {
         browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
-        vi.stubGlobal('Worker', class Worker {
-            constructor() { throw new Error('No worker in the host renderer contract fixture'); }
-        });
+        // A working worker transport: a throwing one now (correctly) routes Pierre to its Happier fallback.
+        BrowserWorker.reset();
+        vi.stubGlobal('Worker', BrowserWorker);
         storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: engine } });
     });
     afterEach(() => {

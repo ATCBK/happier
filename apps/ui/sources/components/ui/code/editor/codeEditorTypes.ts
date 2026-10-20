@@ -50,6 +50,9 @@ export type CodeEditorProps = Readonly<{
      * source that is the page itself (an Artifact's Markdown): no frame, on the page's own surface.
      */
     presentation?: 'framed' | 'canvas';
+    /** Inset of the first line and of the numbers, as the code view's own `contentPadding*` (the page canvas inset). */
+    contentPaddingHorizontal?: number;
+    contentPaddingVertical?: number;
 }>;
 
 export type CodeEditorHandle = Readonly<{

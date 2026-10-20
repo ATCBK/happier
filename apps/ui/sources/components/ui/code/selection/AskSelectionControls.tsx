@@ -13,6 +13,8 @@ export type AskSelectionControlsProps = UseAskSelectionInput &
   Readonly<{
     /** Comment opens this surface's own inline composer; omit where the surface has none. */
     commentEnabled?: boolean;
+    /** The surface's own Comment for the selected lines (opens its inline composer); implies Comment. */
+    onCommentSelection?: (range: Readonly<{ startLine: number; endLine: number }>) => void;
     /** Clears the source selection (phone ✕). */
     onDismissSelection?: () => void;
     testID?: string;
@@ -25,18 +27,48 @@ export type AskSelectionControlsProps = UseAskSelectionInput &
 export function AskSelectionControls(
   props: AskSelectionControlsProps,
 ): React.ReactElement | null {
-  const { commentEnabled, onDismissSelection, testID, ...input } = props;
+  const { commentEnabled, onCommentSelection, onDismissSelection, testID, ...input } = props;
   const ask = useAskSelection(input);
   const phone = useDeviceType() === 'phone';
   const selection = ask.selection;
+  // Once the person asked or commented, the toolbar steps back until the selection changes (lab A2:
+  // the selection stays visible, the question is in the composer now).
+  const selectionKey = selection
+    ? `${selection.startLine}:${selection.endLine}:${selection.text}`
+    : null;
+  const [actedOnKey, setActedOnKey] = React.useState<string | null>(null);
   const visible =
     props.active !== false &&
     selection !== null &&
     selection.collapsed !== true &&
-    selection.text.length > 0;
+    selection.text.length > 0 &&
+    selectionKey !== actedOnKey;
   // Without a session the operation still has a destination (a side run or a new session), so Ask stays.
-  const onAsk = React.useCallback(() => ask.ask(), [ask.ask]);
-  const onComment = commentEnabled && ask.canComment ? ask.comment : null;
+  const onAsk = React.useCallback(() => {
+    setActedOnKey(selectionKey);
+    return ask.ask();
+  }, [ask.ask, selectionKey]);
+  const onComment = React.useMemo(() => {
+    if (onCommentSelection) {
+      return () => {
+        const current = ask.selection;
+        setActedOnKey(selectionKey);
+        if (current) onCommentSelection({ startLine: current.startLine, endLine: current.endLine });
+      };
+    }
+    if (!commentEnabled || !ask.canComment) return null;
+    return () => {
+      setActedOnKey(selectionKey);
+      return ask.comment();
+    };
+  }, [ask.canComment, ask.comment, ask.selection, commentEnabled, onCommentSelection, selectionKey]);
+  const menuItems = React.useMemo(() => ask.menuItems.map((item) => ({
+    ...item,
+    run: () => {
+      setActedOnKey(selectionKey);
+      return item.run();
+    },
+  })), [ask.menuItems, selectionKey]);
   if (phone) {
     const lineCount = selection
       ? selection.endLine - selection.startLine + 1
@@ -72,7 +104,7 @@ export function AskSelectionControls(
             onPress: ask.copy,
             testID: 'selection-bar-copy',
           },
-          ...ask.menuItems.map((item) => ({
+          ...menuItems.map((item) => ({
             id: item.id,
             label: item.label,
             onPress: item.run,
@@ -93,7 +125,7 @@ export function AskSelectionControls(
     <SelectionToolbar
       anchor={visible ? (selection?.rect ?? null) : null}
       onAsk={onAsk}
-      askMenuItems={ask.menuItems}
+      askMenuItems={menuItems}
       onComment={onComment}
       onCopy={ask.copy}
       testID={testID}

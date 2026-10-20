@@ -16,6 +16,9 @@ import { buildMonacoEditorThemeData, formatCodeEditorChangeMarkCss, resolveCodeE
 
 /** One shared stylesheet for every mounted Monaco editor's change marks; rewritten when the theme changes. */
 const CHANGE_MARK_STYLE_ID = 'happier-editor-change-marks';
+/** Per editor: how far Monaco's number box runs past the digits' right edge, and the number size. */
+const LINE_NUMBER_SLACK_VAR = '--happier-line-number-slack';
+const LINE_NUMBER_FONT_SIZE_VAR = '--happier-line-number-font-size';
 import type { CodeEditorTheme } from '../editorTheme';
 import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { createMonacoDecorations } from './monacoDecorations';
@@ -237,13 +240,11 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const canvas = props.presentation === 'canvas';
     // A canvas editor sits on the page's own surface (the page's colour), a framed one on the inset well.
     const backgroundColor = useGlassSurfaceColor(canvas ? theme.colors.surface.base : theme.colors.surface.inset, 'content');
-    const activeLineColor = useGlassSurfaceColor(theme.colors.surface.elevated, 'content', false);
     const selectionColor = useGlassSurfaceColor(theme.colors.accent.blue, 'content', false);
     const editorTheme = React.useMemo(
-        () => resolveCodeEditorTheme(theme, { backgroundColor, activeLineColor, selectionColor }),
+        () => resolveCodeEditorTheme(theme, { backgroundColor, selectionColor }),
         [
             backgroundColor,
-            activeLineColor,
             selectionColor,
             theme.dark,
             theme.colors.accent.blue,
@@ -267,9 +268,14 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         if (typeof document === 'undefined') return;
         let style = document.getElementById(CHANGE_MARK_STYLE_ID) as HTMLStyleElement | null;
         if (!style) { style = document.createElement('style'); style.id = CHANGE_MARK_STYLE_ID; document.head.appendChild(style); }
-        style.textContent = formatCodeEditorChangeMarkCss(editorTheme, (kind) => `.monaco-editor .cldr.happier-editor-change-${kind}`,
-            // Monaco's decoration lane starts at the numbers' edge; the mark sits a step into it, clear of the digits.
-            { insetPx: CODE_GUTTER_METRICS.columnGap + 2 });
+        style.textContent = [
+            formatCodeEditorChangeMarkCss(editorTheme, (kind) => `.monaco-editor .cldr.happier-editor-change-${kind}`,
+                // Monaco's decoration lane starts where its whole-character number box ends, a little past the
+                // digits; the mark sits a fixed step after the digits themselves, clear of them and of the text.
+                { inset: `calc(${CODE_GUTTER_METRICS.columnGap + 2}px - var(${LINE_NUMBER_SLACK_VAR}, 0px))` }),
+            // The code view's numbers (CodeGutter): the smaller number size, right edge where View draws it.
+            `.monaco-editor .margin-view-overlays .line-numbers{font-size:var(${LINE_NUMBER_FONT_SIZE_VAR});padding-right:var(${LINE_NUMBER_SLACK_VAR}, 0px)}`,
+        ].join('\n');
     }, [editorTheme]);
     const containerRef = React.useRef<any>(null);
     const editorRef = React.useRef<any>(null);
@@ -283,8 +289,13 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const latestWrapLinesRef = React.useRef(props.wrapLines ?? true);
     const latestShowLineNumbersRef = React.useRef(props.showLineNumbers ?? true);
     const latestFontMetricsRef = React.useRef(resolveCodeEditorFontMetrics({ uiFontScale }));
-    const gutterPropsRef = React.useRef({ lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0 });
-    gutterPropsRef.current = { lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0 };
+    const contentPaddingVerticalRef = React.useRef(props.contentPaddingVertical ?? 0);
+    contentPaddingVerticalRef.current = props.contentPaddingVertical ?? 0;
+    const gutterPropsRef = React.useRef({ lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0,
+        insetLeft: props.contentPaddingHorizontal ?? 0 });
+    gutterPropsRef.current = { lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0,
+        insetLeft: props.contentPaddingHorizontal ?? 0 };
+    const contentPaddingVertical = props.contentPaddingVertical ?? 0;
     const latestEditorThemeRef = React.useRef(editorTheme);
     const pendingChangeRef = React.useRef<string | null>(null);
     const changeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -322,17 +333,40 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const alignGutter = React.useCallback(() => {
         const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
         const model = modelRef.current as MonacoEditorApi.ITextModel | null;
-        const layout = editor?.getLayoutInfo?.();
+        let layout = editor?.getLayoutInfo?.();
         if (!editor || !model || !layout) return;
-        const digits = Math.max(gutterPropsRef.current.lineNumberDigits, String(model.getLineCount()).length);
-        const gutter = resolveCodeEditorGutterMetrics({ lineNumberDigits: digits, digitWidth: layout.lineNumbersWidth / digits,
-            showLineNumbers: latestShowLineNumbersRef.current, reviewLaneWidth: gutterPropsRef.current.reviewLaneWidth });
-        const widthOption = window.monaco?.editor?.EditorOption?.lineDecorationsWidth;
+        const { lineNumberDigits, reviewLaneWidth, insetLeft } = gutterPropsRef.current;
+        const showNumbers = latestShowLineNumbersRef.current;
+        const digits = Math.max(lineNumberDigits, String(model.getLineCount()).length);
+        const options = window.monaco?.editor?.EditorOption;
+        const fontInfo = options?.fontInfo !== undefined ? editor.getOption(options.fontInfo) as { maxDigitWidth?: number } | null : null;
+        const minCharsOption = options?.lineNumbersMinChars !== undefined ? editor.getOption(options.lineNumbersMinChars) : null;
+        // Monaco sizes its number box in whole digits of the code font; the code view sizes it in digits of the
+        // smaller number font. Both right-align the digits, so the box is made at least as wide as the code view's
+        // number column and its remaining slack is padded away on the digits' right.
+        const codeDigitWidth = fontInfo?.maxDigitWidth ?? layout.lineNumbersWidth / Math.max(digits, typeof minCharsOption === 'number' ? minCharsOption : digits);
+        const metrics = latestFontMetricsRef.current;
+        const gutter = resolveCodeEditorGutterMetrics({ lineNumberDigits: digits, digitWidth: codeDigitWidth * metrics.lineNumberFontSize / metrics.fontSize,
+            showLineNumbers: showNumbers, reviewLaneWidth });
+        const textOffset = insetLeft + gutter.textOffset;
+        const numbersEnd = textOffset - CODE_GUTTER_METRICS.numberPaddingRight;
+        if (showNumbers && codeDigitWidth > 0) {
+            const minChars = Math.max(digits, Math.ceil(numbersEnd / codeDigitWidth));
+            if (minCharsOption !== minChars) {
+                editor.updateOptions({ lineNumbersMinChars: minChars });
+                layout = editor.getLayoutInfo();
+            }
+        }
+        const node = editor.getDomNode?.();
+        node?.style.setProperty(LINE_NUMBER_SLACK_VAR, `${showNumbers ? Math.max(0, layout.lineNumbersWidth - numbersEnd) : 0}px`);
+        node?.style.setProperty(LINE_NUMBER_FONT_SIZE_VAR, `${metrics.lineNumberFontSize}px`);
+        const widthOption = options?.lineDecorationsWidth;
         const configuredDecorationWidth = widthOption !== undefined ? editor.getOption(widthOption) : null;
         // Monaco adds its own folding-control width to the configured decoration gap.
         const controlsWidth = typeof configuredDecorationWidth === 'number' ? layout.decorationsWidth - configuredDecorationWidth : 0;
-        if (layout.contentLeft !== gutter.textOffset) editor.updateOptions({ lineDecorationsWidth: gutter.textOffset - layout.lineNumbersWidth - controlsWidth });
+        if (layout.contentLeft !== textOffset) editor.updateOptions({ lineDecorationsWidth: textOffset - layout.lineNumbersWidth - controlsWidth });
     }, []);
+    const lineDigitsRef = React.useRef(0);
     const selectionListenersRef = React.useRef(new Set<() => void>());
     const getSelection = React.useCallback<NonNullable<CodeEditorHandle['getSelection']>>(() => {
         const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
@@ -495,6 +529,19 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             focus: () => editorRef.current?.focus?.(),
             find,
             getSelection,
+            getLineRect: (line) => {
+                const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
+                const model = modelRef.current as MonacoEditorApi.ITextModel | null;
+                if (!editor || !model || line < 1 || line > model.getLineCount()) return null;
+                const bounds = editor.getDomNode?.()?.getBoundingClientRect();
+                const layout = editor.getLayoutInfo?.();
+                if (!bounds || !layout) return null;
+                // The text column of that line, in window coordinates (wrapped lines span every visual row).
+                const top = editor.getTopForLineNumber(line) - editor.getScrollTop();
+                const height = line < model.getLineCount()
+                    ? editor.getTopForLineNumber(line + 1) - editor.getScrollTop() - top : latestFontMetricsRef.current.lineHeight;
+                return { x: bounds.left + layout.contentLeft, y: bounds.top + top, width: layout.contentWidth, height };
+            },
             subscribeSelection: (listener) => {
                 selectionListenersRef.current.add(listener);
                 return () => { selectionListenersRef.current.delete(listener); };
@@ -548,6 +595,8 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 const initialEditorTheme = latestEditorThemeRef.current;
 
                 const model = monaco.editor.createModel(latestValueRef.current, initialLanguage);
+                // Bracket colours are a model option in Monaco; the editor option alone does not turn them off.
+                model.updateOptions?.({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } });
                 modelRef.current = model;
                 applyMonacoEditorTheme(monaco, initialEditorTheme);
 
@@ -565,6 +614,13 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     lineNumbers: initialShowLineNumbers ? 'on' : 'off',
                     lineNumbersMinChars: gutterPropsRef.current.lineNumberDigits,
                     glyphMargin: false,
+                    // The code view's top and bottom inset, scrolling with the text as View's does.
+                    padding: { top: contentPaddingVerticalRef.current, bottom: contentPaddingVerticalRef.current },
+                    // The current line is one quiet fill across numbers and text (files lab ED1), never a box.
+                    renderLineHighlight: 'all',
+                    // Only the caret and the current line differ from View (files lab ED1): no indent guides the
+                    // code view does not draw (bracket colours are switched off on the model above).
+                    guides: { indentation: false },
                     fontSize: initialFontMetrics.fontSize,
                     lineHeight: initialFontMetrics.lineHeight,
                     fontFamily: resolveCodeMonoFontFamily(),
@@ -630,7 +686,14 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     editor.onDidChangeCursorSelection?.(() => {
                         for (const listener of selectionListenersRef.current) listener();
                     }),
+                    // A scroll moves every anchored surface (selection toolbar, change peek), as CodeMirror's
+                    // bridge reports on its viewport changes.
+                    editor.onDidScrollChange?.(() => {
+                        for (const listener of selectionListenersRef.current) listener();
+                    }),
                     editor.onDidChangeModelContent(() => {
+                        const lineDigits = String(model.getLineCount()).length;
+                        if (lineDigits !== lineDigitsRef.current) { lineDigitsRef.current = lineDigits; alignGutter(); }
                         publishHistory();
                         for (const listener of selectionListenersRef.current) listener();
                         if (ignoreChangeRef.current) return;
@@ -700,13 +763,14 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 readOnly,
                 wordWrap: wrapLines ? 'on' : 'off',
                 lineNumbers: showLineNumbers ? 'on' : 'off',
-                lineNumbersMinChars: props.lineNumberDigits ?? 1,
+                padding: { top: contentPaddingVertical, bottom: contentPaddingVertical },
             });
             alignGutter();
         } catch {
             // ignore
         }
-    }, [alignGutter, fontMetrics.fontSize, fontMetrics.lineHeight, readOnly, showLineNumbers, wrapLines, props.lineNumberDigits, props.reviewLaneWidth]);
+    }, [alignGutter, contentPaddingVertical, fontMetrics.fontSize, fontMetrics.lineHeight, readOnly, showLineNumbers, wrapLines,
+        props.lineNumberDigits, props.reviewLaneWidth, props.contentPaddingHorizontal]);
 
     React.useEffect(() => {
         const model = modelRef.current;

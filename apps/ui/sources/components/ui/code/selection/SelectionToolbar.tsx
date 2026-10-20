@@ -38,6 +38,9 @@ export type SelectionToolbarProps = Readonly<{
  * (lab AS1 A1: `Ask ⌘I · Comment · Copy`). It owns chrome only; the selection, the draft and the
  * destination stay with `useAskSelection`. Non-modal: the selection and the page stay interactive.
  */
+/** One row of menu-row items: the toolbar needs this much room on its side of the selection. */
+const TOOLBAR_HEIGHT_CAP_PX = MENU_ROW_METRICS.minHeightPx * 2;
+
 export function SelectionToolbar(
   props: SelectionToolbarProps,
 ): React.ReactElement | null {
@@ -50,16 +53,12 @@ export function SelectionToolbar(
       anchor
         ? {
             kind: 'rect' as const,
-            rect: {
-              left: anchor.x,
-              top: anchor.y,
-              width: Math.max(1, anchor.width),
-              height: Math.max(1, anchor.height),
-            },
+            // The selection's start: the toolbar rises from the top-left of its first line.
+            rect: { left: anchor.x, top: anchor.y, width: 1, height: 1 },
             coordinateSpace: 'window' as const,
           }
         : null,
-    [anchor?.x, anchor?.y, anchor?.width, anchor?.height],
+    [anchor?.x, anchor?.y],
   );
   if (!popoverAnchor) return null;
   const askMenuItems = props.askMenuItems ?? [];
@@ -85,13 +84,15 @@ export function SelectionToolbar(
       }}
       placement="top"
       flip
+      maxHeightCap={TOOLBAR_HEIGHT_CAP_PX}
+      placementMinSpace={TOOLBAR_HEIGHT_CAP_PX}
       gap={6}
       minWidth={0}
     >
       {() => (
         <FloatingOverlay
           scrollEnabled={false}
-          maxHeight={MENU_ROW_METRICS.minHeightPx * 2}
+          maxHeight={TOOLBAR_HEIGHT_CAP_PX}
         >
           <View
             style={styles.row}

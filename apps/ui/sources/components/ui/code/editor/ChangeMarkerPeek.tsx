@@ -19,8 +19,16 @@ export type ChangeMarkerActionContext = Readonly<{
   revertInDraft: EditorChangeMarkersController['revertInDraft'];
 }>;
 
+/** Where the peek hangs in its editor region: under (or, near the bottom, over) the marked line. */
+export type ChangeMarkerPeekPlacement = Readonly<{ left: number; top: number } | { left: number; bottom: number }>;
+
+/** The peek's tallest frame: eight removed lines under its header. */
+export const CHANGE_MARKER_PEEK_MAX_HEIGHT = CODE_EDITOR_BASE_LINE_HEIGHT * 8 + 48;
+
 export type ChangeMarkerPeekProps = Readonly<{
   marker: EditorChangeMarker;
+  /** Anchored to the marked line when the engine reports line geometry; docked at the region's foot otherwise. */
+  placement?: ChangeMarkerPeekPlacement | null;
   /** Who made the change, from the review owner's attribution ("Claude, turn 3"); omitted when unknown. */
   attribution?: string | null;
   dirty: boolean;
@@ -98,12 +106,12 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
   return (
     <View
       testID="change-marker-peek"
-      style={stylesheet.frame}
+      style={[stylesheet.frame, props.placement ? { bottom: undefined, ...props.placement } : null]}
       pointerEvents="box-none"
     >
       <FloatingOverlay
         header={header}
-        maxHeight={CODE_EDITOR_BASE_LINE_HEIGHT * 8 + 48}
+        maxHeight={CHANGE_MARKER_PEEK_MAX_HEIGHT}
         scrollEnabled={removed.length > 6}
       >
         {removed.length > 0 ? (

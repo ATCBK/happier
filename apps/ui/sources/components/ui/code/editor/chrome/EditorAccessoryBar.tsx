@@ -61,6 +61,8 @@ export type EditorAccessoryChipProps = Readonly<{
     disabled?: boolean;
     badge?: string;
     testID?: string;
+    /** Held, the key repeats (arrow keys, P4 §3.7); a tap still steps once. */
+    repeat?: boolean;
 }>;
 
 /** A press callback, not an editor command owner: hosts bind their existing handle or Save action. */
@@ -69,6 +71,7 @@ export function EditorAccessoryChip(props: EditorAccessoryChipProps) {
     const paintColor = useHappierMaterialColorResolver();
     const selected = props.selected === true;
     const foreground = selected ? theme.colors.state.active.foreground : theme.colors.text.secondary;
+    const repeatHandlers = useHeldKeyRepeat(props.repeat === true && !props.disabled, props.onPress);
     return <Pressable
         testID={props.testID}
         accessibilityRole="button"
@@ -80,7 +83,9 @@ export function EditorAccessoryChip(props: EditorAccessoryChipProps) {
         aria-pressed={props.selected}
         disabled={props.disabled}
         hitSlop={6}
-        onPress={props.onPress}
+        onPress={repeatHandlers?.onPress ?? props.onPress}
+        onPressIn={repeatHandlers?.onPressIn}
+        onPressOut={repeatHandlers?.onPressOut}
         style={({ pressed }) => [stylesheet.chip, props.text !== undefined ? stylesheet.textChip : null, props.disabled ? stylesheet.disabledChip : null, {
             backgroundColor: paintColor(selected ? theme.colors.state.active.background : theme.colors.surface.base),
             borderColor: selected ? theme.colors.state.active.border : theme.colors.border.default,
@@ -94,6 +99,35 @@ export function EditorAccessoryChip(props: EditorAccessoryChipProps) {
             {props.badge}
         </Text> : null}
     </Pressable>;
+}
+
+/**
+ * Press-in steps at once and starts the repeat; release stops it and swallows the release's own press.
+ * A press with no press-in (keyboard, assistive activation) steps once.
+ */
+function useHeldKeyRepeat(enabled: boolean, onStep: () => void) {
+    const stepRef = React.useRef(onStep);
+    stepRef.current = onStep;
+    const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const heldRef = React.useRef(false);
+    const stop = React.useCallback(() => {
+        if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
+    }, []);
+    React.useEffect(() => stop, [stop]);
+    return React.useMemo(() => enabled ? {
+        onPressIn: () => {
+            heldRef.current = true;
+            stepRef.current();
+            const tick = () => { stepRef.current(); timerRef.current = setTimeout(tick, motionTokens.gesture.keyRepeatIntervalMs); };
+            stop();
+            timerRef.current = setTimeout(tick, motionTokens.gesture.keyRepeatDelayMs);
+        },
+        onPressOut: stop,
+        onPress: () => {
+            if (heldRef.current) { heldRef.current = false; return; }
+            stepRef.current();
+        },
+    } : null, [enabled, stop]);
 }
 
 // Mechanical extraction of the Markdown toolbar's existing geometry and paint.

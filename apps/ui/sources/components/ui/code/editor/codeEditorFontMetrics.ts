@@ -3,6 +3,11 @@ export const CODE_EDITOR_BASE_LINE_HEIGHT = 22;
 export { CODE_EDITOR_BASE_LINE_HEIGHT as CODE_LINE_BASE_HEIGHT };
 /** Existing code-view insets; editors consume the same geometry. */
 export const CODE_GUTTER_METRICS = Object.freeze({ rowPadding: 8, numberPaddingLeft: 4, numberPaddingRight: 18, numberMinWidth: 24, numberFontSize: 11, columnGap: 6, reviewLaneWidth: 32 });
+/**
+ * The inset around a file's code on a page canvas: the code view, the diff and the editor that replaces them in
+ * place all hold their first line and their numbers here, so View -> Edit moves nothing (files lab ED1).
+ */
+export const CODE_CANVAS_CONTENT_PADDING = 16;
 
 export function resolveCodeEditorLineNumberDigits(text: string): number {
     return String(text.split(/\r\n|\r|\n/).length).length;

@@ -30,6 +30,7 @@ const darkEditorTheme = {
         text: { primary: '#f8f8f2', secondary: '#cfcfcf', tertiary: '#8a8a8a' },
         surface: { base: '#151515', inset: '#1f1f1f', elevated: '#101010', selected: '#2a2a2a' },
         accent: { blue: '#58a6ff' },
+        diff: { added: { border: '#3fb950' } },
         syntax: {
             default: '#f8f8f2',
             keyword: '#ff79c6',
@@ -48,6 +49,7 @@ const lightEditorTheme = {
         text: { primary: '#24292f', secondary: '#57606a', tertiary: '#6e7781' },
         surface: { base: '#ffffff', inset: '#f6f8fa', elevated: '#ffffff', selected: '#ddf4ff' },
         accent: { blue: '#0969da' },
+        diff: { added: { border: '#1a7f37' } },
         syntax: {
             default: '#24292f',
             keyword: '#cf222e',
@@ -144,16 +146,32 @@ import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRunt
 describe('MonacoEditorSurface (web)', () => {
     it('aligns its measured five-digit gutter with the shared code-view and review inset', async () => {
         setupMonacoGlobals();
-        const updateOptions = vi.fn();
+        // Monaco sizes its number box in whole digits of the 13 px code font (7.8 px each here); the code view
+        // draws 11 px numbers. The box is widened to cover the code view's number column and the slack padded.
+        const digitWidth = 7.8;
+        let minChars = 5;
+        const updateOptions = vi.fn((options: { lineNumbersMinChars?: number }) => {
+            if (options.lineNumbersMinChars !== undefined) minChars = options.lineNumbersMinChars;
+        });
         const model = { ...createModelSpy.getMockImplementation()!(), getLineCount: () => 1 };
+        const style = new Map<string, string>();
+        // Monaco's public option boundary: font metrics and the current number-box width in digits.
+        (globalThis as any).window.monaco.editor.EditorOption = { fontInfo: 'fontInfo', lineNumbersMinChars: 'lineNumbersMinChars' };
         const editorBoundary = { ...createEditorSpy.getMockImplementation()!(), updateOptions,
-            getLayoutInfo: () => ({ lineNumbersWidth: 39, contentLeft: 69 }),
+            getLayoutInfo: () => ({ lineNumbersWidth: Math.round(minChars * digitWidth), contentLeft: 69 }),
+            getOption: (id: string) => id === 'fontInfo' ? { maxDigitWidth: digitWidth } : minChars,
+            getDomNode: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }),
+                style: { setProperty: (name: string, value: string) => { style.set(name, value); } } }),
         };
         createModelSpy.mockReturnValueOnce(model);
         createEditorSpy.mockReturnValueOnce(editorBoundary);
-        await renderScreen(<MonacoEditorSurface resetKey="gutter" value="one" language="text" onChange={vi.fn()} lineNumberDigits={5} reviewLaneWidth={32} />);
+        await renderScreen(<MonacoEditorSurface resetKey="gutter" value="one" language="text" onChange={vi.fn()} lineNumberDigits={5} reviewLaneWidth={32}
+            contentPaddingHorizontal={16} />);
         expect(createEditorSpy.mock.calls[0]?.[1]).toMatchObject({ lineNumbersMinChars: 5, glyphMargin: false });
-        expect(updateOptions).toHaveBeenCalledWith({ lineDecorationsWidth: 62 });
+        // Code view: inset 16 + row 8 + review lane 32 + 4 + five 11 px digits (33) = digits end at 93, text at 111.
+        expect(updateOptions).toHaveBeenCalledWith({ lineNumbersMinChars: 12 });
+        expect(updateOptions).toHaveBeenLastCalledWith({ lineDecorationsWidth: 111 - Math.round(12 * digitWidth) });
+        expect(style.get('--happier-line-number-slack')).toBe(`${Math.round(12 * digitWidth) - 93}px`);
     });
     it('captures Monaco goto chords and dispatches the app commands before built-in handlers', async () => {
         setupMonacoGlobals();

@@ -17,6 +17,8 @@ function createCodeMirrorWebViewTheme(
         activeLineColor: '#111',
         selectionColor: '#0a84ff44',
         isDark: true,
+        changeAddedColor: '#32d74b',
+        changeDeletedColor: '#8e8e93',
         ...rootOverrides,
         syntax: {
             defaultColor: syntaxOverrides?.defaultColor ?? '#fff',

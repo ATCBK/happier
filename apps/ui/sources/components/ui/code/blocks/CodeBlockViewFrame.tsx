@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
@@ -90,6 +90,8 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
 
     return (
         <View
+            // Selection sources (Ask about a transcript code block) find the block they sit in.
+            {...(Platform.OS === 'web' ? { dataSet: { happierCodeBlock: 'true' } } : {})}
             style={[
                 styles.container,
                 showCopyButton && shouldOverlayCopyButton ? styles.containerWithOverlaidCopy : null,

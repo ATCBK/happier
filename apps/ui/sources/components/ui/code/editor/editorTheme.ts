@@ -48,6 +48,9 @@ type CodeEditorThemeSource = Readonly<{
     > & Partial<Pick<Theme['colors'], 'find'>>;
 }>;
 
+/** Share of the focus blue in the current-line fill. */
+const ACTIVE_LINE_TINT = 0.07;
+
 function withoutHash(value: string): string {
     return value.startsWith('#') ? value.slice(1) : value;
 }
@@ -61,7 +64,8 @@ export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Part
         textColor: colors.text.primary,
         dividerColor: colors.border.default,
         lineNumberColor: colors.text.tertiary,
-        activeLineColor: paint.activeLineColor ?? colors.surface.elevated,
+        // The caret's line: a breath of the focus blue across numbers and text (files lab ED1, `.ln.cur`).
+        activeLineColor: paint.activeLineColor ?? parseThemeColor(colors.accent.blue)?.alpha(ACTIVE_LINE_TINT).rgb().string() ?? colors.surface.elevated,
         selectionColor: paint.selectionColor ?? colors.accent.blue,
         findMatchColor: colors.find?.matchAll,
         findCurrentMatchColor: colors.find?.matchCurrent,
@@ -115,7 +119,7 @@ export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): Monaco
             'editor.selectionBackground': editorTheme.selectionColor,
             'editor.inactiveSelectionBackground': editorTheme.activeLineColor,
             'editor.lineHighlightBackground': editorTheme.activeLineColor,
-            'editor.lineHighlightBorder': editorTheme.dividerColor,
+            'editor.lineHighlightBorder': '#00000000',
             'editorIndentGuide.background1': editorTheme.dividerColor,
             'editorIndentGuide.activeBackground1': editorTheme.lineNumberColor,
             'editorWidget.background': editorTheme.backgroundColor,
@@ -152,10 +156,10 @@ export function resolveCodeEditorChangeMarkStyles(theme: Pick<CodeEditorTheme, '
  * from the element's lower edge.
  */
 export function formatCodeEditorChangeMarkCss(theme: Pick<CodeEditorTheme, 'changeAddedColor' | 'changeDeletedColor'>, selector: (kind: 'added' | 'modified' | 'deleted') => string,
-    options: Readonly<{ insetPx?: number }> = {}): string {
+    options: Readonly<{ /** CSS length from the start of the engine's marker lane. */ inset?: string }> = {}): string {
     const styles = resolveCodeEditorChangeMarkStyles(theme);
     const wedge = styles.deleted;
-    const inset = options.insetPx ? `;margin-left:${options.insetPx}px!important` : '';
+    const inset = options.inset ? `;margin-left:${options.inset}!important` : '';
     return [
         `${selector('added')}{width:${styles.added.width}!important;background:${styles.added.background}!important${inset}}`,
         `${selector('modified')}{width:${styles.modified.width}!important;background:${styles.modified.background}!important${inset}}`,

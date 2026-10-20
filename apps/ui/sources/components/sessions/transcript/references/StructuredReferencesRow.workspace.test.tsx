@@ -10,11 +10,14 @@ import type { WorkspaceNavigationContextValue } from '@/components/appShell/work
 import { parseSessionFileDeepLinkAnchor } from '@/utils/url/sessionFileDeepLink';
 import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import type { UserTextMessage } from '@happier-dev/session-core/messages';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// This journey presses the stage after its native opening animation completes.
+vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock({ settleTimingCallbacks: true }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: () => '/search' }).module);
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
@@ -47,10 +50,14 @@ const production = await (async () => {
 let disposeHome: (() => Promise<void>) | undefined;
 let disconnectHome: (() => Promise<unknown>) | undefined;
 let restoreLocks: (() => void) | undefined;
+let restorePortal: (() => void) | undefined;
 afterEach(async () => {
     standardCleanup();
     try { await disconnectHome?.(); }
-    finally { await disposeHome?.(); restoreLocks?.(); }
+    finally {
+        try { await disposeHome?.(); }
+        finally { restoreLocks?.(); restorePortal?.(); restorePortal = undefined; }
+    }
 });
 
 it('opens a transcript file through the canonical Action into the qualified session destination', async () => {
@@ -217,11 +224,12 @@ it('opens rendered MessageView review anchors and tool video evidence through th
         },
     } satisfies UserTextMessage;
     const actionRuntime = await import('@/components/appShell/workspace/workspaceActionRuntime');
-    const actionObservation = vi.spyOn(actionRuntime, 'executeWorkspaceUiAction');
     let navigation!: WorkspaceNavigationContextValue;
     const screen = await renderWithSessionTranscriptSource(<InjectedAuthProvider credentials={null}><ModalProvider><AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
         {owner => { navigation = owner; return <MessageView message={message} metadata={null} sessionId="s1" serverId={targetServerId} />; }}
     </WorkspaceProvider></AppPaneProvider></ModalProvider></InjectedAuthProvider>, source);
+    const actionObservation = vi.spyOn(actionRuntime, 'executeWorkspaceUiAction');
+    restorePortal = installReactDomPortalBoundaryForTests().restore;
     try {
         await vi.waitFor(async () => { await act(async () => {}); expect(navigation.active || navigation.ownsRoute).toBe(true); });
         await screen.pressByTestIdAsync('review-comments-jump:review-jump');
@@ -240,6 +248,7 @@ it('opens rendered MessageView review anchors and tool video evidence through th
             await act(async () => {});
             expect(screen.findByTestId('media-stage')).not.toBeNull();
             for (let node = screen.findByTestId('media-stage-open-file'); node; node = node.parent) {
+                if (node.props.testID === 'media-stage') break;
                 expect(node.props.pointerEvents).not.toBe('none');
             }
         });

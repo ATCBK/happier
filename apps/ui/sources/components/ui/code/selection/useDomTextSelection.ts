@@ -32,30 +32,70 @@ export function resolveSourceLinesForText(source: string, text: string): Readonl
     return { startLine: first + 1, endLine: (last < 0 ? first : last) + 1 };
 }
 
+type ComposedRange = Readonly<{ startContainer: Node; startOffset: number; endContainer: Node; endOffset: number; collapsed: boolean }>;
+type SelectionWithComposedRanges = Selection & { getComposedRanges?: (options: Readonly<{ shadowRoots: ShadowRoot[] }>) => ComposedRange[] };
+
+/** Containment across open shadow roots (a renderer that draws inside one, e.g. Pierre). */
+function composedContains(root: Node, node: Node | null): boolean {
+    let current: Node | null = node;
+    while (current) {
+        if (current === root) return true;
+        current = current.parentNode ?? (current as Partial<ShadowRoot>).host ?? null;
+    }
+    return false;
+}
+
+/** The selection's real endpoints, reaching into the open shadow roots under `root` (StaticRange otherwise retargets to the host). */
+function readSelectionEndpoints(selection: Selection, root: Element, shadowHostSelector: string | undefined) {
+    const range = selection.getRangeAt(0);
+    const getComposedRanges = (selection as SelectionWithComposedRanges).getComposedRanges;
+    const shadowRoots = shadowHostSelector && typeof getComposedRanges === 'function'
+        ? Array.from(root.querySelectorAll(shadowHostSelector)).flatMap((host) => host.shadowRoot ? [host.shadowRoot] : [])
+        : [];
+    if (shadowRoots.length === 0) return { start: range.startContainer, end: range.endContainer, collapsed: selection.isCollapsed, range };
+    const composed = getComposedRanges!.call(selection, { shadowRoots })[0];
+    if (!composed) return null;
+    let inner: Range | null = null;
+    try {
+        inner = document.createRange();
+        inner.setStart(composed.startContainer, composed.startOffset);
+        inner.setEnd(composed.endContainer, composed.endOffset);
+    } catch {
+        inner = null;
+    }
+    return { start: composed.startContainer, end: composed.endContainer, collapsed: composed.collapsed, range: inner ?? range };
+}
+
 /**
  * The browser's text selection inside one rendered body, as the Ask controls' selection source (web).
- * `resolveLines` maps the selection to file lines (code rows by their ids, Markdown by its source).
+ * `resolveLines` maps the selection to lines (code rows by their DOM line facts, Markdown by its source,
+ * diffs by side). `shadowHostSelector` names renderer hosts whose open shadow roots hold selectable text.
  */
 export function useDomTextSelection(input: Readonly<{
     rootRef: React.RefObject<unknown>;
     active: boolean;
-    resolveLines: (range: Readonly<{ startNode: DomNodeLike | null; endNode: DomNodeLike | null; text: string }>) => Readonly<{ startLine: number; endLine: number }> | null;
+    shadowHostSelector?: string;
+    resolveLines: (range: Readonly<{ startNode: DomNodeLike | null; endNode: DomNodeLike | null; text: string }>) => Readonly<{ startLine: number; endLine: number; side?: 'before' | 'after' }> | null;
 }>) {
     const latest = React.useRef(input);
     latest.current = input;
     const getSelection = React.useCallback((): AskSelection | null => {
         if (Platform.OS !== 'web' || typeof window === 'undefined' || !latest.current.active) return null;
         const selection = window.getSelection?.();
-        const root = latest.current.rootRef.current as DomElementLike | null;
+        const root = latest.current.rootRef.current as Element | null;
         if (!selection || selection.rangeCount === 0 || !root?.contains) return null;
-        const range = selection.getRangeAt(0);
-        if (!root.contains(range.commonAncestorContainer)) return null;
-        const text = selection.toString();
-        if (selection.isCollapsed || text.trim().length === 0) return null;
-        const lines = latest.current.resolveLines({ startNode: range.startContainer as DomNodeLike, endNode: range.endContainer as DomNodeLike, text });
+        const endpoints = readSelectionEndpoints(selection, root, latest.current.shadowHostSelector);
+        if (!endpoints || endpoints.collapsed) return null;
+        if (!composedContains(root, endpoints.start) || !composedContains(root, endpoints.end)) return null;
+        const range = endpoints.range;
+        const text = selection.toString() || range.toString();
+        if (text.trim().length === 0) return null;
+        const lines = latest.current.resolveLines({ startNode: endpoints.start as DomNodeLike, endNode: endpoints.end as DomNodeLike, text });
         if (!lines) return null;
         const bounds = range.getBoundingClientRect();
-        return { ...lines, text, rect: { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } };
+        // The toolbar rises from the selection's start: its first painted line box, not the union.
+        const start = Array.from(range.getClientRects()).find((box) => box.width > 0 && box.height > 0) ?? bounds;
+        return { ...lines, text, rect: { x: start.left, y: start.top, width: bounds.width, height: bounds.height } };
     }, []);
     const subscribeSelection = React.useCallback((listener: () => void) => {
         if (Platform.OS !== 'web' || typeof document === 'undefined') return () => {};

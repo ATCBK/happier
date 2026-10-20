@@ -1,4 +1,5 @@
 import { useEffectiveDiffPresentation } from '../diffPresentationStyle';
+import { DiffHunkRowTextInsetContext } from '../hunks/DiffHunkRow';
 import { CODE_LINE_BASE_HEIGHT } from '@/components/ui/code/view/CodeLineRow';
 import * as React from 'react';
 import { PierreDiffScrollAnchor } from './PierreDiffScrollAnchor.web';
@@ -60,7 +61,8 @@ function PierreFileDiffBody(props: React.ComponentProps<typeof FileDiff<React.Re
         ...props.options,
         onPostRender: (node: HTMLElement, instance: PierreFileDiffInstance<React.ReactNode, undefined>) => onPaint({ node, instance, virtualizer }),
     }), [onPaint, props.options, virtualizer]);
-    return <FileDiff {...fileProps} options={options} />;
+    // Review rows sit in Pierre's code column; their label starts where its code text does (its 2ch inset).
+    return <DiffHunkRowTextInsetContext.Provider value="2ch"><FileDiff {...fileProps} options={options} /></DiffHunkRowTextInsetContext.Provider>;
 }
 
 // Pierre supplies its pre/code backing from the syntax theme. Its public CSS adapter
@@ -68,6 +70,11 @@ function PierreFileDiffBody(props: React.ComponentProps<typeof FileDiff<React.Re
 const PIERRE_MATERIAL_UNSAFE_CSS = `
 pre, code, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], [data-virtualizer-buffer] {
   --diffs-bg: var(--happier-diff-material-background);
+}
+[data-line-type='change-addition'], [data-line-type='change-deletion'] {
+  /* 1.5 mixes a change row's colour into the backing (91%/88% backing); the app palette is already the row colour. */
+  --mix-light: 0%;
+  --mix-dark: 0%;
 }
 `;
 
