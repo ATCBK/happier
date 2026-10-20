@@ -558,6 +558,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   lines.push('    cli: PluginAgentCliMetadata | null;');
   lines.push('    acpRegistryIds?: readonly string[];');
   lines.push('    connectedAccounts: NonNullable<PluginAgentContributionV2[\'connectedAccounts\']>;');
+  lines.push('    providerStateSharing: PluginAgentContributionV2[\'capabilities\'][\'providerStateSharing\'] | null;');
   lines.push('    accountSettings: readonly PluginSettingsContributionV2[];');
   lines.push('    providerRequirements: PluginAgentContributionV2[\'providerRequirements\'] | null;');
   lines.push('}>;');
@@ -576,6 +577,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
       cli: agent.cli ?? null,
       acpRegistryIds: agent.catalog?.acpRegistryIds ?? [],
       connectedAccounts: agent.connectedAccounts ?? [],
+      providerStateSharing: agent.capabilities.providerStateSharing ?? null,
       accountSettings,
       providerRequirements: agent.providerRequirements ?? null,
     };
