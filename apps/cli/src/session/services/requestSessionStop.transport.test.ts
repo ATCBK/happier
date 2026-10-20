@@ -222,6 +222,8 @@ describe('requestSessionStop machine transport', () => {
             timers.add(timer);
           })
         : await get(url);
+      if (!result || typeof result !== 'object' || !('status' in result) || typeof result.status !== 'number'
+        || !('data' in result)) throw new Error('Stop fixture HTTP response is invalid');
       response.writeHead(result.status, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(result.data));
     });

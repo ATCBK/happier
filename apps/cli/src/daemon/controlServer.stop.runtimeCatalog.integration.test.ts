@@ -312,14 +312,15 @@ describe('daemon control server: /stop', () => {
     const runners = new Map([[child.pid, tracked]]);
     const requestShutdown = vi.fn();
     const requestSelfRestart = vi.fn(async () => {});
+    const stopSession = createStopSession({
+      pidToTrackedSession: runners,
+      // The filesystem boundary has no terminal attachment for this owned child.
+      readHostAttachmentState: async () => ({ status: 'absent' }),
+    });
     const app = createDaemonControlApp({
       getChildren: () => [...runners.values()],
       machineId: 'machine_local',
-      stopSession: createStopSession({
-        pidToTrackedSession: runners,
-        // The filesystem boundary has no terminal attachment for this owned child.
-        readHostAttachmentState: async () => ({ status: 'absent' }),
-      }),
+      stopSession: (sessionId, _intent, signal) => stopSession(sessionId, { signal }),
       spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
       requestShutdown,
       requestSelfRestart,
