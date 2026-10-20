@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import type { AgentPreflightSessionControlsContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { canonicalAbsolutePathsEqual, canonicalizePath, isCanonicalAbsolutePathInsideRoot,
   resolveConfiguredNativeHomePath, resolveConfiguredPath } from '@happier-dev/plugin-sdk/fs';
-import { resolveClaudeConfigDirEnvOverlay } from '../environment.js';
+import { resolveClaudeConfigDirEnvOverlay, resolveClaudeManagedConfigDir } from '../environment.js';
 
 type ResolveRoots = NonNullable<AgentPreflightSessionControlsContributionV1['resolveNativePluginSkillRoots']>;
 type PluginRoot = Awaited<ReturnType<ResolveRoots>>[number];
@@ -54,21 +54,15 @@ async function projectDirectories(directory: string): Promise<readonly string[]>
   }
 }
 
-function managedSettingsPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/ClaudeCode/managed-settings.json';
-  if (process.platform === 'win32') return join(process.env.ProgramFiles ?? 'C:\\Program Files', 'ClaudeCode', 'managed-settings.json');
-  return '/etc/claude-code/managed-settings.json';
-}
-
 /** Read-only Found projection of installed_plugins v2 and effective enabledPlugins.
  * Cache contents and timestamps never establish installed or enabled identity.
  */
-export const resolveClaudeNativePluginSkillRoots: ResolveRoots = async input => {
-  const env = { ...process.env, HOME: input.homeDirectory, USERPROFILE: input.homeDirectory,
-    ...resolveClaudeConfigDirEnvOverlay(process.env) };
+export const resolveClaudeNativePluginSkillRoots = async (input: Parameters<ResolveRoots>[0], environment = process.env): Promise<readonly PluginRoot[]> => {
+  const env = { ...environment, HOME: input.homeDirectory, USERPROFILE: input.homeDirectory,
+    ...resolveClaudeConfigDirEnvOverlay(environment) };
   const config = resolveConfiguredNativeHomePath({ environmentKey: 'CLAUDE_CONFIG_DIR', defaultRelativePath: '.claude' }, env);
   input.signal?.throwIfAborted();
-  const pluginDirectory = process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR?.trim();
+  const pluginDirectory = environment.CLAUDE_CODE_PLUGIN_CACHE_DIR?.trim();
   const pluginsPath = pluginDirectory ? resolveConfiguredPath(pluginDirectory, { homeDir: input.homeDirectory,
     ...(input.directory ? { cwd: resolveConfiguredPath(input.directory, { homeDir: input.homeDirectory }) } : {}) }) : join(config, 'plugins');
   const installed = await readObject(join(pluginsPath, 'installed_plugins.json'));
@@ -76,7 +70,7 @@ export const resolveClaudeNativePluginSkillRoots: ResolveRoots = async input => 
   if (installed.version !== 2) throw new TypeError('Unsupported Claude installed plugin registry');
   const plugins = object(installed.plugins);
   const userSettings = await readObject(join(config, 'settings.json'));
-  const managedSettings = await readObject(managedSettingsPath());
+  const managedSettings = await readObject(join(resolveClaudeManagedConfigDir(process.platform, environment), 'managed-settings.json'));
   const directory = input.directory ? resolveConfiguredPath(input.directory, { homeDir: input.homeDirectory }) : null;
   const directories = directory ? await projectDirectories(directory) : [];
   async function enablement(projects: readonly string[]): Promise<Record<string, unknown>> {

@@ -33,3 +33,10 @@ export function resolveClaudeConfigDir(env: ClaudeConfigEnvironment): string {
         ?? homedir();
     return join(home, '.claude');
 }
+
+/** Device policy belongs to the native installation, independently of its user config home. */
+export function resolveClaudeManagedConfigDir(platform = process.platform, env: ClaudeConfigEnvironment = process.env): string {
+    if (platform === 'darwin') return '/Library/Application Support/ClaudeCode';
+    if (platform === 'win32') return join(env.ProgramFiles ?? 'C:\\Program Files', 'ClaudeCode');
+    return '/etc/claude-code';
+}

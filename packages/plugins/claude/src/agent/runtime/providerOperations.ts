@@ -123,7 +123,7 @@ export type ClaudeRuntimeTurnOperations = Readonly<{
 
 export type ClaudeRuntimePromptSubmissionOutcome =
   | Readonly<{ kind: 'accepted' }>
-  | Readonly<{ kind: 'rejected_before_effect'; reason: string; code?: 'browser_media_unavailable' | 'claude_image_input_unsupported' }>
+  | Readonly<{ kind: 'rejected_before_effect'; reason: string; code?: 'browser_media_unavailable' | 'claude_image_input_unsupported' | 'claude_skill_source_unavailable' | 'claude_managed_mcp_policy_conflict'; retryable?: boolean }>
   | Readonly<{ kind: 'effect_may_have_occurred'; reason: string }>
   | Readonly<{ kind: 'custody_observed' }>;
 

@@ -90,10 +90,13 @@ describe('Claude declared native catalogs', () => {
   it.each([
     { mode: 'commands', commands: [{ name: 'review', description: 'Review changes', argumentHint: '' }] },
     { mode: 'empty', commands: [] },
-  ])('advertises $mode without a user prompt and distinguishes unsupported skill mentions', async ({ mode, commands }) => {
+  ])('advertises $mode and native skill mentions without a user prompt', async ({ mode, commands }) => {
     await withCatalogDeclaration(async (catalogs) => {
       const { result, transport } = await runNativeCommand(catalogs.command, mode);
-      expect(await catalogs.parseOutput(result)).toEqual({ commands, skills: null });
+      expect(await catalogs.parseOutput(result)).toEqual({ commands, skills: commands.map(command => ({
+        v: 1, id: `vendor:claude:${command.name}`, origin: 'vendor', backendId: 'claude', agentId: 'claude',
+        name: command.name, displayName: command.name, description: command.description, enabled: true,
+      })) });
       expect(transport.requests).toEqual([{
         type: 'control_request', request_id: expect.any(String), request: { subtype: 'initialize' },
       }]);

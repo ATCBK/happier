@@ -378,6 +378,7 @@ export const CLAUDE_PLUGIN = definePlugin({
             cancel: true,
             configuration: true,
             workspaceWrites: 'deny',
+            catalog: { active: ['skills'] },
             goals: {
               active: {
                 clear: true,

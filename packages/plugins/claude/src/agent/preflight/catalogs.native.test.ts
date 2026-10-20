@@ -50,6 +50,7 @@ it.runIf(Boolean(process.env.HAPPIER_TEST_NATIVE_CLAUDE_PATH))('initializes nati
     async function run(args: readonly string[], stdin: string, entrypoint: string) {
         const child = spawn(nativePath, args, { cwd: projectDir, env: {
             PATH: process.env.PATH, NODE_ENV: 'test', TERM: 'dumb',
+            HOME: root, USERPROFILE: root,
             CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_ENTRYPOINT: entrypoint,
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
             ANTHROPIC_BASE_URL: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`,

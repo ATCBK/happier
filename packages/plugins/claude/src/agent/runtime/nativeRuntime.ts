@@ -50,6 +50,7 @@ import {
   createClaudeNativeGoalWorkStatePublisher,
 } from './nativeServices.js';
 import { createClaudeNativeGoalControl } from './goalControl/nativeControl.js';
+import { createClaudeSessionSkillCatalog } from './skillCatalog.js';
 import {
   parseClaudeTerminalRawSpawnOptionOverrides,
   partitionClaudeTerminalUserArgs,
@@ -431,16 +432,29 @@ async function submitClaudeProviderInput(
   if (operations.promptCustody === 'unified_terminal' && Array.isArray(structured?.imageInputs) && structured.imageInputs.length > 0) {
     return { kind: 'rejected_before_effect', code: 'claude_image_input_unsupported', reason: 'The terminal text transport cannot deliver image content.' };
   }
+  const skillReferences: Readonly<{ name: string; path: string }>[] = [];
+  for (const value of Array.isArray(structured?.skillMentions) ? structured.skillMentions : []) {
+    const item = metadataRecord(value);
+    const name = readString(item.name);
+    if (!name) continue;
+    const path = readString(item.path);
+    if (!path) return { kind: 'rejected_before_effect', code: 'claude_skill_source_unavailable',
+      reason: 'Claude could not identify the source of an explicitly requested skill.' };
+    skillReferences.push({ name, path });
+  }
+  // Explicit selections are user invocations, including skills the model-side
+  // Skill tool cannot invoke. Preserve the request; send references, never bodies.
+  const prompt = skillReferences.length ? `${request.input.text}\n\n<explicit_skill_invocations>\nThe user explicitly requested each skill below. Read each source file and follow its instructions, including user-only skills.\n${JSON.stringify(skillReferences)}\n</explicit_skill_invocations>` : request.input.text;
   const meta = {
     localId: request.inputIds[0] ?? null,
     localIds: [...request.inputIds],
     ...(structuredInput === undefined ? {} : { structuredInput }),
   };
   if (request.delivery.kind === 'steer') {
-    return await operations.steerProviderTurn(request.input.text, meta);
+    return await operations.steerProviderTurn(prompt, meta);
   }
   operations.beginProviderTurn(request.delivery.turnId);
-  return await operations.sendProviderTurnPrompt(request.input.text, meta);
+  return await operations.sendProviderTurnPrompt(prompt, meta);
 }
 
 /**
@@ -846,12 +860,13 @@ export function createClaudeNativeSessionRuntimeFromOperations(
         });
       } else if (submissionOutcome.kind === 'rejected_before_effect') {
         if (terminalPromptDelivery) clearTerminalPromptDelivery(terminalPromptDelivery);
-        const failure = sendFailure(submissionOutcome.code === 'claude_image_input_unsupported' ? 'unsupported' : 'rejected', submissionOutcome.reason, true, submissionOutcome.code);
+        const retryable = submissionOutcome.retryable ?? true;
+        const failure = sendFailure(submissionOutcome.code === 'claude_image_input_unsupported' ? 'unsupported' : 'rejected', submissionOutcome.reason, retryable, submissionOutcome.code);
         emit({
           kind: 'input-rejected',
           inputIds: nativeRequest.inputIds,
           diagnostic: failure.diagnostic,
-          retryable: true,
+          retryable,
         });
         return failure;
       } else if (submissionOutcome.kind === 'effect_may_have_occurred') {
@@ -1152,7 +1167,8 @@ function createClaudeExecutionRunConversationFromOperations(
         return sendFailure(
           outcome.kind === 'rejected_before_effect' ? 'rejected' : 'unavailable',
           outcome.reason,
-          outcome.kind === 'rejected_before_effect',
+          outcome.kind === 'rejected_before_effect' ? outcome.retryable ?? true : false,
+          outcome.kind === 'rejected_before_effect' ? outcome.code : undefined,
         );
       } catch (error) {
         return sendFailure(
@@ -1243,6 +1259,7 @@ export function createClaudeNativeRuntime(
   options: CreateClaudeNativeRuntimeOptions,
 ): AgentRuntime {
   const goals = createClaudeNativeGoalControl();
+  const skillCatalog = createClaudeSessionSkillCatalog();
   const openSession = async (
     request: AgentSessionOpenRequest,
     context: AgentSessionRuntimeContext,
@@ -1265,16 +1282,23 @@ export function createClaudeNativeRuntime(
     ]);
     const operations = await options.openSession({ request, context, supportsEffort, supportsSystemPromptSnapshotOff });
     const releaseGoals = goals.bind(request.sessionId, operations);
+    const catalogBinding = skillCatalog.bind(request);
+    const releaseControls = () => { releaseGoals(); catalogBinding.dispose(); };
     try {
       const runtime = createClaudeNativeSessionRuntimeFromOperations(
         operations,
         request,
         context,
-        releaseGoals,
+        releaseControls,
       );
-      return runtime;
+      const refreshSkills = runtime.refreshSkills;
+      return refreshSkills ? { ...runtime, async refreshSkills(refresh, options) {
+        const outcome = await refreshSkills(refresh, options);
+        if (outcome.kind === 'applied') catalogBinding.updateSkills(refresh.skills);
+        return outcome;
+      } } : runtime;
     } catch (error) {
-      releaseGoals();
+      releaseControls();
       throw error;
     }
   };
@@ -1300,6 +1324,7 @@ export function createClaudeNativeRuntime(
     toolExecution: { capability: 'interceptable' },
     sessions: {
       goals: goals.control,
+      catalog: skillCatalog.control,
       async resolveTerminalPresentation(selection, context) {
         const unified = await isClaudeUnifiedTerminalSelected({
           runtimeDescriptorV1: selection.runtimeDescriptorV1,
