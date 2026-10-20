@@ -5,6 +5,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { parseThemeColor } from '@/theme/parseThemeColor';
+import { splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import type { KeyboardCommandId } from '@/keyboard/types';
 
 export type KeyHintProps = Readonly<{
     label: string;
@@ -88,6 +90,21 @@ export function KeyHint(props: KeyHintProps): React.ReactElement | null {
             >
                 {props.label}
             </Text>
+        </View>
+    );
+}
+
+/**
+ * The keycaps of one command as the person has bound it here (⌘ P), or nothing when no key runs it:
+ * the hint beside a control that does the same thing (Go to file in the Files tree, Text in files).
+ */
+export function KeyboardCommandHint(props: Readonly<{ commandId: KeyboardCommandId; testID?: string }>): React.ReactElement | null {
+    const { theme } = useUnistyles();
+    const shortcut = useKeyboardShortcutLabel(props.commandId);
+    if (!shortcut) return null;
+    return (
+        <View testID={props.testID} accessibilityLabel={shortcut} style={{ flexDirection: 'row', gap: theme.space.s2 }}>
+            {splitKeybindingLabel(shortcut).map((label, index) => <KeyHint key={index} label={label} />)}
         </View>
     );
 }

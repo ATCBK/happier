@@ -1,3 +1,4 @@
+import { ShortcutsSheet } from './shortcutsSheet/ShortcutsSheet';
 import * as React from 'react';
 import type { HappierFindBarProps } from '@happier-dev/plugin-ui/presentation';
 import { useFindSurfaceRegistrationWithHost, type FindSurfaceRegistrationHost } from '@happier-dev/plugin-ui/advanced';
@@ -207,21 +208,6 @@ export function useEmbeddedEditorKeyboard(): EmbeddedKeyboardChannel {
 }
 const EMPTY_EMBEDDED_KEYBOARD: EmbeddedKeyboardChannel = { signatures: [], dispatch: () => false };
 
-function buildHelpBody(shortcutLabels: Partial<Record<string, string>>): string {
-    const lines = [
-        shortcutLabels['commandPalette.open']
-            ? `${t('commandPalette.shortcutsHelpCommandPalette')}: ${shortcutLabels['commandPalette.open']}`
-            : null,
-        shortcutLabels['shortcutsHelp.open']
-            ? `${t('commandPalette.shortcutsHelpHelp')}: ${shortcutLabels['shortcutsHelp.open']}`
-            : null,
-        shortcutLabels['session.new']
-            ? `${t('commandPalette.shortcutsHelpNewSession')}: ${shortcutLabels['session.new']}`
-            : null,
-    ].filter((line): line is string => Boolean(line));
-    if (lines.length === 0) return t('commandPalette.shortcutsHelpEmpty');
-    return t('commandPalette.shortcutsHelpBody', { shortcuts: lines.join('\n') });
-}
 
 export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly<{
     handlers: KeyboardShortcutHandlers;
@@ -321,9 +307,11 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
     const handlers = React.useMemo<KeyboardShortcutHandlers>(() => ({
         ...rootHandlers,
         'shortcutsHelp.open': () => {
-            void Modal.alertAsync(t('commandPalette.shortcutsHelpTitle'), buildHelpBody(shortcutLabels));
+            Modal.show({ component: ShortcutsSheet, props: {
+                platform, host: webHost, singleKeyShortcutsEnabled, disabledCommandIds, overrides,
+            } });
         },
-    }), [rootHandlers, shortcutLabels]);
+    }), [disabledCommandIds, overrides, platform, rootHandlers, singleKeyShortcutsEnabled, webHost]);
     const handlerKeySignature = buildHandlerKeySignature(handlers);
     const nativeKeyboardConfigurationKey = React.useMemo(() => [
         keyboardShortcutsV2Enabled === true ? 'enabled' : 'disabled',
