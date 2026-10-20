@@ -164,9 +164,8 @@ describe('Projects › Sources', () => {
     const layout = screen.findHostByTestId('projects.sources.layout');
     expect(layout).not.toBeNull();
     await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
-    const railStyle = [screen.findHostByTestId('projects.sources.list-pane')?.props.style].flat(Infinity)
-      .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
-    expect(1200 * railStyle.flex).toBeCloseTo(365);
+    const divider = screen.findHostByTestId('projects.sources.layout-resize-handle');
+    expect(divider?.props.accessibilityValue.now).toBeCloseTo(365);
     expect(storage.getState().localSettings.collectionRailWidthsV1.inbox).toBe(410);
   });
 

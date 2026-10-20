@@ -96,8 +96,6 @@ describe('InboxView focused item on a phone', () => {
     const layout = screen.findHostByTestId('inbox.layout');
     expect(layout).not.toBeNull();
     await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
-    const style = [screen.findHostByTestId('inbox.list-pane')?.props.style].flat(Infinity)
-      .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
-    expect(1200 * style.flex).toBeCloseTo(430);
+    expect(screen.findHostByTestId('inbox.layout-resize-handle')?.props['aria-valuenow']).toBe(430);
   });
 });

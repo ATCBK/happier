@@ -250,12 +250,8 @@ it('restores the Memory rail width beside an admitted fact', async () => {
     await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
     const layout = screen.findHostByTestId('memory-document.layout');
     await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
-    const rail = screen.findHostByTestId('memory-document.list-pane');
-    expect(rail).not.toBeNull();
-    const style = [rail!.props.style].flat(Infinity)
-        .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
-    expect(style).toMatchObject({ flex: expect.any(Number) });
-    expect(1200 * style.flex).toBeCloseTo(350);
+    const divider = screen.findHostByTestId('memory-document.layout-resize-handle');
+    expect(divider?.props.accessibilityValue.now).toBe(350);
 });
 
 it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admitted Memory audience (%s) without inferring privacy from ownership', async audience => {
