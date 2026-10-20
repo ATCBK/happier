@@ -43,7 +43,7 @@ describe('app shell Actions', () => {
   });
   it.each(['session.work.get', 'inbox.get'] as const)('exposes %s as a strict read with explicit availability', (actionId) => {
     const spec = getActionSpec(actionId);
-    expect(spec.executionPlacement).toBe(actionId === 'inbox.get' ? 'account' : 'client');
+    expect(spec.executionPlacement).toBe('client');
     expect(spec.sideEffectClass).toBe('read');
     expect(spec.requiredAuthority).toBe('account_automation');
     expect(spec.surfaces.agent).toBe(true);

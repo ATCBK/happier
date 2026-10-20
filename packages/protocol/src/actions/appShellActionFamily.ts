@@ -181,7 +181,7 @@ export const APP_SHELL_ACTION_SPECS = [
   {
     id: 'inbox.get', approval: {result: 'required'}, title: 'Read Inbox',
     description: 'Read the canonical Inbox for the invoking Home and own Account. Without a mounted app, reads owned notices and reports unavailable source projections as partial; never opens Inbox.',
-    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account',
+    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'inbox_get', voiceClientToolName: 'inbox_get' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'get'], visibility: 'canonical' }] },

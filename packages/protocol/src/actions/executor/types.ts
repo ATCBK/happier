@@ -2597,7 +2597,7 @@ export type ActionExecutorDeps = Readonly<{
     z.infer<typeof ClipboardWriteResultSchema> | ActionExecuteFailure
   >;
 
-  /** Client-owned Inbox acknowledgement and draft deletion; headless hosts leave it absent. */
+  /** App-shell owners, including the CLI's notice-backed partial Inbox source when no app can answer. */
   appShellAction?: (args: Readonly<{
     actionId: AppShellActionId;
     input: unknown;

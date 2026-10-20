@@ -5021,6 +5021,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
       if (executionPlacement === 'client' && deps.clientActionExecute) {
         const delivered = await deps.clientActionExecute({ actionId, input: admittedInput, context: ctx });
+        if (actionId === 'inbox.get' && delivered.ok && readRecord(delivered.result).status === 'unavailable' && deps.appShellAction) {
+          return completeActionResult(await deps.appShellAction({ actionId, input: admittedInput, context: ctx }));
+        }
         // The recap explicitly serves headless callers with compose data. Only a declared
         // no-client result falls back; denied or uncertain issued requests stay terminal.
         if (actionId === 'usage.recap.export' && !delivered.ok && delivered.errorCode === 'unavailable'
