@@ -326,30 +326,29 @@ export type ProtocolActionSchemaOutput<TSchema> = TSchema extends ProtocolCompos
     : JsonValue | void;
 
 type PluginActionRuntimeDeclaration<TDefinition extends PluginActionDeclaration> =
-    | Readonly<{
-        execution: PluginDaemonActionDeclaration['execution'];
-                run: ActionHandler<
-                    ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
-                    ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
-                >;
-    }>
-    | Readonly<{
+    TDefinition extends Readonly<{ execution: Readonly<{ target: 'account' }> }>
+    ? Readonly<{
         execution: PluginAccountActionDeclaration['execution'];
         run?: PluginAccountActionHandler<
             ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
             ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
         >;
     }>
-    | Readonly<{
-        execution: PluginClientActionDeclaration['execution'];
-        run?: never;
+    : TDefinition extends Readonly<{ execution: Readonly<{ target: 'client' }> }>
+    ? Readonly<{ execution: PluginClientActionDeclaration['execution']; run?: never }>
+    : Readonly<{
+        execution?: PluginDaemonActionDeclaration['execution'];
+        run: ActionHandler<
+            ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
+            ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
+        >;
     }>;
 
 type ValidatedPluginActionDefinition<TDefinition extends PluginActionDeclaration> = Readonly<
     TDefinition & PluginActionRuntimeDeclaration<TDefinition>
 >;
 
-/** One root-authored Action definition, with a handler only for daemon targets. */
+/** Account handlers may be root-authored or registered by a separate portable artifact. */
 export type PluginActionDefinition<
     TDefinition extends PluginActionDeclaration = PluginActionDeclaration,
 > = ValidatedPluginActionDefinition<TDefinition>;
@@ -949,34 +948,7 @@ export type DefinePluginInput<
         contributesTo?: ContributionAuthorTargets<Extract<keyof TActions, string>>;
         actions?: TActions & Readonly<{
             [TLocalId in keyof TActions]: Readonly<
-                TActions[TLocalId] & (
-                    | Readonly<{
-                        execution?: Extract<PluginActionExecutionV2, Readonly<{ target: 'daemon' }>>;
-                        run: ActionHandler<
-                            ProtocolActionSchemaInput<
-                                TActions[TLocalId] extends { inputSchema: infer TSchema }
-                                    ? TSchema
-                                    : undefined
-                            >,
-                            ProtocolActionSchemaOutput<
-                                TActions[TLocalId] extends { resultSchema: infer TSchema }
-                                    ? TSchema
-                                    : undefined
-                            >
-                        >;
-                    }>
-                    | Readonly<{
-                        execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
-                        run?: PluginAccountActionHandler<
-                            ProtocolActionSchemaInput<TActions[TLocalId] extends { inputSchema: infer TSchema } ? TSchema : undefined>,
-                            ProtocolActionSchemaOutput<TActions[TLocalId] extends { resultSchema: infer TSchema } ? TSchema : undefined>
-                        >;
-                    }>
-                    | Readonly<{
-                        execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>;
-                        run?: never;
-                    }>
-                )
+                TActions[TLocalId] & PluginActionRuntimeDeclaration<TActions[TLocalId]>
             >;
         }>;
         /**

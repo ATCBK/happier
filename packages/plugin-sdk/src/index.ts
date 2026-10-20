@@ -1,4 +1,5 @@
 export type { ActionConfirmationWhen } from './definePlugin.js';
+export type { PluginAccountApi, PluginAccountActivationModule } from './activation.js';
 export type { ActionOperationDeclarationV1 } from './definePlugin.js';
 export { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 } from './composer.js';
 export type { ComposerAttachmentAuthorDeclaration } from './definePlugin.js';

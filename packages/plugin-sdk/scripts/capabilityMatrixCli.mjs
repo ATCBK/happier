@@ -23,11 +23,12 @@ async function projectCurrentCapabilityMatrix({
   declarations = CAPABILITY_MATRIX_DECLARATIONS_V1,
 }) {
   const root = resolve(packageRoot);
-  const [definePluginSource, servicesSource] = await Promise.all([
+  const [definePluginSource, servicesSource, accountContextSource] = await Promise.all([
     readFile(resolve(root, 'src/definePlugin.ts'), 'utf8'),
     readFile(resolve(root, 'src/services/index.ts'), 'utf8'),
+    readFile(resolve(root, 'src/actions/contracts.ts'), 'utf8'),
   ]);
-  const services = readPluginServicesCapabilityCatalog(servicesSource);
+  const services = readPluginServicesCapabilityCatalog(servicesSource, accountContextSource);
   return projectCapabilityMatrix({
     contributionCatalog,
     hostAccessCatalog,

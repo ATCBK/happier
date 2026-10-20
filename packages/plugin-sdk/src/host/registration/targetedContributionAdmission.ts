@@ -51,15 +51,55 @@ export type TargetedContributionManifestDeclaration = Readonly<{
     sourceCustody: PluginSourceCustodyV1;
 }>;
 
+function readBoundTargetedActionPlacement(
+    row: TargetedContributionManifestDeclaration,
+    targetPluginId: string,
+): 'account' | 'machine' | 'mixed' | 'none' {
+    const actionIds = new Set(row.manifest.contributes.targetedPluginContributions
+        .filter((entry) => entry.target.pluginId === targetPluginId)
+        .flatMap((entry) => Object.values(entry.operations)));
+    let account = false;
+    let machine = false;
+    for (const action of row.manifest.contributes.actions) {
+        if (!actionIds.has(action.id)) continue;
+        if (action.execution.target === 'account') account = true;
+        else machine = true;
+    }
+    return account ? (machine ? 'mixed' : 'account') : (machine ? 'machine' : 'none');
+}
+
 /** Combines current host declaration snapshots without creating a second catalog. */
 export function mergeTargetedContributionManifestDeclarations(params: Readonly<{
     targetPluginId: string;
     accountDeclarations: readonly TargetedContributionManifestDeclaration[];
     machineDeclarations: readonly TargetedContributionManifestDeclaration[];
 }>): readonly TargetedContributionManifestDeclaration[] {
-    const rows = new Map(params.accountDeclarations.map((row) => [row.manifest.id, row]));
+    const machineRows = new Map(params.machineDeclarations.map((row) => [row.manifest.id, row]));
+    const rows = new Map(params.accountDeclarations.map((row) => {
+        if (row.manifest.id === params.targetPluginId) return [row.manifest.id, row] as const;
+        const placement = readBoundTargetedActionPlacement(row, params.targetPluginId);
+        if (placement === 'mixed') {
+            // The existing admission ABI binds one occurrence per plugin. Do
+            // not fabricate a cross-release identity for mixed placements;
+            // omit only this unsupported source slice, not its personal peers.
+            return [row.manifest.id, { ...row, manifest: { ...row.manifest, contributes: {
+                ...row.manifest.contributes,
+                targetedPluginContributions: row.manifest.contributes.targetedPluginContributions
+                    .filter((entry) => entry.target.pluginId !== params.targetPluginId),
+            } } }] as const;
+        }
+        const machineRow = machineRows.get(row.manifest.id);
+        // Without an actual Machine source, retain the selected declaration
+        // descriptively; the existing Action dispatcher reports Machine-required.
+        return [row.manifest.id, placement === 'machine' && machineRow
+            && readBoundTargetedActionPlacement(machineRow, params.targetPluginId) === 'machine'
+            ? machineRow : row] as const;
+    }));
     for (const row of params.machineDeclarations) {
-        if (row.manifest.id !== params.targetPluginId) rows.set(row.manifest.id, row);
+        if (!rows.has(row.manifest.id) && row.manifest.id !== params.targetPluginId
+            && readBoundTargetedActionPlacement(row, params.targetPluginId) === 'machine') {
+            rows.set(row.manifest.id, row);
+        }
     }
     return [...rows.values()];
 }

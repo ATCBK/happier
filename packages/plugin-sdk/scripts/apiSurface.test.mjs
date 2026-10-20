@@ -136,6 +136,48 @@ const HOST_REGISTRATION_TYPE_SYMBOLS = Object.freeze([
   sourceExport: exportName,
 })));
 
+const HOST_REGISTRATION_TARGETED_SYMBOLS = Object.freeze([
+  ['createAdmittedTargetedOperationExecutionHandle', 'value', 'admittedTargetedOperation'],
+  ['readAdmittedTargetedOperationExecutionBinding', 'value', 'admittedTargetedOperation'],
+  ['requireAdmittedTargetedOperationExecutionBinding', 'value', 'admittedTargetedOperation'],
+  ['AdmittedTargetedOperationExecutionBinding', 'type', 'admittedTargetedOperation'],
+  ['AdmittedTargetedOperationSelectedActionInput', 'type', 'admittedTargetedOperation'],
+  ['resolveAdmittedTargetedContributions', 'value', 'targetedContributionAdmission'],
+  ['dropTargetedContributionAdmissionDiagnostics', 'value', 'targetedContributionAdmission'],
+  ['projectTargetedContributionActionDefinition', 'value', 'targetedContributionAdmission'],
+  ['resolveManifestTargetedContributions', 'value', 'targetedContributionAdmission'],
+  ['mergeTargetedContributionManifestDeclarations', 'value', 'targetedContributionAdmission'],
+  ['TargetedContributionAdmissionResult', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionPointDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionActionDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionRendererDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionCompatibilityDiagnostic', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionManifestDeclaration', 'type', 'targetedContributionAdmission'],
+  ['createTargetedContributionsService', 'value', 'targetedContributions'],
+  ['createManifestTargetedContributionsService', 'value', 'targetedContributions'],
+  ['projectAdmittedTargetedContributionSnapshot', 'value', 'targetedContributions'],
+  ['TargetedContributionsAdmissionSource', 'type', 'targetedContributions'],
+  ['StableTargetedContributionsOwner', 'type', 'targetedContributions'],
+  ['buildPluginUiRendererContributionKey', 'value', 'targetedContributionRendererChain'],
+  ['resolvePluginUiRendererChain', 'value', 'targetedContributionRendererChain'],
+  ['PluginUiRendererChainResolution', 'type', 'targetedContributionRendererChain'],
+  ['AdmittedTargetedContributionSnapshot', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContribution', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContributionOperation', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContributionSurface', 'type', 'targetedContributionTypes'],
+  ['validateTargetedOperationInput', 'value', 'targetedOperationValidation'],
+  ['validateTargetedOperationResult', 'value', 'targetedOperationValidation'],
+  ['TargetedOperationValidationFailure', 'type', 'targetedOperationValidation'],
+  ['resolveAdmittedTargetedOperationInput', 'value', 'targetedOperationInput'],
+].map(([exportName, kind, moduleName]) => Object.freeze({
+  ...HOST_REGISTRATION_SYMBOL,
+  exportName,
+  kind,
+  sourceModule: `src/host/registration/${moduleName}.ts`,
+  sourceExport: exportName,
+})));
+
 const HOST_FILE_LOCK_RECLAIM_SYMBOL = Object.freeze({
   specifier: './host/fs/json-owner-file-lock',
   exportName: 'reclaimJsonOwnerFileLockSnapshot',
@@ -155,16 +197,17 @@ const HOST_FILE_LOCK_SYMBOL = Object.freeze({
 });
 
 const HOST_UI_SYMBOLS = Object.freeze([
+  ['HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT', 'value', 'hostedHtmlGuestBootstrap.generated'],
   ['decodePluginUiClipboardReadResult', 'value'],
   ['decodePluginUiConfirmResult', 'value'],
   ['encodePluginUiDiagnostic', 'value'],
   ['decodePluginUiResourceContent', 'value'],
   ['PluginUiHostApiDecodeResult', 'type'],
-].map(([exportName, kind]) => Object.freeze({
+].map(([exportName, kind, sourceName = 'hostApiCodecs']) => Object.freeze({
   specifier: './host/ui',
   exportName,
   kind,
-  sourceModule: 'src/host/ui/hostApiCodecs.ts',
+  sourceModule: `src/host/ui/${sourceName}.ts`,
   sourceExport: exportName,
   realm: 'any',
 })));
@@ -177,6 +220,7 @@ const HOST_SYMBOLS = Object.freeze([
   HOST_REGISTRATION_SYMBOL,
   ...HOST_REGISTRATION_DEFINE_PLUGIN_SYMBOLS,
   ...HOST_REGISTRATION_TYPE_SYMBOLS,
+  ...HOST_REGISTRATION_TARGETED_SYMBOLS,
   HOST_FILE_LOCK_RECLAIM_SYMBOL,
   HOST_FILE_LOCK_SYMBOL,
   ...HOST_UI_SYMBOLS,
@@ -520,6 +564,7 @@ test('projects symbols without posture metadata while preserving structured depr
           ...HOST_REGISTRATION_DEFINE_PLUGIN_SYMBOLS.map((symbol) => ({
             ...symbol,
           })),
+          ...HOST_REGISTRATION_TARGETED_SYMBOLS,
           ...HOST_REGISTRATION_TYPE_SYMBOLS.map((symbol) => ({
             ...symbol,
           })),
@@ -541,7 +586,7 @@ test('projects symbols without posture metadata while preserving structured depr
     exportName: symbol.exportName,
     replacement: symbol.replacement,
     removalCondition: symbol.removalCondition,
-  })), [
+  })).sort((left, right) => left.exportName.localeCompare(right.exportName)), [
     {
       exportName: 'LegacyExperimentalAuthorContract',
       replacement: undefined,
@@ -628,6 +673,11 @@ test('projects symbols without posture metadata while preserving structured depr
       removalCondition: undefined,
     },
     {
+      exportName: 'HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT',
+      replacement: undefined,
+      removalCondition: undefined,
+    },
+    {
       exportName: 'decodePluginUiClipboardReadResult',
       replacement: undefined,
       removalCondition: undefined,
@@ -647,7 +697,12 @@ test('projects symbols without posture metadata while preserving structured depr
       replacement: undefined,
       removalCondition: undefined,
     },
-  ]);
+    ...HOST_REGISTRATION_TARGETED_SYMBOLS.map((symbol) => ({
+      exportName: symbol.exportName,
+      replacement: undefined,
+      removalCondition: undefined,
+    })),
+  ].sort((left, right) => left.exportName.localeCompare(right.exportName)));
 });
 
 test('client inventory entrypoints require browser, React Native, and default outputs', () => {

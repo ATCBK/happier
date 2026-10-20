@@ -712,6 +712,23 @@ test('binds each published service through the host owner that really supplies i
   }
 });
 
+test('derives the portable Account service subset from the public invocation context', async () => {
+  const packageRoot = resolve(import.meta.dirname, '..');
+  const [servicesSource, accountContextSource] = await Promise.all([
+    readFile(resolve(packageRoot, 'src/services/index.ts'), 'utf8'),
+    readFile(resolve(packageRoot, 'src/actions/contracts.ts'), 'utf8'),
+  ]);
+  const services = readPluginServicesCapabilityCatalog(servicesSource, accountContextSource);
+  assert.deepEqual(services.find(row => row.id === 'actions').accountInvocation, {
+    members: ['execute', 'executeAdmittedTargetedOperation'],
+  });
+  assert.deepEqual(services.find(row => row.id === 'storage').accountInvocation, { members: ['account'] });
+  assert.deepEqual(services.find(row => row.id === 'targetedContributions').accountInvocation, { members: 'all' });
+  for (const id of ['sessions', 'fs', 'http', 'exec', 'connectedAccounts']) {
+    assert.equal(services.find(row => row.id === id).accountInvocation, undefined);
+  }
+});
+
 test('leaves a capability the owner map does not name unbound in every group', () => {
   // A row can only be available with a named binder and lifecycle owner, so an
   // unmapped family, service, HostAccess capability, or realm must arrive here
@@ -1127,7 +1144,8 @@ test('plans the current author-source matrix through the sole publisher output',
     property: 'targetedContributions',
     publicType: 'TargetedContributionsService',
     authorEntrypoints: ['.'],
-    realms: ['daemon'],
+    realms: ['any'],
+    accountInvocation: { members: 'all' },
     producer: 'src/services/targetedContributions.ts',
     lifecycle: 'invocation-scoped',
     provingConsumer: 'packages/plugins/channels/src/ingress.ts',

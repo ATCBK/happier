@@ -113,6 +113,7 @@ export type {
 export type { LoggerService } from './services/core.js';
 export type { MessageActionAvailableSnapshotV1 } from './invocation.js';
 export type { PluginApi } from './activation.js';
+export type { PluginAccountApi, PluginAccountActivationModule } from './activation.js';
 export type { PluginCaptureSourceRuntime } from './captureSources.js';
 export type { PluginCaptureSourceDefinition } from './definePlugin.js';
 export type { PluginClientActivationModule } from './activation.js';

@@ -456,11 +456,49 @@ function typeReferenceName(node) {
   return node.typeName.text;
 }
 
+function unwrapReadonlyType(node) {
+  return typeReferenceName(node) === 'Readonly'
+    ? unwrapReadonlyType(node.typeArguments?.[0])
+    : node;
+}
+
+function readAccountInvocationServices(source, publicTypeByProperty) {
+  if (source === undefined) return new Map();
+  const file = sourceFile(source, 'actions/contracts.ts');
+  const declaration = file.statements.find(node => ts.isTypeAliasDeclaration(node)
+    && node.name.text === 'PluginAccountActionContext');
+  const context = unwrapReadonlyType(declaration?.type);
+  if (!context || !ts.isTypeLiteralNode(context)) throw new Error('PluginAccountActionContext must declare its portable context');
+  const servicesProperty = context.members.find(member => ts.isPropertySignature(member)
+    && propertyNameText(member.name) === 'services');
+  const services = unwrapReadonlyType(servicesProperty?.type);
+  if (!services || !ts.isTypeLiteralNode(services)) throw new Error('PluginAccountActionContext must declare its service capabilities');
+  return new Map(services.members.map(member => {
+    const property = ts.isPropertySignature(member) ? propertyNameText(member.name) : null;
+    if (!property || !publicTypeByProperty.has(property)) throw new Error('Account context declares an unknown service');
+    const type = unwrapReadonlyType(member.type);
+    let members;
+    if (typeReferenceName(type) === 'Pick') {
+      members = collectUnionStringLiterals(type.typeArguments?.[1]).sort(compareCodePoints);
+      if (members.length === 0) throw new Error(`Account service ${property} must name its admitted members`);
+    } else if (type && ts.isTypeLiteralNode(type)) {
+      members = type.members.map(row => ts.isPropertySignature(row) ? propertyNameText(row.name) : null);
+      if (members.some(name => !name)) throw new Error(`Account service ${property} must name its admitted properties`);
+      members.sort(compareCodePoints);
+    } else if (typeReferenceName(type) === publicTypeByProperty.get(property)) {
+      members = 'all';
+    } else {
+      throw new Error(`Account service ${property} must use its canonical service type or explicit subset`);
+    }
+    return [property, Object.freeze({ members: Array.isArray(members) ? Object.freeze(members) : members })];
+  }));
+}
+
 /**
  * Reads the `PluginServiceId` / `PluginServices` one-to-one declaration pair
  * so public service rows are derived from their canonical SDK owner.
  */
-export function readPluginServicesCapabilityCatalog(source) {
+export function readPluginServicesCapabilityCatalog(source, accountContextSource) {
   const file = sourceFile(source, 'services/index.ts');
   const serviceIdDeclaration = file.statements.find((statement) => (
     ts.isTypeAliasDeclaration(statement) && statement.name.text === 'PluginServiceId'
@@ -496,12 +534,14 @@ export function readPluginServicesCapabilityCatalog(source) {
       ...(extraProperties.length > 0 ? [`extra properties: ${extraProperties.join(', ')}`] : []),
     ].join('; '));
   }
+  const accountServices = readAccountInvocationServices(accountContextSource, publicTypeByProperty);
   return Object.freeze(ids
     .sort(compareCodePoints)
     .map((id) => Object.freeze({
       id,
       property: id,
       publicType: publicTypeByProperty.get(id),
+      ...(accountServices.has(id) ? { accountInvocation: accountServices.get(id) } : {}),
     })));
 }
 
@@ -846,6 +886,7 @@ export function projectCapabilityMatrix({
       publicType: service.publicType,
       authorEntrypoints: Object.freeze(entrypoints),
       realms: Object.freeze(realms),
+      ...(service.accountInvocation ? { accountInvocation: service.accountInvocation } : {}),
       ...rowMetadata,
     }));
   }
