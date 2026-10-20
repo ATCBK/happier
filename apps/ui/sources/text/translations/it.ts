@@ -4801,6 +4801,9 @@ export const it: TranslationStructure = {
       full: "Larghezza completa",
       fullDescription: "Usa la larghezza disponibile della finestra",
     },
+    feedback: "Feedback",
+    haptics: "Feedback aptico",
+    hapticsDescription: "Usa il feedback tattile per le azioni e il riordino su questo dispositivo.",
     backdropBlur: "Sfocatura sfondo",
     backdropBlurDescription:
       "Usa la sfocatura dello sfondo dietro modali e menu. Disattivala per migliorare le prestazioni del browser.",

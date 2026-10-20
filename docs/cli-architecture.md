@@ -51,13 +51,43 @@ graph TB
 settlement. Closing a segment freezes its completion or interruption intent and
 separates it from subsequent output. A rejected terminal write retains the full
 snapshot for the next flush with the same local id; unresolved delivery is recorded
-in the default file log. This retention is process-local, and does not promise
-automatic reconnect replay or recovery after process exit.
+in the default file log. While closed snapshots remain, the writer subscribes to
+the session's existing connection-state events and retries them when its transport
+comes online, including a reconnect that races an in-flight failed write. Retries
+reuse the same local id and terminal state through the session commit queue, without
+waiting for pending-input readiness or a new prompt. The subscription ends when
+the snapshots settle or the writer is discarded. This retention is process-local;
+it does not provide recovery after process exit or replacement of the session client.
 
 `createKeyedStreamedTranscriptBridge` keeps writers with active, in-flight, or failed
 segments and releases only drained writers. Codex tool boundaries wait for admission
 into the existing session commit queue, while acknowledgement settles in the writer;
 turn-end flushes await settlement and return the durable delivery summaries.
+
+In development source, ACP output observations enter the existing session mutation
+journal with explicit external provenance. Assistant and thinking snapshots,
+provider-observed input, media-only rows, and lifecycle mutations share that
+owner's durable custody and replay order. Calls without observation provenance
+keep their existing remote-acknowledgement contract.
+
+Pi's existing Happier bridge observes extension-origin text through Pi's `input`
+hook and forwards it using the public RPC notification channel. The Pi adapter
+consumes that observation before diagnostic tracing and sends it through the
+shared ACP transcript path. It records a submitted input, which later extension
+handlers may transform or handle; it does not claim the model received that text.
+Host input keeps its existing recording path, and raw user-message echoes do not
+create another transcript row. The bridge is required for Happier-managed Pi
+launches. Provider-started runs use the same ACP turn state and settlement path as
+host-started runs.
+
+The backend's conclusive response completion seals the captured host turn before
+a provider-started successor can begin; transient idle signals do not seal it.
+The existing flush result carries that captured turn's assistant text into ready
+notifications, including an explicitly empty answer, so later output cannot
+replace the host's notification. Replay suppression belongs to the backend's
+existing replay-capture owner. The shared runtime preserves fresh input and
+output emitted during native resume and imports captured history only when
+requested.
 
 ## CLI entry flow
 
@@ -1437,6 +1467,17 @@ be verified requires reopening the original server; live custom sockets remain
 attachable. There is no parallel Herdr session synchronization service.
 
 ## Daemon architecture
+
+Startup reattachment and resume of an already-running session reconcile both
+the daemon's session access key and the session's machine routing metadata.
+The recovered-session machine-control owner uses the existing versioned
+metadata update owner, and changes routing only while the recorded host PID
+still matches the locally adopted runner. Matching workspace-location bindings
+follow the daemon identity; provider session ids, paths and unrelated metadata
+remain intact. The runner keeps its existing authenticated publisher connection.
+This recovery does not retire or replace that publisher's old Machine identity;
+replacement must wait until its surviving publishers have finished or migrated.
+A handoff that has published another runner's PID is left untouched.
 
 With no tracked runners remaining, daemon shutdown cleans each idle OpenCode
 server in its existing managed pool, not just the ambient launch profile. The

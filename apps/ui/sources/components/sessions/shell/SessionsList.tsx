@@ -1013,12 +1013,12 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         }
     }, [handleLoadMoreSessions, handleTreeScroll, scrollRetention]);
     const handleNativeListScrollInteractionStart = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = true;
         setNativeContextMenuSessionKey(null);
     }, [setNativeContextMenuSessionKey]);
     const handleNativeListScrollInteractionEnd = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = false;
     }, []);
 
@@ -1466,21 +1466,23 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     }, [resolveDragLabel]);
 
     const handleA11yTreeDropResult = React.useCallback((event: Parameters<typeof handleTreeDropResult>[0]) => {
-        handleTreeDropResultRef.current(event);
+        const outcome = handleTreeDropResultRef.current(event);
         sessionListA11yRef.current.announceDropResult({
             label: resolveDragLabel(event.sessionKey),
             destinationLabel: resolveDropResultDestinationLabel(event.result),
             result: event.result,
         });
+        return outcome;
     }, [resolveDragLabel, resolveDropResultDestinationLabel]);
 
     const handleA11yFolderHeaderTreeDropResult = React.useCallback((event: Parameters<typeof handleFolderHeaderTreeDropResult>[0]) => {
-        handleFolderHeaderTreeDropResultRef.current(event);
+        const outcome = handleFolderHeaderTreeDropResultRef.current(event);
         sessionListA11yRef.current.announceDropResult({
             label: resolveDragLabel(event.sessionKey),
             destinationLabel: resolveDropResultDestinationLabel(event.result),
             result: event.result,
         });
+        return outcome;
     }, [resolveDragLabel, resolveDropResultDestinationLabel]);
 
     const handleStableDragCancel = React.useCallback((event: Parameters<typeof handleDragCancel>[0]) => {

@@ -309,6 +309,7 @@ import {
 } from './committedUserMessageSeqTracker';
 import {
     createSessionMutationOutbox,
+    SessionMutationJournalAdmissionBlockedError,
     type RuntimeActivitySnapshotTail,
     type SessionMutationOutbox,
 } from './mutations/createSessionMutationOutbox';
@@ -853,6 +854,11 @@ export class ApiSessionClient extends EventEmitter {
         );
     }
 
+    subscribeToSessionConnectionState(listener: (state: ManagedConnectionState) => void): () => void {
+        this.on(SESSION_CONNECTION_STATE_EVENT, listener);
+        return () => { this.off(SESSION_CONNECTION_STATE_EVENT, listener); };
+    }
+
     private isSessionSocketOnlineForAckWrite(): boolean {
         return (this.socket as Socket<ServerToClientEvents, ClientToServerEvents> | undefined)?.connected === true
             || this.currentConnectionState.phase === 'online';
@@ -1127,6 +1133,8 @@ export class ApiSessionClient extends EventEmitter {
         // Always register execution-run RPC methods so callers never see "RPC method not available".
         // Feature gating is enforced inside the handler implementations.
         const streamedTranscriptSession = {
+            subscribeToSessionConnectionState: (listener: (state: ManagedConnectionState) => void) =>
+                this.subscribeToSessionConnectionState(listener),
             enqueueAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown>; provenance: SessionTranscriptObservationProvenanceV1 }) =>
                 this.enqueueAgentMessageCommitted(provider, body, opts),
             sendAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }) =>
@@ -4704,6 +4712,20 @@ export class ApiSessionClient extends EventEmitter {
     ): Promise<void> {
         const content = this.buildUserTextMessageContent(text, opts.meta);
         const payload = this.buildOutboundSessionMessagePayload(content);
+        if (opts.provenance !== undefined) {
+            const result = await this.sessionMutationOutbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
+                sessionId: this.sessionId,
+                localId: opts.localId,
+                content: payload,
+                sidechainId: null,
+                messageRole: 'user',
+                provenance: opts.provenance,
+            }));
+            if (!result.persisted) {
+                throw new SessionMutationJournalAdmissionBlockedError(new Error('Session transcript journal is closed'));
+            }
+            return;
+        }
         await this.enqueueMessageCommit('required', {
             operation: 'user-message-commit',
             details: {
@@ -4882,8 +4904,17 @@ export class ApiSessionClient extends EventEmitter {
     async sendAgentMessageCommitted(
         provider: ACPProvider,
         body: ACPMessageData,
-        opts: { localId: string; meta?: Record<string, unknown> },
+        opts: { localId: string; meta?: Record<string, unknown>; provenance?: SessionTranscriptObservationProvenanceV1 },
     ): Promise<void> {
+        // Explicit observation provenance opts into durable journal custody. Callers without
+        // provenance retain the required remote-acknowledgement contract below.
+        if (opts.provenance !== undefined) {
+            const result = await this.enqueueAgentMessageCommitted(provider, body, { ...opts, provenance: opts.provenance });
+            if (!result.persisted) {
+                throw new SessionMutationJournalAdmissionBlockedError(new Error('Session transcript journal is closed'));
+            }
+            return;
+        }
         const { normalizedBody, content, localId, sidechainId } = this.prepareAcpAgentMessage({
             provider,
             body,

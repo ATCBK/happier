@@ -81,6 +81,30 @@ off. An unknown setting leaves the item untouched; failures remain visible in
 the tray and retry on the next setting observation. This reuses the existing
 login-item migration rather than adding another startup preference or writer.
 
+## Linux desktop rendering runtime
+
+In development source, the desktop release pipeline prepares WebKitGTK 2.54.1
+for AppImage bundling. The trusted Linux finalizer opts into
+`.github/actions/install-tauri-linux-dependencies`; its checksum-pinned source
+recipe builds on Ubuntu 22.04 with Clang 18 and GCC 12's standard library.
+An exact Actions cache reuses the staged SDK. Missing helpers, unresolved native
+dependencies, the wrong engine version or a newer libc ABI fail validation rather
+than falling back to the distribution engine. The AppImage artifact audit repeats
+the runtime validation after bundling.
+
+Candidate compilation keeps Ubuntu's native WebKit headers. DEB and RPM packages
+continue to use the installed distribution runtime; the SDK and additional GPU
+helper are bundled only into AppImage. Direct Tauri development commands retain
+their system-runtime behavior; the pinned runtime contract belongs to the release
+pipeline. This source change does not establish availability in a published release.
+
+WebKit can migrate IndexedDB when opening an existing desktop profile. An older
+engine may then be unable to open that database; replacing the executable does
+not reverse the migration. Follow the downgrade warning on the
+[downloads page](../apps/docs/content/docs/getting-started/get-the-apps.mdx),
+preserve pending drafts and messages, and do not delete the profile to diagnose
+rendering performance. No second storage writer or profile migration is added.
+
 ## Desktop-initiated CLI acquisition
 
 The desktop app acquires the Happier CLI itself; the user never runs an installer to connect the
@@ -508,10 +532,15 @@ dependency copies is removed only when the surviving ancestor is reachable from 
 the two trees are recursively byte-identical without symbolic links, and direct peer resolution is
 unchanged; missing, shadowed, divergent, peer-dependent, or linked copies are retained.
 
-The PTY provider uses `node-pty` first. On POSIX Bun it skips the Homebridge native
-fallback because that package writes through a `tty.ReadStream` that is not writable
-in Bun, then uses the existing external relay when available. Node-hosted Homebridge
-and Windows backend selection are unchanged.
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+the bundled Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
 
 ## Internal dependency closure
 

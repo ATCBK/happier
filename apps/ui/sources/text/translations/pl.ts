@@ -4489,6 +4489,9 @@ export const pl: TranslationStructure = {
       full: "Pełna szerokość",
       fullDescription: "Użyj dostępnej szerokości okna",
     },
+    feedback: "Informacje zwrotne",
+    haptics: "Wibracje dotykowe",
+    hapticsDescription: "Używaj wibracji przy działaniach i zmianie kolejności na tym urządzeniu.",
     backdropBlur: "Rozmycie tła",
     backdropBlurDescription:
       "Używaj rozmycia tła za modalami i menu. Wyłącz, aby poprawić wydajność przeglądarki.",
