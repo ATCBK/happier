@@ -5,6 +5,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createDeferred, renderHook } from '@/dev/testkit';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import type { DesktopFileInvoke } from '@/sync/runtime/files/openInDefaultApp';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
@@ -33,6 +35,25 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
         return await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: harness.scope }));
     }
 
+    function installTauriFileBoundary(fileInvoke: DesktopFileInvoke) {
+        const secureStorage = createDesktopSecureStorageBoundary();
+        // Recognizing the desktop host also selects OS credential custody. Keep
+        // that real Account path alive with the canonical secure-storage port.
+        const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+            if (command.startsWith('desktop_secure_storage_')) return await secureStorage.invoke(command, args);
+            // Desktop uses these IPC commands instead of the mobile SDK port
+            // already installed by the transfer harness. Routing, grants and
+            // encrypted HTTP bytes still pass through their real owners.
+            if (command === 'iroh_get_availability') return { available: true };
+            if (command === 'iroh_get_application_endpoint') return { endpointId: 'b'.repeat(64) };
+            if (command === 'iroh_start_machine_tunnel') return { leaseId: 'desktop-file-transfer', localPort: 48126 };
+            if (command === 'iroh_stop_machine_tunnel') return;
+            return await fileInvoke(command, args);
+        });
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
+        return invoke;
+    }
+
     it('downloads held complete bytes while the Machine is unavailable without opening a transfer', async () => {
         const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:cached-file');
         vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
@@ -51,11 +72,10 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
     it('streams a Tauri open into the app-owned temp sink and hands its path to the scoped opener', async () => {
         const bytes: number[] = [];
         const path = '/tmp/happier-downloads/file-123/report.txt';
-        const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+        const invoke = installTauriFileBoundary(async (command, args) => {
             if (command === 'desktop_download_cache_create') return path;
             if (command === 'desktop_download_cache_write') bytes.push(...args!.bytes as number[]);
         });
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
         const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
         const hook = await renderTransfers();
         await act(async () => {
@@ -70,11 +90,10 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
 
     it('removes the Tauri temp file when its default handler fails', async () => {
         const path = '/tmp/happier-downloads/file-456/report.txt';
-        const invoke = vi.fn(async (command: string) => {
+        const invoke = installTauriFileBoundary(async (command) => {
             if (command === 'desktop_download_cache_create') return path;
             if (command === 'plugin:opener|open_path') throw new Error('No handler');
         });
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
         vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
         const hook = await renderTransfers();
         await act(async () => {

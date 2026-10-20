@@ -7,7 +7,7 @@ describe('recentWorkspaceFiles', () => {
     it('reads tolerant persisted data and writes a unique bounded MRU list without touching another workspace', () => {
         const previous = parseRecentWorkspaceFiles({ a: ['src/a.ts', 7, 'src/a.ts', ''], b: ['b.ts'], ignored: true });
         expect(previous).toEqual({ a: ['src/a.ts'], b: ['b.ts'] });
-        const full = { ...previous, a: Array.from({ length: 20 }, (_, i) => `${i}.ts`) };
+        const full: Record<string, string[]> = { ...previous, a: Array.from({ length: 20 }, (_, i) => `${i}.ts`) };
         const next = recordRecentWorkspaceFile(full, 'a', '10.ts');
         expect(next.a).toEqual(['10.ts', ...full.a.filter(path => path !== '10.ts')]);
         expect(recordRecentWorkspaceFile(next, 'a', 'new.ts').a).toHaveLength(20);

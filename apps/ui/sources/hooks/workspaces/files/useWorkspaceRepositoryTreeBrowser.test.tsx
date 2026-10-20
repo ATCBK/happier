@@ -26,7 +26,7 @@ describe('useWorkspaceRepositoryTreeBrowser', () => {
         const scope = { serverId: 'reload-home', machineId: 'write-machine', rootPath: '/write-repo' };
         const sessionId = 'tree-write-stream';
         storage.setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId: scope.serverId,
-            active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'running',
+            active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
             metadata: { path: scope.rootPath, machineId: scope.machineId, host: 'test' } }) },
             machines: { [scope.machineId]: createMachineFixture({ id: scope.machineId, active: true }) },
             sessionMessages: { [sessionId]: { messageIdsOldestFirst: [], messagesById: {}, messagesMap: {},
