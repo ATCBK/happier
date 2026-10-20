@@ -107,20 +107,30 @@ describe('managed Codex native children', () => {
       expect(tools.every((event) => !('turnId' in event))).toBe(true);
     } finally { await f.runtime.dispose(); }
   });
-  it.each(['assistant', 'reasoning'] as const)('clears an empty authoritative child %s draft and retains the next message', async (channel) => {
+  it.each([
+    { channel: 'assistant', nativeRetry: false },
+    { channel: 'reasoning', nativeRetry: false },
+    { channel: 'assistant', nativeRetry: true },
+  ] as const)('settles a child $channel draft and retains the next message (nativeRetry=$nativeRetry)', async ({ channel, nativeRetry }) => {
     const f = fixture();
     try {
       await startCodexAppServerRuntime(f.runtime);
       await f.runtime.send({ text: 'Delegate' }, { turnId: 'host-turn' });
       await f.notify('thread/started', { thread: { id: 'child', parentThreadId: 'parent' } });
+      await f.notify('error', { threadId: 'child', turnId: 'unobserved-turn', willRetry: true, error: { message: 'diagnostic' } });
+      expect(f.observations).toEqual([]);
       await f.notify('turn/started', { threadId: 'child', turn: { id: 'child-turn' } });
       await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'no-output', type: 'agentMessage', text: '' } });
       await f.notify(channel === 'assistant' ? 'item/agentMessage/delta' : 'item/reasoning/textDelta', {
         threadId: 'child', turnId: 'child-turn', itemId: 'removed', delta: 'Removed child draft',
       });
-      await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn',
-        item: { id: 'removed', type: channel === 'assistant' ? 'agentMessage' : 'reasoning', text: '' },
-      });
+      if (nativeRetry) {
+        await f.notify('error', { threadId: 'child', turnId: 'child-turn', willRetry: true, error: { message: 'stream failed' } });
+      } else {
+        await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn',
+          item: { id: 'removed', type: channel === 'assistant' ? 'agentMessage' : 'reasoning', text: '' },
+        });
+      }
       await f.notify('item/agentMessage/delta', { threadId: 'child', turnId: 'child-turn', itemId: 'retained', delta: 'Retained child answer' });
       await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'retained', type: 'agentMessage', text: 'Retained child answer' } });
       await f.notify('turn/completed', { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } });

@@ -8,6 +8,9 @@ import type { RuntimeTranscriptProjectionSession } from './projectRuntimeTranscr
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { projectSessionUsageWorkEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
+import { createCodexAppServerRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
+import { createCodexNativeAppServerSessionRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
+import type { DisposableCodexAppServerClient } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
 
 type EnqueueAgentMessageCommitted = NonNullable<
   RuntimeTranscriptProjectionSession['enqueueAgentMessageCommitted']
@@ -43,6 +46,84 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('projectRuntimeTranscriptEvent', () => {
+  it('replaces an unfinished Codex answer on native retry without replaying input or removing completed messages', async () => {
+    const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
+    const stored = new Map<string, CommittedAgentMessageBody>();
+    const session = { sessionId: 'codex-retry-session',
+      enqueueAgentMessageCommitted: vi.fn<EnqueueAgentMessageCommitted>(async (_provider, body, opts) => {
+        stored.set(opts.localId, body);
+        return { persisted: true, delivered: false };
+      }),
+    };
+    // Only the external native JSON-RPC process and durable storage are substituted.
+    const handlers = new Map<string, (params: unknown) => void | Promise<void>>();
+    const requests: string[] = [];
+    const client: DisposableCodexAppServerClient = {
+      launchFeatures: { realtimeConversationAdvertised: false },
+      request: async method => {
+        requests.push(method);
+        if (method === 'thread/start') return { thread: { id: 'native-thread' } };
+        if (method === 'turn/start') return { turnId: 'native-turn' };
+        if (method === 'account/read') return { account: null };
+        if (method === 'account/rateLimits/read') return { rateLimits: null };
+        throw new Error(`Unexpected native request: ${method}`);
+      },
+      notify: async () => undefined,
+      registerRequestHandler: () => () => undefined,
+      registerNotificationHandler: (method, handler) => { handlers.set(method, handler); return () => handlers.delete(method); },
+      onExit: () => () => undefined,
+      dispose: async () => undefined,
+    };
+    const runtime = createCodexAppServerRuntime({ happierSessionId: session.sessionId, directory: '/tmp',
+      host: { baseProcessEnv: {}, logger: { debug: vi.fn(), warn: vi.fn() }, createClient: async () => client } });
+    const native = createCodexNativeAppServerSessionRuntime(runtime, session.sessionId);
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
+    const project = createRuntimeTranscriptProjector();
+    const events: AgentSessionRuntimeEventV1[] = [];
+    let projection = Promise.resolve();
+    native.watch(event => {
+      events.push(event);
+      projection = projection.then(async () => {
+        await project({ session, provider: 'codex', runtimeMessageDeltaBridge: bridge, event });
+      });
+    });
+    const scope = { threadId: 'native-thread', turnId: 'native-turn' };
+    const notify = async (method: string, params: Record<string, unknown>) => {
+      const handler = handlers.get(method);
+      if (!handler) throw new Error(`Missing native handler: ${method}`);
+      await handler(params);
+      await projection;
+    };
+    const text = (itemId: string, delta: string) => notify('item/agentMessage/delta', { ...scope, itemId, delta });
+    try {
+      await native.send({ inputIds: ['original-input'], input: { text: 'Write the answer' },
+        delivery: { kind: 'newTurn', turnId: 'host-turn' } });
+      await text('completed', 'Earlier complete message');
+      await notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'completed', text: 'Earlier complete message' } });
+      await text('interrupted', '1. able\n2. acid\n3');
+      await vi.waitFor(() => expect([...stored.values()]).toContainEqual({ type: 'message', message: '1. able\n2. acid\n3' }));
+      // An unrelated error and a diagnostic without a native retry must leave the active draft alone.
+      await notify('error', { ...scope, threadId: 'foreign-thread', willRetry: true, error: { message: 'stream failed' } });
+      await notify('error', { ...scope, willRetry: false, error: { message: 'diagnostic' } });
+      expect([...stored.values()]).toContainEqual({ type: 'message', message: '1. able\n2. acid\n3' });
+      // c40 daemon :74348 records this same native-turn willRetry=true boundary after Gateway SIGTERM.
+      await notify('error', { ...scope, willRetry: true, error: { message: 'stream failed' } });
+      await text('retry-answer', '1. able\n2. acid\n3. acre');
+      await notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'retry-answer', text: '1. able\n2. acid\n3. acre' } });
+      await notify('turn/completed', { ...scope, turn: { id: scope.turnId, status: 'completed' } });
+      await vi.waitFor(() => expect(events.filter(event => event.kind === 'turn-complete')).toHaveLength(1));
+      await projection;
+      expect([...stored.values()].flatMap(body => body.type === 'message' && body.message ? [body.message] : []))
+        .toEqual(['Earlier complete message', '1. able\n2. acid\n3. acre']);
+      expect(requests.filter(method => method === 'turn/start')).toHaveLength(1);
+      expect(events.some(event => event.kind === 'turn-failed' || event.kind === 'turn-cancelled')).toBe(false);
+    } finally {
+      await native.dispose();
+      await projection;
+      bridge.clear();
+    }
+  });
+
   it.each(['turn-cancelled', 'turn-complete'] as const)(
     'flushes a yielded question without publishing a false terminal marker after %s', async kind => {
       const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');

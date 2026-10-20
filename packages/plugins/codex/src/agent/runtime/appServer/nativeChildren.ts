@@ -99,6 +99,7 @@ export function createCodexNativeChildObserver(params: Readonly<{
     if (!childTurnId) return;
     const key = childTurnKey(childThreadId, childTurnId);
     let child = nativeChildTurns.get(key);
+    if (!child && method === 'error') return;
     if (!child) {
       const textByStream = new Map<string, { text: string; thinking: boolean }>();
       const messageIdForStream = (streamKey: string): string => `codex:${streamKey}`;
@@ -127,6 +128,12 @@ export function createCodexNativeChildObserver(params: Readonly<{
       await publishNativeChildStatus(child, 'running');
     }
     if (child.terminal) return;
+    if (method === 'error') {
+      if (readRecord(notificationParams)?.willRetry === true) {
+        child.projector.supersedeUnfinishedAssistantMessages({ sidechainId: childThreadId, streamScopeId: key });
+      }
+      return;
+    }
     for (const event of child.tools.project({ method, notificationParams, scopeId: key })) {
       if (event.type === 'tool-call') params.publish({ kind: 'tool-call', sidechainId: childThreadId, toolCallId: event.callId, toolName: event.name, toolInput: event.input });
       else params.publish({ kind: 'tool-result', sidechainId: childThreadId, toolCallId: event.callId, output: event.output, ...(event.isError === undefined ? {} : { isError: event.isError }) });

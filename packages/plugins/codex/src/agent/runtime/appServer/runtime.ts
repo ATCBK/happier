@@ -2262,7 +2262,9 @@ export function createCodexAppServerRuntime(
       if (deferTerminalNotificationUntilTurnStartAcknowledged('turn/interrupted', notificationParams)) return;
       handleTurnInterruptedNotification(notificationParams);
     });
-    nextClient.registerNotificationHandler('error', (notificationParams) => {
+    nextClient.registerNotificationHandler('error', (notificationParams): void | Promise<void> => {
+      const childNotification = nativeChildren.observe('error', notificationParams);
+      if (childNotification) return childNotification;
       const record = readRecord(notificationParams);
       const errorThreadId = readThreadId(notificationParams);
       const errorTurnId = readProviderEventTurnId(notificationParams, { allowTopLevelId: true })
@@ -2273,6 +2275,12 @@ export function createCodexAppServerRuntime(
         notificationParams,
         pendingTurn?.providerOperationIdentity ?? null,
       );
+      if (record?.willRetry === true && pendingTurn) {
+        assistantReasoningProjector.supersedeUnfinishedAssistantMessages({
+          sidechainId: null,
+          streamScopeId: pendingTurn.sessionTurnId,
+        });
+      }
       // App-server `error` is diagnostic and can be followed by more activity
       // for the same native turn even when willRetry is false. Only a provider
       // terminal turn notification can release the active owner; otherwise a
