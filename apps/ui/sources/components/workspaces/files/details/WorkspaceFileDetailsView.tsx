@@ -641,6 +641,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, refreshAll, publishSavedFile } = useWorkspaceFileDetailsLoading({
         scope, filePath, diffMode,
         fileEntryKind: fileEntry?.kind ?? null,
+        isBinaryContent: fileEntry?.stats.isBinary,
         fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
         previewSlice: fileView.previewSlice,
         maxImagePreviewBytes: typeof filesImagePreviewMaxBytes === 'number' ? filesImagePreviewMaxBytes : null,
@@ -740,7 +741,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     }, [lineSelectionCanStart]);
 
     const language = getFileLanguageFromPath(filePath);
-    const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime });
+    const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime, isBinaryContent: fileEntry?.stats.isBinary });
     const markdownPreviewAvailable = fileContent?.isBinary !== true
         && fileViewer.kind === 'markdown'
         && typeof fileContent?.content === 'string';

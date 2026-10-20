@@ -17,6 +17,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
     snapshotSignature: string | null;
     workspaceScope?: WorkspaceScopeBase | null;
     diffStateSource: ChangedFilesReviewDiffStateSource;
+    binaryPaths?: ReadonlySet<string>;
     getEstimatedChangedLines?: (path: string) => number | null;
     reviewCommentsEnabled?: boolean;
     reviewCommentDrafts?: readonly ReviewCommentDraft[];
@@ -83,6 +84,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
                 snapshotSignature={snapshotSignature}
                 workspaceScope={workspaceScope ?? null}
                 filePath={path}
+                isBinaryContent={input.binaryPaths?.has(path)}
                 estimatedChangedLines={estimated}
                 diffStateSource={diffStateSource}
                 reviewCommentsEnabled={reviewCommentsEnabled === true}
@@ -107,6 +109,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
         input.hunkNotes,
         input.findModel,
         input.findActive,
+        input.binaryPaths,
         getEstimatedChangedLines,
         onDeleteReviewCommentDraft,
         onReviewCommentError,

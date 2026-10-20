@@ -1044,6 +1044,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         render: props.comparisonChrome.renderHunkNotes,
     } : null, [props.comparisonChrome?.renderHunkNotes, props.comparisonChrome?.indexPlacement, props.comparisonChrome?.hunkNotesColumnWidth]);
     const renderDiffBlock = useChangedFilesReviewDiffBlockRenderer({
+        binaryPaths: binaryReviewPaths,
         hunkNotes,
         evidenceOnly: props.evidenceOnly,
         externalScrollView: Platform.OS === 'web' ? undefined : externalScrollView,

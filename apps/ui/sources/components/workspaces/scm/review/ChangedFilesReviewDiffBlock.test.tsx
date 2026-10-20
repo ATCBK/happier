@@ -7,6 +7,8 @@ import { ChangedFilesReviewDiffBlock } from './ChangedFilesReviewDiffBlock';
 import { renderScreen } from '@/dev/testkit';
 import { installFilesContentCommonModuleMocks } from './filesContentTestHelpers';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import { createChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
+import { t } from '@/text';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,6 +70,21 @@ vi.mock('@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer', () 
 describe('ChangedFilesReviewDiffBlock', () => {
     beforeEach(() => {
         diffReviewCommentsViewerMock.renderCount = 0;
+    });
+
+    it('updates an opaque unknown file when its SCM binary metadata arrives', async () => {
+        const diffStateSource = createChangedFilesReviewDiffStateSource();
+        diffStateSource.setDiffState('unknown.asset', { status: 'loaded', diff: '', error: null });
+        const props = {
+            theme: createThemeFixture(), sessionId: 's1', snapshotSignature: 'sig',
+            filePath: 'unknown.asset', diffStateSource, reviewCommentsEnabled: false,
+            reviewCommentDrafts: [],
+        };
+        const screen = await renderScreen(<ChangedFilesReviewDiffBlock {...props} />);
+        expect(screen.getTextContent()).toContain(t('files.noChanges'));
+        await screen.update(<ChangedFilesReviewDiffBlock {...props} isBinaryContent />);
+        expect(screen.getTextContent()).toContain(t('files.binaryFile'));
+        expect(screen.getTextContent()).not.toContain(t('files.noChanges'));
     });
 
     it('reserves a fixed height while loading for large diffs (prevents scroll jumps)', async () => {

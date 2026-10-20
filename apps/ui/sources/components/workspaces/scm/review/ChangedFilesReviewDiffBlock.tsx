@@ -44,6 +44,7 @@ export type ChangedFilesReviewDiffBlockProps = Readonly<{
     snapshotSignature: string | null;
     workspaceScope?: WorkspaceScopeBase | null;
     filePath: string;
+    isBinaryContent?: boolean;
     estimatedChangedLines?: number | null;
     diffStateSource: ChangedFilesReviewDiffStateSource;
     reviewCommentsEnabled: boolean;
@@ -90,6 +91,7 @@ function areChangedFilesReviewDiffBlockPropsEqual(
         || prev.snapshotSignature !== next.snapshotSignature
         || prev.workspaceScope !== next.workspaceScope
         || prev.filePath !== next.filePath
+        || prev.isBinaryContent !== next.isBinaryContent
         || prev.estimatedChangedLines !== next.estimatedChangedLines
         || prev.diffStateSource !== next.diffStateSource
         || prev.reviewCommentsEnabled !== next.reviewCommentsEnabled
@@ -225,7 +227,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         borderColor: theme.colors.border.default });
     const noteColumnStyle = columnNotes ? { paddingRight: columnNotes.columnWidth, minHeight: notesColumn.minHeight } : null;
     const hasDiff = diffLoaded && Boolean(state.diff);
-    const fileViewer = resolveFileViewerKind({ path: filePath });
+    const fileViewer = resolveFileViewerKind({ path: filePath, isBinaryContent: props.isBinaryContent });
     const fileIsBinary = fileViewer.kind !== 'code' && fileViewer.kind !== 'markdown' && fileViewer.kind !== 'svg';
     const fileIsImage = fileViewer.kind === 'image' || fileViewer.kind === 'svg';
 
