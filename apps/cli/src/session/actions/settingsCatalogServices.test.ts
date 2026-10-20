@@ -11,7 +11,7 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { readProviderStateSharingRiskAgentIdsV1, prepareAgentProviderStateSharingChangeV1, prepareDefaultProviderStateSharingChangeV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
 import { encodeScmDiffSummaryModelOverride, scmDiffSummarySettingBinding, SCM_DIFF_SUMMARY_SETTING_KEYS, type ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
-import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -155,11 +155,17 @@ describe('exact remote Voice Agent catalog admission', () => {
         }
     });
     it('refuses an unknown model target without treating the Custom ACP declaration as executable', async () => {
-        expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => entry.id === 'custom-acp')).toBe(true);
-        const services = createCliSettingsCatalogServices({});
-        await expect(services.readScmDiffSummaryCatalog!(accountSettingsParse({}), encodeScmDiffSummaryModelOverride({
-            backendTargetKey: 'agent:missing.agent/missing', modelId: 'model',
-        }))).resolves.toBeNull();
+        const catalog = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            runtimeOptions: { pluginIds: [] } });
+        try {
+            expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => entry.id === 'custom-acp')).toBe(true);
+            const services = createCliSettingsCatalogServices({});
+            await expect(services.readScmDiffSummaryCatalog!(accountSettingsParse({}), encodeScmDiffSummaryModelOverride({
+                backendTargetKey: 'agent:missing.agent/missing', modelId: 'model',
+            }))).resolves.toBeNull();
+        } finally {
+            await catalog.dispose();
+        }
     });
     it('distinguishes an unactivated empty snapshot from a proven activated empty native catalog', () => {
         const empty = createResolvedContributionRegistry({});
@@ -167,14 +173,21 @@ describe('exact remote Voice Agent catalog admission', () => {
         expect(projectCliProviderStateSharingRiskAgentIdsV1(empty, { activated: true, unavailable: false })).toEqual([]);
         expect(projectCliProviderStateSharingRiskAgentIdsV1(empty, { activated: true, unavailable: true })).toBeNull();
     });
-    it('derives sharing risks from every current Agent declaration', () => {
-        const entries = [...readCurrentContributionRegistry().agentDefinitionsById.values()];
-        const services = createCliSettingsCatalogServices({});
-        const risks = readProviderStateSharingRiskAgentIdsV1(entries.map(entry => ({ agentId: entry.id,
-            capability: entry.richDefinition?.definition.capabilities.providerStateSharing,
-        })));
-        expect(services.readProviderStateSharingRiskAgentIds()).toEqual(risks);
-        expect(risks).toContain('codex');
+    it('derives sharing risks from every current Agent declaration', async () => {
+        // A previous external fixture retires to an authoritative empty catalog.
+        const catalog = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            runtimeOptions: { pluginIds: [] } });
+        try {
+            const entries = [...readCurrentContributionRegistry().agentDefinitionsById.values()];
+            const services = createCliSettingsCatalogServices({});
+            const risks = readProviderStateSharingRiskAgentIdsV1(entries.map(entry => ({ agentId: entry.id,
+                capability: entry.richDefinition?.definition.capabilities.providerStateSharing,
+            })));
+            expect(services.readProviderStateSharingRiskAgentIds()).toEqual(risks);
+            expect(risks).toContain('codex');
+        } finally {
+            await catalog.dispose();
+        }
     });
     it('keeps bundled and default sharing writable beside an admitted external Agent, then refuses retirement', async () => {
         const admitted = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,

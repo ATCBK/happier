@@ -26,7 +26,7 @@ import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineId
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { VoiceAgentCatalogEntryV1 } from '@happier-dev/protocol/voice/settings/voiceAgentSelection';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { getAgentCore, getAgentStaticModels, isBundledAgentId } from '@happier-dev/agents';
+import { getAgentStaticModels } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1, type ProviderStateSharingAgentV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { resolveSpawnConnectedServicesDefaultDisposition } from '@/session/services/spawnConnectedServicesDefaults';
@@ -48,8 +48,9 @@ export function projectCliProviderStateSharingRiskAgentIdsV1(
     if (readiness.unavailable || registry.agentDefinitionsById.size === 0 && !readiness.activated) return null;
     const agents: ProviderStateSharingAgentV1[] = [];
     for (const entry of registry.agentDefinitionsById.values()) {
-        if (entry.provenance !== 'first_party' || !isBundledAgentId(entry.id)) return null;
-        agents.push({ agentId: entry.id, capability: getAgentCore(entry.id).connectedServices?.providerStateSharing });
+        const definition = entry.richDefinition?.definition;
+        if (!definition) return null;
+        agents.push({ agentId: entry.id, capability: definition.capabilities.providerStateSharing });
     }
     return readProviderStateSharingRiskAgentIdsV1(agents);
 }
