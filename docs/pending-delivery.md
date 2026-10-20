@@ -69,7 +69,14 @@ outcome; a pass does not depend on response text. The existing Workflow progress
 retains that typed outcome across restart, independently of selected result text.
 A reference-only answer with no readable text needs attention rather than becoming
 fabricated text. Historical inputs with authoritative reply status `none` retain
-exact-input transcript observation; unavailable or unfulfilled reply custody holds.
+exact-input transcript observation. Unavailable reply custody holds. When an
+unfulfilled original names its accepted Workflow turn, the same result reader can
+observe that terminal turn only if its Workflow invocation also matches the
+protected input identity. A completed turn whose final-message anchor is missing
+can supply text only from committed, foreground assistant rows tagged with that
+exact runtime turn; stale range anchors do not substitute for that identity.
+Explicit original outcomes still take precedence, and an active or unmatched
+turn, provisional text, or a later foreign reply cannot complete the input.
 V2 input remains host-authored:
 a return destination requires admitted source-Session correlation, and it cannot
 claim a person's composer origin or downgrade to V1 to acquire reply support.
@@ -97,9 +104,11 @@ reply mutation. It cannot author an outcome or choose another return destination
 Native Run Stop settles the exact admitted turn as cancelled using the host's
 existing terminal fact, even after its native transcript writer retires. A crash
 between a native terminal transcript commit and the reply-custody callback can
-still leave the ask pending. Current Machine recovery reads only fulfilled
+still leave the ask pending. Current Machine return recovery reads only fulfilled
 original custody and cannot author outcomes; re-asking remains the recovery for
-that window. No terminal sidecar or separate recovery store is used.
+that window. Workflow `wait` observation has the exact accepted-turn recovery
+above; it does not author an original reply outcome or a return delivery. No
+terminal sidecar or separate recovery store is used.
 
 `deliverSessionMessageReply` is the host-only delivery entry point shared with
 question answers. It reuses ordinary Pending admission and receiver policy:

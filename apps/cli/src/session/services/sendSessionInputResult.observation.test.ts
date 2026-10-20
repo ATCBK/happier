@@ -16,6 +16,8 @@ import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussion
 import { classifyWorkflowSessionInputResult } from '@/daemon/workflows/stepExecution';
 import { applyWorkflowInvocationFactV1, WorkflowProgressEnvelopeV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { createWorkflowInvocationRecoveryObserver } from '@/daemon/workflows/invocationRecoveryObserver';
+import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 const socketBoundary = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('@/api/session/sockets', async (importOriginal) => ({
@@ -28,6 +30,114 @@ vi.mock('@/api/session/sockets', async (importOriginal) => ({
 }));
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it('rejoins only the original completed Workflow turn when retained reply anchors are incomplete', async () => {
+  const sessionId = 'c' + 'b'.repeat(24);
+  const workflowInvocation = { runId: 'retained-run', invocationRecordId: '00000000-0000-4000-8000-000000000003' };
+  const localId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', ...workflowInvocation });
+  const turnId = 'native-turn-retained-2';
+  let status: 'in_progress' | 'completed' = 'in_progress';
+  let acceptedTurnId = turnId;
+  let finalAssistantMessageSeq: number | null | undefined = null;
+  let endSeqInclusive: number | undefined;
+  let outcome: SessionMessageReplyOutcomeV1 | undefined;
+  let invocation = workflowInvocation;
+  let answerVisible = true;
+  const socket = Object.assign(new EventEmitter(), {
+    connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(),
+  });
+  socketBoundary.create.mockReturnValue(socket);
+  const row = (seq: number, value: unknown, inputLocalId: string | null = null) => ({
+    id: `retained-row-${seq}`, localId: inputLocalId, seq, createdAt: seq, updatedAt: seq,
+    content: { t: 'plain', v: value },
+  });
+  const inputBody = { role: 'user', content: { type: 'text', text: 'Work' }, meta: {
+    happierInputAuthorityV1: SessionInputAuthorityV2Schema.parse({
+      v: 2, producer: 'workflow', caller: { kind: 'host' },
+      permission: { admittedPermissionCeiling: 'default', requestedPermissionCeiling: 'default' },
+      workflow: { ...workflowInvocation, purpose: 'invocation', stepOrdinal: '1', workDepth: 1 },
+    }),
+  } };
+  const input = row(3, inputBody, localId);
+  const assistant = (seq: number, text: string, runtimeTurnId: string, extra: Record<string, unknown> = {}, sidechainId?: string) => row(seq,
+    buildAcpAgentMessageEnvelope({ provider: 'external-agent', body: { type: 'message', message: text,
+      ...(sidechainId ? { sidechainId } : {}) },
+    meta: { runtimeTurnId, runtimeEventKind: 'transcript-message-committed', ...extra } }));
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
+      v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId, ...(outcome ? { outcome } : {}),
+    } } };
+    if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
+    if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 20, turns: [{
+      turnId, status, startedAt: 3, updatedAt: 6, initiator: 'workflow', workDepth: 1, workflowInvocation: invocation,
+      transcriptAnchors: { ...(finalAssistantMessageSeq === undefined ? {} : { finalAssistantMessageSeq }),
+        ...(endSeqInclusive === undefined ? {} : { endSeqInclusive }) },
+    }, { turnId: 'later-turn', status: 'completed', startedAt: 10, updatedAt: 12,
+      initiator: 'workflow', workDepth: 1, workflowInvocation: { ...workflowInvocation,
+        invocationRecordId: '00000000-0000-4000-8000-000000000004' },
+      transcriptAnchors: { startUserMessageSeq: 10, userMessageSeqs: [10], finalAssistantMessageSeq: 12 },
+    }] } };
+    if (url.includes('/messages?')) return { status: 200, data: { messages: [input,
+      ...(answerVisible ? [assistant(5, 'QA-FIN80 CHILD DONE', turnId)] : []),
+      assistant(6, 'Other child', turnId, {}, 'sidechain'),
+      assistant(7, 'Unfinished checkpoint', turnId, { runtimeEventKind: 'streaming',
+        happierStreamSegmentV1: { segmentKind: 'assistant', segmentState: 'streaming' } }),
+      assistant(12, 'Wrong later answer', 'later-turn'),
+    ] } };
+    if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+      createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', active: false }) } };
+    throw new Error(`unexpected_retained_read:${url}`);
+  });
+  const observe = () => observeWorkflowSessionInputResult({ credentials: { token: 'token', encryption: null },
+    sessionId, localId, deadlineMs: 0 });
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  status = 'completed';
+  const result = await observe();
+  expect(result).toMatchObject({ ok: true, result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE',
+    messageRef: { messageId: 'retained-row-5' } } });
+  if (!result.ok) throw new Error('retained_input_unavailable');
+  expect(classifyWorkflowSessionInputResult(result.result)).toMatchObject({ kind: 'completed', result: 'QA-FIN80 CHILD DONE' });
+  const recover = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null },
+    machineId: 'machine-1', now: () => 0, actionExecutor: { execute: async () => { throw new Error('No detached Run'); } } });
+  await expect(recover({ terminalParent: true, cancellationRequested: true,
+    run: { id: workflowInvocation.runId, state: 'cancelled' }, index: { id: workflowInvocation.invocationRecordId },
+    progress: WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+      invocationPath: { blockId: 'child', scope: [{ kind: 'workflow', blockId: 'nested' }] }, attempt: '0',
+      logicalInvocationRecordId: workflowInvocation.invocationRecordId,
+      execution: { kind: 'session', sessionId, localInputId: localId },
+    }),
+  })).resolves.toMatchObject({ kind: 'completed', result: 'QA-FIN80 CHILD DONE' });
+  // The same retained turn may lack the anchor entirely, not just carry null.
+  finalAssistantMessageSeq = undefined;
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE' } });
+  // Delayed transcript ACKs can also leave the retained terminal range short.
+  endSeqInclusive = 3;
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE' } });
+  endSeqInclusive = undefined;
+  answerVisible = false;
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  answerVisible = true;
+  acceptedTurnId = 'later-turn';
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  acceptedTurnId = turnId;
+  invocation = { ...workflowInvocation, invocationRecordId: '00000000-0000-4000-8000-000000000005' };
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  invocation = workflowInvocation;
+  const authority = inputBody.meta.happierInputAuthorityV1;
+  inputBody.meta.happierInputAuthorityV1 = SessionInputAuthorityV2Schema.parse({ ...authority, workflow: {
+    ...workflowInvocation, purpose: 'invocation', stepOrdinal: '1', workDepth: 1,
+    invocationRecordId: '00000000-0000-4000-8000-000000000005',
+  } });
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  inputBody.meta.happierInputAuthorityV1 = authority;
+  for (const kind of ['pass', 'declined', 'cancelled', 'failed', 'terminal_no_result'] as const) {
+    outcome = { kind };
+    await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'fulfilled', outcome: { kind } } });
+  }
+});
 
 it.each(['cancelled', 'failed'] as const)('observes original pre-provider %s without inventing a committed input', async kind => {
   const sessionId = 'c' + 'd'.repeat(24);
@@ -121,6 +231,7 @@ it.each([1_900_000_000_000, null, undefined])('carries the exact failed turn usa
     if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
       mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
       recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'none' } };
     if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
     if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 12, turns: [{
       turnId: 'previous-turn', status: 'failed', startedAt: 1, updatedAt: 2, terminalAt: 2, lastRuntimeIssue: earlierIssue,
@@ -189,6 +300,7 @@ it.each(['single', 'shared', 'quiet'] as const)('captures only the host-settled 
     if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
       mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
       recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'none' } };
     if (url.includes('/messages/by-local-id/')) return { status: 200, data: {
       message: inputs[url.endsWith(encodeURIComponent(inputId('beta'))) ? 1 : 0] } };
     if (url.endsWith('/turns') && phase === 'ledger_unavailable') return { status: 404, data: {} };

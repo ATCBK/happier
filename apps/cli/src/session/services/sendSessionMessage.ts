@@ -710,7 +710,10 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
   finalAssistantMessageId?: string;
   usage?: SessionInputUsageV1;
 }>> {
-  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1, params.precedingTurnEndSeq ?? 0);
+  const readCommittedTurnText = params.turn?.status === 'completed'
+    && typeof params.turn.transcriptAnchors?.finalAssistantMessageSeq !== 'number';
+  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1,
+    readCommittedTurnText ? 0 : params.precedingTurnEndSeq ?? 0);
   let currentUserSeq = Math.max(0, Math.trunc(params.materializedSeq));
   let observedAgentProgress = false;
   let sawCompletion = params.turn?.transcriptAnchors?.finalAssistantMessageSeq === null;
@@ -761,12 +764,17 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
         continue;
       }
       if (params.resultMessageId && row.id !== params.resultMessageId) continue;
-      const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+      const endSeq = readCommittedTurnText ? undefined : params.turn?.transcriptAnchors?.endSeqInclusive;
       if (typeof endSeq === 'number' && row.seq > endSeq) break;
       const decrypted = decryptTranscriptRowContent({
         content: row.content,
         ctx: params.ctx,
       });
+      const meta = asRecord(asRecord(decrypted)?.meta);
+      // Retained terminal projections can predate their complete anchors.
+      // Only the host's exact native turn tag can fill that correspondence;
+      // transcript adjacency and later turns cannot supply it.
+      if (readCommittedTurnText && meta?.runtimeTurnId !== params.turn?.turnId) continue;
       // The exact input's terminal proof closes this scan. A later input
       // starts another turn and must not become a fallback result for this
       // input when a legacy transcript lacks an explicit turn anchor.
@@ -788,8 +796,11 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
       const decoded = decodeTranscriptBody(decrypted);
       addTurnUsage(decrypted);
+      const segment = asRecord(meta?.happierStreamSegmentV1);
+      const committedTurnText = readCommittedTurnText && (meta?.runtimeEventKind === 'transcript-message-committed'
+        || segment?.segmentKind === 'assistant' && segment.segmentState === 'complete');
       if (decoded?.semanticRole === 'assistant' && (params.resultMessageId || decoded.sidechainId === undefined) && decoded.text
-        && (!params.turn || row.seq === params.turn.transcriptAnchors?.finalAssistantMessageSeq)) {
+        && (!params.turn || row.seq === params.turn.transcriptAnchors?.finalAssistantMessageSeq || committedTurnText)) {
         finalAssistantText = decoded.text;
         finalAssistantMessageId = row.id || undefined;
         if (params.turn || params.resultMessageId) sawCompletion = true;
@@ -813,7 +824,7 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
     }
 
-    const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+    const endSeq = readCommittedTurnText ? undefined : params.turn?.transcriptAnchors?.endSeqInclusive;
     if (orderedRows.length < ASSISTANT_TURN_SCAN_PAGE_LIMIT
       || (typeof endSeq === 'number' && (orderedRows.at(-1)?.seq ?? 0) >= endSeq)) {
       const usage = currentUsage();
@@ -837,6 +848,8 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   materializedSeq: number;
   materializedContent?: TranscriptMessageLookupResult['content'];
   resultMessageId?: string;
+  /** Original input custody, never supplied by transcript content. */
+  acceptedTurnId?: string;
   ctx: Readonly<{
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
@@ -846,16 +859,23 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   const projection = params.resultMessageId ? null : await fetchSessionTurnsProjection(params);
   const input = params.materializedContent
     ? asRecord(decryptTranscriptRowContent({ content: params.materializedContent, ctx: params.ctx })) : null;
-  const workflowInput = readSessionInputAuthority(input?.meta, 'stored')?.producer === 'workflow';
-  const turn = projection?.turns.find(candidate => candidate.transcriptAnchors?.userMessageSeqs?.includes(params.materializedSeq)
-    || candidate.transcriptAnchors?.startUserMessageSeq === params.materializedSeq
-    || (candidate.workflowInvocation && deriveWorkflowSessionInputLocalIdV2({
+  const inputAuthority = readSessionInputAuthority(input?.meta, 'stored');
+  const workflowInput = inputAuthority?.producer === 'workflow';
+  const matchesWorkflowInput = (candidate: SessionTurnV1) => Boolean(candidate.workflowInvocation && deriveWorkflowSessionInputLocalIdV2({
       purpose: 'invocation', ...candidate.workflowInvocation,
-    }) === params.localId));
+    }) === params.localId);
+  const turn = projection?.turns.find(candidate => params.acceptedTurnId
+    ? candidate.turnId === params.acceptedTurnId && matchesWorkflowInput(candidate)
+      && (inputAuthority?.producer === 'workflow'
+        ? deriveWorkflowSessionInputLocalIdV2(inputAuthority.workflow) === params.localId
+        : isSessionContextOnlyHostInput(input))
+    : candidate.transcriptAnchors?.userMessageSeqs?.includes(params.materializedSeq)
+      || candidate.transcriptAnchors?.startUserMessageSeq === params.materializedSeq || matchesWorkflowInput(candidate));
   // A queued input can be materialized before the current provider turn ends.
   // Neither that turn's text nor the next input's transcript position owns it.
   if (!params.resultMessageId && (
-    !projection && (workflowInput || isSessionContextOnlyHostInput(input))
+    params.acceptedTurnId && !turn
+    || !projection && (workflowInput || isSessionContextOnlyHostInput(input))
     || projection && (!turn || turn.status === 'in_progress')
   )) return { kind: 'missing' };
   const precedingTurnEndSeq = turn && projection ? projection.turns.reduce((latest, candidate) => {
@@ -926,6 +946,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
       try {
         let replyOutcome: SessionMessageReplyOutcomeV1 | undefined;
         let originalHasNoReply = false;
+        let acceptedTurnId: string | undefined;
         if (params.reply) {
           const original = await readOriginalReply({ credentials: params.reply.credentials,
             sessionId: params.sessionId, localId: params.localId, ...(params.signal ? { signal: params.signal } : {}),
@@ -934,6 +955,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           // authorizes falling back to an unrelated or merely later final.
           originalHasNoReply = original.status === 'none';
           replyOutcome = original.status === 'available' ? original.progress.outcome : undefined;
+          acceptedTurnId = original.status === 'available' && !replyOutcome ? original.progress.acceptedTurnId : undefined;
           if (replyOutcome) {
             params.reply.onOutcome(replyOutcome);
             if (replyOutcome.kind !== 'answer' || 'publicationRef' in replyOutcome) {
@@ -942,10 +964,16 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           }
         }
         const outcome = await readAssistantTurnOutcomeAfterCurrentUserTurn({ ...params,
+          ...(acceptedTurnId ? { acceptedTurnId } : {}),
           ...(replyOutcome?.kind === 'answer' && 'result' in replyOutcome
             && replyOutcome.result.sessionId === params.sessionId
             ? { resultMessageId: replyOutcome.result.messageId } : {}) });
         if ((!params.reply || originalHasNoReply) && outcome.kind !== 'missing') return outcome;
+        // The original accepted Workflow turn can remain observable after its
+        // runner exits without fulfilling reply custody. Reuse the same exact
+        // result reader; explicit pass/failure/cancellation above stays final.
+        if (acceptedTurnId && (outcome.kind === 'failed' || outcome.kind === 'cancelled'
+          || outcome.kind === 'completed' && outcome.finalAssistantText !== null)) return outcome;
         if (replyOutcome?.kind === 'answer' && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
           && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) return outcome;
