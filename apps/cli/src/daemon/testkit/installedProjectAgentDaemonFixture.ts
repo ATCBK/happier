@@ -44,7 +44,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
           sessionRunnerFactory: { module: './agent.mjs', export: 'factory', runtimeApiVersion: 1 } }); }` } }] });
   onTestFinished(() => plugin.dispose());
   const retainedAgent = plugin.registry.agentRuntimesByAgentId.get(bundledAgentId ?? 'acme.project-launch/agent')?.sessionRunnerFactoryBinding;
-  if (!retainedAgent) throw new Error(`Missing genuine retained Agent binding: ${JSON.stringify(plugin.registry.pluginDiagnosticsByPluginId['acme.project-launch'])}`);
+  if (!retainedAgent) throw new Error(`Missing genuine retained Agent binding: ${JSON.stringify(plugin.registry.pluginDiagnosticsByPluginId[bundledAgentId ? `happier.agent.${bundledAgentId}` : 'acme.project-launch'])}`);
   const runner = { pid: process.pid, processStartTimeMs: 1, processCommandHash: 'a'.repeat(64), snapshotIdentity: 'fixture-runner' };
   const sessionId = 'project-session';
   const tracked: TrackedSession = { pid: process.pid, sessionRunnerPid: process.pid, startedBy: 'daemon', happySessionId: sessionId,
