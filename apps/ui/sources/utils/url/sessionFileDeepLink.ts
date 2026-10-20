@@ -90,10 +90,12 @@ export function parseSearchFileTarget(query: string): SearchFileTarget | null {
     const driveLength = /^[a-zA-Z]:[\\/]/.test(value) ? 2 : 0;
     const suffix = /:(\d+)(?::(\d+))?$/.exec(value.slice(driveLength));
     if (!suffix || suffix.index === 0) return null;
+    const path = value.slice(0, driveLength + suffix.index);
+    if (/^[a-z]$/i.test(path) || path.endsWith(':')) return null;
     const line = parseOptionalInt(suffix[1]);
     const column = suffix[2] === undefined ? null : parseOptionalInt(suffix[2]);
     if (!line || line <= 0 || (suffix[2] !== undefined && (!column || column <= 0))) return null;
-    return { path: value.slice(0, driveLength + suffix.index), anchor: { kind: 'fileLine', startLine: line }, ...(column ? { column } : {}) };
+    return { path, anchor: { kind: 'fileLine', startLine: line }, ...(column ? { column } : {}) };
 }
 
 /** Validate typed resources through the route parser instead of trusting renderer casts. */
