@@ -319,6 +319,16 @@ describe('author package boundary', () => {
     };
 
     for (const specifier of Object.keys(packageJson.exports)) {
+      if (specifier === './presentation/formatBytes') {
+        expect(packageJson.exports[specifier]).toEqual({
+          'happier-source': './src/presentation/data/formatBytes.ts',
+          types: './dist/presentation/data/formatBytes.d.ts',
+          default: './dist/presentation/data/formatBytes.js',
+        });
+        const source = readFileSync(join(packageRoot, packageJson.exports[specifier]['happier-source']), 'utf8');
+        expect(importedSpecifiers(source)).toEqual([]);
+        continue;
+      }
       if (specifier === './presentation/typeScale') {
         // UI and design-lab consumers share these metrics without importing React/Native.
         expect(packageJson.exports[specifier]).toEqual({
