@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./machines/codeIntelligenceFallback": {
+      "happier-source": "./src/machines/codeIntelligenceFallback.ts",
+      "types": "./dist/machines/codeIntelligenceFallback.d.ts",
+      "default": "./dist/machines/codeIntelligenceFallback.js"
+    },
     "./messages/structured/fileReviewNoteV1": {
       "happier-source": "./src/messages/structured/fileReviewNoteV1.ts",
       "types": "./dist/messages/structured/fileReviewNoteV1.d.ts",

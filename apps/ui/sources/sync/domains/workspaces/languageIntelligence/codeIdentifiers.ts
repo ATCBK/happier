@@ -1,4 +1,7 @@
 import { tokenizeSimpleSyntaxLine } from '@/components/ui/code/tokenization/simpleSyntaxTokenizer';
+import { CODE_IDENTIFIER_PATTERN } from '@happier-dev/protocol/machines/codeIntelligenceFallback';
+
+const identifierPattern = new RegExp(CODE_IDENTIFIER_PATTERN, 'gu');
 
 export type CodeIdentifier = Readonly<{ symbol: string; startCharacter: number; endCharacter: number }>;
 export type CodeIntelligencePosition = Readonly<{ line: number; character: number }>;
@@ -8,7 +11,7 @@ export function readCodeLineIdentifiers(line: string, languageId: string | null)
     let offset = 0;
     for (const token of tokenizeSimpleSyntaxLine({ line, language: languageId })) {
         if (token.type === 'default') {
-            for (const match of token.text.matchAll(/[$_\p{ID_Start}][$_\u200c\u200d\p{ID_Continue}]*/gu)) {
+            for (const match of token.text.matchAll(identifierPattern)) {
                 const startCharacter = offset + match.index;
                 names.push({ symbol: match[0], startCharacter, endCharacter: startCharacter + match[0].length });
             }
