@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -75,6 +77,31 @@ describe('plugin surface openable content', () => {
         workspaceReadFileMock.mockResolvedValue({ success: true, content: 'aGVsbG8=' });
     });
     afterEach(cleanupWorkspaceFileDetailsActionBoundary);
+
+    it.each([
+        ['docs/spec.pdf', 'binary', 'application/pdf'],
+        ['media/song.mp3', 'binary', 'audio/mpeg'],
+        ['media/clip.mp4', 'binary', 'video/mp4'],
+        ['assets/logo.svg', 'image', 'image/svg+xml'],
+        ['notes/README.md', 'text', 'text/markdown'],
+        ['src/app.ts', 'text', 'text/plain'],
+    ])('exposes canonical viewer metadata for %s', async (filePath, contentClass, mimeType) => {
+        const binding = createWorkspaceFileOpenableContentBinding({ target: TARGET, filePath });
+        const result = await binding.stat();
+        expect(result).toMatchObject({ status: 'ready', contentClass, mimeType });
+        expect(OpenableContentStatResultV1Schema.safeParse(result).success).toBe(true);
+    });
+
+    it('uses bytes already read by the classification probe for precise binary metadata', async () => {
+        const bytes = new Uint8Array([80, 75, 3, 4, 0]);
+        workspaceStatFileMock.mockResolvedValue({
+            success: true, exists: true, kind: 'file', sizeBytes: bytes.length,
+            contentHash: bytesToHex(sha256(bytes)), modifiedMs: 100,
+        });
+        workspaceReadFileMock.mockResolvedValue({ success: true, content: 'UEsDBAA=' });
+        const binding = createWorkspaceFileOpenableContentBinding({ target: TARGET, filePath: 'download.asset' });
+        expect(await binding.stat()).toMatchObject({ status: 'ready', contentClass: 'binary', mimeType: 'application/zip' });
+    });
 
     it('changes the revision for an equal-size edit that preserved the modification time', async () => {
         // The failure this pins: a tool that rewrites a file in place and restores
@@ -218,7 +245,7 @@ describe('plugin surface openable content', () => {
         await expect(handlers.statOpenableContent!(request('statOpenableContent', { ref: binding.ref }))).resolves.toEqual({
             status: 'ready',
             contentClass: 'text',
-            mimeType: 'text/plain',
+            mimeType: 'text/markdown',
             extension: '.md',
             sizeBytes: 5,
             revision: `workspace-file:5:${HELLO_HASH}`,

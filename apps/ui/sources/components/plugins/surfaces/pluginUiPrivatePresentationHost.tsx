@@ -77,6 +77,7 @@ import type { DetailsPaneSlotBinding } from '@/components/appShell/panes/details
 import type { usePaneHeaderSlotBinding } from '@/components/appShell/panes/paneHeaderSlot';
 import { readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useSetting } from '@/sync/store/settingsReadHooks';
+import { useCollectionRailWidth } from '@/components/ui/lists/collection/useCollectionRailWidth';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
@@ -171,9 +172,13 @@ export type PluginDestinationRowInput = NavigationListDestination & Readonly<{
 }>;
 
 export type PluginUiPrivatePresentationHostOptions = Readonly<{
+    /** Canonical mounted plugin identity, supplied by the physical host. */
+    pluginId?: string;
     renderDragSource?: (input: DragSourceProps) => React.ReactNode;
     renderDropTarget?: (input: DropTargetProps) => React.ReactNode;
     renderLiveStream?: NonNullable<PluginUiPrivatePresentationHost['renderLiveStream']>;
+    /** Same-realm bridge to the incumbent Media stage, supplied by the mounted host. */
+    mediaStage?: import('@happier-dev/plugin-ui/advanced').PluginUiPresentationHost['mediaStage'];
     renderDestinationRow?: (input: PluginDestinationRowInput) => React.ReactNode;
     /** Exact mounted direction for logical icon tokens. */
     direction?: PluginUiIconDirection;
@@ -385,7 +390,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
     renderMaterialSurface: renderThemeMaterialSurface,
     renderMarkdown(input: HappierMarkdownRenderInput) {
         // Plugin Markdown sits inside interface chrome (a detail step, a page section): the document scale.
-        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} inlineReferences={input.inlineReferences} profile="document" />;
+        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} inlineReferences={input.inlineReferences} images={input.images} profile="document" />;
     },
     renderCodeBlock(input: Readonly<{ code: string; language?: string; selectable: boolean; testID?: string }>) {
         return (
@@ -490,6 +495,7 @@ export type PluginUiPrivatePresentationHost = Readonly<
         typography: ReturnType<typeof readPluginUiHostTypography>;
         /** The host's configuration-page colour roles, when the mount supplies its theme. */
         palette?: HappierUiPalette;
+        panelSizing?: import('@happier-dev/plugin-ui/advanced').PluginUiPresentationHost['panelSizing'];
         find?: FindSurfaceRegistrationHost;
         pageChrome?: PluginUiPrivatePageChrome;
         stateSize?: HappierStateSize;
@@ -499,6 +505,7 @@ export type PluginUiPrivatePresentationHost = Readonly<
         renderDragSource?: (input: DragSourceProps) => React.ReactNode;
         renderDropTarget?: (input: DropTargetProps) => React.ReactNode;
         renderLiveStream?: (input: HappierLiveStreamProps) => React.ReactNode;
+        mediaStage?: import('@happier-dev/plugin-ui/advanced').PluginUiPresentationHost['mediaStage'];
         /** The Collection transition and peek motion, from the app's motion tokens. */
         collectionMotion: typeof reanimatedCollectionMotion;
         disclosureMotion: HappierDisclosureMotionDriver;
@@ -646,12 +653,19 @@ export function createPluginUiPrivatePresentationHost(
         focusTarget: focusPluginUiPrivatePresentationTarget,
         find: options?.find,
     });
+    const pluginId = options?.pluginId;
     return Object.freeze({
         ...presentationRenderers,
+        ...(pluginId === undefined ? {} : { panelSizing: {
+            useWidth(resizeKey: string) {
+                return useCollectionRailWidth(`plugin:${JSON.stringify([pluginId, resizeKey])}`);
+            },
+        } }),
         createScrollActivityTracker: createScrollViewNearViewportTracker,
         ...(options?.renderDragSource === undefined ? {} : { renderDragSource: options.renderDragSource }),
         ...(options?.renderDropTarget === undefined ? {} : { renderDropTarget: options.renderDropTarget }),
         ...(options?.renderLiveStream ? { renderLiveStream: options.renderLiveStream } : {}),
+        ...(options?.mediaStage ? { mediaStage: options.mediaStage } : {}),
         typography: readPluginUiHostTypography(),
         ...(options?.palette === undefined ? {} : { palette: options.palette }),
         ...(options?.resolveMaterialColor === undefined ? {} : { resolveMaterialColor: options.resolveMaterialColor }),

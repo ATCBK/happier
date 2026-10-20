@@ -1102,6 +1102,10 @@ the existing pane minima and preserves the mounted detail. You can provide the
 handle's accessible name, hint and value text through `labels.resize`,
 `labels.resizeHint` and `labels.resizeValue`.
 
+These width controls govern the component's own split. When `Collection` opens
+its detail in the app's details pane, the host keeps placement and pane-width
+ownership; `listWidthPx` and `resizeKey` do not override that pane.
+
 - **Bounded region.** The parts fill a bounded flex column: the transcript takes
   the remaining height and the composer keeps its natural height. There is no
   auto-height mode; an unbounded parent gives the session no room. On iOS and

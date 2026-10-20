@@ -1649,6 +1649,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         () => createPluginUiPrivatePresentationHost(
             canonicalRenderIdentity.brand,
             {
+                pluginId: canonicalRenderIdentity.pluginId,
                 direction: environment.direction,
                 renderLiveStream: (input) => <PluginLiveStreamViewer {...input} hostApi={props.hostApi}
                     surface={props.requestSurface} mountLifetime={props.mountLifetime} readViewing={props.readLiveStreamViewing}
