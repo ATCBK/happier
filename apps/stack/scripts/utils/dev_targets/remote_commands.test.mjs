@@ -49,10 +49,10 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
-test('tracker source-resolving Vitest uses source preparation in both dispatchers', async t => {
+test('plugin source-resolving Vitest uses source preparation in both dispatchers', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const args = ['corepack', 'yarn', '-s', 'vitest', 'run', 'src/source.test.ts'];
-  for (const tracker of ['linear', 'jira', 'sentry', 'posthog']) {
+  for (const tracker of ['linear', 'jira', 'sentry', 'posthog', 'claude']) {
     const cwd = join(root, `packages/plugins/${tracker}`);
     assert.equal(resolveRemoteCommandPolicy(args, { cwd }).kind, 'source-test');
     if (process.platform === 'win32') continue;

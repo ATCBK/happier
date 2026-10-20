@@ -171,6 +171,10 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '/.project/plans/runtime-unification-v2/_validation/source-reality-review/qa/lane-A/repo-importers-map.json',
   '/.project/plans/plugin-sdk-author-surface-convergence/CLAUDE-AUDIT-JOURNAL.md',
   '/.project/plans/**/*.har',
+  // QA traces are append-only runtime output, not worker source. Including
+  // them makes every source barrier race a continuously changing file.
+  '/.project/plans/**/*.ndjson',
+  '/.project/plans/**/*.jsonl',
   '/.project/plans/**/*.png',
   '/.project/plans/**/*.webm',
   '/.project/plans/**/*.pyc',

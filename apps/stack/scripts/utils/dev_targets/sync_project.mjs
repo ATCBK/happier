@@ -426,18 +426,9 @@ async function ensureDevTargetSyncProjectUnlocked(
   }
   let projectCreated = false;
   if (!resumed) {
-    if (existingProject && !canResumeProject) {
-      // Flush the old membership before replacing its project file. Otherwise
-      // terminate would select the new names and strand the old sessions.
-      const names = projectSessionNames(existingProject);
-      for (const name of names) {
-        if (parseMutagenSyncList(currentSessions, name).state === 'missing') continue;
-        requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
-          args: ['sync', 'resume', name], env: mutagenRuntime.env }), 'existing Mutagen session resume');
-        requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
-          args: ['sync', 'flush', name], syncFlushSession: name, env: mutagenRuntime.env }), 'existing Mutagen session flush');
-      }
-    }
+    // These one-way source replicas can be reconstructed from the controller.
+    // Mutagen terminates by the existing project id, without a remote flush;
+    // requiring one would prevent policy repair for an offline replica.
     const termination = await runProcess({
       label: 'mutagen',
       command: 'mutagen',

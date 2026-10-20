@@ -526,6 +526,36 @@ test('independent sync start owns and resumes the canonical Mutagen project', as
   );
 });
 
+test('source policy replacement does not require a paused replica to become reachable', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-policy-offline-' });
+  const projectFile = projectFor(root);
+  await mkdir(dirname(projectFile), { recursive: true });
+  const desired = renderMutagenProject({ sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
+    targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER });
+  const stale = desired.replace('        - "/.project/plans/**/*.ndjson"\n', '');
+  assert.notEqual(stale, desired);
+  await writeFile(projectFile, stale);
+  await writeFile(`${projectFile}.lock`, 'proj-existing-source-replicas');
+  const result = await ensureDevTargetSyncProject({ stackBaseDir: root,
+    sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO, targets: [target],
+    ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, allowIndependentBorrow: false, env: envFor(root),
+  }, { runProcess: async ({ command, args }) => {
+    // Mutagen/SSH are process boundaries. The paused replica cannot complete
+    // network synchronization, but its project can still be retired locally.
+    if (command === 'mutagen' && args[0] === 'sync') {
+      if (args[1] === 'list') return { code: 0, out: JSON.stringify([{
+        name: 'happier-mac', paused: true, status: 'disconnected',
+        alpha: { protocol: 'local', path: DEV_TARGET_SYNC_EXECUTOR_REPO, connected: false },
+        beta: { connected: false },
+      }]) };
+      return { code: 1 };
+    }
+    return { code: 0 };
+  } });
+  assert.equal(result.projectCreated, true);
+  assert.equal(await readFile(projectFile, 'utf8'), desired);
+});
+
 test('equivalent project keeps reconnecting sessions when project resume reports an offline endpoint', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-sync-project-reconnect-'));
   const projectFile = projectFor(root);
@@ -787,8 +817,6 @@ test('sync-service release waits for stale independent reconciliation before cha
       [
         ['mutagen', 'version'],
         ['mutagen', 'sync', 'list'],
-        ['mutagen', 'sync', 'resume'],
-        ['mutagen', 'sync', 'flush'],
         ['mutagen', 'project', 'terminate'],
         ['mutagen', 'project', 'start'],
         ['mutagen', 'project', 'list'],
