@@ -123,7 +123,7 @@ import { DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServi
 import type { RpcHandlerContext, RpcLocalActionContext } from '@/api/rpc/types';
 import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { resolveCwd } from '@/scm/runtime';
-import type { SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
+import { resolveSocketRpcSessionAuthorization, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { hasReceivedWorkflowSessionRoleAuthority, resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
 
@@ -492,6 +492,7 @@ import type {
   RevalidatePluginActionCallerMaterialization,
 } from '@/plugins/runtime/invocation/services/actionCaller';
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
+import { ScmChangeDiscardResponseSchema, type ScmChangeDiscardRequest, type ScmChangeDiscardResponse } from '@happier-dev/protocol/scm';
 import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
 import { createCliScmReviewedMarkAction } from '@/scm/actions/executeScmReviewedMarkAction';
 import { executeScmDiffSummaryAction } from '@/scm/actions/executeScmDiffSummaryAction';
@@ -1761,7 +1762,12 @@ export function createCliActionDeps(params: Readonly<{
     // serialized self-RPC drops its private readers; spend it at this installed owner.
     const requester = readRequesterAccountActionContext(input.context?.externalActionExecutionAuthorization);
     const admittedLocalRequester = requester?.authorization.binding.machineId === input.machineId;
-    if (direct?.machineId === input.machineId && (!externalRequest || admittedLocalRequester)
+    // Session-scoped SCM evidence needs verified ingress. This local adapter
+    // cannot synthesize it; preserve already-admitted private requester custody
+    // and let the canonical protocol map classify ordinary SCM callers.
+    const requiresScmSessionIngress = input.authorization && !admittedLocalRequester
+      && input.method.startsWith('scm.') && resolveSocketRpcSessionAuthorization(input.method) !== null;
+    if (!requiresScmSessionIngress && direct?.machineId === input.machineId && (!externalRequest || admittedLocalRequester)
       && !authenticatedMachineIngressMethods.has(input.method)) {
       const localActionContext: RpcLocalActionContext = {
         ...(admittedLocalRequester && input.effectActionId === 'session.open'
@@ -3302,6 +3308,7 @@ export function createCliActionDeps(params: Readonly<{
           : { outcomeVersion: 1 }),
         ...(actionId === 'scm.status.snapshot' ? { operationStateVersion: 1 } : {}),
       }, ...(context.rpcSessionAuthorization ? { authorization: context.rpcSessionAuthorization } : {}),
+        context, effectActionId: actionId,
         ...(context.signal ? { signal: context.signal } : {}) }));
     }
     if (!params.credentials) {
@@ -3392,6 +3399,34 @@ export function createCliActionDeps(params: Readonly<{
 
     return await attachSuccessfulPullRequest(await executeScmActionOperation({
       emitFileReviewNote,
+      ...(actionId === 'scm.change.discard' ? {
+        delegateComparisonDiscardForUndoExport: async (request: ScmChangeDiscardRequest): Promise<ScmChangeDiscardResponse> => {
+          const machineId = sessionMachineId ?? currentMachine.machineId;
+          const unavailable = { success: false as const, errorCode: 'COMPARISON_UNAVAILABLE' as const,
+            error: 'Prepared Undo delivery is unavailable' };
+          if (!machineId) return unavailable;
+          try {
+            // Canonical preflight invokes this only before every local commit.
+            // The selected Machine revalidates and owns the single mutation/result.
+            const result = ScmChangeDiscardResponseSchema.safeParse(await callMachineAction({
+              machineId, method: 'scm.change.discard', exactMachine: true,
+              request: { ...request, cwd: workingDirectory, outcomeVersion: 1,
+                entries: request.entries.map(entry => entry.kind === 'comparison'
+                  ? { ...entry, against: { ...entry.against, sessionId: entry.against.sessionId ?? transport.sessionId } } : entry) },
+              authorization: context.rpcSessionAuthorization ?? { kind: 'session.write', sessionId: transport.sessionId },
+              authority: context.authority, context, effectActionId: actionId,
+              ...(context.signal ? { signal: context.signal } : {}),
+            }));
+            return result.success ? result.data : { success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN',
+              error: 'The Machine discard outcome could not be established' };
+          } catch (error) {
+            if (readMachineRpcRequestDisposition(error) === 'notSent'
+              || isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) return unavailable;
+            // A lost acknowledgement is never permission to replay locally.
+            return { success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN', error: 'The Machine discard outcome could not be established' };
+          }
+        },
+      } : {}),
       actionId,
       input: sessionBoundInput,
       workingDirectory,
