@@ -6,7 +6,7 @@ import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machin
 import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentFoundSkillSources } from '@/agent/skills/resolveAgentSkillsCapability';
 import { detectCliSnapshotOnDaemonPath } from '@/capabilities/snapshots/cliSnapshot';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import type { StoredCredentials } from '@/persistence';
@@ -41,8 +41,7 @@ export function createMachineSkillHostService(input: Readonly<{
 }>) {
   return runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => {
     const catalog = readAgentCatalogSnapshot();
-    const agents = Object.keys(catalog.catalogEntriesById).map(agentId => ({ agentId,
-      nativeRoots: resolveAgentSkillsCapability(agentId, catalog).nativeRoots }));
+    const agents = resolveAgentFoundSkillSources(catalog);
     const account = createCliApprovalsArtifactStore({ credentials: input.credentials, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
       ...(input.operationContext ? { operationContext: input.operationContext } : {}) });
     return createMachineSkillActions({ store: account.promptLibraryStore, readPluginSkills: account.readPluginSkills,

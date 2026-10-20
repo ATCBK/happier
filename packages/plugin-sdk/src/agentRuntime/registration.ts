@@ -641,6 +641,21 @@ export type AgentPreflightSessionControlsModelsV1 = Readonly<{
  * enforcement, dispatch, and result projection.
  */
 export type AgentPreflightSessionControlsContributionV1 = Readonly<{
+  /** Installed/enabled native plugin roots for Found only, never native masking.
+   * A known download path may resolve its recorded project scope for revalidation.
+   */
+  resolveNativePluginSkillRoots?: (input: Readonly<{
+    homeDirectory: string;
+    directory?: string | null;
+    skillPath?: string;
+    signal?: AbortSignal;
+  }>) => Promise<readonly Readonly<{
+    path: string;
+    pluginName: string;
+    confinementRoot: string;
+    layout: 'collection' | 'skill';
+    status: 'ok' | 'failed';
+  }>[]>;
   /** Extra launch directories whose project skill roots this Agent will load.
    * The host scans them using the Agent's declared nativeRoots.project patterns.
    */

@@ -144,7 +144,7 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
       const contents = await libraryContents(request.signal);
       const receipts = await readReceipts(request.signal);
       const scan = await scanNativeSkillRoots({ purpose: 'found', home: input.homeDirectory, directory: request.directory,
-        agents: input.agents.map(agent => ({ agentId: agent.agentId, nativeRoots: agent.nativeRoots })) });
+        agents: input.agents, signal: request.signal });
       current(request.signal);
       const context = filesystem(receipts.value.links);
       return SkillFoundListResultV1Schema.parse({ scannedAt: nowMs(), roots: scan.roots, items: scan.items.map(item => ({

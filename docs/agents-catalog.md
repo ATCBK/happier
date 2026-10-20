@@ -71,16 +71,36 @@ retains failed-root uncertainty, so it cannot unmask a library skill. Found fold
 physical directory aliases and combines their Agent coverage, while retaining
 distinct copies, declared-root failures and plugin ownership/confinement.
 
+In 0.3 development, Claude supplies plugin-owned Found roots through
+`preflightSessionControls.resolveNativePluginSkillRoots`. Its native installed
+registry and effective enable settings select the applicable install, including
+project/local records for linked worktrees. Default and manifest-declared skill
+directories stay confined to that real install. Cache modification times do not
+select Claude plugins. Found downloads revalidate the recorded scope and current
+enablement through the same contribution; plugin roots never participate in
+native masking. Other Agents may still declare their own static plugin patterns.
+
+Claude SDK launches keep their requested MCP isolation when organization policy
+rejects strict or dynamic MCP configuration. In development source, that startup
+refusal becomes `claude_managed_mcp_policy_conflict`; there is no retry with
+weaker restrictions. A terminal launch still presents the native refusal because
+its inherited terminal output does not enter the SDK error classifier.
+
 Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
 The optional `skills.sessionDelivery` block selects `env_path_list`,
 `defaults_file_env`, or `native_config_skills_dir`; it accompanies a matching
 `session_dir` capability rather than creating another runtime carrier. The
 composer preserves inherited paths/defaults and user configuration, owns private
 launch files, and releases them with the launch. The native skills subdirectory
-is a portable component inside the private Agent directory. Bundled Copilot,
-Qwen, CodeBuddy and Devin remain index-only without a passing native probe;
-they do not advertise dormant delivery blocks. These are development-source
-contracts, not a statement of released availability or completed live QA.
+is a portable component inside the private Agent directory. Copilot and
+CodeBuddy's source leaves append their documented extra-directory environment variables; Qwen
+uses a private defaults file, including native disables; Devin uses a private
+config root containing retained native skills and session skills. The matching
+lazy manifest projection must be published before these paths are selected.
+No-login discovery or launch acceptance, together with launch contract checks,
+establishes these development-source declarations.
+Authenticated model use remains a release check after enablement. These contracts
+do not claim released availability or completed live QA.
 
 In development source, Claude's SDK `Skill` tool events and Codex's dispatched
 skill input items provide declared usage evidence. Claude's terminal path and

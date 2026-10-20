@@ -5,11 +5,11 @@ import { CLAUDE_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 import { CLAUDE_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 
 describe('Claude plugin manifest', () => {
-  it('declares the plugin-cache skill pattern through canonical manifest ingestion', () => {
+  it('keeps static masking roots separate from installed plugin discovery', () => {
     const result = ingestPluginManifestV2(PLUGIN_MANIFEST);
     if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
-    expect(result.manifest.contributes.agents[0]?.capabilities.skills?.nativeRoots?.plugin)
-      .toEqual([['.claude', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']]);
+    expect(result.manifest.contributes.agents[0]?.capabilities.skills?.nativeRoots)
+      .toEqual({ user: [['.claude', 'skills']], project: [['.claude', 'skills']] });
   });
   it('makes both native team launch Actions callable across UI, agent, CLI and MCP with their strict input schemas', () => {
     const admitted = ingestPluginManifestV2(PLUGIN_MANIFEST);

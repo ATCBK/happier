@@ -1,10 +1,11 @@
 import type { PluginAgentSkillsCapabilityV2 } from '@happier-dev/protocol';
+import type { AgentPreflightSessionControlsContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { NativeSkillScanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { readSkillFrontmatterV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { buildPromptBundleBodyFromDirectory } from '@/prompts/assets/shared/promptBundleDirectory';
 import { expandHomeDirPath, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
@@ -12,8 +13,9 @@ type NativeRoots = PluginAgentSkillsCapabilityV2['nativeRoots'];
 type MaskingScanInput = Readonly<{ purpose?: 'masking'; nativeRoots: NativeRoots; directory?: string | null; home?: string;
   additionalProjectDirectories?: readonly string[] }>;
 export type FoundNativeSkillScanInput = Readonly<{
-  purpose: 'found'; agents: readonly Readonly<{ agentId: string; nativeRoots: NativeRoots }>[];
-  directory?: string | null; home?: string;
+  purpose: 'found'; agents: readonly Readonly<{ agentId: string; nativeRoots?: NativeRoots;
+    resolveNativePluginSkillRoots?: AgentPreflightSessionControlsContributionV1['resolveNativePluginSkillRoots'] }>[];
+  directory?: string | null; home?: string; skillPath?: string; signal?: AbortSignal;
 }>;
 export type FoundNativeSkillRoot = Readonly<{
   path: string; scope: 'user' | 'project' | 'plugin'; agents: readonly string[]; status: 'ok' | 'failed';
@@ -25,7 +27,7 @@ export type FoundNativeSkillItem = Readonly<{
 export type FoundNativeSkillScan = Readonly<{ roots: readonly FoundNativeSkillRoot[]; items: readonly FoundNativeSkillItem[] }>;
 type ScanRoot = {
   path: string; scope: FoundNativeSkillRoot['scope']; agents: string[]; status: 'ok' | 'failed';
-  pluginName: string | null; confinementRoot?: string;
+  pluginName: string | null; confinementRoot?: string; layout?: 'collection' | 'skill';
 };
 
 function missing(error: unknown): boolean {
@@ -35,12 +37,12 @@ function missing(error: unknown): boolean {
 async function resolveContentRoot(path: string, confinementRoot?: string): Promise<string> {
   const contentRoot = await realpath(path);
   if (confinementRoot && !isCanonicalAbsolutePathInsideRoot(confinementRoot, contentRoot)) {
-    throw new Error('Plugin skill path leaves its declared cache root');
+    throw new Error('Plugin skill path leaves its declared root');
   }
   return contentRoot;
 }
 
-/** Expand only declared directory segments; vendor manifests never decide discovery. */
+/** Expand declared patterns for Agents without an installed-plugin root contribution. */
 async function expandPluginRoots(home: string, pattern: readonly string[]): Promise<Array<{
   path: string; status: 'ok' | 'failed'; pluginName: string | null; confinementRoot: string;
 }>> {
@@ -95,7 +97,7 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
   const agents = input.purpose === 'found' ? input.agents : [{ agentId: '', nativeRoots: input.nativeRoots }];
   const home = input.home ?? homedir();
   const roots = new Map<string, ScanRoot>();
-  function addRoot(path: string, scope: ScanRoot['scope'], agentIds: readonly string[], options?: Partial<Pick<ScanRoot, 'status' | 'pluginName' | 'confinementRoot'>>) {
+  function addRoot(path: string, scope: ScanRoot['scope'], agentIds: readonly string[], options?: Partial<Pick<ScanRoot, 'status' | 'pluginName' | 'confinementRoot' | 'layout'>>) {
     const key = resolve(path);
     let root = roots.get(key);
     if (!root) {
@@ -129,8 +131,20 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
     }
   }
   if (input.purpose === 'found') {
+    for (const agent of input.agents) {
+      if (!agent.resolveNativePluginSkillRoots) continue;
+      try {
+        const pluginRoots = await agent.resolveNativePluginSkillRoots({ homeDirectory: home, directory: input.directory,
+          skillPath: input.skillPath, signal: input.signal });
+        for (const root of pluginRoots) addRoot(root.path, 'plugin', [agent.agentId], root);
+      } catch {
+        input.signal?.throwIfAborted();
+        // Failure cannot fall back to a cache inventory that lacks installed/enabled authority.
+        addRoot(home, 'plugin', [agent.agentId], { status: 'failed' });
+      }
+    }
     const patterns = new Map<string, { pattern: readonly string[]; agentIds: string[] }>();
-    for (const agent of agents) for (const pattern of agent.nativeRoots?.plugin ?? []) {
+    for (const agent of input.agents.filter(agent => !agent.resolveNativePluginSkillRoots)) for (const pattern of agent.nativeRoots?.plugin ?? []) {
       const key = JSON.stringify(pattern);
       let declaration = patterns.get(key);
       if (!declaration) {
@@ -148,7 +162,7 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
   for (const root of roots.values()) {
     if (root.status === 'failed') continue;
     let children: string[];
-    try { children = await readdir(root.path); }
+    try { children = root.layout === 'skill' ? [''] : await readdir(root.path); }
     catch (error) {
       if (missing(error)) {
         // Absent native folders are normal; an existing broken alias is not an empty scan.
@@ -167,7 +181,7 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
         if (!(await stat(path)).isFile()) throw new Error('Native skill entry is not a regular file');
         const frontmatter = readSkillFrontmatterV1(await readFile(path, 'utf8'));
         // Native Agents may accept names outside the library's authoring pattern.
-        const name = frontmatter.name ?? child;
+        const name = frontmatter.name ?? (child || basename(skillDirectory));
         if (!physicalNames.has(contentRoot)) { names.push({ name, path, root: root.path }); physicalNames.add(contentRoot); }
         if (input.purpose === 'found') {
           // Plugin provenance remains distinct from user/project masking identity.

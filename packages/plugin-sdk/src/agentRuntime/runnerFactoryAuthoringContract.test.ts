@@ -177,6 +177,7 @@ const emptyRuntime = undefined as never; /* @sdk-negative-type-case-end */
       | 'catalogs'
       | 'prepareLaunchEnvironment'
       | 'resolveNativeSkillDirectories'
+      | 'resolveNativePluginSkillRoots'
       | 'probeCatalogs'
       | 'jsonRpcCommands'
       | 'managedServiceCommands'

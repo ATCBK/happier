@@ -2,10 +2,11 @@ import type { PluginAgentSkillsCapabilityV2 } from '@happier-dev/protocol';
 
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import type { FoundNativeSkillScanInput } from '@/prompts/skills/native/scanNativeSkillRoots';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 
 type SkillCatalog = Readonly<{ catalogEntriesById: Readonly<Record<string,
-  Pick<AgentCatalogEntry, 'skills' | 'resolveNativeSkillDirectories' | 'resolveProbePluginSettings'>>> }>;
+  Pick<AgentCatalogEntry, 'skills' | 'resolveNativeSkillDirectories' | 'resolveNativePluginSkillRoots' | 'resolveProbePluginSettings'>>> }>;
 
 const NO_SKILLS: PluginAgentSkillsCapabilityV2 = Object.freeze({
   delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
@@ -17,6 +18,12 @@ export function resolveAgentSkillsCapability(
   catalog: SkillCatalog = readAgentCatalogSnapshot(),
 ): PluginAgentSkillsCapabilityV2 {
   return catalog.catalogEntriesById[agentId]?.skills ?? NO_SKILLS;
+}
+
+/** Listing and byte revalidation consume the same current Agent discovery authority. */
+export function resolveAgentFoundSkillSources(catalog: SkillCatalog = readAgentCatalogSnapshot()): FoundNativeSkillScanInput['agents'] {
+  return Object.entries(catalog.catalogEntriesById).map(([agentId, entry]) => ({ agentId,
+    nativeRoots: entry.skills?.nativeRoots, resolveNativePluginSkillRoots: entry.resolveNativePluginSkillRoots }));
 }
 
 /** The Agent interprets its exact non-secret Settings; the host owns filesystem discovery. */

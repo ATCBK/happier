@@ -9,10 +9,12 @@ import { join, resolve } from 'node:path';
 
 import { buildPromptBundleBodyFromDirectory, materializePromptBundleBodyToDirectory } from '@/prompts/assets/shared/promptBundleDirectory';
 import { deleteManagedBundleSymlinkInstall, resolveAllowedManagedBundleSymlinkTarget, resolvePromptAssetManagedBundleInstallDir } from '@/prompts/assets/shared/promptAssetManagedSymlinkInstall';
+import type { FoundNativeSkillScanInput } from '../native/scanNativeSkillRoots';
 
 export type MachineSkillInstallAgent = Readonly<{
   agentId: string;
   nativeRoots?: PluginAgentSkillsCapabilityV2['nativeRoots'];
+  resolveNativePluginSkillRoots?: FoundNativeSkillScanInput['agents'][number]['resolveNativePluginSkillRoots'];
 }>;
 export type MachineSkillInstallRoot = Readonly<{ assetTypeId: string; segments: readonly string[]; agents: readonly string[] }>;
 export type MachineSkillInstallContent = Readonly<{ skillId: string; name: string; bundleBody: PromptBundleBodyV1; digest: string }>;

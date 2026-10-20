@@ -4,7 +4,7 @@ import { dirname, isAbsolute } from 'node:path';
 import { FoundSkillBundleV1Schema, type FoundSkillBundleV1, type FoundSkillDownloadRequestV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import type { DownloadTransferSource } from '@happier-dev/transfers/node';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentFoundSkillSources } from '@/agent/skills/resolveAgentSkillsCapability';
 import { buildPromptBundleBodyFromDirectory } from '@/prompts/assets/shared/promptBundleDirectory';
 import { canonicalAbsolutePathsEqual, expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { scanNativeSkillRoots, type FoundNativeSkillScanInput } from './scanNativeSkillRoots';
@@ -21,15 +21,14 @@ export async function readFoundSkillBundle(input: FoundSkillReadOptions & Readon
     throw Object.assign(new Error('not_found'), { code: 'not_found' });
   }
   const catalog = input.agents ? null : readAgentCatalogSnapshot();
-  const agents = input.agents ?? Object.keys(catalog!.catalogEntriesById).map(agentId => ({ agentId,
-    nativeRoots: resolveAgentSkillsCapability(agentId, catalog!).nativeRoots }));
-  const scan = await scanNativeSkillRoots({ purpose: 'found', home, agents });
+  const agents = input.agents ?? resolveAgentFoundSkillSources(catalog!);
+  const scan = await scanNativeSkillRoots({ purpose: 'found', home, agents, skillPath: path, signal: input.signal });
   input.signal?.throwIfAborted();
   let item = scan.items.find(item => canonicalAbsolutePathsEqual(item.path, path));
   if (!item) {
     // Only project paths need a directory context. Preserve the default Found
     // provenance for user/plugin paths instead of adding project-only readers.
-    const projectScan = await scanNativeSkillRoots({ purpose: 'found', home, agents, directory: dirname(path) });
+    const projectScan = await scanNativeSkillRoots({ purpose: 'found', home, agents, directory: dirname(path), skillPath: path, signal: input.signal });
     input.signal?.throwIfAborted();
     item = projectScan.items.find(item => canonicalAbsolutePathsEqual(item.path, path));
   }
