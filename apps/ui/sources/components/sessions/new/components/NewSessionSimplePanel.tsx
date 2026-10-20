@@ -31,6 +31,7 @@ import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import type { AcpConfigOptionOverridesV1, ProviderErrorV1 } from '@happier-dev/protocol';
 import type { HandleCreateSessionOptions } from '../hooks/useCreateNewSession';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { layout } from '@/components/ui/layout/layout';
 import {
     ComposerKeyboardScaffold,
     useComposerKeyboardLayoutContext,
@@ -406,11 +407,11 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
             style={{
                 width: '100%',
                 alignSelf: 'stretch',
-                paddingHorizontal: shouldBottomAnchor ? props.newSessionSidePadding : 0,
+                paddingHorizontal: props.newSessionSidePadding,
                 paddingBottom: 8,
             }}
         >
-            <View style={{ width: '100%', alignSelf: 'center' }}>
+            <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
                 <NewSessionLaunchPendingPreview launchAttempt={props.pendingLaunchAttempt} />
             </View>
         </View>
