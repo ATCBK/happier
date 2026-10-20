@@ -89,9 +89,8 @@ describe('relay preview address display', () => {
         expect(displayHost).toBe('localhost:42511');
         expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/docs/start', { displayHost })).toBe('localhost:42511/docs/start');
         expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/', { displayHost, hostOnly: true })).toBe('localhost:42511');
-        // The access URL's admission token is never part of the name shown for the preview.
-        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/docs?previewToken=secret&tab=1', { displayHost })).toBe('localhost:42511/docs?tab=1');
-        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/?previewToken=secret', { displayHost })).toBe('localhost:42511');
+        // The preview's own query stays; its admission never reaches the address (the control reducer owns that).
+        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/docs?tab=1', { displayHost })).toBe('localhost:42511/docs?tab=1');
     });
 
     it('does not rename an address that is no longer the preview: a pending page on another origin, or another target kind', async () => {

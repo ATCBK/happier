@@ -79,6 +79,52 @@ describe('LocalPreviewTarget web', () => {
         });
         await act(async () => { host.dispatchEvent(event); });
         expect(lifecycle).toHaveBeenCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false });
+        const titled = new Event('message') as MessageEvent;
+        Object.defineProperties(titled, {
+            data: { value: JSON.stringify({ v: 1, kind: 'browser.collector.navigation', ...identity, loading: false, canGoBack: true, canGoForward: false, url: 'https://preview.example.test/c', title: 'Checkout' }) },
+            origin: { value: 'https://preview.example.test' }, source: { value: frame },
+        });
+        await act(async () => { host.dispatchEvent(titled); });
+        // The tab names the document the preview is on now, not the one it was opened at.
+        expect(lifecycle).toHaveBeenLastCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false, title: 'Checkout' });
+        await screen.unmount();
+    });
+
+    it('probes the frame state without spending the one-use preview admission', async () => {
+        vi.stubGlobal('window', new EventTarget());
+        const identity = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'n' };
+        const fetchBoundary = vi.fn(async (href: string) => Object.defineProperty(new Response(JSON.stringify({ state: 'collector_available' })), 'url', { value: href }));
+        vi.stubGlobal('fetch', fetchBoundary);
+        const screen = await renderScreen(<LocalPreviewTarget title="Preview" url="https://preview.example.test/app?tab=1&previewToken=one-use" testID="local-preview"
+            diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
+            automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: [], controlService: createBrowserAutomationControlService({ nowMs: Date.now }) }} />,
+        { createNodeMock: element => element.type === 'iframe' ? { contentWindow: {} } : null });
+        // The frame's own first request carries the admission; the server exchanges it for the frame's cookie.
+        expect(new URL(screen.findByType('iframe').props.src).searchParams.get('previewToken')).toBe('one-use');
+        await act(async () => screen.findByType('iframe').props.onLoad());
+        expect(fetchBoundary).toHaveBeenCalledTimes(1);
+        const probe = new URL(fetchBoundary.mock.calls[0]![0]);
+        expect(probe.searchParams.has('previewToken')).toBe(false);
+        expect(probe.searchParams.get('tab')).toBe('1');
+        await screen.unmount();
+    });
+
+    it.each([
+        { status: 404, body: { error: 'preview_not_found', reasonCode: 'preview_not_found' } },
+        { status: 401, body: { error: 'preview_access_denied', reasonCode: 'preview_token_missing' } },
+    ])('shows one ended state when the proxy no longer serves the preview ($status)', async ({ status, body }) => {
+        vi.stubGlobal('window', new EventTarget());
+        const identity = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'n' };
+        vi.stubGlobal('fetch', vi.fn(async (href: string) => Object.defineProperty(new Response(JSON.stringify(body), { status }), 'url', { value: href })));
+        const lifecycle = vi.fn();
+        const screen = await renderScreen(<LocalPreviewTarget title="Preview" url="https://preview.example.test/" testID="local-preview" onLifecycle={lifecycle}
+            diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
+            automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: [], controlService: createBrowserAutomationControlService({ nowMs: Date.now }) }} />,
+        { createNodeMock: element => element.type === 'iframe' ? { contentWindow: {} } : null });
+        await act(async () => screen.findByType('iframe').props.onLoad());
+        expect(screen.findAllByType('iframe')).toHaveLength(0);
+        expect(screen.findHostByTestId('local-preview-unavailable')).not.toBeNull();
+        expect(lifecycle).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'loadFailed', errorCode: 'preview_ended' }));
         await screen.unmount();
     });
 

@@ -107,6 +107,32 @@ describe('browser control reducer', () => {
         expect(state.viewsById.view_1?.navigationGeneration).toBe(4);
         expect(applyBrowserControlEvent(state, { ...event, eventId: 'old', currentUrl: 'https://old.test/', navigationGeneration: 3 })).toBe(state);
     });
+    it('keeps a relay preview\'s one-use admission out of its address, so its first load is the opened document', async () => {
+        const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
+        const [opened, ...rest] = openLocalPreviewEvents();
+        // The opener seeds the status row's access URL; the frame then commits the freshly admitted one.
+        let state = [{ ...opened, currentUrl: 'https://preview.happier.test/app?tab=1&previewToken=listed' } as BrowserEventV1, ...rest]
+            .reduce(applyBrowserControlEvent, createBrowserControlState());
+        expect(state.viewsById.view_1?.currentUrl).toBe('https://preview.happier.test/app?tab=1');
+        state = applyBrowserControlEvent(state, { kind: 'navigationFinished', eventId: 'loaded', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            occurredAt: 10, currentUrl: 'https://preview.happier.test/app?tab=1&previewToken=fresh' });
+        expect(state.viewsById.view_1).toMatchObject({ currentUrl: 'https://preview.happier.test/app?tab=1', navigationGeneration: 0, loadingState: 'ready' });
+        state = applyBrowserControlEvent(state, { kind: 'navigationFinished', eventId: 'next', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            occurredAt: 11, currentUrl: 'https://preview.happier.test/other?previewToken=fresh' });
+        expect(state.viewsById.view_1).toMatchObject({ currentUrl: 'https://preview.happier.test/other', navigationGeneration: 1 });
+    });
+    it('settles an ended relay preview so its chrome no longer offers the page\'s history or address', async () => {
+        const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
+        const { selectBrowserToolbarModel } = await import('../shell/selectors');
+        let state = openLocalPreviewEvents().reduce(applyBrowserControlEvent, createBrowserControlState());
+        state = applyBrowserControlEvent(state, { kind: 'navigationStateChanged', eventId: 'history', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            occurredAt: 10, loadingState: 'ready', canGoBack: true, canGoForward: false });
+        expect(selectBrowserToolbarModel(state.viewsById.view_1 ?? null)).toMatchObject({ canNavigate: true, canGoBack: true });
+        state = applyBrowserControlEvent(state, { kind: 'navigationFailed', eventId: 'ended', browserSessionId: 'browser_session_1', viewId: 'view_1',
+            occurredAt: 11, errorCode: 'preview_ended' });
+        // Reload still asks again; nothing else acts on a page that is gone.
+        expect(selectBrowserToolbarModel(state.viewsById.view_1 ?? null)).toMatchObject({ canNavigate: false, canGoBack: false, canGoForward: false, canReload: true });
+    });
     it('keeps the agent\'s latest pointer action after the controller settles, replaced by the next one', async () => {
         const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
         const changed = (eventId: string, state: Record<string, unknown>) => ({ kind: 'controllerChanged' as const, eventId,
