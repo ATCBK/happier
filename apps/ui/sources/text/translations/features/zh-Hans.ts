@@ -10811,7 +10811,7 @@ const zhHans: typeof en = {
     },
 };
 
-const notify = { zhHans: { turn: '此轮结束时通知我', attention: '需要我处理时通知我', armed: '届时会通知你', cancel: '取消通知', failed: '无法更新通知，请重试。', turnFinished: '此会话的本轮已结束。', needsYou: '此会话需要你处理。', settings: '通知设置' } };
+const notify = { zhHans: { attention: '需要我处理时通知我', armed: '届时会通知你', cancel: '取消通知', failed: '无法更新通知，请重试。', turnFinished: '此会话的本轮已结束。', needsYou: '此会话需要你处理。', settings: '通知设置' } };
 
 const runNotify = { zhHans: { run: '结束时通知我', runFinished: '此运行已结束。', runNeedsYou: '此运行需要你处理。', setup: '设置通知', walkthroughUpdate: "你的导览有更新。", commitPlanUpdate: "你的提交建议有更新。" } };
 

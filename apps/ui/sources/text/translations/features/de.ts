@@ -10814,7 +10814,7 @@ const de: typeof en = {
     },
 };
 
-const notify = { de: { turn: 'Benachrichtige mich, wenn dieser Durchgang endet', attention: 'Benachrichtige mich, wenn ich gebraucht werde', armed: 'Du wirst benachrichtigt', cancel: 'Benachrichtigung abbrechen', failed: 'Benachrichtigung konnte nicht aktualisiert werden. Versuche es erneut.', turnFinished: 'Der Durchgang dieser Sitzung ist beendet.', needsYou: 'Diese Sitzung braucht dich.', settings: 'Benachrichtigungseinstellungen' } };
+const notify = { de: { attention: 'Benachrichtige mich, wenn ich gebraucht werde', armed: 'Du wirst benachrichtigt', cancel: 'Benachrichtigung abbrechen', failed: 'Benachrichtigung konnte nicht aktualisiert werden. Versuche es erneut.', turnFinished: 'Der Durchgang dieser Sitzung ist beendet.', needsYou: 'Diese Sitzung braucht dich.', settings: 'Benachrichtigungseinstellungen' } };
 
 const runNotify = { de: { run: 'Benachrichtige mich, wenn dies endet', runFinished: 'Dieser Lauf ist beendet.', runNeedsYou: 'Dieser Lauf braucht dich.', setup: 'Benachrichtigungen einrichten', walkthroughUpdate: "Es gibt Neuigkeiten zu deinem Rundgang.", commitPlanUpdate: "Es gibt Neuigkeiten zu deinen Commit-Vorschlägen." } };
 

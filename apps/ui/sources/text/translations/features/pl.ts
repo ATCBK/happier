@@ -10841,7 +10841,7 @@ const pl: typeof en = {
     },
 };
 
-const notify = { pl: { turn: 'Powiadom mnie, gdy ta tura się skończy', attention: 'Powiadom mnie, gdy będę potrzebny', armed: 'Otrzymasz powiadomienie', cancel: 'Anuluj powiadomienie', failed: 'Nie udało się zaktualizować powiadomienia. Spróbuj ponownie.', turnFinished: 'Tura tej sesji się zakończyła.', needsYou: 'Ta sesja potrzebuje Twojej uwagi.', settings: 'Ustawienia powiadomień' } };
+const notify = { pl: { attention: 'Powiadom mnie, gdy będę potrzebny', armed: 'Otrzymasz powiadomienie', cancel: 'Anuluj powiadomienie', failed: 'Nie udało się zaktualizować powiadomienia. Spróbuj ponownie.', turnFinished: 'Tura tej sesji się zakończyła.', needsYou: 'Ta sesja potrzebuje Twojej uwagi.', settings: 'Ustawienia powiadomień' } };
 
 const runNotify = { pl: { run: 'Powiadom mnie, gdy się zakończy', runFinished: 'To uruchomienie się zakończyło.', runNeedsYou: 'To uruchomienie wymaga Twojej uwagi.', setup: 'Skonfiguruj powiadomienia', walkthroughUpdate: "Są nowości w Twoim przewodniku.", commitPlanUpdate: "Są nowości w Twoich propozycjach commitów." } };
 

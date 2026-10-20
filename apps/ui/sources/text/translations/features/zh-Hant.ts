@@ -10811,7 +10811,7 @@ const zhHant: typeof en = {
     },
 };
 
-const notify = { zhHant: { turn: '此回合結束時通知我', attention: '需要我處理時通知我', armed: '屆時會通知你', cancel: '取消通知', failed: '無法更新通知，請重試。', turnFinished: '此工作階段的本回合已結束。', needsYou: '此工作階段需要你處理。', settings: '通知設定' } };
+const notify = { zhHant: { attention: '需要我處理時通知我', armed: '屆時會通知你', cancel: '取消通知', failed: '無法更新通知，請重試。', turnFinished: '此工作階段的本回合已結束。', needsYou: '此工作階段需要你處理。', settings: '通知設定' } };
 
 const runNotify = { zhHant: { run: '結束時通知我', runFinished: '此執行已結束。', runNeedsYou: '此執行需要你處理。', setup: '設定通知', walkthroughUpdate: "你的導覽有更新。", commitPlanUpdate: "你的提交建議有更新。" } };
 

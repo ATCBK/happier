@@ -146,7 +146,7 @@ export const en = {
 };
 
 
-export const notifyEnglish = { en: { turn: 'Notify me when this turn finishes', attention: 'Notify me when this needs me', armed: 'You’ll be notified', cancel: 'Cancel notification', failed: 'Couldn’t update the notification. Try again.', turnFinished: 'This session’s turn finished.', needsYou: 'This session needs you.', settings: 'Notification settings' } };
+export const notifyEnglish = { en: { attention: 'Notify me when this needs me', armed: 'You’ll be notified', cancel: 'Cancel notification', failed: 'Couldn’t update the notification. Try again.', turnFinished: 'This session’s turn finished.', needsYou: 'This session needs you.', settings: 'Notification settings' } };
 
 
 export const runNotifyEnglish = { en: { run: 'Notify me when this finishes', runFinished: 'This run finished.', runNeedsYou: 'This run needs you.', setup: 'Set up notifications', walkthroughUpdate: 'Your walkthrough has an update.', commitPlanUpdate: 'Your commit proposals have an update.' } };

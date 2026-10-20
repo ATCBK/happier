@@ -10831,7 +10831,7 @@ const es: typeof en = {
     },
 };
 
-const notify = { es: { turn: 'Avísame cuando termine este turno', attention: 'Avísame cuando me necesite', armed: 'Recibirás una notificación', cancel: 'Cancelar notificación', failed: 'No se pudo actualizar la notificación. Inténtalo de nuevo.', turnFinished: 'El turno de esta sesión ha terminado.', needsYou: 'Esta sesión te necesita.', settings: 'Ajustes de notificaciones' } };
+const notify = { es: { attention: 'Avísame cuando me necesite', armed: 'Recibirás una notificación', cancel: 'Cancelar notificación', failed: 'No se pudo actualizar la notificación. Inténtalo de nuevo.', turnFinished: 'El turno de esta sesión ha terminado.', needsYou: 'Esta sesión te necesita.', settings: 'Ajustes de notificaciones' } };
 
 const runNotify = { es: { run: 'Avísame cuando termine', runFinished: 'Esta ejecución ha terminado.', runNeedsYou: 'Esta ejecución te necesita.', setup: 'Configurar notificaciones', walkthroughUpdate: "Hay novedades en tu recorrido.", commitPlanUpdate: "Hay novedades en tus propuestas de commit." } };
 

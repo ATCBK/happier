@@ -10828,7 +10828,7 @@ const fr: typeof en = {
     },
 };
 
-const notify = { fr: { turn: 'Me prévenir quand ce tour se termine', attention: 'Me prévenir quand mon intervention est nécessaire', armed: 'Tu seras prévenu', cancel: 'Annuler la notification', failed: 'Impossible de modifier la notification. Réessaie.', turnFinished: 'Le tour de cette session est terminé.', needsYou: 'Cette session a besoin de toi.', settings: 'Paramètres des notifications' } };
+const notify = { fr: { attention: 'Me prévenir quand mon intervention est nécessaire', armed: 'Tu seras prévenu', cancel: 'Annuler la notification', failed: 'Impossible de modifier la notification. Réessaie.', turnFinished: 'Le tour de cette session est terminé.', needsYou: 'Cette session a besoin de toi.', settings: 'Paramètres des notifications' } };
 
 const runNotify = { fr: { run: 'Me prévenir quand ceci se termine', runFinished: 'Cette exécution est terminée.', runNeedsYou: 'Cette exécution a besoin de toi.', setup: 'Configurer les notifications', walkthroughUpdate: "Ton parcours a du nouveau.", commitPlanUpdate: "Tes propositions de commit ont du nouveau." } };
 

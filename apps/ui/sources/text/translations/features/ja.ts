@@ -10815,7 +10815,7 @@ const ja: typeof en = {
     },
 };
 
-const notify = { ja: { turn: 'このターンが終了したら通知', attention: '対応が必要になったら通知', armed: '通知が届きます', cancel: '通知をキャンセル', failed: '通知を更新できませんでした。もう一度お試しください。', turnFinished: 'このセッションのターンが終了しました。', needsYou: 'このセッションで対応が必要です。', settings: '通知設定' } };
+const notify = { ja: { attention: '対応が必要になったら通知', armed: '通知が届きます', cancel: '通知をキャンセル', failed: '通知を更新できませんでした。もう一度お試しください。', turnFinished: 'このセッションのターンが終了しました。', needsYou: 'このセッションで対応が必要です。', settings: '通知設定' } };
 
 const runNotify = { ja: { run: '終了したら通知', runFinished: 'この実行が終了しました。', runNeedsYou: 'この実行で対応が必要です。', setup: '通知を設定', walkthroughUpdate: "ウォークスルーに更新があります。", commitPlanUpdate: "コミット案に更新があります。" } };
 
