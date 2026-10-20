@@ -14,8 +14,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { CommittedTranscriptMessageOptions, CommittedTranscriptUserMessageOptions } from './transcriptPort';
 import type {
-  SessionEncryptionContext,
-  SessionStoredContentEncryptionMode,
+  SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import type { PendingQueueState } from './pendingQueueState';
@@ -149,8 +148,8 @@ export interface SessionClientPort {
     hasNext: boolean;
   }>>;
   getStoredContentEncryptionContext?(): Readonly<{
-    mode: SessionStoredContentEncryptionMode;
-    ctx?: SessionEncryptionContext;
+    mode: SessionStoredContentCryptoContext['mode'];
+    ctx?: SessionStoredContentCryptoContext['ctx'];
   }>;
   getAuthenticatedAccountId?(): Promise<string | null>;
   enqueueSessionTurnMutation?(mutation: SessionTurnMutationV1): void | Promise<void>;
