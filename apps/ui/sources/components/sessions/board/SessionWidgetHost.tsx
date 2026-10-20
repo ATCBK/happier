@@ -232,6 +232,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The card's own region, laid over it without drawing or taking input: a real rectangle for Post a snapshot to open from
     // (the popover measurer rejects zero-size anchors).
     cardRegion: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    provenanceStack: { minWidth: 0, flexShrink: 1 },
     provenance: {
         ...Typography.default(),
         ...happierPageTextMetrics('meta'),
@@ -789,7 +790,8 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         testID={`${testID}-title`}
                         style={styles.title}
                         tabIndex={-1}
-                        numberOfLines={1}
+                        // A narrow card wraps its title to a second line before it clips.
+                        numberOfLines={narrow ? 2 : 1}
                         accessibilityRole="header"
                         accessibilityLabel={recordLoading
                             ? t('sessionBoard.item.loading.title')
@@ -807,8 +809,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             </TitleFrame>
     );
 
-    // A posted snapshot says when its numbers are from on the same source line ("Snapshot by you · As of 11:08 AM"),
-    // never in a second header column that squeezes the line out at a wide pane; it never updates.
+    // A posted snapshot says when its numbers are from beside its source ("Snapshot by you · As of 11:08 AM"); it never
+    // updates. In a narrow card the time takes its own line under the source, so the clipping source gives way and
+    // the time is always read in full.
     const snapshotAsOf = state.kind === 'ready' && state.item.snapshot ? Date.parse(state.item.snapshot.asOf) : null;
     const asOfLabel = snapshotAsOf !== null && Number.isFinite(snapshotAsOf)
         ? t('widgetDefinition.asOf', { time: formatHappierAsOfTime(snapshotAsOf) }) : null;
@@ -816,14 +819,23 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     // says, and it is the only thing that tells two plugin widgets apart. The visible name may
     // clip (or leave first when the frame narrows); the announced one keeps the exact identity.
     const source = provenance ? (
-        <Text
+        <View
             testID={`${testID}-provenance`}
-            style={styles.provenance}
-            numberOfLines={1}
+            style={styles.provenanceStack}
+            accessible
             accessibilityLabel={asOfLabel ? `${provenance.accessibilityLabel} · ${asOfLabel}` : provenance.accessibilityLabel}
         >
-            {asOfLabel ? `${provenance.label} · ${asOfLabel}` : provenance.label}
-        </Text>
+            {asOfLabel && narrow ? (
+                <>
+                    <Text style={styles.provenance} numberOfLines={1}>{provenance.label}</Text>
+                    <Text style={styles.provenance} numberOfLines={1}>{asOfLabel}</Text>
+                </>
+            ) : (
+                <Text style={styles.provenance} numberOfLines={1}>
+                    {asOfLabel ? `${provenance.label} · ${asOfLabel}` : provenance.label}
+                </Text>
+            )}
+        </View>
     ) : undefined;
 
     // A Companion section identifies its shared Board record. Board cards keep their header
