@@ -25,6 +25,7 @@ import {
   HappierDisclosureChevron,
 } from '../collection/DisclosureChevron.js';
 import { HAPPIER_PAGE_METRICS } from './pageMetrics.js';
+import { HappierBodyEdgeContext } from './columnEdge.js';
 import { resolveHappierPageTextStyle } from './pageText.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from './Surface.js';
 import type { HappierSurfaceGradient } from './material.js';
@@ -524,7 +525,7 @@ export function HappierWidgetFrame(props: HappierWidgetFrameProps) {
             props.bodyStyle,
           ]}
         >
-          {props.children}
+          <HappierBodyEdgeContext.Provider value>{props.children}</HappierBodyEdgeContext.Provider>
         </View>
         {props.footer ? (
           <View

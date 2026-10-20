@@ -1,9 +1,9 @@
-import { isValidElement, useState, type ReactNode } from 'react';
+import { isValidElement, useContext, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { useHappierPageSection } from '../layout/PageSection.js';
-import { useHappierColumnEdgePx } from '../layout/columnEdge.js';
+import { HappierBodyEdgeContext, useHappierColumnEdgePx } from '../layout/columnEdge.js';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '../collection/CollectionList.js';
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_BALANCED_TEXT_WRAP } from '../text/balancedTextWrap.js';
@@ -86,6 +86,8 @@ export function HappierStateLine(props: Readonly<{
   // Loose in a page or detail column (no sheet around it) it stands on the column's text edge, under the
   // titles, rather than the collection's inset.
   const columnEdgePx = useHappierColumnEdgePx();
+  // In a body that draws its own content edge (a widget body) the line stands on that edge.
+  const onBodyEdge = useContext(HappierBodyEdgeContext);
   // The glyph sits in the leading column of the rows around it, so the sentence starts on their titles'
   // edge: a menu's icon box, a page section's leading column, or a collection row's glyph box.
   const glyphColumn = menu
@@ -98,7 +100,9 @@ export function HappierStateLine(props: Readonly<{
       minHeight: menu ? HAPPIER_MENU_ROW_METRICS.minHeightPx : metrics.minHeightPx,
       paddingHorizontal: menu
         ? HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx
-        : pageSection?.rowInsetPx
+        : onBodyEdge
+          ? 0
+          : pageSection?.rowInsetPx
           ?? (columnEdgePx > 0 ? Math.max(0, HAPPIER_PAGE_METRICS.pageTextInsetPx - columnEdgePx) : metrics.paddingHorizontalPx),
       paddingVertical: metrics.paddingVerticalPx,
       // One line that wraps its sentence, never its parts: the glyph and the recovery stay beside the

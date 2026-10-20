@@ -12,6 +12,7 @@ import {
   resolveHappierWidgetFrameSourceText,
   type HappierWidgetFrameProps,
 } from './WidgetFrame.js';
+import { HappierStateLine } from '../state/InfoState.js';
 
 /**
  * The one widget frame (lab `cwidgets` F1, round 2 WK): the same header grammar — mark, title,
@@ -39,7 +40,7 @@ function mount(props: Partial<HappierWidgetFrameProps> = {}) {
       footer={<Text>Open Channels</Text>}
       {...props}
     >
-      <Text>body</Text>
+      {props.children ?? <Text>body</Text>}
     </HappierWidgetFrame>,
   );
 }
@@ -202,5 +203,19 @@ describe('HappierWidgetFrame', () => {
     expect(resolveHappierWidgetFrameSource({ widthPx: limit, source: 'Following group · happier', compactSource: 'happier' })).toBe('Following group · happier');
     // Without a compact form, the source still leaves before the title truncates.
     expect(resolveHappierWidgetFrameSource({ widthPx: limit - 1, source: 'Note' })).toBeNull();
+  });
+
+  it('stands a state line on the body edge the frame already draws, never a second collection inset', () => {
+    // A one-sentence empty note in a widget body ("No runs recorded today") lines up with the body's
+    // titles and figures; the frame's body inset is the only inset.
+    const view = mount({ children: <HappierStateLine testID="note"><Text>No runs recorded today</Text></HappierStateLine> });
+    const line = byId(view.container, 'note')!;
+    expect(line.style.paddingLeft).toBe('0px');
+    expect(line.style.paddingRight).toBe('0px');
+    view.unmount();
+    // Outside a widget body the line keeps its collection-row inset.
+    const loose = mountThroughReactNativeWeb(<HappierStateLine testID="loose"><Text>Nothing yet</Text></HappierStateLine>);
+    expect(byId(loose.container, 'loose')!.style.paddingLeft).not.toBe('0px');
+    loose.unmount();
   });
 });
