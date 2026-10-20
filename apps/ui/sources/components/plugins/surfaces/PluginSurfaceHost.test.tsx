@@ -7007,6 +7007,54 @@ describe('PluginSurfacePlacementHost', () => {
         await screen.unmount();
     });
 
+    it('preserves plugin local state through same-Account availability failure and recovery', async () => {
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const { invalidateAccountEncryptionModeCache } = await import('@/sync/api/account/apiAccountEncryptionMode');
+        let modeAvailable = true;
+        let failedModeReads = 0;
+        const mounts: string[] = [];
+        function DraftPanel() {
+            const [draft, setDraft] = React.useState('');
+            React.useEffect(() => { mounts.push('mount'); return () => { mounts.push('unmount'); }; }, []);
+            return React.createElement('TextInput', { testID: 'availability-draft', value: draft, onChangeText: setDraft });
+        }
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(DraftPanel) };
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, path => {
+            if (path !== '/v1/account/encryption' || modeAvailable) return undefined;
+            failedModeReads += 1;
+            return Response.json({ error: 'database_transaction_conflict_exhausted' }, { status: 503 });
+        }, { serverIdentityId: 'srv_server_1' });
+        const projection = withExactGeneratedMountedTarget({
+            projection: generatedReactNativeProjection, pluginId: 'acme.browser',
+            occurrenceId: 'browser-availability-generation-44', projectionGeneration: 44,
+            displayName: 'Browser Inspector', version: '3.2.1',
+        }).projection;
+        const host = () => <PluginSurfacePlacementHost
+            placement={generatedReactNativePlacement({ occurrenceId: 'browser-availability-generation-44' })}
+            resourceBrowserTarget={target} machineId="machine_1" serverId="server_1"
+            pluginUiProjection={projection} platform="web" />;
+        const screen = await renderScreen(host());
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('availability-draft')).not.toBeNull());
+            await act(async () => { screen.findByTestId('availability-draft')!.props.onChangeText('Keep this recipe'); });
+            expect(screen.findByTestId('availability-draft')?.props.value).toBe('Keep this recipe');
+            modeAvailable = false;
+            await act(async () => { invalidateAccountEncryptionModeCache(); });
+            await vi.waitFor(() => expect(failedModeReads).toBeGreaterThan(0));
+            await vi.waitFor(() => expect(screen.findByTestId(
+                'plugin-surface-unavailable-diagnostic-account_encryption_mode_pending',
+            )).not.toBeNull());
+            expect(screen.findByTestId('availability-draft')?.props.value).toBe('Keep this recipe');
+            expect(mounts).toEqual(['mount']);
+            modeAvailable = true;
+            await act(async () => { invalidateAccountEncryptionModeCache(); });
+            await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-unavailable')).toBeNull());
+            expect(screen.findByTestId('availability-draft')?.props.value).toBe('Keep this recipe');
+            expect(mounts).toEqual(['mount']);
+        } finally { await screen.unmount(); }
+    });
+
     it('withholds a generated mount and Host API context until the current Account mode resolves', async () => {
         reactNativeSurfaceProps.length = 0;
         let resolveAccountEncryptionMode!: (value: AccountEncryptionModeResult) => void;

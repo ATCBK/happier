@@ -2044,6 +2044,29 @@ function renderPluginSurfaceUnavailable(
     );
 }
 
+/** Retain presentation only; the bound controller still admits every operation. */
+function PluginSurfacePresentation(props: Readonly<{
+    lifetime: BoundPluginSurfaceMountLifetime;
+    children?: React.ReactElement;
+    notice?: React.ReactNode;
+}>): React.ReactElement {
+    const committed = React.useRef<Readonly<{
+        lifetime: BoundPluginSurfaceMountLifetime;
+        content: React.ReactElement;
+    }> | null>(null);
+    React.useLayoutEffect(() => {
+        if (props.children && props.lifetime.isCurrent()) {
+            committed.current = { lifetime: props.lifetime, content: props.children };
+        } else if (committed.current?.lifetime !== props.lifetime || !props.lifetime.isCurrent()) {
+            committed.current = null;
+        }
+    });
+    // Account, target and occurrence retirement must still remove private state.
+    const retained = committed.current?.lifetime === props.lifetime && props.lifetime.isCurrent()
+        ? committed.current.content : null;
+    return <>{props.notice}<React.Fragment key="surface">{props.children ?? retained}</React.Fragment></>;
+}
+
 /**
  * B is supplied only by the response-local A→B adapter. Its target is the
  * already-resolved physical parent target; it is presentation context only,
@@ -3642,6 +3665,9 @@ function PluginSurfaceHostMount(props: Readonly<(
         );
     };
     if (!renderGate.canRender) {
+        if (renderGate.state === 'loading') {
+            return <PluginSurfacePresentation lifetime={controller} notice={renderUnavailable(renderGate.reason, renderGate.state)} />;
+        }
         return renderUnavailable(renderGate.reason, renderGate.state);
     }
     if (!mountBinding) {
@@ -3661,11 +3687,11 @@ function PluginSurfaceHostMount(props: Readonly<(
     if (!resolvedSurfaceTarget.resolved) {
         return renderUnavailable(resolvedSurfaceTarget.reason);
     }
-    // Account-mode disclosure is required for every executable renderer. Do
-    // not lend either public Host API transport a stale, inferred, or absent
-    // context while the canonical cache is resolving or has just invalidated.
+    // A resolved Account mode is required before building a new renderer
+    // context. Revalidation keeps only the incumbent presentation within its
+    // controller lifetime; it does not replace current Account/Action admission.
     if (accountLocalInteractionEnabled && !accountEncryptionMode) {
-        return renderAccountEncryptionModeReadiness();
+        return <PluginSurfacePresentation lifetime={controller} notice={renderAccountEncryptionModeReadiness()} />;
     }
     const surfaceTarget = resolvedSurfaceTarget.target;
     const resolvedHostApi = controller.hostApi;
@@ -4303,6 +4329,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         />
     );
     return (
+        <PluginSurfacePresentation lifetime={controller}>
         <InputTypePickerHostProvider enabled={renderer.kind === 'reactNative'}
             machineId={machineId ?? undefined} serverId={serverId} sessionId={props.sessionId}
             accountLifetime={accountLifetime ?? undefined} isCurrent={controller.isCurrent}
@@ -4326,6 +4353,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(pluginActionApproval.approvalId!)}?serverId=${encodeURIComponent(accountLifetime?.scope.serverId ?? serverId ?? '')}`)} />
         ) : null}
         </InputTypePickerHostProvider>
+        </PluginSurfacePresentation>
     );
 }
 
