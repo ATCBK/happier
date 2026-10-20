@@ -502,7 +502,7 @@ describe('Discord Gateway supervisor', () => {
                 session_start_limit: {
                   total: 1_000,
                   remaining: 1_000,
-                  reset_after: 86_400_000,
+                  reset_after: 0,
                   max_concurrency: 16,
                 },
               });
