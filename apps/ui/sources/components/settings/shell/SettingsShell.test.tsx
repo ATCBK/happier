@@ -13,7 +13,6 @@ const windowDimsState = vi.hoisted(() => ({ width: 1600, height: 900 }));
 const localSettingsState = vi.hoisted(() => ({
     values: new Map<string, unknown>([
         ['settingsNavSidebarWidthPx', 230],
-        ['settingsNavSidebarWidthBasisPx', 1200],
         ['settingsNavSidebarEnabled', true],
     ]),
 }));
@@ -78,11 +77,16 @@ vi.mock('@/modal', async () => {
 vi.mock('expo-clipboard', () => ({ setStringAsync: async () => {} }));
 
 describe('SettingsShell', () => {
+    it('keeps a chosen nav width in pixels on wide windows', async () => {
+        localSettingsState.values.set('settingsNavSidebarWidthPx', 300);
+        windowDimsState.width = 2560;
+        const screen = await renderScreen(<SettingsShell>{React.createElement('Child', { testID: 'child' })}</SettingsShell>);
+        expect(screen.findByType('ResizableDockedPane').props.widthPx).toBe(300);
+    });
     afterEach(() => {
         windowDimsState.width = 1600;
         windowDimsState.height = 900;
         localSettingsState.values.set('settingsNavSidebarWidthPx', 230);
-        localSettingsState.values.set('settingsNavSidebarWidthBasisPx', 1200);
         localSettingsState.values.set('settingsNavSidebarEnabled', true);
     });
 

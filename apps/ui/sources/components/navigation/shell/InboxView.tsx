@@ -2,7 +2,8 @@ import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierListDetailLayout, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { COLLECTION_RAIL_MIN_WIDTH_PX, HappierListDetailLayout, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { InboxContent, type InboxView as InboxContentView } from '@/components/inbox/InboxContent';
@@ -13,6 +14,7 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Header } from '@/components/navigation/Header';
 import { NavigationTitleChromeProvider, PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { useCollectionRailWidth } from '@/components/ui/lists/collection/useCollectionRailWidth';
 import {
     InboxModelBoundary,
     useInboxModel,
@@ -45,9 +47,7 @@ const InboxItemDetail = retryableLazy<React.ComponentProps<typeof import('@/comp
  * detail keeps room for an approval page's decision row and a transcript's messages. Below their
  * sum the Inbox is the list alone and rows open their item's own page.
  */
-const INBOX_LIST_MIN_WIDTH_PX = 400;
 const INBOX_DETAIL_MIN_WIDTH_PX = 440;
-const INBOX_LIST_SHARE = 0.6;
 
 const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ focusedItem?: InboxItemFocus | null }>) {
     const { theme } = useUnistyles();
@@ -185,15 +185,24 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const { fontScale } = useWindowDimensions();
+    const railWidth = useCollectionRailWidth('inbox');
     const scale = Math.max(1, fontScale);
     return (
         <HappierListDetailLayout
             testID="inbox.layout"
             listTestID="inbox.list-pane"
             detailTestID="inbox.detail-pane"
-            minListWidth={INBOX_LIST_MIN_WIDTH_PX * scale}
+            minListWidth={COLLECTION_RAIL_MIN_WIDTH_PX * scale}
             minDetailWidth={INBOX_DETAIL_MIN_WIDTH_PX * scale}
-            preferredListRatio={INBOX_LIST_SHARE}
+            listWidthPx={railWidth.widthPx ?? HAPPIER_COLLECTION_RAIL_WIDTH_PX.detailed * scale}
+            onListWidthCommit={railWidth.commit}
+            onListWidthReset={railWidth.reset}
+            preferredListRatio={0.5}
+            labels={{
+                resize: t('ui.resizableDockedPane.resizeA11y'),
+                resizeHint: t('ui.resizableDockedPane.resizeHint'),
+                resizeValue: (px) => t('ui.resizableDockedPane.resizeValue', { px }),
+            }}
             stackedPane="list"
             // The hairline separates the list from an open item; a list alone has nothing to separate from.
             listStyle={props.focusedItem ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}

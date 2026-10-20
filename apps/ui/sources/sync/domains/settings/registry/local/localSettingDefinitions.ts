@@ -8,10 +8,12 @@ import {
     HAPPIER_SPINNER_SPEED_IDS,
     HAPPIER_SPINNER_STYLE_IDS,
 } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { z } from 'zod/mini';
 import { ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS } from './localSettingDefinitions.activitySurfaces';
 import { LAYOUT_LOCAL_SETTING_DEFINITIONS } from './localSettingDefinitions.layout';
-import { serializeNormalizedPaneSizeWithBasisKey } from './localSettingDefinitions.shared';
+import { FILES_LOCAL_SETTING_DEFINITIONS } from './localSettingDefinitions.files';
+import { serializePaneSizePxBucket } from './localSettingDefinitions.shared';
 import {
     DEFAULT_THEME_PROFILES_LOCAL_STATE,
     ThemeProfilesLocalStateSchema,
@@ -24,6 +26,12 @@ const SessionMruOrderSchema = z.catch(z.pipe(z.array(z.unknown()), z.transform((
         .map((value) => value.trim()))), []);
 
 const localSettingInputs = {
+    filesTrackAgentEdits: {
+        schema: z.catch(z.boolean(), false),
+        default: false,
+        description: 'Follow the file and region the agent is editing on this device',
+        storageScope: 'local',
+    },
     hideConnectedAccountIdentities: {
         schema: z.catch(z.boolean(), false),
         default: false,
@@ -301,7 +309,7 @@ const localSettingInputs = {
     },
     sidebarWidthPx: {
         schema: z.number(),
-        default: 320,
+        default: HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard,
         description: 'Preferred sidebar width in px',
         storageScope: 'local',
         analytics: {
@@ -310,14 +318,8 @@ const localSettingInputs = {
             valueKind: 'bucket',
             privacy: 'bucketed',
             identityScope: 'device_user',
-            serializeCurrentWithContext: serializeNormalizedPaneSizeWithBasisKey('sidebarWidthBasisPx', 1200, 0.25, 0.4),
+            serializeCurrent: serializePaneSizePxBucket(300, 480),
         },
-    },
-    sidebarWidthBasisPx: {
-        schema: z.number(),
-        default: 1200,
-        description: 'Container width basis for sidebar width scaling',
-        storageScope: 'local',
     },
     settingsNavSidebarEnabled: {
         schema: z.boolean(),
@@ -337,14 +339,8 @@ const localSettingInputs = {
             valueKind: 'bucket',
             privacy: 'bucketed',
             identityScope: 'device_user',
-            serializeCurrentWithContext: serializeNormalizedPaneSizeWithBasisKey('settingsNavSidebarWidthBasisPx', 1200, 0.2, 0.35),
+            serializeCurrent: serializePaneSizePxBucket(240, 420),
         },
-    },
-    settingsNavSidebarWidthBasisPx: {
-        schema: z.number(),
-        default: 1200,
-        description: 'Container width basis for settings navigation sidebar width scaling',
-        storageScope: 'local',
     },
     uiMultiPanePanelsEnabled: {
         schema: z.boolean(),
@@ -462,6 +458,7 @@ const localSettingInputs = {
     },
     ...ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS,
     ...LAYOUT_LOCAL_SETTING_DEFINITIONS,
+    ...FILES_LOCAL_SETTING_DEFINITIONS,
 } as const;
 
 export const LOCAL_SETTING_DEFINITIONS: ReturnType<typeof defineSettingDefinitions<typeof localSettingInputs>> = defineSettingDefinitions(localSettingInputs);

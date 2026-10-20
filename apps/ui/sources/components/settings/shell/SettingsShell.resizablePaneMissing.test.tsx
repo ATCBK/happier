@@ -10,7 +10,6 @@ const windowDimsState = vi.hoisted(() => ({ width: 1600, height: 900 }));
 const localSettingsState = vi.hoisted(() => ({
     values: new Map<string, unknown>([
         ['settingsNavSidebarWidthPx', 230],
-        ['settingsNavSidebarWidthBasisPx', 1200],
         ['settingsNavSidebarEnabled', true],
     ]),
 }));
@@ -68,7 +67,6 @@ describe('SettingsShell ResizableDockedPane missing export', () => {
         windowDimsState.width = 1600;
         windowDimsState.height = 900;
         localSettingsState.values.set('settingsNavSidebarWidthPx', 230);
-        localSettingsState.values.set('settingsNavSidebarWidthBasisPx', 1200);
         localSettingsState.values.set('settingsNavSidebarEnabled', true);
     });
 

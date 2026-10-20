@@ -47,11 +47,22 @@ const deprecatedLocalSettingKeys = [
     'sessionsListStorageTab',
 ] as const;
 
+// 0.2 persisted the chosen pixels together with a proportional-scaling basis.
+// Only exact former defaults at their original basis mean "use the current default".
+const LEGACY_SCALED_PANE_SETTINGS = [
+    { pxKey: 'sidebarWidthPx', basisKey: 'sidebarWidthBasisPx', defaults: [320], basis: 1200 },
+    { pxKey: 'rightPaneWidthPx', basisKey: 'rightPaneWidthBasisPx', defaults: [360, 340], basis: 1200 },
+    { pxKey: 'detailsPaneWidthPx', basisKey: 'detailsPaneWidthBasisPx', defaults: [520], basis: 1200 },
+    { pxKey: 'bottomPaneHeightPx', basisKey: 'bottomPaneHeightBasisPx', defaults: [320], basis: 900 },
+    { pxKey: 'settingsNavSidebarWidthPx', basisKey: 'settingsNavSidebarWidthBasisPx', defaults: [230, 280], basis: 1200 },
+] as const;
+
 function stripDeprecatedLocalSettingsKeys(settings: Readonly<Record<string, unknown>>): Record<string, unknown> {
     const next: Record<string, unknown> = { ...settings };
     for (const key of deprecatedLocalSettingKeys) {
         delete next[key];
     }
+    for (const { basisKey } of LEGACY_SCALED_PANE_SETTINGS) delete next[basisKey];
     return next;
 }
 
@@ -146,6 +157,9 @@ function normalizeLocalSettingsParseInput(settings: unknown): unknown {
     if (migrated.sessionsListStorageFilter === undefined && migrated.sessionsListStorageTab === 'direct') {
         migrated.sessionsListStorageFilter = 'direct';
     }
+    for (const { pxKey, basisKey, defaults, basis } of LEGACY_SCALED_PANE_SETTINGS) {
+        if (migrated[basisKey] === basis && defaults.some(value => value === migrated[pxKey])) delete migrated[pxKey];
+    }
     const next = stripDeprecatedLocalSettingsKeys(migrated);
     if (next.attentionDeviceOverridesV1 === undefined && hasLegacyAttentionDeviceOverrideFields(next)) {
         next.attentionDeviceOverridesV1 = deriveAttentionDeviceOverridesV1FromLegacyLocalSettings({
@@ -236,17 +250,6 @@ export function localSettingsParse(settings: unknown): LocalSettings {
     const normalizedParsedData = normalizeActivitySurfaceLocalSettings({ ...parsed.data } as LocalSettingsRecord);
     const next: LocalSettingsRecord = { ...localSettingsDefaults, ...normalizedParsedData, uiFontScale: nextUiFontScale };
     normalizeActivitySurfaceLocalSettings(next);
-
-    // Migration: older builds persisted the then-default settings sidebar width into storage.
-    // When a user never resized the sidebar, their storage can still contain that legacy default
-    // value. Treat it as "unset" so the newer default applies.
-    const LEGACY_SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX = 280;
-    if (
-        next.settingsNavSidebarWidthPx === LEGACY_SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX
-        && next.settingsNavSidebarWidthBasisPx === 1200
-    ) {
-        next.settingsNavSidebarWidthPx = localSettingsDefaults.settingsNavSidebarWidthPx;
-    }
 
     return next;
 }

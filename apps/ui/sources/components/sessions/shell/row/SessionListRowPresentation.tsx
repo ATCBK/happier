@@ -101,7 +101,7 @@ const styles = StyleSheet.create((theme) => ({
     subtitleMinimal: resolveSessionListRowStatusTextMetrics('minimal'),
     // The slot yields before the title does: a long status word truncates at two fifths of the row so two Runs or
     // Sessions with different names never collapse to the same clipped title.
-    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 1, minWidth: 0, maxWidth: `${SESSION_LIST_ROW_WIDTH_METRICS.default.trailingMaxShare * 100}%` },
+    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 1, minWidth: 0, maxWidth: `${SESSION_LIST_ROW_WIDTH_METRICS.default.trailingMaxShare * 100}%` as `${number}%` },
     // The row's press target: everything left of the trailing slot, the row's full height.
     pressTarget: { flex: 1, minWidth: 0, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' },
 }));

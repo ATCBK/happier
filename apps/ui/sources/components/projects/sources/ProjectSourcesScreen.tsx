@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierListDetailLayout } from '@happier-dev/plugin-ui/presentation';
+import { COLLECTION_RAIL_MIN_WIDTH_PX, HappierListDetailLayout } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 
 import {
   useLocalSearchParams,
@@ -11,6 +12,7 @@ import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDispla
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { CollectionDraftTitleScope } from '@/components/ui/lists/collection/CollectionDraftTitle';
+import { useCollectionRailWidth } from '@/components/ui/lists/collection/useCollectionRailWidth';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -32,8 +34,6 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 /** Projects › Sources: one Collection list beside the selected Source (lab `p-sources`). */
 export const PROJECT_SOURCES_ROUTE = '/projects/sources';
 const NEW_SOURCE = 'new';
-/** Rail width at normal text scale: a mark, a repository name and its owner/name · branch line. */
-const SOURCES_RAIL_WIDTH_PX = 300;
 /** The narrowest detail that keeps the address field beside its label. */
 const SOURCES_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -70,6 +70,7 @@ const ProjectSourcesCollection = React.memo(function ProjectSourcesCollection(
   const navigateToOpen = useNavigateToProjectOpen();
   const { theme } = useUnistyles();
   const { fontScale } = useWindowDimensions();
+  const railWidth = useCollectionRailWidth('project-sources');
   const params = useLocalSearchParams<{ source?: string | string[] }>();
   const requested = readParam(params.source);
   const creating = requested === NEW_SOURCE;
@@ -222,9 +223,17 @@ const ProjectSourcesCollection = React.memo(function ProjectSourcesCollection(
         testID="projects.sources.layout"
         listTestID="projects.sources.list-pane"
         detailTestID="projects.sources.detail-pane"
-        minListWidth={SOURCES_RAIL_WIDTH_PX * scale}
+        minListWidth={COLLECTION_RAIL_MIN_WIDTH_PX * scale}
         minDetailWidth={SOURCES_DETAIL_MIN_WIDTH_PX * scale}
-        preferredListRatio={0}
+        listWidthPx={railWidth.widthPx ?? HAPPIER_COLLECTION_RAIL_WIDTH_PX.detailed * scale}
+        onListWidthCommit={railWidth.commit}
+        onListWidthReset={railWidth.reset}
+        preferredListRatio={0.5}
+        labels={{
+          resize: t('ui.resizableDockedPane.resizeA11y'),
+          resizeHint: t('ui.resizableDockedPane.resizeHint'),
+          resizeValue: (px) => t('ui.resizableDockedPane.resizeValue', { px }),
+        }}
         listStyle={{
           borderRightWidth: 1,
           borderRightColor: theme.colors.border.default,

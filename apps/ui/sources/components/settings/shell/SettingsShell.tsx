@@ -8,7 +8,6 @@ import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShel
 import { appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
 import { isRenderableElementType } from '@/components/ui/icons/isRenderableElementType';
 import { ResizableDockedPane } from '@/components/ui/panels/ResizableDockedPane';
-import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
 import { resolveViewportMinEdgePx, VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX } from '@/utils/platform/viewportClass';
 import { getStorage, useLocalSetting } from '@/sync/domains/state/storage';
 
@@ -99,20 +98,8 @@ export const SettingsShell = React.memo(function SettingsShell(props: Readonly<{
     const enabled = isTabletViewport && settingsNavSidebarEnabled !== false;
     const [sidebarFallbackActive, setSidebarFallbackActive] = React.useState(false);
     const sidebarWidthPx = useLocalSetting('settingsNavSidebarWidthPx') ?? SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX;
-    const sidebarWidthBasisPx = useLocalSetting('settingsNavSidebarWidthBasisPx') ?? windowWidth;
     const preferredSidebarWidthPx = typeof sidebarWidthPx === 'number' ? sidebarWidthPx : SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX;
-    const basisSidebarWidthPx = typeof sidebarWidthBasisPx === 'number' ? sidebarWidthBasisPx : windowWidth;
-
-    const effectiveSidebarWidthPx = React.useMemo(() => {
-        return resolveScaledPaneWidthPx({
-            preferredWidthPx: preferredSidebarWidthPx,
-            basisContainerWidthPx: basisSidebarWidthPx,
-            containerWidthPx: windowWidth,
-            minPx: SETTINGS_NAV_SIDEBAR_MIN_WIDTH_PX,
-            maxPx: SETTINGS_NAV_SIDEBAR_MAX_WIDTH_PX,
-            skipScalingWhenPreferredWidthPxMatches: SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX,
-        });
-    }, [basisSidebarWidthPx, preferredSidebarWidthPx, windowWidth]);
+    const effectiveSidebarWidthPx = Math.min(SETTINGS_NAV_SIDEBAR_MAX_WIDTH_PX, Math.max(SETTINGS_NAV_SIDEBAR_MIN_WIDTH_PX, preferredSidebarWidthPx));
 
     React.useEffect(() => {
         if (!enabled && sidebarFallbackActive) {
@@ -148,8 +135,10 @@ export const SettingsShell = React.memo(function SettingsShell(props: Readonly<{
                         onCommitWidthPx={(nextWidthPx) => {
                             getStorage().getState().applyLocalSettings({
                                 settingsNavSidebarWidthPx: nextWidthPx,
-                                settingsNavSidebarWidthBasisPx: windowWidth,
                             }, { source: 'ui' });
+                        }}
+                        onResetRequest={() => {
+                            getStorage().getState().applyLocalSettings({ settingsNavSidebarWidthPx: SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX }, { source: 'ui' });
                         }}
                     >
                         <AppShellMaterialPlane group="sidebar" color={theme.colors.surface.inset} translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, styles.sidebarColumn]}>

@@ -616,7 +616,6 @@ describe('settings', () => {
             expect((parsed as any).filesImagePreviewCacheMaxTotalBytes).toBe(96 * 1024 * 1024);
             expect((parsed as any).filesImagePreviewMaxBytes).toBe(16 * 1024 * 1024);
             expect((parsed as any).filesEditorChangeDebounceMs).toBeGreaterThan(0);
-            expect((parsed as any).filesEditorMaxFileBytes).toBeGreaterThan(0);
         });
 
         it('defaults permission mode apply timing to immediate', () => {

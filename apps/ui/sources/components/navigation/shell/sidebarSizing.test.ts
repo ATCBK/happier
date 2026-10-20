@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { HAPPIER_COLLECTION_LIST_METRICS, HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/presentation';
 import { SESSION_LIST_ROW_IDENTITY_METRICS, SESSION_LIST_ROW_WIDTH_METRICS, resolveSessionListRowTitleTextMetrics } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { resolveSidebarDockMaxWidthPx, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
+import { BUILTIN_COLUMN_MINIMUM_WIDTH_PX } from './appRail/appShellColumnSizing';
 
 describe('sidebar content minimum', () => {
     it('keeps a sixteen-character session title beside identity and compact trailing controls at every density', () => {
@@ -14,6 +15,9 @@ describe('sidebar content minimum', () => {
             expect(SIDEBAR_DOCK_MIN_WIDTH_PX).toBeGreaterThanOrEqual(demand);
         }
         expect(SIDEBAR_DOCK_MIN_WIDTH_PX).toBeLessThanOrEqual(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard);
+        for (const headerDemand of Object.values(BUILTIN_COLUMN_MINIMUM_WIDTH_PX)) {
+            expect(SIDEBAR_DOCK_MIN_WIDTH_PX).toBeGreaterThanOrEqual(headerDemand);
+        }
     });
 });
 

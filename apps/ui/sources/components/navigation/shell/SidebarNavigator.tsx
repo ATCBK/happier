@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Stack, usePathname } from 'expo-router';
+import { Stack } from 'expo-router';
 import { View, useWindowDimensions, Platform } from 'react-native';
 import { getStorage, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
 import { ResizableDockedPane, type ResizableDockedPaneCommitMeta } from '@/components/ui/panels/ResizableDockedPane';
-import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
-import { resolveSidebarDockMaxWidthPx, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
+import { resolveSidebarDockMaxWidthPx, SIDEBAR_DEFAULT_WIDTH_PX, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 import { AppRail } from './appRail/AppRail';
 import { AppShellColumn } from './appRail/AppShellColumn';
 import { AppShellTitleStrip } from './appRail/AppShellTitleStrip';
@@ -18,8 +17,8 @@ import {
 import { useAppShellLocation } from './appRail/useAppShellLocation';
 import { AppShellColumnContext, type AppShellColumnState } from './appRail/appShellColumnContext';
 import { isDesktopActivityOverlayWindowContext } from '@/activity/adapters/desktop/runtime/isDesktopActivityOverlayWindowContext';
-import { useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
-import { resolvePaneFocusModeRouteScopeId } from '@/components/appShell/panes/focusMode/resolvePaneFocusModeRouteScopeId';
+import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
+import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { AppShellMaterialFrame } from './AppShellMaterialFrame';
 import { InboxSummaryProvider } from '@/hooks/inbox/useInboxSummary';
@@ -53,10 +52,8 @@ const renderPeekColumn = (column: AppShellColumnModel) => (
 export const SidebarNavigator = React.memo(() => {
     const accountScope = useActiveServerAccountScope();
     const { execute, isCurrent } = useMountedActionExecution(accountScope, { openOnRequest: true });
-    const pathname = usePathname();
     const isDesktopOverlayWindow = isDesktopActivityOverlayWindowContext();
     const workspace = useOptionalWorkspaceNavigation();
-    const { state: paneState, dispatch: dispatchPaneAction } = useAppPaneContext();
     // The onboarding journey host owns the whole viewport until its session ends
     // (visual spec v3 §5): the post-auth setup beats must never render beside the
     // live app sidebar. Reuse the route-based sidebar-bypass seam rather than
@@ -76,19 +73,9 @@ export const SidebarNavigator = React.memo(() => {
     const { width: windowWidth } = useWindowDimensions();
     const sidebarCollapsed = useLocalSetting('sidebarCollapsed');
     const sidebarWidthPx = useLocalSetting('sidebarWidthPx');
-    const sidebarWidthBasisPx = useLocalSetting('sidebarWidthBasisPx');
     const [dragSidebarWidthPx, setDragSidebarWidthPx] = React.useState<number | null>(null);
-    const collapseTriggeredDuringDragRef = React.useRef(false);
-    const focusedPaneScopeId = paneState.focusMode?.scopeId ?? null;
-    const focusedPaneScope = focusedPaneScopeId ? paneState.scopes[focusedPaneScopeId] : undefined;
-    const focusedPaneScopeHasFocusablePane = Boolean(focusedPaneScope?.right.isOpen || focusedPaneScope?.details.isOpen);
-    const routePaneScopeId = React.useMemo(() => resolvePaneFocusModeRouteScopeId(pathname), [pathname]);
-    const focusedPaneScopeMatchesRoute =
-        focusedPaneScopeId != null
-        && focusedPaneScopeId === routePaneScopeId
-        && paneState.activeScopeId === focusedPaneScopeId
-        && focusedPaneScopeHasFocusablePane;
-    const paneFocusModeChromeActive = showSidebar && focusedPaneScopeMatchesRoute;
+    const [sidebarCollapseArmed, setSidebarCollapseArmed] = React.useState(false);
+    const [sidebarOvershootPx, setSidebarOvershootPx] = React.useState(0);
 
     const stopScrollEventPropagationOnWeb = React.useCallback((event: { stopPropagation?: () => void }) => {
         // Expo Router (Vaul/Radix) modals on web often install document-level scroll-lock listeners
@@ -101,27 +88,12 @@ export const SidebarNavigator = React.memo(() => {
 
     const sidebarMaxWidthPx = React.useMemo(() => resolveSidebarDockMaxWidthPx(windowWidth), [windowWidth]);
 
-    const effectiveSidebarWidthPx = React.useMemo(() => {
-        return resolveScaledPaneWidthPx({
-            preferredWidthPx: sidebarWidthPx,
-            basisContainerWidthPx: sidebarWidthBasisPx,
-            containerWidthPx: windowWidth,
-            minPx: SIDEBAR_DOCK_MIN_WIDTH_PX,
-            maxPx: sidebarMaxWidthPx,
-        });
-    }, [sidebarMaxWidthPx, sidebarWidthBasisPx, sidebarWidthPx, windowWidth]);
-
-    const effectiveSidebarCollapsed = Boolean(sidebarCollapsed || paneFocusModeChromeActive);
-
-    React.useEffect(() => {
-        if (!focusedPaneScopeId) return;
-        if (focusedPaneScopeMatchesRoute) return;
-        dispatchPaneAction({ type: 'exitFocusMode', scopeId: focusedPaneScopeId });
-    }, [dispatchPaneAction, focusedPaneScopeId, focusedPaneScopeMatchesRoute]);
+    const effectiveSidebarWidthPx = Math.min(sidebarMaxWidthPx, Math.max(SIDEBAR_DOCK_MIN_WIDTH_PX, sidebarWidthPx));
 
     // The column shows when the open destination has one and the person has not hidden it; the rail
     // stays either way. Hidden chrome reserves no horizontal space.
-    const columnShown = showSidebar && !effectiveSidebarCollapsed && column.kind !== 'none';
+    const columnShown = showSidebar && !sidebarCollapsed && column.kind !== 'none';
+    const columnFocus = usePaneRegionFocusBoundary('navigation', columnShown);
     const sidebarWidth = React.useMemo(() => {
         if (!columnShown) return 0;
         return dragSidebarWidthPx ?? effectiveSidebarWidthPx;
@@ -133,9 +105,8 @@ export const SidebarNavigator = React.memo(() => {
     );
 
     const handleSetColumnVisible = React.useCallback((visible: boolean) => {
-        if (visible && paneFocusModeChromeActive) dispatchPaneAction({ type: 'exitFocusMode' });
         getStorage().getState().applyLocalSettings({ sidebarCollapsed: !visible }, { source: 'ui' });
-    }, [dispatchPaneAction, paneFocusModeChromeActive]);
+    }, []);
     const requestSetColumnVisible = React.useCallback(async (visible: boolean) => {
         try {
             const result = await execute('shell.column.set', { visible }, { retainInvocation: true });
@@ -148,34 +119,21 @@ export const SidebarNavigator = React.memo(() => {
     }, [execute, isCurrent]);
 
     const handleSidebarWidthDrag = React.useCallback((nextWidthPx: number | null, dragMeta?: ResizableDockedPaneCommitMeta | null) => {
-        if (nextWidthPx == null) {
-            collapseTriggeredDuringDragRef.current = false;
-            setDragSidebarWidthPx(null);
-            return;
-        }
-
-        const shouldCollapseToCompactView =
-            Platform.OS === 'web'
-            && !sidebarCollapsed
-            && !collapseTriggeredDuringDragRef.current
-            && nextWidthPx <= SIDEBAR_DOCK_MIN_WIDTH_PX
-            && dragMeta?.exceededMinPx === true;
-
-        if (shouldCollapseToCompactView) {
-            collapseTriggeredDuringDragRef.current = true;
-            setDragSidebarWidthPx(null);
-            fireAndForget(requestSetColumnVisible(false), { tag: 'SidebarNavigator.collapse' });
-            return;
-        }
-
         setDragSidebarWidthPx(nextWidthPx);
-    }, [requestSetColumnVisible, sidebarCollapsed]);
+        setSidebarOvershootPx(dragMeta?.overshootPx ?? 0);
+    }, []);
+
+    const handleSidebarCollapse = React.useCallback(() => {
+        fireAndForget(requestSetColumnVisible(false), { tag: 'SidebarNavigator.collapse' });
+    }, [requestSetColumnVisible]);
 
     const handleSidebarWidthCommit = React.useCallback((nextWidthPx: number) => {
-        collapseTriggeredDuringDragRef.current = false;
         setDragSidebarWidthPx(null);
-        getStorage().getState().applyLocalSettings({ sidebarWidthPx: nextWidthPx, sidebarWidthBasisPx: windowWidth }, { source: 'ui' });
-    }, [windowWidth]);
+        getStorage().getState().applyLocalSettings({ sidebarWidthPx: nextWidthPx }, { source: 'ui' });
+    }, []);
+    const handleSidebarWidthReset = React.useCallback(() => {
+        handleSidebarWidthCommit(SIDEBAR_DEFAULT_WIDTH_PX);
+    }, [handleSidebarWidthCommit]);
 
     const stackNavigationOptions = React.useMemo(() => ({
         lazy: false,
@@ -190,15 +148,18 @@ export const SidebarNavigator = React.memo(() => {
     }), [isDesktopOverlayWindow]);
 
     const handleToggleColumn = React.useCallback(() => {
-        fireAndForget(requestSetColumnVisible(effectiveSidebarCollapsed), { tag: 'SidebarNavigator.toggleColumn' });
-    }, [effectiveSidebarCollapsed, requestSetColumnVisible]);
+        fireAndForget(requestSetColumnVisible(sidebarCollapsed), { tag: 'SidebarNavigator.toggleColumn' });
+    }, [sidebarCollapsed, requestSetColumnVisible]);
+    useKeyboardShortcutHandlers(React.useMemo(() => showSidebar && column.kind !== 'none'
+        ? { 'shell.column.toggle': handleToggleColumn }
+        : {}, [column.kind, handleToggleColumn, showSidebar]));
     const columnActionRef = React.useRef({ present: showSidebar, visible: columnShown,
         available: column.kind !== 'none', setVisible: handleSetColumnVisible });
     React.useLayoutEffect(() => {
         columnActionRef.current = { present: showSidebar, visible: columnShown,
             available: column.kind !== 'none', setVisible: handleSetColumnVisible };
     });
-    React.useEffect(() => registerShellColumnActionOwner(() => columnActionRef.current), []);
+    React.useEffect(() => registerShellColumnActionOwner('navigation', () => columnActionRef.current), []);
 
     const columnContent = (
         <ResizableDockedPane
@@ -208,11 +169,19 @@ export const SidebarNavigator = React.memo(() => {
             resizeEdge="right"
             onDragWidthPx={handleSidebarWidthDrag}
             onCommitWidthPx={handleSidebarWidthCommit}
+            collapse
+            onCollapseArmedChange={setSidebarCollapseArmed}
+            onCollapse={handleSidebarCollapse}
+            onResetRequest={handleSidebarWidthReset}
         >
             <View
+                ref={columnFocus.ref}
+                onFocus={columnFocus.onFocus}
+                accessibilityLabel={t('paneRegions.navigation')}
+                focusable
                 style={{ flex: 1, flexShrink: 0, minHeight: 0 }}
                 {...(Platform.OS === 'web'
-                    ? { onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb }
+                    ? { role: 'navigation' as const, tabIndex: -1, onFocusCapture: columnFocus.onFocusCapture, onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb }
                     : {})}
             >
                 <AppShellColumn column={column} />
@@ -231,6 +200,7 @@ export const SidebarNavigator = React.memo(() => {
             dragEnabled={showSidebar && Platform.OS === 'web' && isDesktopHost()}
             leftOffsetPx={shellLeftPx}
             sidebarWidth={sidebarWidth}
+            columnResizeState={{ collapseArmed: sidebarCollapseArmed, overshootPx: sidebarOvershootPx }}
             titleStrip={showSidebar || workspace?.active ? (
                 <AppShellTitleStrip key="title-strip" columnVisible={columnShown}
                     columnToggleAvailable={column.kind !== 'none'} onToggleColumn={handleToggleColumn}

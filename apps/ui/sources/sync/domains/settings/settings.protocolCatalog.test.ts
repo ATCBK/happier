@@ -36,7 +36,6 @@ const PREVIOUSLY_UI_ONLY_ACCOUNT_KEYS = [
     'filesEditorAutoSave',
     'filesEditorBridgeMaxChunkBytes',
     'filesEditorChangeDebounceMs',
-    'filesEditorMaxFileBytes',
     'filesEditorNativeCodeMirrorEnabled',
     'filesEditorWebMonacoEnabled',
     'filesImagePreviewCacheMaxEntries',

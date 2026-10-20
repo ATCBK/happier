@@ -7,6 +7,8 @@ import {
 } from '@/components/ui/lists/itemGroupSpacing';
 import { Typography } from '@/constants/Typography';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { SESSION_LIST_COLUMN_METRICS } from './sessionListColumnMetrics';
+export { SESSION_LIST_COLUMN_METRICS } from './sessionListColumnMetrics';
 
 /**
  * The Sessions column's header and section rhythm, measured from the approved lab
@@ -15,19 +17,6 @@ import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presenta
  * what precedes it and 6 above its sheet. One owner for the list's header, the Drafts group and every
  * project group, so the rhythm cannot drift between them.
  */
-export const SESSION_LIST_COLUMN_METRICS = Object.freeze({
-    // The column rhythm every navigation column shares (plugin-ui's list anatomy owner).
-    titleRowHeightPx: HAPPIER_COLLECTION_LIST_METRICS.titleRowHeight,
-    iconButtonSizePx: 30,
-    iconButtonGapPx: 2,
-    /** The close button inside the compact search field: a small square the field's padding frames. */
-    fieldCloseButtonSizePx: 20,
-    /** Title row → the search field opened beneath it. */
-    fieldGapPx: 4,
-    groupLabelPaddingTopPx: HAPPIER_COLLECTION_LIST_METRICS.groupLabelPaddingTop,
-    groupLabelPaddingBottomPx: HAPPIER_COLLECTION_LIST_METRICS.groupLabelPaddingBottom,
-});
-
 /** The column's text edge: the list title and every group label start here (the shared column frame). */
 const SESSION_LIST_TEXT_INSET_PX = HAPPIER_COLLECTION_LIST_METRICS.contentInset;
 /** The column's sheet edge: session rows, the Drafts sheet and the Browse row start here (the shared gutter). */

@@ -4,6 +4,7 @@ import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 import {
+    COLLECTION_RAIL_MIN_WIDTH_PX,
     HappierListDetailLayout,
     useHappierCollectionLayout,
     type HappierCollectionRailWidth,
@@ -19,9 +20,10 @@ import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigation
 import { getPreferredLanguage, t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { CollectionDraftTitleScope } from '@/components/ui/lists/collection/CollectionDraftTitle';
+import { useCollectionRailWidth } from '@/components/ui/lists/collection/useCollectionRailWidth';
 
 export type SettingsCollectionLayoutProps = Readonly<{
-    /** The rail's width at normal text scale: a role from the one metrics owner, never a page-local number. */
+    /** The rail's default width at normal text scale, from the shared role metrics. */
     railWidth: HappierCollectionRailWidth;
     navigator: SettingsNestedNavigator;
     /** The collection's own route (`/settings/machines`): the back control of its details stops here. */
@@ -63,6 +65,7 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
     const currentRoute = props.resolveChildRoute(pathname);
     const scale = Math.max(1, fontScale);
     const hasRail = props.rail !== null && props.rail !== undefined;
+    const railWidth = useCollectionRailWidth(props.navigator);
 
     return <CollectionDraftTitleScope key={props.navigator}>
         {/* One phone header stays above both panes and follows the active child route. */}
@@ -76,10 +79,17 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
                 testID={`${props.testID}-layout`}
                 listTestID={`${props.testID}-list-pane`}
                 detailTestID={`${props.testID}-detail-pane`}
-                minListWidth={hasRail ? HAPPIER_COLLECTION_RAIL_WIDTH_PX[props.railWidth] * scale : 0}
+                minListWidth={hasRail ? COLLECTION_RAIL_MIN_WIDTH_PX * scale : 0}
                 minDetailWidth={props.detailMinWidthPx * scale}
-                // The rail keeps its own width; every extra pixel goes to the detail.
-                preferredListRatio={0}
+                listWidthPx={hasRail ? railWidth.widthPx ?? HAPPIER_COLLECTION_RAIL_WIDTH_PX[props.railWidth] * scale : 0}
+                onListWidthCommit={hasRail ? railWidth.commit : undefined}
+                onListWidthReset={hasRail ? railWidth.reset : undefined}
+                preferredListRatio={0.5}
+                labels={hasRail ? {
+                    resize: t('ui.resizableDockedPane.resizeA11y'),
+                    resizeHint: t('ui.resizableDockedPane.resizeHint'),
+                    resizeValue: (px) => t('ui.resizableDockedPane.resizeValue', { px }),
+                } : undefined}
                 gap={0}
                 listStyle={hasRail ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}
                 // The rail exists only beside a detail; when stacked, the index page lists the collection instead.

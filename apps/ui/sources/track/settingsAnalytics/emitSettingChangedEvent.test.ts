@@ -336,7 +336,6 @@ describe('emitLocalSettingChangedEvents', () => {
             nextSettings: {
                 ...localSettingsDefaults,
                 sidebarWidthPx: 220,
-                sidebarWidthBasisPx: 1_200,
                 acknowledgedCliVersions: {
                     'machine-a': '1.2.3',
                     'machine-b': '2.0.0',

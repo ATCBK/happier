@@ -33,7 +33,6 @@ vi.mock('@/sync/domains/state/storage', async () => {
     return createStorageModuleStub({
         useLocalSetting: (key: string) => {
             if (key === 'settingsNavSidebarWidthPx') return 230;
-            if (key === 'settingsNavSidebarWidthBasisPx') return 1200;
             if (key === 'settingsNavSidebarEnabled') return true;
             return null;
         },

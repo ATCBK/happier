@@ -43,6 +43,7 @@ describe('localSettingsParse', () => {
             expect(input).toHaveProperty(basisKey, oldBasis);
             // A record without a basis was written as literal pixels, even when equal to an old default.
             expect(localSettingsParse({ [pxKey]: oldDefault })[pxKey]).toBe(oldDefault);
+            expect(localSettingsParse({ [pxKey]: oldDefault, [basisKey]: oldBasis * 2 })[pxKey]).toBe(oldDefault);
         }
         const chosen = localSettingsParse({ [pxKey]: 777, [basisKey]: oldBasis * 2 });
         expect(chosen[pxKey]).toBe(777);
@@ -270,9 +271,9 @@ describe('localSettingsParse', () => {
             },
         });
         expect(typeof (parsed as any).sidebarWidthPx).toBe('number');
-        expect(typeof (parsed as any).sidebarWidthBasisPx).toBe('number');
+        expect(parsed).not.toHaveProperty('sidebarWidthBasisPx');
         expect((parsed as any).bottomPaneHeightPx).toBe(320);
-        expect((parsed as any).bottomPaneHeightBasisPx).toBe(900);
+        expect(parsed).not.toHaveProperty('bottomPaneHeightBasisPx');
         expect((parsed as any).terminalRendererPreference).toBe('auto');
         expect(parsed).not.toHaveProperty('mobileWorkspaceExperienceV1');
     });

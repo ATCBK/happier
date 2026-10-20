@@ -57,6 +57,7 @@ import { useSessionListRailOrganizationAction } from '@/components/sessions/shel
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { moveAppRailBot } from './useAppRailBotReorder';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
 
 /** A rail-pinned Bot, standing right under the Bots entry among the top items. */
 type AppRailTopGroup = AppRailPlacementItem['group'] | 'bots';
@@ -91,6 +92,7 @@ const AppRailIcon = React.memo(function AppRailIcon(props: Readonly<{ name: Icon
  * while one exists, Settings and the person, whose Home/account popover opens from the avatar.
  */
 export const AppRail = React.memo(function AppRail() {
+    const focusBoundary = usePaneRegionFocusBoundary('rail', true);
     const { catalog, location } = useAppShellLocation();
     const botHomes = useAppRailBotHomes();
     const botHomeIds = React.useMemo(() => botHomes.map(home => home.serverId), [botHomes]);
@@ -109,7 +111,7 @@ export const AppRail = React.memo(function AppRail() {
         }), { tag: 'AppRail.customize' });
     }, [items]);
     return <AppRailSurface entries={entries} activeId={activeId} onOpen={open} preferences={preferences}
-        updatesVisible={updatesVisible} onCustomize={customize} />;
+        updatesVisible={updatesVisible} onCustomize={customize} focusBoundary={focusBoundary} />;
 });
 
 /** The real rail composition, shared by the shell and its fixture preview. */
@@ -122,6 +124,7 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
     onCustomize?: () => void;
     /** Static previews replace only the effectful footer boundary, using the same rail composition. */
     renderFooter?: (item: AppRailPlacementItem, renderTrigger?: SidebarFooterPopoverTrigger) => React.ReactNode;
+    focusBoundary?: ReturnType<typeof usePaneRegionFocusBoundary>;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -179,6 +182,9 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
 
     return (
         <View testID="app-rail" style={[styles.rail, { backgroundColor: materialColor(theme.colors.background.canvas, 'transparent') }]} onLayout={onRailLayout}
+            ref={props.focusBoundary?.ref} onFocus={props.focusBoundary?.onFocus}
+            focusable={props.focusBoundary ? true : undefined} accessibilityLabel={props.focusBoundary ? t('paneRegions.rail') : undefined}
+            {...(Platform.OS === 'web' && props.focusBoundary ? { role: 'navigation' as const, tabIndex: -1, onFocusCapture: props.focusBoundary.onFocusCapture } : null)}
             {...(Platform.OS === 'web' ? { onContextMenu: (event: { preventDefault: () => void }) => { event.preventDefault(); props.onCustomize?.(); } } : null)}
             >
             <View testID="app-rail-destinations" style={styles.topArea}>

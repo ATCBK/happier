@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { localSettingsDefaults, localSettingsParse } from '@/sync/domains/settings/localSettings';
 
 import { buildLocalSettingsSnapshot } from './buildLocalSettingsSnapshot';
 
 describe('buildLocalSettingsSnapshot', () => {
     it('buckets pane pixels independently of retired window bases', () => {
-        const smallBasis = buildLocalSettingsSnapshot({ ...localSettingsDefaults, sidebarWidthPx: 420, sidebarWidthBasisPx: 600 });
-        const largeBasis = buildLocalSettingsSnapshot({ ...localSettingsDefaults, sidebarWidthPx: 420, sidebarWidthBasisPx: 2560 });
+        const smallBasis = buildLocalSettingsSnapshot(localSettingsParse({ sidebarWidthPx: 420, sidebarWidthBasisPx: 600 }));
+        const largeBasis = buildLocalSettingsSnapshot(localSettingsParse({ sidebarWidthPx: 420, sidebarWidthBasisPx: 2560 }));
         expect(smallBasis.properties.local_setting__sidebarWidthPx).toBe(largeBasis.properties.local_setting__sidebarWidthPx);
         expect(typeof smallBasis.properties.local_setting__sidebarWidthPx).toBe('string');
     });
@@ -18,7 +18,6 @@ describe('buildLocalSettingsSnapshot', () => {
             uiFontScale: 1.24,
             sidebarCollapsed: true,
             sidebarWidthPx: 220,
-            sidebarWidthBasisPx: 1_200,
             uiMultiPanePanelsEnabled: false,
             sessionsRightPaneDefaultOpen: true,
             detailsPaneTabsBehavior: 'persistent',
@@ -64,11 +63,8 @@ describe('buildLocalSettingsSnapshot', () => {
             desktopOverlayShowPreviewText: true,
             desktopOverlayCompactStyle: 'panel',
             rightPaneWidthPx: 360,
-            rightPaneWidthBasisPx: 800,
             detailsPaneWidthPx: 420,
-            detailsPaneWidthBasisPx: 1_400,
             bottomPaneHeightPx: 180,
-            bottomPaneHeightBasisPx: 900,
             sessionsListStorageFilter: 'direct',
             acknowledgedCliVersions: {
                 'machine-a': '1.2.3',
@@ -122,7 +118,7 @@ describe('buildLocalSettingsSnapshot', () => {
         expect(snapshot.properties.local_setting__homeScreenWidgetsMode).toBeUndefined();
         expect(snapshot.properties.local_setting__homeScreenWidgetsShowPreviewText).toBeUndefined();
         expect(snapshot.properties.local_setting__homeScreenWidgetsShowMachinePath).toBeUndefined();
-        expect(snapshot.properties.local_setting__rightPaneWidthPx).toBe('large');
+        expect(snapshot.properties.local_setting__rightPaneWidthPx).toBe('medium');
         expect(snapshot.properties.local_setting__detailsPaneWidthPx).toBe('medium');
         expect(snapshot.properties.local_setting__bottomPaneHeightPx).toBe('small');
         expect(snapshot.properties.local_setting__sessionsListStorageFilter).toBe('direct');
