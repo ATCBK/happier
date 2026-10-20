@@ -48,6 +48,17 @@ against the shown disk hash and Undo is guarded too. These are development
 integration contracts, not a release or live-validation claim; [file editor
 ownership](file-editor.md) describes the state, draft and write boundaries.
 
+The unreleased File-page copy flow uses the same `artifact.publish_from_file`
+Action. Its optional `workspace: {machineId, rootPath}` explicitly selects the
+source instead of an ambient Session; omitting it retains the admitted Session
+source. The UI reads through the existing confined workspace transfer under
+the captured Home/Account. Source paths, Machine and workspace identity stay
+in private revision provenance, not the public header or shared content. A
+Session-bound CLI host cannot serve an explicit Machine workspace and returns
+`artifact_source_unavailable` rather than publishing its ambient Session's file.
+Generated Action references own the exact input; File-page rendering and live
+validation remain program integration work.
+
 In 0.3 development source, Session-targeted Actions declare their operational
 operand and one/many cardinality through `sessionTarget`. The shared
 `sessionTargetV1` schema normalizes shorthand and object intent; the executor's
