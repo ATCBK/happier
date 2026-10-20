@@ -146,6 +146,25 @@ afterEach(() => {
 });
 
 describe('plugins command daemon mutations', () => {
+  it('hands a development review to the ordinary install approval owner', async () => {
+    const output = captureStdoutJsonOutput();
+    try {
+      await handlePluginsCommand(['dev', '/tmp/acme-dev', '--sdk-registry', 'https://registry.example.test', '--json'], {
+        ensureDaemon: async () => undefined,
+        controlPluginDevelopment: async () => ({
+          kind: 'failed', code: 'plugin_dev_reviewRequired',
+          message: 'Plugin development preparation failed', status: { roots: [], plugins: [] },
+        }),
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
+      });
+      expect(output.json()).toMatchObject({
+        ok: true, kind: 'plugins_install',
+        data: { kind: 'approval_request_created', artifactId: 'plugins-command-approval' },
+      });
+      expect(daemon.decideChange).not.toHaveBeenCalled();
+    } finally { output.restore(); }
+  });
+
   it.each(['enable', 'disable', 'rollback', 'update'] as const)('routes %s through Action approval before requesting a daemon change', async command => {
     daemon.requestChange.mockResolvedValue({ kind: 'committed', pluginId: 'acme.sample', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] });
     const output = captureStdoutJsonOutput();

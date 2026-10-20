@@ -3720,9 +3720,11 @@ Failed install preparation returns its domain error before creating an approval
 Artifact; a source operand alone cannot stand in for the evaluated disclosure.
 Direct development install first registers its exact source through the same
 daemon development-root owner before retaining a review. Observer-created
-development reviews publish through this same owner; an
-explicit `plugins install <exact-source> --dev --json` rejoins the retained
-candidate and same Artifact. `plugins change status` only inspects pending
+development reviews publish through this same owner. In 0.3 development source,
+`plugins dev` hands a review-required registration to the ordinary install Action
+and returns its approval Artifact ID. An explicit
+`plugins install <exact-source> --dev --json` remains an alternative way to rejoin
+the retained candidate and same Artifact. `plugins change status` only inspects pending
 daemon custody. Restart expires that custody, so the original source flow must
 prepare new facts; `outcome_unknown` requires installed-state inspection before
 replay. Optional resource and credential grants retain their canonical owners.

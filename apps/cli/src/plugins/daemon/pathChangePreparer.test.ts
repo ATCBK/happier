@@ -440,6 +440,9 @@ describe('createDaemonPathPluginChangePreparer', () => {
     });
     const candidate = await prepare({ kind: 'development', sourceRootPath: pluginRoot, observedRevision: 1 });
     expect(candidate).toMatchObject({ kind: 'preparedDevelopmentCandidate', pluginId: 'acme.code-ui' });
+    expect(candidate.review?.uiArtifacts).toEqual({
+      status: hostedUi ? 'verified' : 'none', contributionIds: hostedUi ? ['panel'] : [],
+    });
     const inventory = JSON.parse(await readFile(join(pluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')) as { entries: { artifactId: string }[] };
     expect(inventory.entries.map((entry) => entry.artifactId)).toEqual(hostedUi ? ['panel'] : []);
     await expect(readFile(join(pluginRoot, '.happier-plugin/plugin.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -1341,7 +1344,7 @@ describe('createDaemonPathPluginChangePreparer', () => {
         signalFirstSourceOnlyBuild();
         await firstSourceOnlyBuildBlocked;
       }
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return await buildUiWithManagedProcessBoundary(input);
     });
     const service = createDaemonPluginChangeService({
       prepare: createDaemonPathPluginChangePreparer({
@@ -1933,11 +1936,12 @@ describe('createDaemonPathPluginChangePreparer', () => {
     const uiBuildRoots: string[] = [];
     const runPluginUiArtifactBuild = vi.fn(async (input: Readonly<{ projectRoot: string }>) => {
       uiBuildRoots.push(input.projectRoot);
+      const built = await buildUiWithManagedProcessBoundary(input);
       const uiByte = await readFile(join(input.projectRoot, 'src', 'ui-byte.txt'), 'utf8');
       const artifactRoot = join(input.projectRoot, 'dist', 'happier-plugin-ui');
       await mkdir(artifactRoot, { recursive: true });
       await writeFile(join(artifactRoot, 'ui-byte.txt'), uiByte, 'utf8');
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return built;
     });
     const runtimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),

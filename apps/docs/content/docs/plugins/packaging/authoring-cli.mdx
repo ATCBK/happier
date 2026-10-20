@@ -169,8 +169,12 @@ approval Artifact in the Happier Inbox. Review the evaluated manifest,
 permissions, and host access there. A review still awaiting daemon evaluation
 cannot be approved.
 
-For a retained development review, rerun the install with the exact original
-source to rejoin the candidate and the same approval Artifact:
+When development registration needs review, `plugins dev` hands the retained
+candidate to this same install owner and returns the ordinary approval Artifact
+ID. Decide it, then run `plugins dev` again to continue watching.
+
+To reconnect to a retained development review, rerun `plugins dev` with the exact
+source, or use the explicit install alternative to rejoin the same Artifact:
 
 ```bash
 hdev plugins install <exact-source> --dev --json

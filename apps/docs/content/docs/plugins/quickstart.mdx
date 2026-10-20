@@ -40,6 +40,10 @@ hdev plugins pack .
 directory name. Use `--id com.example.my-plugin` when you need a durable
 publisher-owned id.
 
+If `plugins dev` returns an approval Artifact ID, review it in the Happier Inbox,
+then run `plugins dev` again to continue watching. See
+[pending reviews](/plugins/packaging/authoring-cli#review-a-pending-change).
+
 After `plugins dev` registers the source, open the plugin's app page in Happier
 and choose **Save note**. The page invokes the declared Action with
 `{ note: 'hello' }`; its handler returns that note. Edit the greeting in
