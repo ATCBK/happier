@@ -88,7 +88,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const liveValue = React.useMemo(() => {
         let value = draft?.editorText ?? input.fileText ?? '';
         const listeners = new Set<() => void>();
-        return { get: () => isCurrentOwner() ? value : '',
+        return { get: () => isCurrentOwner() ? text.current : '',
             subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
             publish(next: string) { if (value === next) return; value = next; for (const listener of listeners) listener(); } };
     }, [ownerKey, isCurrentOwner]);

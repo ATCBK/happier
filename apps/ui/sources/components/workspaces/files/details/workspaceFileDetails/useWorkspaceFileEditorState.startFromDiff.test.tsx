@@ -67,6 +67,30 @@ describe('file editor entry and persisted restoration', () => {
         expect(hook.getCurrent().saveFileEdits).toBe(save);
     });
 
+    it('reads current text before the existing debounced subscription publishes it', async () => {
+        const hook = await harness({ displayMode: 'file', fileText: 'base', fileHash: 'base-hash' });
+        await act(async () => hook.getCurrent().startEditingFile());
+        vi.useFakeTimers();
+        const notified = vi.fn();
+        const unsubscribe = hook.getCurrent().liveValue.subscribe(notified);
+        try {
+            await act(async () => {
+                hook.getCurrent().onEditorChange('first');
+                hook.getCurrent().onEditorChange('second');
+                hook.getCurrent().onEditorChange('third');
+            });
+            // A query flush must never read the previous debounce publication.
+            expect(hook.getCurrent().liveValue.get()).toBe('third');
+            expect(notified).toHaveBeenCalledTimes(2);
+            await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+            expect(notified).toHaveBeenCalledTimes(3);
+        } finally {
+            unsubscribe();
+            await hook.unmount();
+            vi.useRealTimers();
+        }
+    });
+
     it('adopts external content while the editor is clean', async () => {
         const hook = await harness({ displayMode: 'file', fileText: 'base', fileHash: 'base-hash' });
         await act(async () => hook.getCurrent().startEditingFile());
