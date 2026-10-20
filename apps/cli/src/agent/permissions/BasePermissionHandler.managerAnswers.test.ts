@@ -30,7 +30,7 @@ class QuestionSession {
     getAgentStateResponseTargetDispatcher() { return this.dispatcher; }
 }
 
-function managerContext(callerSessionId = 'manager', accountId = 'account-owner'): RpcHandlerContext {
+function managerContext(callerSessionId = 'manager', accountId = 'account-owner') {
     return {
         signal: new AbortController().signal,
         sessionActionOrigin: {
@@ -41,7 +41,7 @@ function managerContext(callerSessionId = 'manager', accountId = 'account-owner'
             kind: 'session.permission.respond', sessionId: 'worker',
             actor: { kind: 'accountUser', accountId, relationship: 'owner' },
         },
-    };
+    } satisfies RpcHandlerContext;
 }
 
 function tokenContext(): RpcHandlerContext {
@@ -61,10 +61,11 @@ function tokenContext(): RpcHandlerContext {
 
 function prepareQuestion() {
     const session = new QuestionSession();
-    session.agentState.requests!.question = Object.assign({
+    session.agentState.requests!.question = {
         tool: 'AskUserQuestion', kind: 'user_action', createdAt: 100,
         arguments: { questions: [{ question: 'Choose?', options: [{ label: 'Yes' }], multiSelect: false, allowCustom: false }, { question: 'Revision?' }] },
-    }, { questionV1: { mode: 'wait', lasting: false }, currentHandler: { kind: 'session', sessionId: 'manager' } });
+        questionV1: { mode: 'wait', lasting: false }, currentHandler: { kind: 'session', sessionId: 'manager' },
+    };
     new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Manager question]' });
     const rpc = session.rpcHandlerManager.handlers.get('session.user_action.answer')!;
     return { session, rpc };

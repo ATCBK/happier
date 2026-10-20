@@ -231,8 +231,8 @@ describe('finalizeComposerStagedMediaToSession', () => {
       settlement: {
         v: 1,
         workingDirectory: join(root, 'workspace'),
-        releaseIntents: first.releaseIntents,
-        createdWorkspaceRelativePaths: first.createdWorkspaceRelativePaths,
+        releaseIntents: [...first.releaseIntents],
+        createdWorkspaceRelativePaths: [...first.createdWorkspaceRelativePaths],
       },
       stageStore,
     });
@@ -298,8 +298,8 @@ describe('finalizeComposerStagedMediaToSession', () => {
         settlement: {
           v: 1,
           workingDirectory: join(root, 'workspace'),
-          releaseIntents: finalized.releaseIntents,
-          createdWorkspaceRelativePaths: finalized.createdWorkspaceRelativePaths,
+          releaseIntents: [...finalized.releaseIntents],
+          createdWorkspaceRelativePaths: [...finalized.createdWorkspaceRelativePaths],
         },
         stageStore,
       });

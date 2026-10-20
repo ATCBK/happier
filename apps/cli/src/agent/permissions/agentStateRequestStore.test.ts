@@ -206,6 +206,7 @@ describe('AgentStateRequestStore', () => {
             updateState: updater => {
                 state = updater(state);
                 if (!acceptPublication) return new Promise<void>(resolve => { acceptPublication = resolve; });
+                return undefined;
             },
         } });
         const publication = store.publishRequestAndWait({ requestId: 'question', toolName: 'AskUserQuestion',
@@ -230,7 +231,8 @@ describe('AgentStateRequestStore', () => {
             }
             notifySessionFollowRuleRequestCommitted(occurrence: (typeof committed)[number]) { committed.push(occurrence); }
             override updateAgentState(updater: (state: AgentState) => AgentState): Promise<void> {
-                this.agentState = AgentStateSchema.parse(JSON.parse(JSON.stringify(updater(this.agentState))));
+                const durable = AgentStateSchema.parse(JSON.parse(JSON.stringify(updater(this.agentState))));
+                this.agentState = { ...this.agentState, requests: durable.requests, completedRequests: durable.completedRequests };
                 return new Promise(resolve => { accept = resolve; });
             }
         }

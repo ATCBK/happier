@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
@@ -132,7 +133,7 @@ describe('Follow HTTP family adapter', () => {
   });
   it.each(['plain', 'e2ee'] as const)('reads the complete own-Account %s rule census without dropping route facts', async mode => {
     const encryption = mode === 'e2ee' ? { type: 'legacy' as const, secret: new Uint8Array(32).fill(29) } : null;
-    const snapshot = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: mode, material: encryption });
+    const snapshot = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption });
     const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
     const rules = [{ ruleId: 'personal', receiver: { kind: 'account' as const }, version: 0 },
       { ruleId: 'session-a', receiver: { kind: 'session' as const, sessionId: 'receiver-a' }, version: 1 },
@@ -215,7 +216,7 @@ describe('Follow HTTP family adapter', () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'personal-account' })).toString('base64url')}.signature`;
     const encryption = mode === 'e2ee' ? { type: 'legacy' as const, secret: new Uint8Array(32).fill(19) } : null;
     const credentials = { token, encryption };
-    const material = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: mode, material: encryption });
+    const material = encryption && createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption });
     const policy = { preset: 'custom' as const, events: { goal_changed: { delivery: 'interrupt' as const } } };
     const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['home'],
       projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] } }), policy };
@@ -229,7 +230,7 @@ describe('Follow HTTP family adapter', () => {
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode,
       contentKeyFingerprint: material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint) : null }));
     app.get('/v2/account/settings', async () => ({ version: 3, content: encryption
-      ? { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material: encryption, payload: {} }) }
+      ? { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material: encryption, payload: {}, randomBytes }) }
       : { t: 'plain', v: {} } }));
     app.get('/v2/account/session-follows', async () => ({ follows: [] }));
     app.get('/v2/account/session-delivery-mutes', async () => ({ scopes: [] }));

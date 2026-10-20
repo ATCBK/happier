@@ -41,6 +41,7 @@ import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocati
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST as CHANNELS_MANIFEST } from '@happier-dev/plugins-channels/manifest';
 import { activate as activateTelegram, PLUGIN_MANIFEST as TELEGRAM_MANIFEST } from '@happier-dev/plugins-channel-telegram';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -691,11 +692,15 @@ describe('executeContributedAction', () => {
         expect(repairs).toBe(0);
         return { status: 'approved' as const, fingerprint: request.fingerprint };
       });
-      const invoke = () => executeContributedAction({ runtimeRegistry, actionId: action.definition.id,
+      const invoke = () => executeContributedAction({ runtimeRegistry,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: CHANNELS_MANIFEST.id, localId: action.definition.id }),
         input: { providerSelection: selection, providerRemediationInput: { credentialRef }, credentialRef }, requestCurrentIntent,
         context: { surface },
       });
-      const prepare = () => executeContributedAction({ runtimeRegistry, actionId: prepareAction.definition.id, input: setup, requestCurrentIntent, context: { surface } });
+      const prepare = () => executeContributedAction({ runtimeRegistry,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: CHANNELS_MANIFEST.id, localId: prepareAction.definition.id }),
+        input: setup, requestCurrentIntent, context: { surface },
+      });
       publish({ v: 1, actions: { [qualifiedId]: { disabledSurfaces: [surface] } } }, 1);
       expect(await invoke()).toMatchObject({ result: { ok: false, errorCode: 'plugin_action_unavailable', actionHandlerInvocation: 'notStarted' } });
       expect(repairs).toBe(0);

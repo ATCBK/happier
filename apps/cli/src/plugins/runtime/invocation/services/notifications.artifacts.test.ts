@@ -111,7 +111,7 @@ describe('plugin notification Account Artifact custody', () => {
         };
         const seed = { plugin: { id: 'acme.tasks', version: '1.0.0' }, contribution: { id: 'run', qualifiedId: 'acme.tasks/actions/run' },
           occurrenceId: 'one', correlationId: 'one', surface: 'cli' as const, signal: new AbortController().signal, isOccurrenceCurrent: () => true };
-        const host = { categories: [{ provenance: 'external' as const, source: { kind: 'path' as const }, pluginId: 'acme.tasks',
+        const host = { categories: [{ pluginId: 'acme.tasks',
           definition: { id: 'updates', kind: 'plugin' as const, title: 'Updates', eventIds: [] } }], channels: [],
           readAttentionPolicy: () => ({ channels: { badge: { enabled: false } } }),
           async activateChannel() {}, readChannel: () => null,

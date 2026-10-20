@@ -21,6 +21,7 @@ import {
   resolveActivityNotificationPolicyEvent,
 } from './dispatchActivityNotification';
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
+import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createStablePluginNotificationsOwner, type PluginNotificationSenderBinding } from '@/plugins/runtime/invocation/services/notifications';
 import { createWorkflowRunReviewEntryNotificationHandler } from './dispatchWorkflowRunUpdateNotification';
@@ -857,7 +858,7 @@ describe('dispatchActivityNotificationAsync', () => {
         url: 'https://hooks.example.test/happier', topics: { ready: true },
       }],
     });
-    const dispatch = (context: typeof allowed | null, readerAvailable = true) => dispatchActivityNotificationAsync({
+    const dispatch = (context: RawSessionRecord | null, readerAvailable = true) => dispatchActivityNotificationAsync({
       settings, webhookNetwork, expoPushSender: { sendToAllDevicesAsync },
       liveActivityRemoteSender: { serverId: 'home', sendLiveActivityRemoteUpdateAsync },
       fetchSessionNotificationContext: readerAvailable ? async () => context : undefined,
