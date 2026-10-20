@@ -2,11 +2,33 @@ import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec } from './actionSpecs.js';
-import { AppShellActionOutputSchemas } from './appShellActionFamily.js';
+import { AppShellActionOutputSchemas, readNoticeInboxAccountIdV1 } from './appShellActionFamily.js';
+import { ExternalActionExecutionAuthorizationV1Schema } from './externalActionApi.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 
 describe('app shell Actions', () => {
+  it('owns notice admission for native and signed own-Account agents while excluding foreign and external credentials', () => {
+    const native = { surface: 'agent', authority: 'account_automation', runtimeAccountId: 'owner', expectedAccountId: 'owner',
+      actionCaller: { kind: 'session', sessionId: 'worker', starterDepth: 0, turnDepth: 0 } } as const;
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'host-validated-proof', binding: {
+      serverIdentityId: 'home', accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 },
+      machineId: 'machine', custodianAccountId: 'owner', installationId: 'installation', actionId: 'inbox.get',
+      requestId: 'read-inbox', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } });
+    expect(readNoticeInboxAccountIdV1(native)).toBe('owner');
+    const signed = { ...native, externalActionExecutionAuthorization: authorization };
+    expect(readNoticeInboxAccountIdV1(signed)).toBe('owner');
+    expect(readNoticeInboxAccountIdV1({ ...signed, externalActionExecutionAuthorization: { ...authorization,
+      binding: { ...authorization.binding, accountId: 'foreign' } } })).toBeNull();
+    expect(readNoticeInboxAccountIdV1({ ...signed, externalActionExecutionAuthorization: { ...authorization,
+      binding: { ...authorization.binding, custodianAccountId: 'foreign' } } })).toBeNull();
+    expect(readNoticeInboxAccountIdV1({ ...native, runtimeAccountId: 'foreign' })).toBeNull();
+    expect(readNoticeInboxAccountIdV1({ ...native, externalActionCredential: {
+      accountId: 'owner', principalId: 'api', credentialId: 'token', grant: API_TOKEN_FULL_GRANT_V1,
+    } })).toBeNull();
+  });
   it('accepts canonical Inbox Automation and approval pointers but rejects private approval bodies', () => {
     const snapshot = { status: 'ready', groups: [{ key: 'automation:weekly',
       root: { kind: 'automation', automationId: 'weekly', serverId: 'home-a', runId: 'run-a' },
