@@ -1994,8 +1994,37 @@ export async function handleUpdateContainer(params: {
         const publishedDataEncryptionKey = machineUpdate.dataEncryptionKey;
         let viewerAccountId: string | null = null;
         try { if (params.credentials) viewerAccountId = parseToken(params.credentials.token); } catch { /* No owner fallback without a verified Account identity. */ }
+        const previousContext = encryption?.getMachineEncryptionContext(machineId);
         const machineContext = encryption?.captureMachineEncryptionContext(machineId, readMachineEncryptionContextInput(machineUpdate, viewerAccountId));
         const isMachineCurrent = () => shouldContinue() && machineContext?.isCurrent() !== false;
+        // Registration may be replayed while the census opens this same key or
+        // after it has hydrated. Reuse the content-patch owner instead of
+        // replacing its current content with a registration placeholder.
+        if (existingMachine && machineContext && machineContext === previousContext) {
+            const keyBasis = MachineKeyBasisStoredReadV1Schema.safeParse(machineUpdate.keyBasis);
+            const updatedMachine = await buildUpdatedMachineFromSocketUpdate({
+                existingMachine,
+                machineUpdate: {
+                    ...machineUpdate,
+                    metadata: { version: machineUpdate.metadataVersion, value: machineUpdate.metadata },
+                    daemonState: { version: machineUpdate.daemonStateVersion, value: machineUpdate.daemonState },
+                },
+                updateSeq: updateData.seq,
+                updateCreatedAt: updateData.createdAt,
+                ...(keyBasis.success ? { keyBasis: keyBasis.data } : {}),
+                getMachineEncryption: (id) => encryption?.getMachineEncryption(id) ?? null,
+            });
+            if (!isMachineCurrent()) return;
+            if (updatedMachine && storage.getState().machines[machineId] === existingMachine) {
+                const access = AccessibleMachineAccessStoredReadV1Schema.safeParse(machineUpdate.access);
+                storage.getState().applyMachines([{
+                    ...updatedMachine,
+                    ...(access.success ? { access: access.data, isShared: access.data.custodian.accountId !== viewerAccountId } : {}),
+                }], false, { sourceServerId });
+            }
+            invalidateMachines();
+            return;
+        }
         let decryptedDataKey: Uint8Array | null = null;
         if (
             encryption
