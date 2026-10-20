@@ -155,6 +155,7 @@ export type VoiceAgentInstance = {
   backendId: string;
   createRuntime: BackendFactory;
   chatBackend: ExecutionRunHostRuntime;
+  replacementChatBackend: ExecutionRunHostRuntime | null;
   chatSessionId: string;
   commitIsolation: boolean;
   commitBackend: ExecutionRunHostRuntime | null;

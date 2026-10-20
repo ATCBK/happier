@@ -471,6 +471,7 @@ export class VoiceAgentManager {
   }
 
   private async replaceChatBackendAfterCancellation(voiceAgent: VoiceAgentInstance): Promise<void> {
+    if (this.disposed || this.voiceAgents.get(voiceAgent.id) !== voiceAgent) return;
     const previousBackend = voiceAgent.chatBackend;
     const previousUnsubscribe = voiceAgent.unsubscribeChatMessages;
     let replacementBackend: ExecutionRunHostRuntime | null = null;
@@ -491,6 +492,8 @@ export class VoiceAgentManager {
       if (replacementBackend === previousBackend) {
         throw new Error('Cancelled backend factory returned the tainted runtime instance');
       }
+      // The instance owns the acquired replacement before native opening can wait.
+      voiceAgent.replacementChatBackend = replacementBackend;
       // A cancelled provider runtime is tainted: provision a genuinely fresh
       // runtime before changing the live instance, then swap atomically.
       const replacementRuntime = await replacementBackend.provisionRuntime();
@@ -529,6 +532,8 @@ export class VoiceAgentManager {
       await voiceAgent.dispose();
       await this.onTerminalFailure?.(voiceAgent.id, 'backend_replacement_failed');
       return;
+    } finally {
+      if (voiceAgent.replacementChatBackend === replacementBackend) voiceAgent.replacementChatBackend = null;
     }
     if (replacementBackend !== previousBackend) {
       await this.disposeRuntimeOnce(previousBackend);
@@ -816,6 +821,7 @@ export class VoiceAgentManager {
         backendId,
         createRuntime,
         chatBackend,
+        replacementChatBackend: null,
         chatSessionId,
         commitIsolation: params.commitIsolation === true,
         commitBackend: null,
@@ -866,6 +872,9 @@ export class VoiceAgentManager {
               const disposals: Promise<unknown>[] = [this.disposeRuntimeOnce(instance.chatBackend)];
               if (instance.commitBackend && instance.commitBackend !== instance.chatBackend) {
                 disposals.push(this.disposeRuntimeOnce(instance.commitBackend));
+              }
+              if (instance.replacementChatBackend) {
+                disposals.push(this.disposeRuntimeOnce(instance.replacementChatBackend));
               }
               await Promise.allSettled(disposals);
             })();
@@ -973,9 +982,9 @@ export class VoiceAgentManager {
 
     await Promise.allSettled(
       toStop.map(async (m) => {
+        await m.dispose();
         if (m.lifecycleInFlight) await m.lifecycleInFlight.catch(() => {});
         if (m.inFlight) await m.inFlight.catch(() => {});
-        await m.dispose();
       }),
     );
   }
@@ -1443,10 +1452,10 @@ export class VoiceAgentManager {
       return { ok: true };
     }
     const retirement = this.beginRetirement(params.voiceAgentId, async () => {
+      const lifecycle = voiceAgent.lifecycleInFlight;
+      let cancellation: Promise<void> | null = null;
       try {
-        if (voiceAgent.lifecycleInFlight) {
-          await voiceAgent.lifecycleInFlight.catch(() => {});
-        } else if (voiceAgent.activeTurnStream) {
+        if (!lifecycle && voiceAgent.activeTurnStream) {
           if (voiceAgent.activeTurnStream.done || voiceAgent.activeTurnStream.completedHistory) {
             // Stop retires the whole voice-agent instance; it is not a claim that
             // an already committed turn was cancelled. Public turn cancellation
@@ -1454,12 +1463,16 @@ export class VoiceAgentManager {
             this.closeTurnStream(voiceAgent.activeTurnStream);
             voiceAgent.activeTurnStream = null;
           } else {
-            await this.cancelActiveTurnStream(voiceAgent, voiceAgent.activeTurnStream, {
+            cancellation = this.cancelActiveTurnStream(voiceAgent, voiceAgent.activeTurnStream, {
               awaitCompletion: false,
               replaceBackend: false,
             });
           }
         }
+        // Native release interrupts pending work; joining that work first can
+        // retain both active and provisionally opening processes indefinitely.
+        await Promise.all([voiceAgent.dispose(), ...(cancellation ? [cancellation] : [])]);
+        if (lifecycle) await lifecycle.catch(() => {});
         if (voiceAgent.inFlight && !voiceAgent.activeTurnStream) {
           await voiceAgent.inFlight.catch(() => {});
         }

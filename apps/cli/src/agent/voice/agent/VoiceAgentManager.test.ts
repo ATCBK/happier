@@ -631,6 +631,36 @@ describe('VoiceAgentManager', () => {
     }
   });
 
+  it.each(['stop', 'dispose'] as const)('releases the native runtime before joining an active Voice turn during %s', async operation => {
+    let disposed = false;
+    let completeTurn: (() => void) | undefined;
+    const backend = createDeterministicBackend('retire-active', {
+      onSend(request, publish) {
+        completeTurn = () => publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+      },
+      onDispose() { disposed = true; },
+    });
+    const manager = new VoiceAgentManager({ createRuntime: () => backend });
+    const { voiceAgentId } = await manager.start({
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, chatModelId: 'chat-model', commitModelId: 'chat-model',
+      permissionIntent: 'read-only', idleTtlSeconds: 60, initialContext: 'CTX',
+    });
+    const work = manager.sendTurn({ voiceAgentId, userText: 'still running' });
+    void work.catch(() => {});
+    let retirement: Promise<unknown> | undefined;
+    try {
+      await vi.waitFor(() => expect(backend.getSeenPrompts()).toHaveLength(1));
+      retirement = operation === 'stop' ? manager.stop({ voiceAgentId }) : manager.dispose();
+      await vi.waitFor(() => expect(disposed).toBe(true));
+      await retirement;
+      expect(manager.isTurnInFlight(voiceAgentId)).toBe(false);
+    } finally {
+      completeTurn?.();
+      await Promise.allSettled([work, retirement]);
+      await manager.dispose();
+    }
+  });
+
   it.each(['READY', 'unexpected response'])(
     'reports bootstrap activity and settlement for %s',
     async (responseText) => {
@@ -1939,7 +1969,7 @@ describe('VoiceAgentManager', () => {
     expect(result.commitText).toContain('commit:');
   });
 
-  it('waits for in-flight operations to finish before stopping', async () => {
+  it('rejects an in-flight Voice send when its runtime is stopped', async () => {
 
     const deferred: { resolve: () => void } = { resolve: () => {} };
     let resolveWasSet = false;
@@ -1969,24 +1999,18 @@ describe('VoiceAgentManager', () => {
     });
 
     const sendP = manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'hi' });
+    const sendRejected = expect(sendP).rejects.toBeInstanceOf(Error);
 
     await vi.waitFor(() => expect(resolveWasSet).toBe(true));
 
-    let stopResolved = false;
-    const stopP = manager.stop({ voiceAgentId: started.voiceAgentId }).then(() => {
-      stopResolved = true;
-    });
-
-    await Promise.resolve();
-    expect(stopResolved).toBe(false);
-
-    expect(resolveWasSet).toBe(true);
+    const stopP = manager.stop({ voiceAgentId: started.voiceAgentId });
+    await vi.waitFor(() => expect(chatBackend.getRuntimeLifetimeSignal().aborted).toBe(true));
     deferred.resolve();
-    await sendP;
+    await sendRejected;
     await stopP;
   });
 
-  it('cancels an active turn stream before stopping', async () => {
+  it('retires an active turn stream without creating a replacement when stopping', async () => {
 
     const chatBackend = createCancelableBlockingBackend('chat');
     const commitBackend = createDeterministicBackend('commit');
@@ -2010,7 +2034,7 @@ describe('VoiceAgentManager', () => {
     await vi.waitFor(() => expect(chatBackend.getSeenPrompts()).toHaveLength(1));
 
     await expect(manager.stop({ voiceAgentId: started.voiceAgentId })).resolves.toEqual({ ok: true });
-    expect(chatBackend.wasCancelled()).toBe(true);
+    expect(chatBackend.getRuntimeLifetimeSignal().aborted).toBe(true);
     expect(createBackend).toHaveBeenCalledTimes(1);
   });
 
@@ -2422,12 +2446,16 @@ describe('VoiceAgentManager', () => {
     const cancelling = manager.cancelTurnStream({ voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
     await replacementOpening;
     const stopping = manager.stop({ voiceAgentId: started.voiceAgentId });
-
-    replacementDeferred.resolve();
-    await expect(Promise.all([cancelling, stopping])).resolves.toEqual([{ ok: true }, { ok: true }]);
-    expect(disposed).toEqual({ old: 1, replacement: 1 });
-    await manager.dispose();
-    expect(disposed).toEqual({ old: 1, replacement: 1 });
+    try {
+      await vi.waitFor(() => expect(oldBackend.getRuntimeLifetimeSignal().aborted).toBe(true));
+      expect(replacementBackend.getRuntimeLifetimeSignal().aborted).toBe(true);
+    } finally {
+      replacementDeferred.resolve();
+      await expect(Promise.all([cancelling, stopping])).resolves.toEqual([{ ok: true }, { ok: true }]);
+      expect(disposed).toEqual({ old: 1, replacement: 1 });
+      await manager.dispose();
+      expect(disposed).toEqual({ old: 1, replacement: 1 });
+    }
   });
 
   it('does not suppress same-backend commit output while a naturally completed stream awaits its final read', async () => {
@@ -2534,6 +2562,7 @@ describe('VoiceAgentManager', () => {
     });
 
     const sendP = manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'hi' });
+    const sendRejected = expect(sendP).rejects.toBeInstanceOf(Error);
     await vi.waitFor(() => expect(promptStarted).toBe(true));
     const stopP = manager.stop({ voiceAgentId: started.voiceAgentId });
 
@@ -2542,7 +2571,7 @@ describe('VoiceAgentManager', () => {
     });
 
     deferred.resolve();
-    await sendP;
+    await sendRejected;
     await stopP;
   });
 
