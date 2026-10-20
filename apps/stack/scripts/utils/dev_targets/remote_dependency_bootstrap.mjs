@@ -4,7 +4,7 @@ import { join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { execYarn } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
-import { resolveRemoteValidationPreparationEnv } from './remote_validation_preparation.mjs';
+import { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
 import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';

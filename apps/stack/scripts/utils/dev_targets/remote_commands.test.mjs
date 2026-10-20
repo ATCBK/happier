@@ -685,7 +685,9 @@ test('CLI command prerequisites distinguish Vitest setup from generator-only pro
 });
 
 test('source-test native requirements belong to the selected package declaration', async t => {
-  const { root } = await createTempFixture(t, { prefix: 'selected-source-test-tools-' });
+  const fixture = await createTempFixture(t, { prefix: 'selected-source-test-tools-' });
+  await installNativeAdmissionFixture({ root: fixture.root });
+  const root = join(fixture.root, 'native-owner');
   const cliDir = join(root, 'apps/cli');
   mkdirSync(cliDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
@@ -722,8 +724,9 @@ test('source-test native requirements belong to the selected package declaration
     if (declaration !== undefined) {
       const { prepareRemoteValidationWorkspace } = await import('./remote_validation_preparation.mjs');
       await assert.rejects(prepareRemoteValidationWorkspace({ repoDir: root,
-        componentRelativeDir: 'apps/cli', validationKind: 'source-test', requiredTools: expected }),
-      error => error.code === 'EEXIT' && error.err.includes('ERR_MODULE_NOT_FOUND'),
+        componentRelativeDir: 'apps/cli', validationKind: 'source-test', requiredTools: expected,
+        env: buildNativeAdmissionFixtureEnv() }),
+      error => error.exitCode === 1 && error.signal === null,
       'a declared native prerequisite must not silently skip a missing selected source owner');
     }
   }
@@ -786,7 +789,10 @@ printf 'prepared-native' > "$output"
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
     };
     const run = (component, buildMode) => {
-      const fixtureEnv = buildNativeAdmissionFixtureEnv();
+      // Bind scratch at the worker process boundary, before remote custody
+      // starts. The fixture owns its teardown; per-dispatch scratch reclamation
+      // otherwise censuses this shared host, unrelated to publication leases.
+      const fixtureEnv = { ...buildNativeAdmissionFixtureEnv(), TMPDIR: root };
       delete fixtureEnv.HAPPIER_WORKSPACE_BUILD_MODE;
       const commandEnvironment = { ...environment,
         HAPPIER_DEV_TARGET_EXECUTION: placement === 'remote' ? '1' : '',

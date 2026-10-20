@@ -3,6 +3,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveWorkspaceBuildMode, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 import { requiresTypeScriptAdmission } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import { runWorkspaceBuildAdmission } from '../proc/workspace_build_admission.mjs';
+import { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
+export { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
 
 async function prepareCliSourceNativeCustody(repoDir, env) {
   const setupModule = pathToFileURL(resolve(repoDir, 'apps/cli/src/test-setup.ts')).href;
@@ -28,12 +30,6 @@ async function prepareCliSourceNativeCustody(repoDir, env) {
       : `CLI native process custody preparation exited with status ${String(result.status)}`),
     { exitCode: result.status, signal: result.signal });
   }
-}
-
-export function resolveRemoteValidationPreparationEnv(env, validationKind, defaultBuildMode = validationKind === 'runtime' ? 'source-dev' : 'strict') {
-  return { ...env, [WORKSPACE_BUILD_MODE_ENV]: resolveWorkspaceBuildMode({
-    buildMode: env[WORKSPACE_BUILD_MODE_ENV] ?? defaultBuildMode, env,
-  }), ...(validationKind === 'typecheck' || validationKind === 'runtime' ? { HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' } : {}) };
 }
 
 function resolveComponentDir(repoDir, componentRelativeDir) {
