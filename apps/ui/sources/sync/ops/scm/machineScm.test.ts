@@ -81,7 +81,15 @@ describe('machineScm', () => {
         const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
         const { tmpdir } = await import('node:os');
         const { join } = await import('node:path');
-        const { createTestGitRpcManager, runGit } = await import('../../../../../cli/src/scm/rpc/__tests__/testRpcHarness');
+        // Load the real CLI fixture under Vitest's importer-aware aliases, without
+        // rooting the CLI program in the UI TypeScript compiler's alias space.
+        const scmHarnessSource = '../../../../../cli/src/scm/rpc/__tests__/testRpcHarness';
+        const { createTestGitRpcManager, runGit } = await vi.importActual<{
+            createTestGitRpcManager(input: Readonly<{ workingDirectory: string }>): {
+                call(method: string, request: unknown): Promise<unknown>;
+            };
+            runGit(cwd: string, args: string[]): string;
+        }>(scmHarnessSource);
         const { Platform } = await import('react-native');
         const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
         const { flushHookEffects } = await import('@/dev/testkit/hooks/flushHookEffects');
