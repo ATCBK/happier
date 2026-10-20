@@ -46,6 +46,15 @@ The snippet is shown again later so you can confirm what the comment refers to b
 
 ## Line anchoring
 
+<Callout type="info">
+  Unreleased 0.3 selection Ask integration reuses these review-comment anchors
+  for files and diffs. With an unsaved editor draft, the anchor refers to saved
+  text and the quote retains the selected draft text. Ask from terminal or
+  transcript text instead inserts a fenced quote in the editable composer;
+  it does not add a new line-anchor kind or send automatically. Desktop and
+  phone integration is still being validated.
+</Callout>
+
 Review comments are not anchored only by line number.
 
 Happier also stores a line-content hash for the selected line when it can. If the file shifts, Happier can use that hash to find the same line content again. If the exact line cannot be found, the stored line number and snippet still give the agent and the UI useful fallback context.
