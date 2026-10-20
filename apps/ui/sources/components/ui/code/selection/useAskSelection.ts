@@ -20,7 +20,7 @@ export { askAboutRanges } from './askAboutRanges';
 export type { AskSelectionTargetContext } from './askSelectionTarget';
 export type { AskSelectionSource } from './askSelectionSource';
 
-export type AskSelection = AskSelectionRange & Readonly<{ text: string; rect?: Rect | null }>;
+export type AskSelection = AskSelectionRange & Readonly<{ text: string; rect?: Rect | null; collapsed?: boolean }>;
 
 export type UseAskSelectionInput = Readonly<{
     scopeId: string;

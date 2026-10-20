@@ -63,7 +63,8 @@ export type CodeEditorHandle = Readonly<{
     subscribeHistory: (listener: (state: CodeEditorHistory) => void) => () => void;
     setDecorations: (layer: EditorDecorationLayer, items: readonly EditorDecoration[]) => void;
     onDecorationPress: (cb: (layer: EditorDecorationLayer, item: EditorDecoration) => void) => () => void;
-    getSelection?: () => { startLine: number; endLine: number; text: string; rect: Rect | null } | null;
+    /** `collapsed` is a caret: Ask still asks about its line, but no selection toolbar is raised. */
+    getSelection?: () => { startLine: number; endLine: number; text: string; rect: Rect | null; collapsed?: boolean } | null;
     subscribeSelection?: (listener: () => void) => () => void;
     getLineRect?: (line: number) => Rect | null;
     onPointerPosition?: (cb: (position: { line: number; character: number; rect: Rect } | null) => void) => () => void;

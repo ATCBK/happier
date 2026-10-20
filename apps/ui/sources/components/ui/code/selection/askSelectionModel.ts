@@ -42,6 +42,7 @@ export function buildAskSelectionDrafts(input: Readonly<{
     lines?: readonly CodeLine[];
     ranges: readonly AskSelectionRange[];
     existingDrafts?: readonly ReviewCommentDraft[];
+    preserveRangeOccurrences?: boolean;
 }>): readonly ReviewCommentDraft[] {
     // The read-only table omits the final empty line; an editor caret can select it.
     const fileLines = (text: string) => buildCodeLinesFromFile({ text: text === '' || text.endsWith('\n') ? `${text}\n` : text });
@@ -49,12 +50,15 @@ export function buildAskSelectionDrafts(input: Readonly<{
     const savedLines = input.source === 'file' && input.savedText !== undefined
         ? fileLines(input.savedText) : liveLines;
     const seen = new Set<string>();
+    const usedDraftIds = new Set<string>();
     return input.ranges.flatMap((range) => {
         const start = Math.max(1, Math.min(range.startLine, range.endLine));
         const end = Math.max(start, range.startLine, range.endLine);
-        const key = JSON.stringify([input.filePath, start, end]);
-        if (seen.has(key)) return [];
-        seen.add(key);
+        const key = JSON.stringify([input.filePath, start, end, range.body ?? null]);
+        if (!input.preserveRangeOccurrences) {
+            if (seen.has(key)) return [];
+            seen.add(key);
+        }
         const lineNumber = (line: CodeLine) => input.source === 'diff' && range.side === 'before'
             ? line.oldLine : line.newLine;
         const liveRange = liveLines.filter((line) => {
@@ -74,9 +78,12 @@ export function buildAskSelectionDrafts(input: Readonly<{
         }
         const existing = input.existingDrafts?.find((draft) => draft.filePath === input.filePath && draft.anchor.kind === 'range'
             && draft.anchor.startLine === lineNumber(rangeLines[0]!) && draft.anchor.endLine === lineNumber(rangeLines[rangeLines.length - 1]!)
-            && draft.anchor.side === (input.source === 'diff' ? range.side ?? 'after' : undefined));
+            && draft.anchor.side === (input.source === 'diff' ? range.side ?? 'after' : undefined)
+            && (range.body === undefined || draft.body === range.body)
+            && (!input.preserveRangeOccurrences || !usedDraftIds.has(draft.id)));
         const draft = buildReviewCommentDraftFromCodeLineRange({ filePath: input.filePath, source: input.source,
             lines, rangeLines, body: range.body ?? existing?.body ?? '', contextRadius: 2, existing });
+        usedDraftIds.add(draft.id);
         return [{ ...draft, includeInPrompt: true, snapshot: { ...draft.snapshot,
             selectedLines: range.text ? range.text.split('\n') : liveRange.map((line) => line.renderCodeText) } }];
     });

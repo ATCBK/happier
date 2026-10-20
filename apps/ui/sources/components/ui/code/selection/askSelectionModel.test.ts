@@ -31,6 +31,26 @@ describe('Ask selection context', () => {
         expect(buildAskSelectionDrafts({ ...input, existingDrafts: first })[0]?.id).toBe(first[0]?.id);
     });
 
+    it('retains distinct diagnostic messages on the same range and reuses only their matching drafts', () => {
+        const input = { filePath: 'a.ts', source: 'file' as const, text: 'const result = missing;', savedText: 'const result = missing;',
+            ranges: [{ startLine: 1, endLine: 1, body: 'Unknown name' }, { startLine: 1, endLine: 1, body: 'Unused result' },
+                { startLine: 1, endLine: 1, body: 'Unknown name' }] };
+        const first = buildAskSelectionDrafts(input);
+        expect(first.map((draft) => draft.body)).toEqual(['Unknown name', 'Unused result']);
+        expect(new Set(first.map((draft) => draft.id)).size).toBe(2);
+        expect(buildAskSelectionDrafts({ ...input, existingDrafts: first }).map((draft) => draft.id)).toEqual(first.map((draft) => draft.id));
+    });
+
+    it('preserves explicit problem occurrences without changing ordinary selection dedupe', () => {
+        const input = { filePath: 'a.ts', source: 'file' as const, text: 'absent + absent', savedText: 'absent + absent',
+            ranges: [{ startLine: 1, endLine: 1, body: 'Unknown name' }, { startLine: 1, endLine: 1, body: 'Unknown name' }] };
+        expect(buildAskSelectionDrafts(input)).toHaveLength(1);
+        const first = buildAskSelectionDrafts({ ...input, preserveRangeOccurrences: true });
+        expect(first).toHaveLength(2);
+        expect(new Set(first.map((draft) => draft.id)).size).toBe(2);
+        expect(buildAskSelectionDrafts({ ...input, preserveRangeOccurrences: true, existingDrafts: first }).map((draft) => draft.id)).toEqual(first.map((draft) => draft.id));
+    });
+
     it('keeps unanchored code containing fences as one editable quote', () => {
         const text = 'before\n```ts\nconst answer = 42;\n```\nafter';
         const quote = buildAskSelectionQuote({ text, filePath: 'a.ts', startLine: 4, endLine: 8 });
