@@ -156,7 +156,10 @@ export async function archiveSessionReports(params: Pick<SessionArchiveActionRes
             })?.session : null;
             return known ? getSessionName(known, params.serverId) : report.title || report.sessionId;
         });
-    if (params.reportsError) notArchived.push(t('sessionInfo.failedToArchiveSession'));
+    if (params.reportsError) {
+        Modal.alert(t('common.error'), [t('sessionInfo.failedToArchiveSession'), ...notArchived].join('\n'));
+        return;
+    }
     if (notArchived.length > 0) {
         Modal.alert(
             t('sessionWork.archive.someNotArchivedTitle', { count: notArchived.length }),
