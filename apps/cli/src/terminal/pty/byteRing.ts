@@ -104,6 +104,8 @@ export function createTerminalByteRing(params: Readonly<{
     nextSeq += 1;
     chunks.push(stored);
     retainedBytes += stored.bytes.length;
+    // Advance the retained output window only when new output arrives. Reading
+    // a quiet or finished terminal must not erase its last retained bytes.
     trim(timestampMs);
 
     return {
@@ -116,7 +118,6 @@ export function createTerminalByteRing(params: Readonly<{
   };
 
   const read = (input: Readonly<{ byteOffset: number; maxBytes: number; maxChunks: number }>): TerminalByteRingReadResult => {
-    trim(now());
     const requestedByteOffset = Math.max(0, Math.trunc(input.byteOffset));
     const boundedRequestedByteOffset = Math.min(requestedByteOffset, nextByteOffset);
     const effectiveByteOffset = Math.max(boundedRequestedByteOffset, droppedBeforeByteOffset);
@@ -179,7 +180,6 @@ export function createTerminalByteRing(params: Readonly<{
       droppedBeforeByteOffset = nextByteOffset;
     },
     bounds: () => {
-      trim(now());
       return {
         availableByteOffset: nextByteOffset,
         totalBytesWritten: nextByteOffset,

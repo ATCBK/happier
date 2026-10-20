@@ -668,9 +668,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
       maxBytes: config.bufferMaxBytes,
       maxChunks: config.bufferMaxEvents,
       maxAgeMs: config.bufferRetentionMs,
-      // Once a process ends, its retained output must remain replayable for
-      // the lifetime of this terminal. Live age and byte/count bounds still apply.
-      now: () => session.ended ? session.lastActivityAtMs : now(),
+      now,
     });
     const urlDetector = createTerminalUrlDetector({
       bufferLimit: config.urlParseBufferLimit,

@@ -169,7 +169,7 @@ function defaultConfig(overrides?: Partial<TerminalPtySessionManagerConfig>): Te
 const BASH_ENV: NodeJS.ProcessEnv = { SHELL: '/bin/bash' };
 
 describe('finite natural tree settlement', () => {
-  it('replays retained finished output after the live output age window, through the strict stream consumer', () => {
+  it('replays tiny output after a long idle hold and its later exit, through the strict stream consumer', () => {
     let clock = 0;
     const provider = new FakePtyProvider();
     const manager = createTerminalPtySessionManager({ ptyProvider: provider, platform: 'linux', env: BASH_ENV,
@@ -178,16 +178,21 @@ describe('finite natural tree settlement', () => {
       const accepted = manager.ensure({ terminalKey: 'finished-replay', cwd: '/fixture', holdUntilExit: true,
         launchProcess: { file: '/installed/echo', args: [] } });
       if (!accepted.ok) throw new Error(accepted.errorCode);
-      provider.spawned[0]!.pty.emitData(Buffer.from('世界🚀\u0000\n'));
-      clock = 500;
-      provider.spawned[0]!.pty.emitExit({ exitCode: 0 });
-      clock = 2000;
-      const output = TerminalStreamReadResponseSchema.parse(manager.readByteStream({ terminalId: accepted.terminalId, byteOffset: 0 }));
-      if (!output.ok) throw new Error(output.code);
-      expect(output.frames.some(frame => frame.t === 'gap')).toBe(false);
-      expect(Buffer.concat(output.frames.flatMap(frame => frame.t === 'bytes' ? [decodeTerminalStreamBytesFrame(frame)] : [])).toString('utf8')).toBe('世界🚀\u0000\n');
-      expect(output.done).toBe(true);
-      expect(output.frames.at(-1)).toMatchObject({ t: 'exit', exitCode: 0 });
+      const text = 'QA_HOLD_READY 世界🚀\u0000\n';
+      provider.spawned[0]!.pty.emitData(Buffer.from(text));
+      for (const ended of [false, true]) {
+        clock += 40 * 60_000;
+        if (ended) {
+          provider.spawned[0]!.pty.emitExit({ exitCode: 0 });
+          clock += 40 * 60_000;
+        }
+        const output = TerminalStreamReadResponseSchema.parse(manager.readByteStream({ terminalId: accepted.terminalId, byteOffset: 0 }));
+        if (!output.ok) throw new Error(output.code);
+        expect(output.frames.some(frame => frame.t === 'gap')).toBe(false);
+        expect(Buffer.concat(output.frames.flatMap(frame => frame.t === 'bytes' ? [decodeTerminalStreamBytesFrame(frame)] : [])).toString('utf8')).toBe(text);
+        expect(output.done).toBe(ended);
+        if (ended) expect(output.frames.at(-1)).toMatchObject({ t: 'exit', exitCode: 0 });
+      }
     } finally { manager.dispose(); }
   });
   it('retains finite Windows custody when fresh census cannot verify Job absence', async () => {
