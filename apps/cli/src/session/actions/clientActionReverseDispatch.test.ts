@@ -183,6 +183,11 @@ describe('client Action reverse delivery', () => {
       status: 'ready', sessionId: 'lead', summary: { outstanding: 1, needsYou: 0, stalled: 0, sessions: 1, runs: 0 },
       items: [], managedRuns: { phase: 'loaded', refreshFailed: false },
     }, absent: { ok: true, result: { status: 'unavailable' } } },
+    { actionId: 'inbox.get', input: {}, result: {
+      status: 'ready', groups: [], items: [], coverage: { discussions: 'complete' },
+      approvalIds: ['approval'], usageNoticeIds: [], friendRequestIds: [],
+      automationRunIds: [], readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false,
+    }, absent: { ok: true, result: { status: 'unavailable' } } },
     { actionId: 'inbox.mark_all_read', input: { targets: [{ serverId: 'home', sessionId: 'lead' }] },
       result: { results: [{ serverId: 'home', sessionId: 'lead', status: 'succeeded' }] },
       absent: { ok: false, errorCode: 'unavailable', error: 'noClient' } },
@@ -198,7 +203,7 @@ describe('client Action reverse delivery', () => {
   ] as const)('invokes $actionId from CLI through the answering client and reports typed absence', async request => {
     const expectedMethod = request.actionId === 'session.work.get'
       ? mountedWorkReadClientRpcMethod(request.actionId, request.input.sessionId)
-      : RPC_METHODS.UI_ACTION_EXECUTE;
+      : request.actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(request.actionId) : RPC_METHODS.UI_ACTION_EXECUTE;
     const client: ClientActionMachineRpc = {
       hasConnectedClientRpcHandler: method => method === expectedMethod,
       // Replace only the process/network hop; admission and result validation stay real.
@@ -211,13 +216,13 @@ describe('client Action reverse delivery', () => {
         return { ok: true, result: { v: 1, execution: { ok: true, result: request.result } } };
       },
     };
-    const context = { surface: 'cli', authority: 'present_user', serverId: 'home',
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home', runtimeAccountId: 'owner',
       presentUserConfirmation: { actionId: request.actionId } } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
     expect(await executor(disconnectedClient).execute(request.actionId, request.input, context)).toEqual(request.absent);
   });
 
-  it.each(['session.work.get'] as const)('preserves mounted-owner absence for %s when a client is connected', async actionId => {
+  it.each(['session.work.get', 'inbox.get'] as const)('preserves mounted-owner absence for %s when a client is connected', async actionId => {
     const client: ClientActionMachineRpc = {
       hasConnectedClientRpcHandler: () => true,
       callConnectedClientRpc: async (_method, _payload, options) => {
@@ -226,7 +231,7 @@ describe('client Action reverse delivery', () => {
       },
     };
     expect(await executor(client).execute(actionId, actionId === 'session.work.get' ? { sessionId: 'unmounted' } : {},
-      { surface: 'cli', authority: 'present_user', serverId: 'home' })).toEqual({ ok: true, result: { status: 'unavailable' } });
+      { surface: 'cli', authority: 'present_user', serverId: 'home', runtimeAccountId: 'owner' })).toEqual({ ok: true, result: { status: 'unavailable' } });
   });
 
   it('opens the exact comparison through the answering client without resuming a Session headlessly', async () => {

@@ -75,6 +75,8 @@ export type ExecuteScmActionOperationParams = Readonly<{
     rpcCompatibility?: true;
     deliverFileAtRevision?: (request: scm.ScmFileAtRevisionRequest, response: scm.ScmFileAtRevisionResponse, signal?: AbortSignal) => Promise<scm.ScmFileReadResponse>;
     prepareFileBytesExport?: (input: import('./deliverScmFileAtRevision').ScmFileBytesExportInput) => ReturnType<typeof import('./deliverScmFileAtRevision').prepareScmFileBytesExport>;
+    /** Local Session transport, called only by proven Undo-export preflight before any mutation. */
+    delegateComparisonDiscardForUndoExport?: (request: scm.ScmChangeDiscardRequest) => Promise<scm.ScmChangeDiscardResponse>;
 }>;
 
 async function admitReviewScope(params: ExecuteScmActionOperationParams,
@@ -399,6 +401,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
         }
         case 'scm.change.discard': {
             const request = params.input as scm.ScmChangeDiscardRequest;
+            let delegatedUndoExport = false;
             const headNoteEvidence: { changedPaths: readonly string[] | null } = { changedPaths: null };
             const result = await runMutation(async () => runScmRoute<scm.ScmChangeDiscardRequest, scm.ScmChangeDiscardResponse>({
                 request,
@@ -453,28 +456,32 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                             ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}), ...(failure?.error ? { error: failure.error } : {}),
                             ...(params.emitFileReviewNote ? { noteDelivery: { status: 'queued' } } : {}) };
                     };
-                    const inlinePrevious = prepared.filter(item => item.result.previous && 'inlineBase64' in item.result.previous)
-                        .sort((a, b) => {
-                            const previousA = a.result.previous;
-                            const previousB = b.result.previous;
-                            return (previousB && 'inlineBase64' in previousB ? previousB.inlineBase64.length : 0)
-                                - (previousA && 'inlineBase64' in previousA ? previousA.inlineBase64.length : 0);
-                        });
-                    while (Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES && inlinePrevious.length) {
-                        const item = inlinePrevious.shift()!;
+                    const undoPayloads = prepared.flatMap(item => {
                         const previous = item.result.previous;
-                        if (!previous || !('inlineBase64' in previous)) continue;
+                        if (previous && 'inlineBase64' in previous) return [{ item, bytes: Buffer.from(previous.inlineBase64, 'base64'), weight: previous.inlineBase64.length }];
+                        if (item.result.inverseEdits && item.undoPreimage) return [{ item, bytes: Buffer.from(item.undoPreimage),
+                            weight: Buffer.byteLength(JSON.stringify(item.result.inverseEdits), 'utf8') }];
+                        return [];
+                    }).sort((a, b) => b.weight - a.weight);
+                    const exceedsReplyBudget = () => Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES;
+                    if (exceedsReplyBudget() && undoPayloads.length && !params.prepareFileBytesExport && params.delegateComparisonDiscardForUndoExport) {
+                        // This is the only delegation point: every entry is prepared, no
+                        // local commit has run, and the Machine becomes the result/note owner.
+                        delegatedUndoExport = true;
+                        return await params.delegateComparisonDiscardForUndoExport(request);
+                    }
+                    while (exceedsReplyBudget() && undoPayloads.length) {
+                        const { item, bytes } = undoPayloads.shift()!;
                         if (!params.prepareFileBytesExport) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
                             error: 'Prepared Undo delivery is unavailable' };
                         try {
-                            item.result.previous = { export: await params.prepareFileBytesExport({ bytes: Buffer.from(previous.inlineBase64, 'base64'),
+                            item.result.previous = { export: await params.prepareFileBytesExport({ bytes,
                                 name: item.result.path.split(/[\\/]/).at(-1) || 'content', signal: context.signal }) };
+                            delete item.result.inverseEdits;
                         } catch { return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
                             error: 'Prepared Undo delivery is unavailable' }; }
                     }
-                    // Oversized inverse-unit delivery is blocked pending the approved
-                    // previous-export fallback. Never mutate without deliverable Undo.
-                    if (Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES) {
+                    if (exceedsReplyBudget()) {
                         return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
                             error: 'Prepared Undo delivery is unavailable' };
                     }
@@ -485,7 +492,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                         ...(failure?.error ? { error: failure.error } : {}) };
                 },
             }));
-            if (params.emitFileReviewNote) {
+            if (params.emitFileReviewNote && !delegatedUndoExport) {
                 const bySession = new Map<string, FileReviewNoteOperationV1[]>();
                 let noteDeliveryFailed = false;
                 for (const [index, entry] of request.entries.entries()) {

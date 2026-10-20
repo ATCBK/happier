@@ -11,7 +11,8 @@ import type { ScmBackend, ScmBackendContext } from '@/scm/types';
 
 type Params = Readonly<{ entry: ScmComparisonDiscardEntry; context: ScmBackendContext; backend: ScmBackend;
   sessionId?: string }>;
-export type PreparedComparisonDiscard = Readonly<{ result: ScmChangeDiscardResultEntry; commit: () => Promise<ScmChangeDiscardResultEntry> }>;
+export type PreparedComparisonDiscard = Readonly<{ result: ScmChangeDiscardResultEntry; undoPreimage?: Uint8Array;
+  commit: () => Promise<ScmChangeDiscardResultEntry> }>;
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 function refusedEntry(path: string, errorCode: NonNullable<ScmChangeDiscardResultEntry['errorCode']>, error: string,
@@ -158,10 +159,11 @@ export async function prepareDiscardAgainstComparison(params: Params): Promise<P
       previous = { inlineBase64: current.toString('base64') };
     }
   }
-  return prepared({ path: entry.path, status: current === null ? 'recreated' : unitArm ? 'reverted' : 'restored', hashBefore, hashAfter: hash(replacement),
+  const operation = prepared({ path: entry.path, status: current === null ? 'recreated' : unitArm ? 'reverted' : 'restored', hashBefore, hashAfter: hash(replacement),
     ...(undo ? { inverseEdits: [...undo] } : {}), ...(previous ? { previous } : {}) }, async () => {
     context.signal?.throwIfAborted();
     await context.beforeFilesystemMutation?.();
     return await commitGuardedFileReplace({ destPath: path, expectation: hashBefore, source: { kind: 'bytes', bytes: replacement } });
   });
+  return undo && current !== null ? { ...operation, undoPreimage: current } : operation;
 }
