@@ -1155,39 +1155,43 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             });
         }
 
-        if (session) {
-            try {
-                await currentSession?.closeProviderInputAdmissionAndWaitForDispatches();
-                // Dispose the local permission bridge while the session transport is still alive so it can
-                // cancel and persist any outstanding local-mode permission requests.
-                disposeLocalPermissionBridge();
-                // Bound the critical metadata drain so shutdown cannot stack waits.
-                const metadataDeadline = terminationRequested ? createSessionMetadataShutdownDeadline() : null;
-                await currentSession?.drainCriticalMetadataWrites(
-                    metadataDeadline ? { timeoutMs: metadataDeadline.remainingMs() } : undefined,
-                );
+        try {
+            if (session) {
+                try {
+                    await currentSession?.closeProviderInputAdmissionAndWaitForDispatches();
+                    // Dispose the local permission bridge while the session transport is still alive so it can
+                    // cancel and persist any outstanding local-mode permission requests.
+                    disposeLocalPermissionBridge();
+                    // Bound the critical metadata drain so shutdown cannot stack waits.
+                    const metadataDeadline = terminationRequested ? createSessionMetadataShutdownDeadline() : null;
+                    await currentSession?.drainCriticalMetadataWrites(
+                        metadataDeadline ? { timeoutMs: metadataDeadline.remainingMs() } : undefined,
+                    );
 
-                // Cleanup session resources (intervals, callbacks)
-                currentSession?.cleanup();
+                    // Cleanup session resources (intervals, callbacks)
+                    currentSession?.cleanup();
 
-                // A terminated runtime leaves the Session inactive, never archived:
-                // archiving is a user-intent action owned by setSessionArchivedState.
-                session.sendSessionDeath();
-                await session.flush();
-                await session.close();
-            } finally {
-                await runtimeActivity.lifecycle.dispose();
+                    // A terminated runtime leaves the Session inactive, never archived:
+                    // archiving is a user-intent action owned by setSessionArchivedState.
+                    session.sendSessionDeath();
+                    await session.flush();
+                    await session.close();
+                } finally {
+                    await runtimeActivity.lifecycle.dispose();
+                }
             }
-        }
 
-        // Stop caffeinate
-        stopCaffeinate();
+        } finally {
+            // Hook artifacts and their secrets must be retired even if session transport cleanup fails.
+            // Stop caffeinate
+            stopCaffeinate();
 
-        // Stop Hook server and cleanup settings file + plugin dir
-        hookServer.stop();
-        if (!endpointArtifactsOwnedByAttachment) {
-            cleanupHookSettingsFile(hookSettingsPath);
-            cleanupHookPluginDir(hookPluginDir);
+            // Stop Hook server and cleanup settings file + plugin dir
+            hookServer.stop();
+            if (!endpointArtifactsOwnedByAttachment) {
+                cleanupHookSettingsFile(hookSettingsPath);
+                cleanupHookPluginDir(hookPluginDir);
+            }
         }
 
         logger.debug('[START] Cleanup complete');
@@ -1283,6 +1287,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     let loopError: unknown = null;
     let loopSettlement: ClaudeRunnerLoopSettlement<number> | null = null;
     try {
+        // MCP startup can finish while accepted termination is still flushing the session.
+        if (terminationRequested) {
+            await terminationHandlers.whenTerminated;
+            return;
+        }
         activeLoopAbortController = new AbortController();
         logger.infoFile('[CLAUDE_STARTUP] stage=provider_loop_started');
         activeLoopPromise = loop({
