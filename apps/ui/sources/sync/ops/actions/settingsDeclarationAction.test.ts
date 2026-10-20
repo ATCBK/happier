@@ -121,14 +121,15 @@ describe('Track device-local Settings declaration', () => {
 
 describe('image Background device-local Settings declaration', () => {
     it('reads and changes the manual image and SVG preferences through the real Actions owner', async () => {
-        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: {
-            v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] },
-        } });
+        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            ...settingsDefaults.actionsSettingsV1,
+            approvalWaivedSurfaces: { 'settings.set': ['agent'] },
+        }) });
         const owner = createOwner(undefined, false, true, initialAccount);
         const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
         const context = { surface: 'agent', authority: 'account_automation' } as const;
         expect(await executor.execute('settings.get', { anchor: 'files.imageBackground' }, context))
-            .toMatchObject({ ok: true, result: { value: {} } });
+            .toEqual({ ok: true, result: { anchor: 'files.imageBackground', value: {} } });
         expect(await executor.execute('settings.set', {
             anchor: 'files.imageBackground', value: { image: 'dark', svg: 'light' },
         }, context)).toMatchObject({ ok: true, result: { value: { image: 'dark', svg: 'light' } } });
@@ -2488,7 +2489,7 @@ describe('declared settings owner', () => {
             .toMatchObject({ ok: false, errorCode: 'setting_unsupported_host' });
     });
 
-    it('preserves the canonical page-level feature admission before reading or writing a declared preference', async () => {
+    it('preserves SCM-write row admission before reading or writing a declared preference', async () => {
         const owner = createOwner();
         const before = owner.account().showLineNumbers;
         expect(await owner.action({ actionId: 'settings.list', input: { pageId: 'sourceControl' } }))
