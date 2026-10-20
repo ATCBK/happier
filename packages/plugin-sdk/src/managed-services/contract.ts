@@ -379,6 +379,7 @@ export type ManagedServiceErrorCode =
     | 'plugin_managed_service_capacity_exceeded'
     | 'plugin_managed_service_not_reusable'
     | 'plugin_managed_service_unavailable'
+    | 'plugin_managed_service_request_too_large'
     | 'plugin_managed_service_establishment_failed'
     | 'plugin_managed_service_health_timeout'
     | 'plugin_managed_server_termination_incomplete'

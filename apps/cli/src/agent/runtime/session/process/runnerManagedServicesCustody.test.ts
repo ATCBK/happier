@@ -594,6 +594,11 @@ describe('runner managed-services Provider custody', () => {
         });
         const service = await client.adopt(spec.id);
 
+        await expect(service.request({ pathAndQuery: '/oversized', method: 'POST',
+            body: new Uint8Array(16 * 1024 * 1024 + 1) }))
+            .rejects.toMatchObject({ code: 'plugin_managed_service_request_too_large',
+                details: { resource: 'body_bytes', limit: 16 * 1024 * 1024, actual: 16 * 1024 * 1024 + 1 } });
+
         const streamed = await service.request({
             pathAndQuery: '/events',
         });

@@ -2508,6 +2508,34 @@ describe('managed-services SVC09 owner', () => {
         expect(hostFetch).toHaveBeenCalledOnce();
     });
 
+    it('admits the SVC09 Provider-source descriptor boundary and types over-envelope refusal before transport', async () => {
+        const hostFetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+        const harness = createHarness(hostFetch);
+        const handle = await harness.owner.bindScope(harness.scope, exec).supervise({
+            id: 'gateway',
+            mode: { kind: 'spawn', launch: { executable: {} as never },
+                endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: 4312 } } },
+        });
+        const source = { baseUrl: 'https://example.com/v1', resolvedAddresses: ['1.1.1.1'],
+            publicHeaders: { 'x-first': 'x'.repeat(4096), 'x-second': '' }, credentialHeaderName: 'authorization' };
+        source.publicHeaders['x-second'] = 'x'.repeat(6144 - Buffer.byteLength(JSON.stringify(source)));
+        const descriptor = () => Buffer.from(JSON.stringify(source)).toString('base64url');
+        try {
+            expect(descriptor()).toHaveLength(8192);
+            await expect(handle.request({ pathAndQuery: '/v1/responses', method: 'POST',
+                headers: { 'x-happier-provider-source': descriptor() } })).resolves.toMatchObject({ status: 204 });
+            source.publicHeaders['x-second'] += 'x';
+            // 8193 cannot encode whole bytes in unpadded base64url; 8194 is the next valid descriptor.
+            expect(descriptor()).toHaveLength(8194);
+            await expect(handle.request({ pathAndQuery: '/v1/responses', method: 'POST',
+                headers: { 'x-happier-provider-source': descriptor() } })).rejects.toMatchObject({
+                code: 'plugin_managed_service_request_too_large',
+                details: { resource: 'header_value', limit: 8192, actual: 8194 },
+            });
+            expect(hostFetch).toHaveBeenCalledOnce();
+        } finally { await handle.dispose(); }
+    });
+
     it('revalidates final request header count and bytes after injecting host-Basic authorization', async () => {
         const hostFetch = vi.fn<typeof globalThis.fetch>(async () =>
             new Response(null, { status: 200 }));
@@ -2548,7 +2576,7 @@ describe('managed-services SVC09 owner', () => {
                 pathAndQuery: '/session',
                 headers,
             })).rejects.toMatchObject({
-                code: 'plugin_managed_service_unavailable',
+                code: 'plugin_managed_service_request_too_large',
             });
         }
         expect(hostFetch).not.toHaveBeenCalled();
@@ -2563,18 +2591,20 @@ describe('managed-services SVC09 owner', () => {
                 endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: 4312 } } },
         });
         try {
-            for (const request of [
-                { body: new Uint8Array(16 * 1024 * 1024 + 1) },
-                { timeoutMs: 300_001 },
-            ]) {
-                await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST', ...request }))
-                    .rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
-            }
+            await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST',
+                body: new Uint8Array(16 * 1024 * 1024 + 1) }))
+                .rejects.toMatchObject({ code: 'plugin_managed_service_request_too_large',
+                    details: { resource: 'body_bytes', limit: 16 * 1024 * 1024, actual: 16 * 1024 * 1024 + 1 } });
+            await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST', timeoutMs: 300_001 }))
+                .rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
             expect(hostFetch).not.toHaveBeenCalled();
             await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST',
                 body: new Uint8Array(16 * 1024 * 1024), timeoutMs: 300_000 }))
                 .resolves.toMatchObject({ status: 204 });
             expect(hostFetch).toHaveBeenCalledOnce();
+            await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST',
+                body: new Uint8Array(16 * 1024 * 1024 - 1) }))
+                .resolves.toMatchObject({ status: 204 });
         } finally {
             await handle.dispose();
         }

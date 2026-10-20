@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -212,8 +213,8 @@ const MANAGED_SERVICE_REQUEST_METHODS = new Set([
     'DELETE',
     'OPTIONS',
 ]);
-const MAX_MANAGED_SERVICE_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_MANAGED_SERVICE_REQUEST_HEADERS = 64;
+const MAX_MANAGED_SERVICE_REQUEST_HEADER_VALUE_CHARS = 8_192;
 const MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_RESPONSE_HEADERS = 128;
 const MAX_MANAGED_SERVICE_RESPONSE_HEADER_BYTES = 64 * 1024;
@@ -1918,6 +1919,14 @@ function requestUnavailable(message: string): never {
     return fail('plugin_managed_service_unavailable', message);
 }
 
+function requestHeaderSizeExceeded(
+    resource: 'header_count' | 'header_value' | 'header_bytes',
+    limit: number,
+    actual: number,
+): never {
+    return failManagedServiceRequestSize(resource, limit, actual);
+}
+
 /**
  * Cancellation provenance for one managed request.
  *
@@ -1982,7 +1991,7 @@ function normalizeManagedServiceRequest(
     }
     const headerEntries = Object.entries(rawHeaders);
     if (headerEntries.length > MAX_MANAGED_SERVICE_REQUEST_HEADERS) {
-        return requestUnavailable('Managed-service request has too many headers');
+        return requestHeaderSizeExceeded('header_count', MAX_MANAGED_SERVICE_REQUEST_HEADERS, headerEntries.length);
     }
     const headers = new Headers();
     const seenHeaders = new Set<string>();
@@ -2003,32 +2012,27 @@ function normalizeManagedServiceRequest(
             || seenHeaders.has(name)
             || !publicHeaderNameIsValid
             || typeof value !== 'string'
-            || value.length > 8_192
             || CONTROL_CHARACTER_PATTERN.test(value)
         ) {
             return requestUnavailable(
                 'Managed-service request headers are invalid',
             );
         }
+        if (value.length > MAX_MANAGED_SERVICE_REQUEST_HEADER_VALUE_CHARS) {
+            return requestHeaderSizeExceeded('header_value', MAX_MANAGED_SERVICE_REQUEST_HEADER_VALUE_CHARS, value.length);
+        }
         headerBytes += Buffer.byteLength(rawName) + Buffer.byteLength(value);
         if (headerBytes > MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES) {
-            return requestUnavailable(
-                'Managed-service request headers are too large',
-            );
+            return requestHeaderSizeExceeded('header_bytes', MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES, headerBytes);
         }
         seenHeaders.add(name);
         headers.set(name, value);
     }
     const body = request.body;
-    if (
-        body !== undefined
-        && (
-            !(body instanceof Uint8Array)
-            || body.byteLength > MAX_MANAGED_SERVICE_REQUEST_BODY_BYTES
-        )
-    ) {
+    if (body !== undefined && !(body instanceof Uint8Array)) {
         return requestUnavailable('Managed-service request body is invalid');
     }
+    assertManagedServiceRequestBodySize(body);
     if (body !== undefined && (method === 'GET' || method === 'HEAD')) {
         return requestUnavailable(
             'Managed-service GET and HEAD requests cannot include a body',
@@ -2100,7 +2104,7 @@ function mergeManagedServiceRequestHeaders(
             name.length < 1
             || name.length > 128
             || !HTTP_HEADER_NAME_PATTERN.test(name)
-            || value.length > 8_192
+            || value.length > MAX_MANAGED_SERVICE_REQUEST_HEADER_VALUE_CHARS
             || CONTROL_CHARACTER_PATTERN.test(value)
             || merged.has(name)
         ) {
@@ -2116,13 +2120,11 @@ function mergeManagedServiceRequestHeaders(
         count += 1;
         bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
     });
-    if (
-        count > MAX_MANAGED_SERVICE_REQUEST_HEADERS
-        || bytes > MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES
-    ) {
-        return requestUnavailable(
-            'Managed-service request headers exceed their final bounds',
-        );
+    if (count > MAX_MANAGED_SERVICE_REQUEST_HEADERS) {
+        return requestHeaderSizeExceeded('header_count', MAX_MANAGED_SERVICE_REQUEST_HEADERS, count);
+    }
+    if (bytes > MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES) {
+        return requestHeaderSizeExceeded('header_bytes', MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES, bytes);
     }
     return merged;
 }
