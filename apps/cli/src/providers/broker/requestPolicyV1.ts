@@ -80,7 +80,6 @@ function normalizeHeaderName(rawName: string): string | null {
  * differently sanitized one.
  */
 function sanitizeRequest(request: ManagedServiceRequest): ManagedServiceRequest | null {
-    if (request.body && request.body.byteLength > PROVIDER_ENDPOINT_SAFETY_LIMITS.maxDecodedBodyBytes) return null;
     let pathAndQuery: string;
     try {
         pathAndQuery = normalizeProviderOriginRelativePathSyntax(request.pathAndQuery, { allowQuery: true });

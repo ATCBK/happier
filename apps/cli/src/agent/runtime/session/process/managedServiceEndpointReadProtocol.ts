@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { MAX_MANAGED_SERVICE_REQUEST_BODY_BYTES } from '@/plugins/runtime/invocation/services/managedServiceRequestSize';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import {
@@ -63,7 +64,7 @@ const HttpMethodSchema = z.enum([
   'DELETE',
   'OPTIONS',
 ]);
-const CanonicalBodyBase64Schema = z.string().check(z.maxLength(22_369_624), z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u), z.refine((value) => Buffer.from(value, 'base64').byteLength <= 16 * 1024 * 1024
+const CanonicalBodyBase64Schema = z.string().check(z.maxLength(Math.ceil(MAX_MANAGED_SERVICE_REQUEST_BODY_BYTES / 3) * 4), z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u), z.refine((value) => Buffer.from(value, 'base64').byteLength <= MAX_MANAGED_SERVICE_REQUEST_BODY_BYTES
     && Buffer.from(value, 'base64').toString('base64') === value, 'Expected at most 16 MiB of canonical padded Base64'));
 const CanonicalChunkBase64Schema = z.string().check(z.maxLength(87_384), z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u), z.refine((value) => Buffer.from(value, 'base64').byteLength <= 64 * 1024
     && Buffer.from(value, 'base64').toString('base64') === value, 'Expected at most 64 KiB of canonical padded Base64'));

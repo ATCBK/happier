@@ -2,7 +2,6 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ProviderCredentialTransportV1 } from '@happier-dev/protocol';
-import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 
 import { renderProviderProbeCredential } from '@/providers/spawn/runtimeCredential';
 import { startProviderBrokerApplicationServer } from './providerBrokerApplicationServer';
@@ -39,8 +38,7 @@ export async function startManagedProviderConsumerApplication(input: Readonly<{
                     if (name.toLowerCase() === localCredentialHeader || name.toLowerCase() === 'x-happier-machine-local-capability') return [];
                     // Downstream access credentials never reach any upstream
                     // transport; source-owned headers are added by that owner.
-                    const publicHeader = ProviderPublicHeadersV1Schema.safeParse({ [name]: value });
-                    return publicHeader.success ? Object.entries(publicHeader.data) : [];
+                    return [[name, value]];
                 }));
                 return input.request({ ...request, headers,
                     signal: AbortSignal.any([input.signal, lifetime.signal, ...(request.signal ? [request.signal] : [])]),

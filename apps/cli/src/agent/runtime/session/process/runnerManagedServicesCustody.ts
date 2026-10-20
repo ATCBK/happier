@@ -2,6 +2,7 @@ import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { randomUUID } from 'node:crypto';
 
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { assertManagedServiceRequestBodySize } from '@/plugins/runtime/invocation/services/managedServiceRequestSize';
 import { ConnectedAccountMaterializationRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import { ConnectedAccountPurposeIdSchema } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
 import { ManagedExecutableRefSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
@@ -3000,6 +3001,9 @@ export function createRunnerManagedServicesClient(input: Readonly<{
                 claim,
                 serviceId: current.id,
             });
+            // Reuse SVC09 admission before encoding the complete wire message,
+            // so a size refusal keeps its typed cause without a second buffer.
+            assertManagedServiceRequestBodySize(request.body);
             const parsedOpenRequest =
                 ManagedServiceEndpointReadOpenRequestV1Schema.safeParse({
                     v: 1,

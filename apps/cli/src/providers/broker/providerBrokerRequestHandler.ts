@@ -28,9 +28,23 @@ import type {
 } from '@happier-dev/protocol/teams';
 import { createExternalProviderTerminalTokenReader } from './externalProviderTerminalTokens';
 import { isSameTeamCredentialBrokerApplication } from './teamCredentialModelCatalog';
+import { readProviderBrokerTransportFailure } from './providerBrokerTransportFailure';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
     PROVIDER_BROKER_MODEL_ID_HEADER, projectProviderBrokerEndpointMetadata } from './providerBrokerPrivateProtocol';
 import type { SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+
+async function requestProviderAccess(
+    access: ManagedProviderEndpointHttpAccess,
+    request: ManagedServiceRequest,
+): Promise<ManagedServiceResponse> {
+    try {
+        return await access.request(request);
+    } catch (error) {
+        const failure = readProviderBrokerTransportFailure(error);
+        if (failure) return failure;
+        throw error;
+    }
+}
 
 /** Request-policy refusals come from the evaluator owner; Home admission
  * failures use the one canonical protocol vocabulary. */
@@ -375,7 +389,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
                         context.access.endpointUrl(context.authority.payload.application.endpointTemplateId));
                     return response ? { ok: true, response } : { ok: false, reasonCode: 'resource_unavailable' };
                 }
-                return { ok: true, response: await context.access.request(request) };
+                return { ok: true, response: await requestProviderAccess(context.access, request) };
             } catch {
                 return { ok: false, reasonCode: 'broker_unavailable' };
             }
@@ -435,7 +449,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
                     },
                 });
                 if (!admitted.ok) return admitted;
-                const response = await admitted.access.request(evaluated.request);
+                const response = await requestProviderAccess(admitted.access, evaluated.request);
                 return { ok: true, response };
             }
             if (binding.kind !== 'external_api_key'
@@ -493,7 +507,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
             });
             if (!admitted.ok) return admitted;
             try {
-                const response = await admitted.access.request(evaluated.request);
+                const response = await requestProviderAccess(admitted.access, evaluated.request);
                 return {
                     ok: true,
                     response: admitted.terminalUsage
@@ -642,7 +656,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
         });
         if (!admitted.ok) return admitted;
 
-        const response = await admitted.access.request(evaluated.request);
+        const response = await requestProviderAccess(admitted.access, evaluated.request);
         return { ok: true, response };
     };
 }

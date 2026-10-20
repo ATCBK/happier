@@ -1,5 +1,12 @@
 import type { ManagedServiceResponse } from '@happier-dev/plugin-sdk/managed-services';
 import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol/providers/safety/url';
+import type { ProviderCredentialTransportV1, ProviderWireProtocol } from '@happier-dev/protocol';
+
+/** The worker authenticates to the carrier, independently of upstream auth. */
+export function teamCredentialBrokerLocalCredentialTransport(protocol: ProviderWireProtocol): ProviderCredentialTransportV1 {
+  return { id: 'team-provider-broker-local-capability-v1', protocols: [protocol], uses: ['runtime'],
+    destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } };
+}
 
 /** Host-private members of the existing signed broker application. They are not
  * part of a Provider's `/v1` surface and never reach Provider dispatch. */

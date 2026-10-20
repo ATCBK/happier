@@ -1,4 +1,5 @@
 import { connect } from 'node:net';
+import { createServer } from 'node:http';
 
 import {
   createProviderBrokerRouteGrantSigningInputV1,
@@ -7,6 +8,7 @@ import {
   type SignedProviderBrokerRouteGrantV1,
 } from '@happier-dev/protocol';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_ENVELOPE_MAX_BYTES_V1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,7 +22,6 @@ import {
   writeProviderBrokerApplicationFailure,
 } from './providerBrokerApplicationServer';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
-import { evaluateTeamCredentialRequestPolicyV1 } from './requestPolicyV1';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from './providerBrokerPrivateProtocol';
 
 const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
@@ -142,6 +143,28 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it('keeps the separate external carrier envelope boundary and reports a typed size refusal', async () => {
+    const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [], nowMs: () => 0, resolveRequestPolicy: async () => null,
+      createRequestId: () => 'unused', admit: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+    }) });
+    try {
+      const limit = TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_ENVELOPE_MAX_BYTES_V1;
+      for (const bytes of [limit - 1, limit, limit + 1]) {
+        const response = await server.app.inject({ method: 'POST',
+          url: TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1,
+          headers: { 'content-type': 'application/json' }, payload: `{}` + ' '.repeat(bytes - 2),
+        });
+        // Under/at the parser boundary, the absent authenticated carrier is
+        // refused by admission; only an oversized envelope is a size error.
+        expect(response.statusCode).toBe(bytes <= limit ? 403 : 413);
+        if (bytes > limit) expect(response.json().code).toBe('FST_ERR_CTP_BODY_TOO_LARGE');
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it('keeps the consumer endpoint through upstream replacement and refuses withdrawn admission before effects', async () => {
     let admitted = true;
     let generation = 'daemon-one';
@@ -255,11 +278,8 @@ describe('Provider broker target application integration', () => {
     }
   });
 
-  // The Agent's raw request reaches this parser before the Provider request
-  // policy, so the ingress must not be narrower than the canonical Provider
-  // decoded-body budget that policy enforces.
-  it('accepts an Agent request body above the inherited default parser limit', async () => {
-    const handler = vi.fn(async () => ({
+  it('preserves Agent request bytes above the inherited default parser limit for policy parsing', async () => {
+    const handler = vi.fn(async (_request: Parameters<ReturnType<typeof createProviderBrokerRequestHandler>>[0]) => ({
       ok: true as const,
       response: {
         ok: true as const, status: 200, statusText: 'OK', headers: Object.freeze({}), body: null,
@@ -273,53 +293,102 @@ describe('Provider broker target application integration', () => {
         expected: expectedBinding,
         streamLifetime: { acquireSource: vi.fn(), close: vi.fn(async () => {}), retire: vi.fn(async () => {}) },
       });
+      const body = ` { "model": "gpt-5", "context": "${'x'.repeat(1_200_000)}" } `;
       const response = await requestThroughApplicationTarget({
         ...target,
         authority: signedAuthority(),
-        body: JSON.stringify({ model: 'gpt-5', context: 'x'.repeat(1_200_000) }),
+        body,
       });
       expect(response).toContain('HTTP/1.1 200 OK');
       expect(handler).toHaveBeenCalledOnce();
+      const forwarded = handler.mock.calls[0][0].request.body;
+      expect(new TextDecoder().decode(forwarded) === body).toBe(true);
     } finally {
       await server.close();
     }
   });
 
-  // Review-blocked: unbounded buffering was rejected; the prior ingress regression above stays active.
-  it.skip('admits a large inference body through the real transport and request policy', async () => {
-    const input = 'x'.repeat(5 * 1024 * 1024 + 1);
+  it('admits a large inference body through the real transport and request policy and cancels upstream', async () => {
+    const input = 'x'.repeat(8 * 1024 * 1024);
     let admittedInput: unknown;
-    const handler = vi.fn(async (request: Parameters<ReturnType<typeof createProviderBrokerRequestHandler>>[0]) => {
-      const result = evaluateTeamCredentialRequestPolicyV1({
-        policy: { allowedModelIds: null, allowedProtocolKinds: null, reasoningEffort: null },
-        request: request.request,
-      });
-      if (!result.ok) return result;
-      admittedInput = JSON.parse(new TextDecoder().decode(result.request.body)).context;
-      return {
-      ok: true as const,
-      response: {
-        ok: true as const, status: 200, statusText: 'OK', headers: Object.freeze({}), body: null,
+    let upstreamCancelled = false;
+    const upstream = createServer(async (request, reply) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      admittedInput = body.context;
+      if (body.stream) {
+        reply.on('close', () => { upstreamCancelled = true; });
+        reply.writeHead(200, { 'content-type': 'text/event-stream' });
+        reply.write('data: {"id":"large-stream"}\n\n');
+      } else {
+        reply.writeHead(200, { 'content-type': 'application/json' });
+        reply.end(JSON.stringify({ id: 'large-completion', inputBytes: Buffer.byteLength(body.context) }));
+      }
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('upstream did not listen');
+    const upstreamUrl = `http://127.0.0.1:${address.port}`;
+    const access: ManagedProviderEndpointHttpAccess = {
+      endpointUrl: () => upstreamUrl,
+      async request(request) {
+        const response = await fetch(`${upstreamUrl}${request.pathAndQuery}`, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body ? new TextDecoder().decode(request.body) : undefined,
+          signal: request.signal,
+        });
+        return { ok: response.ok, status: response.status, statusText: response.statusText,
+          headers: Object.fromEntries(response.headers), body: response.body };
       },
-      };
+    };
+    const handler = createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [{ keyId: 'home-1', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+      nowMs: () => 200,
+      resolveRequestPolicy: async () => ({
+        resourceRevision: 7, sourceRevision: payload.sourceRevision, application: payload.application,
+        source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection',
+          connectionId: 'pc_source', connectionSecurityFingerprint: 'connection-security:v1:source', credentialSlotId: 'apiKey' }),
+        policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: (id: string) => id },
+      }),
+      createRequestId: () => 'request-large',
+      admit: async () => ({ ok: true, access }),
     });
     const server = await startProviderBrokerApplicationServer({ handler });
+    const context = {
+      authenticatedRemoteEndpointId: payload.initiator.endpointId,
+      authority: signedAuthority(), expected: expectedBinding,
+    };
     try {
-      const target = await server.createStreamTarget({
-        authenticatedRemoteEndpointId: payload.initiator.endpointId,
-        authority: signedAuthority(),
-        expected: expectedBinding,
-        streamLifetime: { acquireSource: vi.fn(), close: vi.fn(async () => {}), retire: vi.fn(async () => {}) },
-      });
+      const target = await server.createStreamTarget(context);
       const response = await requestThroughApplicationTarget({
         ...target,
         authority: signedAuthority(),
         body: JSON.stringify({ model: 'gpt-5', context: input }),
       });
       expect(response).toContain('HTTP/1.1 200 OK');
+      expect(response).toContain('large-completion');
+      expect(response).toContain('8388608');
       expect(admittedInput).toBe(input);
+
+      const streamTarget = await server.createStreamTarget(context);
+      const streamBody = JSON.stringify({ model: 'gpt-5', context: input, stream: true });
+      const socket = connect({ host: '127.0.0.1', port: streamTarget.port });
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', () => {
+          socket.write(streamTarget.localCapability, 'ascii');
+          socket.write(`POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(streamBody)}\r\n\r\n${streamBody}`);
+        });
+        socket.once('data', () => { socket.destroy(); resolve(); });
+        socket.once('error', reject);
+      });
+      await vi.waitFor(() => expect(upstreamCancelled).toBe(true));
     } finally {
       await server.close();
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
     }
   });
 

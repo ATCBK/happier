@@ -5,6 +5,7 @@ import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers
 import type { ProviderBrokerApplicationBindingV1, ProviderWireProtocol } from '@happier-dev/protocol';
 import type { ProviderContributionRegistryView } from '@/providers/registry';
 import { projectManagedProviderBrokerApplication } from './applicationProjection';
+import { getProviderContribution } from '@/providers/registry';
 
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import type {
@@ -12,8 +13,14 @@ import type {
   ProviderConnectionCpxBridgeOpenInput,
 } from './providerConnectionSource';
 import { acquireBrokerSourceOperation } from './brokerSourceOperationAcquisition';
+import { readProviderBrokerTransportFailure } from './providerBrokerTransportFailure';
 
 const SOURCE_CREDENTIAL_HEADER = 'x-happier-provider-source-credential';
+
+/** Implementation of the private source-envelope transport, independent of an Agent. */
+export function readProviderConnectionBrokerImplementation(registry: ProviderContributionRegistryView) {
+  return getProviderContribution(registry, 'happier.provider.cliproxyapi/cliproxyapi');
+}
 
 /** This transport implements CLIProxyAPI's private source-envelope contract.
  * Its target is fixed; endpoint and protocol admission remain registry-owned. */
@@ -23,7 +30,8 @@ export function projectProviderConnectionBrokerApplication(input: Readonly<{
   protocol: ProviderWireProtocol;
   expectedApplication?: ProviderBrokerApplicationBindingV1;
 }>): ProviderBrokerApplicationBindingV1 | null {
-  const identity = { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' };
+  const identity = readProviderConnectionBrokerImplementation(input.registry)?.identity;
+  if (!identity) return null;
   if (input.expectedApplication && (
     input.expectedApplication.implementationIdentity.pluginId !== identity.pluginId
     || input.expectedApplication.implementationIdentity.localId !== identity.localId
@@ -246,9 +254,9 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
             pathAndQuery: requestInput.pathAndQuery,
             headers,
           });
-        } catch {
+        } catch (error) {
           lease.close();
-          return unavailable(502);
+          return readProviderBrokerTransportFailure(error) ?? unavailable(502);
         }
         if ((response.status >= 300 && response.status < 400)
           || Object.entries(response.headers).some(([name, value]) => (

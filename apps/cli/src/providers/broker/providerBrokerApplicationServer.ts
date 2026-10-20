@@ -1,8 +1,8 @@
 import fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
+import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_ENVELOPE_MAX_BYTES_V1, TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import type { TeamCredentialUsageLimitDenialV1 } from '@happier-dev/protocol/teams';
 
@@ -217,47 +217,60 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         return await sendResponse(reply, result, controller.signal);
     });
 
-    app.route({
-        method: ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'],
-        url: '/v1/*',
-        // The Agent's raw request reaches this parser first, so the ingress
-        // reuses the canonical Provider decoded-body budget the request policy
-        // later enforces instead of Fastify's much smaller default.
-        bodyLimit: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxDecodedBodyBytes,
-        handler: async (request, reply) => {
-            const remotePort = request.raw.socket.remotePort;
-            const context = remotePort === undefined ? undefined : contextsByRemotePort.get(remotePort);
-            const headers: Record<string, string> = {};
-            for (const [name, value] of Object.entries(request.headers)) {
-                if (typeof value === 'string') headers[name] = value;
-            }
-            const localConsumer = !context ? input.localConsumer : undefined;
-            if (localConsumer ? !localConsumer.authorize(headers) : !context || context.kind === 'external') {
-                return reply.code(403).send();
-            }
-            // The Agent's bearer is its local capability, meaningful only to
-            // the tunnel; authority comes from the stream's admission.
-            delete headers.authorization;
-            const body = request.body === undefined || request.body === null
-                ? undefined
-                : request.body instanceof Uint8Array
-                    ? request.body
-                    : Buffer.from(typeof request.body === 'string' ? request.body : JSON.stringify(request.body), 'utf8');
-            const controller = new AbortController();
-            request.raw.once('aborted', () => controller.abort());
-            reply.raw.once('close', () => controller.abort());
-            const forwardedRequest: ManagedServiceRequest = {
+    app.register(async (inference) => {
+        // Keep the one ingress buffer. The request policy owns JSON parsing;
+        // parsing here would serialize a second copy before that evaluation.
+        inference.removeAllContentTypeParsers();
+        inference.addContentTypeParser(['application/json', 'text/plain'], {
+            parseAs: 'buffer',
+            bodyLimit: Number.MAX_SAFE_INTEGER,
+        }, (_request, body, done) => done(null, body));
+        inference.route<{ Body: Uint8Array }>({
+            method: ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'],
+            url: '/v1/*',
+            // Fastify requires a positive integer. Its maximum representable byte
+            // count disables the default application cap; transport frames bound
+            // their own chunks, not the total inference request.
+            bodyLimit: Number.MAX_SAFE_INTEGER,
+            handler: async (request, reply) => {
+                const remotePort = request.raw.socket.remotePort;
+                const context = remotePort === undefined ? undefined : contextsByRemotePort.get(remotePort);
+                const headers: Record<string, string> = {};
+                for (const [name, value] of Object.entries(request.headers)) {
+                    if (typeof value === 'string') headers[name] = value;
+                }
+                const localConsumer = !context ? input.localConsumer : undefined;
+                if (localConsumer ? !localConsumer.authorize(headers) : !context || context.kind === 'external') {
+                    return reply.code(403).send();
+                }
+                // The Agent's bearer is its local capability, meaningful only to
+                // the tunnel; authority comes from the stream's admission.
+                delete headers.authorization;
+                // Native HTTP adds Host, Connection and framing headers. They are
+                // transport facts, not public Provider headers; managed access
+                // correctly rejects them. Project once at this shared ingress,
+                // after authenticating the original local capability headers.
+                const publicHeaders = Object.fromEntries(Object.entries(headers).flatMap(([name, value]) => {
+                    const parsed = ProviderPublicHeadersV1Schema.safeParse({ [name]: value });
+                    return parsed.success ? Object.entries(parsed.data) : [];
+                }));
+                const body = request.body;
+                const controller = new AbortController();
+                request.raw.once('aborted', () => controller.abort());
+                reply.raw.once('close', () => controller.abort());
+                const forwardedRequest: ManagedServiceRequest = {
                     pathAndQuery: request.raw.url ?? request.url,
                     method: request.method as ManagedServiceRequest['method'],
-                    headers,
+                    headers: publicHeaders,
                     ...(body ? { body } : {}),
                     signal: controller.signal,
-            };
-            const result = localConsumer
-                ? await localConsumer.request(forwardedRequest)
-                : await input.handler({ context, request: forwardedRequest });
-            return await sendResponse(reply, result, controller.signal, context);
-        },
+                };
+                const result = localConsumer
+                    ? await localConsumer.request(forwardedRequest)
+                    : await input.handler({ context, request: forwardedRequest });
+                return await sendResponse(reply, result, controller.signal, context);
+            },
+        });
     });
 
     await app.listen({ host: '127.0.0.1', port: 0 });

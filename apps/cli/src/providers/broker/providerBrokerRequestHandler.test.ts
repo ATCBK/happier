@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ManagedProviderEndpointHttpAccess } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import {
     createProviderBrokerRouteGrantSigningInputV1,
@@ -86,6 +87,21 @@ const request = { pathAndQuery: '/v1/chat/completions', method: 'POST' as const,
 function access(): ManagedProviderEndpointHttpAccess { return { endpointUrl: () => 'http://127.0.0.1:1234', request: vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', headers: {}, body: null })) }; }
 
 describe('createProviderBrokerRequestHandler', () => {
+    it('reports the managed carrier size refusal as an observable HTTP 413', async () => {
+        const handle = createProviderBrokerRequestHandler({ ...handlerSecurity,
+            admit: async () => ({ ok: true, access: { endpointUrl: () => 'http://127.0.0.1:1234',
+                request: async () => { throw new PluginError({ code: 'plugin_managed_service_request_too_large',
+                    details: { resource: 'body_bytes', limit: 16 * 1024 * 1024, actual: 16 * 1024 * 1024 + 1 } }); } } }),
+        });
+        const result = await handle({ context, request });
+        expect(result).toMatchObject({ ok: true, response: { status: 413,
+            headers: { 'x-happier-provider-broker-error-code': 'request_too_large' } } });
+        if (!result.ok) throw new Error('expected transport size response');
+        expect(await new Response(result.response.body).json()).toMatchObject({ error: {
+            code: 'request_too_large', type: 'invalid_request_error',
+        } });
+    });
+
     it('authorizes model-list metadata against current Home facts without request admission or provider access', async () => {
         const admit = vi.fn();
         const authorizeModelCatalog = vi.fn(async () => ({ ok: true as const }));
