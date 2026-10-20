@@ -1,4 +1,4 @@
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 /** Page, review and stage consumers share both the workspace and file-version identity. */
 export function buildWorkspacePreviewIdentity(
@@ -8,7 +8,7 @@ export function buildWorkspacePreviewIdentity(
     signature?: string | null,
 ): Readonly<{ cacheScopeId: string; cacheKey: string }> {
     return {
-        cacheScopeId: `${scope.serverId}:${scope.machineId}:${scope.rootPath}`,
+        cacheScopeId: buildWorkspaceCacheKey(scope),
         cacheKey: JSON.stringify([filePath, sizeBytes ?? null, signature ?? null]),
     };
 }
