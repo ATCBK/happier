@@ -99,7 +99,8 @@ function expectSeededSheet(screen: Awaited<ReturnType<typeof renderScreen>>) {
     const snapshot = props ? readNewSessionDraftProjectionFromRepository({ draftId: props.draftId, scope: { serverId: state.serverId, accountId: 'account-a' } }) : null;
     expect(snapshot?.draft.input).toBe(buildWorkflowAgentAuthoringSeed({ kind: 'create' }).prompt);
     // The sheet states what happens before anything is sent (07 S22).
-    expect(modal?.chrome?.subtitle).toBe('workflows.authoring.description');
+    if (modal.chrome?.kind !== 'card') throw new Error('Expected authoring sheet card chrome');
+    expect(modal.chrome.subtitle).toBe('workflows.authoring.description');
     const composers = screen.findAllByType(WorkflowAgentAuthoringDraft);
     expect(composers).toHaveLength(1);
     expect(composers[0].props.draftId).toBe(props?.draftId);

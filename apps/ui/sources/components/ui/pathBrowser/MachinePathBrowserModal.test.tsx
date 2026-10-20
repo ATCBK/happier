@@ -28,7 +28,7 @@ import {
     PATH_BROWSER_MODAL_TEST_ID,
 } from './pathBrowserTestIds';
 import { flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/modal/types';
+import type { CustomModalChromeConfig, CustomModalInjectedProps } from '@/modal/types';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,7 +38,8 @@ import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/mo
  * body, then the footer. The browser never draws a header of its own.
  */
 function ChromeHost(props: Readonly<{ children: React.ReactElement<CustomModalInjectedProps> }>) {
-    const [chrome, setChrome] = React.useState<CustomModalChromeCardConfig | null>(null);
+    const [chrome, setChrome] = React.useState<CustomModalChromeConfig | null>(null);
+    if (chrome && chrome.kind !== 'card') throw new Error('Expected path browser card chrome');
     return React.createElement(
         'ChromeHost',
         { testID: chrome?.testID, title: chrome?.title, subtitle: chrome?.subtitle },
