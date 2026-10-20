@@ -6954,11 +6954,6 @@
       "types": "./dist/workspace/favicon/v1.d.ts",
       "default": "./dist/workspace/favicon/v1.js"
     },
-    "./machines/fileLanguage": {
-      "happier-source": "./src/machines/fileLanguage.ts",
-      "types": "./dist/machines/fileLanguage.d.ts",
-      "default": "./dist/machines/fileLanguage.js"
-    },
     "./machines/languageIntelligence": {
       "happier-source": "./src/machines/languageIntelligence.ts",
       "types": "./dist/machines/languageIntelligence.d.ts",
