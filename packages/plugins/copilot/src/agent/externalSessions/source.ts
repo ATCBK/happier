@@ -22,8 +22,8 @@ export async function resolveCopilotSessionFile(root: string, remoteSessionId: s
   if (!remoteSessionId || remoteSessionId === '.' || remoteSessionId === '..' || /[\\/\0]/u.test(remoteSessionId)) {
     throw new Error('source_invalid');
   }
-  const file = await realpath(join(root, remoteSessionId, 'events.jsonl'));
-  const physicalRoot = await realpath(root);
+  const physicalRoot = await realpath(root).catch(() => { throw new Error('unavailable'); });
+  const file = await realpath(join(physicalRoot, remoteSessionId, 'events.jsonl'));
   if (!isCanonicalAbsolutePathInsideRoot(physicalRoot, file) || !(await stat(file)).isFile()) throw new Error('source_invalid');
   return file;
 }

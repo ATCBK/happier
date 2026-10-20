@@ -103,7 +103,7 @@ export function createCopilotExternalSessionsContribution(options: { env?: NodeJ
         const inventoryKey = createHash('sha256').update(JSON.stringify(inventory.files)).digest('base64url');
         const query = request.searchTerm ?? '';
         const target = request.searchTarget ?? 'metadata';
-        const cursor = request.cursor ? decode(request.cursor)
+        const cursor: CandidateCursor = request.cursor ? decode(request.cursor)
           : { v: 1 as const, root: resolved.root, inventory: inventoryKey, query, target, index: 0, ordinal: 0, partial: false };
         if (cursor.root !== resolved.root || cursor.query !== query || cursor.target !== target || cursor.inventory !== inventoryKey) throw new Error('source_invalid');
         const candidates: AgentExternalSessionCandidate[] = [];
@@ -115,7 +115,7 @@ export function createCopilotExternalSessionsContribution(options: { env?: NodeJ
             const file = await resolveCopilotSessionFile(resolved.root, remoteSessionId);
             const metadata = await stat(file);
             const header = await readCopilotHeader(file, remoteSessionId, request.signal);
-            const candidate = { remoteSessionId, title: remoteSessionId, updatedAtMs: metadata.mtimeMs, createdAtMs: metadata.birthtimeMs,
+            const candidate = { remoteSessionId, title: remoteSessionId, updatedAtMs: Math.max(0, Math.trunc(metadata.mtimeMs)), createdAtMs: Math.max(0, Math.trunc(metadata.birthtimeMs)),
               ...(header.cwd ? { cwd: header.cwd } : {}),
               linkData: { copilotSessionId: remoteSessionId } };
             if (!header.supported) cursor.partial = true;
@@ -166,4 +166,4 @@ export function createCopilotExternalSessionsContribution(options: { env?: NodeJ
   };
 }
 
-export const copilotExternalSessionsContribution = createCopilotExternalSessionsContribution();
+export const copilotExternalSessionsContribution: AgentExternalSessionsContribution = createCopilotExternalSessionsContribution();

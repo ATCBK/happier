@@ -4,7 +4,7 @@ import { open, stat } from 'node:fs/promises';
 
 import { isRecord, parseTimestampMs } from '@happier-dev/plugin-sdk';
 import { createExternalSessionUnsupportedTranscriptItem, readJsonlFileBackwardPage, readJsonlFileForward } from '@happier-dev/plugin-sdk/sessions/file-stores';
-import type { AgentExternalSessionTranscriptItem, AgentExternalSessionsInvocation, AgentExternalSessionsPageTranscriptRequest, AgentExternalSessionsReadAfterTranscriptRequest } from '@happier-dev/plugin-sdk/sessions/external';
+import type { AgentExternalSessionTranscriptItem, AgentExternalSessionsInvocation, AgentExternalSessionsPageTranscriptRequest, AgentExternalSessionsReadAfterTranscriptRequest, AgentExternalSessionsReadAfterTranscriptResult, AgentExternalSessionsTranscriptPage } from '@happier-dev/plugin-sdk/sessions/external';
 
 // Copilot event schema v1: official SDK 374b77380700e550a39847445656369412f4005f,
 // generated/session-events.ts. Compaction changes model context, not the visible
@@ -121,7 +121,7 @@ export function isCopilotUnsupported(item: AgentExternalSessionTranscriptItem): 
   return item.localId === null;
 }
 
-export async function pageCopilotTranscript(file: string, request: AgentExternalSessionsPageTranscriptRequest) {
+export async function pageCopilotTranscript(file: string, request: AgentExternalSessionsPageTranscriptRequest): Promise<AgentExternalSessionsTranscriptPage> {
   const snapshot = await readCopilotSnapshot(file, request.remoteSessionId, request, request.cursor);
   const page = request.direction === 'older'
     ? await readJsonlFileBackwardPage({ filePath: file, endOffsetBytes: snapshot.offset, maxItems: request.maxItems,
@@ -145,7 +145,7 @@ export async function pageCopilotTranscript(file: string, request: AgentExternal
     ...(partial ? { diagnostics: [{ code: 'unsupported_content', severity: 'required' as const, count: 1, positions: [] }] } : {}) };
 }
 
-export async function readAfterCopilotTranscript(file: string, request: AgentExternalSessionsReadAfterTranscriptRequest) {
+export async function readAfterCopilotTranscript(file: string, request: AgentExternalSessionsReadAfterTranscriptRequest): Promise<AgentExternalSessionsReadAfterTranscriptResult> {
   const previous = await readCopilotSnapshot(file, request.remoteSessionId, request, request.cursor);
   // Cursor verification already compared the captured prefix. An unchanged
   // tail needs no transcript read/hash, which keeps repeated worker ticks cheap.
