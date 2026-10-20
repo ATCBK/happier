@@ -61,8 +61,24 @@ describe('MiniMax provider contributions', () => {
     expect([...transport?.protocols ?? []].sort()).toEqual([...protocols].sort());
   });
 
-  it.each(REGIONS)('declares M3\'s extended-context variant for $label rather than hardcoding the suffix', ({ contribution }) => {
+  it.each(REGIONS)('offers Flash first without removing existing models for $label', ({ contribution }) => {
+    expect(contribution.catalog.staticModels.map(model => model.id)).toEqual([
+      'MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7',
+    ]);
+    expect(contribution.catalog.staticModels[0]).toMatchObject({
+      id: 'MiniMax-M3.1-Flash', contextWindowTokens: 1_000_000,
+      capabilities: { toolRoundTrips: 'supported' },
+    });
+  });
+
+  it.each(REGIONS)('declares extended-context variants for $label rather than hardcoding suffixes', ({ contribution }) => {
     expect(contribution.catalog.staticModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'MiniMax-M3.1-Flash',
+        aliases: ['MiniMax-M3.1-Flash[1m]'],
+        contextWindowTokens: 1_000_000,
+        extendedContextModelId: 'MiniMax-M3.1-Flash[1m]',
+      }),
       expect.objectContaining({
         id: 'MiniMax-M3',
         contextWindowTokens: 1_000_000,
@@ -78,7 +94,7 @@ describe('MiniMax provider contributions', () => {
     expect(migration).toMatchObject({
       sourceProfileId: id,
       credentialBinding: { legacyEnvVarName: legacySecret, credentialSlotId: 'apiKey' },
-      primaryModel: { agentTargetKey: 'agent:claude', legacyEnvVarName: 'ANTHROPIC_MODEL', defaultModelId: 'MiniMax-M3' },
+      primaryModel: { agentTargetKey: 'agent:claude', legacyEnvVarName: 'ANTHROPIC_MODEL', defaultModelId: 'MiniMax-M3.1-Flash' },
     });
     // The legacy profile pinned the `[1m]` id directly; it must land on the
     // canonical catalog model instead of a model the catalog does not list.
@@ -102,6 +118,16 @@ describe('MiniMax provider contributions', () => {
     // The provider connection owns routing; these stay profile-side because the
     // Claude binding adapter does not own model-tier or compaction settings.
     expect(retained).not.toContain('ANTHROPIC_BASE_URL');
+    const prefix = contribution.id === 'minimax' ? 'MINIMAX' : 'MINIMAX_CN';
+    for (const tier of ['OPUS', 'SONNET', 'HAIKU']) {
+      expect(contribution.legacyProfileMigrations[0]?.retainedEnvironmentVariables).toContainEqual({
+        name: `ANTHROPIC_DEFAULT_${tier}_MODEL`, value: '${' + prefix + '_' + tier + '_MODEL:-MiniMax-M3.1-Flash}',
+      });
+    }
+    // Source recognition is historical; changing launch defaults must not rewrite it.
+    expect(contribution.legacyProfileMigrations[0]?.migratedEnvironmentVariables).toContainEqual({
+      name: 'ANTHROPIC_MODEL', value: '${' + prefix + '_MODEL:-MiniMax-M3[1m]}',
+    });
   });
 
   it('uses distinct migration sources so both regional profiles can coexist', () => {
