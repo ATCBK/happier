@@ -1,4 +1,4 @@
-import { ComposerOperationV1Schema, type ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
+import { ComposerOperationV1Schema, type ComposerOperationV1, type ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { validatePluginDragSourceReferenceV1 } from '@happier-dev/protocol/plugins/contributions/entityDragDrop';
 import { readComposerReferenceMentionV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
@@ -32,6 +32,23 @@ export type ComposerEntityDropContext = Readonly<{
     preview: EntityDropPreviewV1;
     reason: (code: string) => string;
 }>;
+
+function buildReferenceOperations(
+    selection: ReturnType<typeof buildComposerFileReferenceSelection> | ReturnType<typeof buildComposerSessionReferenceSelection> | ReturnType<typeof buildContributedComposerReferenceSelection>,
+    snapshot: ComposerSnapshotV1,
+): ComposerOperationV1[] {
+    const spacer = snapshot.text.length > 0 && !/\s$/.test(snapshot.text) ? ' ' : '';
+    const start = snapshot.text.length + spacer.length;
+    return [
+        { kind: 'text.insert', position: { offset: snapshot.text.length }, text: spacer + selection.token },
+        { kind: 'reference.insert', reference: { ...selection.payload, token: selection.token, start, end: start + selection.token.length } },
+    ];
+}
+
+/** Attach and drag/drop insert the same typed reference, preserving the draft. */
+export function buildFileReferenceOperation(path: string, snapshot: ComposerSnapshotV1): ComposerOperationV1[] {
+    return buildReferenceOperations(buildComposerFileReferenceSelection(path, path.split('/').at(-1) ?? path), snapshot);
+}
 
 export function resolveComposerEntityDrop(item: EntityDragItemV1, context: ComposerEntityDropContext): EntityDropAdmissionV1 {
     const refuse = (code: string): EntityDropAdmissionV1 => ({ status: 'refused',
@@ -74,12 +91,12 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         return file ? resolveComposerEntityDrop(file, context) : refuse('referenceUnavailable');
     }
 
-    let selection: ReturnType<typeof buildComposerFileReferenceSelection> | ReturnType<typeof buildComposerSessionReferenceSelection> | ReturnType<typeof buildContributedComposerReferenceSelection>;
+    let operations: ComposerOperationV1[];
     if (item.kind === 'session') {
         if (item.address.serverId !== context.scope.serverId) return refuse('scopeMismatch');
         const candidate = context.sessions.find(candidate => candidate.id === item.address.sessionId && candidate.serverId === item.address.serverId);
         if (!candidate) return refuse('referenceUnavailable');
-        selection = buildComposerSessionReferenceSelection(candidate);
+        operations = buildReferenceOperations(buildComposerSessionReferenceSelection(candidate), snapshot);
     } else if (item.kind === 'repository-file') {
         const workspace = context.workspace;
         if (!workspace || workspace.serverId !== item.scope.serverId || workspace.machineId !== item.machineId) return refuse('workspaceMismatch');
@@ -89,7 +106,7 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         if (!path || !isAbsoluteLocalPath(path) || path.split('/').some(part => part === '..')) return refuse('workspaceMismatch');
         const relative = resolvePathRelativeToRoot({ path: item.path, root: workspace.rootPath });
         if (!relative || relative === '.') return refuse('workspaceMismatch');
-        selection = buildComposerFileReferenceSelection(relative, relative.split('/').at(-1) ?? relative);
+        operations = buildFileReferenceOperation(relative, snapshot);
     } else if (item.kind === 'plugin') {
         const host = context.referenceHost;
         if (!host || host.serverId !== context.scope.serverId || !host.isCurrent()) return refuse('referenceUnavailable');
@@ -103,16 +120,11 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         ));
         const trigger = current?.presentation.kind === 'composerReference' ? current.presentation.triggers[0] : undefined;
         if (!trigger || !reference.label) return refuse('referenceUnavailable');
-        selection = buildContributedComposerReferenceSelection({ reference: reference.reference,
-            candidate: { id: reference.candidateId, label: reference.label }, trigger });
+        operations = buildReferenceOperations(buildContributedComposerReferenceSelection({ reference: reference.reference,
+            candidate: { id: reference.candidateId, label: reference.label }, trigger }), snapshot);
     } else return refuse('referenceUnavailable');
 
-    const spacer = snapshot.text.length > 0 && !/\s$/.test(snapshot.text) ? ' ' : '';
-    const start = snapshot.text.length + spacer.length;
     return { status: 'allowed', effect: { actionId: 'composer.transaction.apply', input: {
-        scope: context.scope, ref: context.ref, transaction: { expectedRevision: snapshot.revision, operations: [
-            { kind: 'text.insert', position: { offset: snapshot.text.length }, text: spacer + selection.token },
-            { kind: 'reference.insert', reference: { ...selection.payload, token: selection.token, start, end: start + selection.token.length } },
-        ] },
+        scope: context.scope, ref: context.ref, transaction: { expectedRevision: snapshot.revision, operations },
     }, preview: context.preview } };
 }
