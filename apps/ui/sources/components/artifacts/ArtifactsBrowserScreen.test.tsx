@@ -171,7 +171,10 @@ describe('Artifacts browser row operations', () => {
         expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: expect.objectContaining({ artifactId: artifact.id }),
             chrome: expect.objectContaining({ testID: 'document-share-modal' }) }));
         await act(async () => { invokeTestInstanceHandler(menu, 'onSecondaryAction', 'history'); });
-        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: { artifactId: artifact.id, canRestore: true },
+        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: {
+            artifactId: artifact.id, canRestore: true, currentArtifact: artifact,
+            client: expect.objectContaining({ scope: { serverId: served.homes.owner!.id, accountId: 'owner' } }),
+        },
             chrome: expect.objectContaining({ testID: 'artifact-history-modal' }) }));
         await act(async () => { await menu.props.onSecondaryAction('delete'); });
         expect(served.requests.filter(request => request.method === 'DELETE')).toEqual([]);
@@ -187,22 +190,36 @@ describe('Artifacts browser row operations', () => {
 
     it('opens a shared Workflow in its destination and keeps mutation operations unavailable', async () => {
         const artifact = artifactFixture('workflow-1', { access: 'view', header: { kind: 'workflow-definition.v1', title: 'Review' } });
+        const served = await serveActionHomes({ homes: [{ key: 'viewer', serverUrl: 'https://artifact-history-viewer.test', accountId: 'viewer' }],
+            route: () => undefined });
+        disposeHome = served.dispose;
+        getStorage().getState().addArtifact(artifact);
         const screen = await renderRows([artifact]);
         const menu = rowMenu(screen, artifact.id);
         expect(menu.props.secondaryActions.map((item: { id: string }) => item.id)).toEqual(['open', 'history']);
         await act(async () => { invokeTestInstanceHandler(menu, 'onSecondaryAction', 'open'); });
         expect(router.push).toHaveBeenLastCalledWith('/workflows/workflow-1');
         await act(async () => { invokeTestInstanceHandler(menu, 'onSecondaryAction', 'history'); });
-        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: { artifactId: artifact.id, canRestore: false } }));
+        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: {
+            artifactId: artifact.id, canRestore: false, currentArtifact: artifact,
+            client: expect.objectContaining({ scope: { serverId: served.homes.viewer!.id, accountId: 'viewer' } }),
+        } }));
     });
 
     it('allows a shared editor to restore history without managing shares or deleting', async () => {
         const artifact = artifactFixture('editable', { access: 'edit' });
+        const served = await serveActionHomes({ homes: [{ key: 'editor', serverUrl: 'https://artifact-history-editor.test', accountId: 'editor' }],
+            route: () => undefined });
+        disposeHome = served.dispose;
+        getStorage().getState().addArtifact(artifact);
         const screen = await renderRows([artifact]);
         const menu = rowMenu(screen, artifact.id);
         expect(menu.props.secondaryActions.map((item: { id: string }) => item.id)).toEqual(['open', 'history']);
         await act(async () => { invokeTestInstanceHandler(menu, 'onSecondaryAction', 'history'); });
-        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: { artifactId: artifact.id, canRestore: true } }));
+        expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({ props: {
+            artifactId: artifact.id, canRestore: true, currentArtifact: artifact,
+            client: expect.objectContaining({ scope: { serverId: served.homes.editor!.id, accountId: 'editor' } }),
+        } }));
     });
 
     it('opens a policy-required delete approval without claiming or executing deletion', async () => {

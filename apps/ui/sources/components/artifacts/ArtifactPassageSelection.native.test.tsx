@@ -221,4 +221,27 @@ describe('ArtifactPassageSelection on iOS/Android', () => {
       range: { start: source.lastIndexOf('[shown]') + 1, end: source.lastIndexOf('[shown]') + 6 }, quote: 'shown',
     } } });
   });
+
+  it('shows the changed passage\'s own card above the body and, while it waits for new text, offers Attach here instead of Comment', async () => {
+    home = await activateStorageAccountScope(scope);
+    const complete = vi.fn();
+    const { View } = await import('react-native');
+    const props = { artifactId: 'runbook', markdown, revision,
+      margin: { passages: [{ id: 'moved', location: { state: 'detached' as const } }], focusedId: null, onFocus: () => {}, onOpen: () => {},
+        renderCard: (id: string) => <View testID={`card:${id}`} /> } };
+    const screen = await renderScreen(<ArtifactPassageSelection {...props}
+      margin={{ ...props.margin, attach: { discussionId: 'moved', complete } }} />);
+    expect(screen.findAllHostsByTestId('card:moved')).toHaveLength(1);
+    const paragraph = screen.findAllByType('EnrichedMarkdownText').find(run => String(run.props.markdown).startsWith('😀 A replay'))!;
+    const action = (paragraph.props.contextMenuItems as readonly ContextMenuItem[])[0]!;
+    expect(action.text).toContain('attachHere');
+    const renderedText = '\n😀 A replay shows one row. 😀 A replay shows one row.\n';
+    const text = 'A replay shows one row.';
+    const start = renderedText.lastIndexOf(text);
+    await act(async () => action.onPress({ text, renderedText, selection: { start, end: start + text.length } }));
+    expect(navigation.push).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+    const begin = markdown.lastIndexOf('A replay');
+    expect(complete.mock.calls[0]![0]).toMatchObject({ revision, range: { start: begin, end: markdown.indexOf('\n\nEscalate') } });
+  });
 });

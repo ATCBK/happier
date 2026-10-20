@@ -109,6 +109,21 @@ export function ArtifactPassageSelection(
   return <WebPassageSelection {...props} revision={props.revision} />;
 }
 
+/**
+ * Without a margin beside the body (a phone, a narrow pane) a passage that changed after its comment
+ * has no place to stand in the text, so its own thread card leads the body: the same card the margin
+ * draws, carrying the notice, Open version and Attach to new text. Placed threads open as pages.
+ */
+function ChangedPassageCards(props: Readonly<{ margin: ArtifactPassageMargin | undefined }>) {
+  const ids = (props.margin?.passages ?? []).filter((passage) => passage.location.state === 'detached').map((passage) => passage.id);
+  if (ids.length === 0 || !props.margin) return null;
+  return (
+    <View testID="artifact:passage-changed" style={styles.changed}>
+      {ids.map((id) => <React.Fragment key={id}>{props.margin?.renderCard(id)}</React.Fragment>)}
+    </View>
+  );
+}
+
 function overlapsBlock(range: Readonly<{ start: number; end: number }>, block: MarkdownSourceRangeAction): boolean {
   return range.start < block.sourceStart + block.sourceLength && range.end > block.sourceStart;
 }
@@ -195,15 +210,18 @@ function NativePassageSelection(
     },
   }], [artifactId, attaching, client, markdown, props.onRequestNativeSelection, revision, router, scope]);
   return (
-    <MarkdownView
-      testID="artifact:body"
-      markdown={markdown}
-      selectionActions={selectionActions}
-      sourceMarkKind="passage"
-      findSourceRanges={marks}
-      onPressSourceRange={marks ? openPassage : undefined}
-      sourceRangePressable={isMarked}
-    />
+    <View>
+      <ChangedPassageCards margin={margin} />
+      <MarkdownView
+        testID="artifact:body"
+        markdown={markdown}
+        selectionActions={selectionActions}
+        sourceMarkKind="passage"
+        findSourceRanges={marks}
+        onPressSourceRange={marks ? openPassage : undefined}
+        sourceRangePressable={isMarked}
+      />
+    </View>
   );
 }
 
@@ -460,6 +478,7 @@ function WebPassageSelection(
       style={wide ? styles.row : null}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
+      {wide ? null : <ChangedPassageCards margin={margin} />}
       <View ref={container} style={[styles.frame, wide ? styles.body : null]}>
         {placed.map((passage) => {
           const rects = marks.get(passage.id);
@@ -563,6 +582,7 @@ function WebPassageSelection(
 
 const styles = StyleSheet.create((theme) => ({
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s32 },
+  changed: { gap: theme.space.s12, marginBottom: theme.space.s16 },
   frame: { position: 'relative' },
   body: { flex: 1, minWidth: 0 },
   margin: { width: MARGIN_WIDTH, position: 'relative' },

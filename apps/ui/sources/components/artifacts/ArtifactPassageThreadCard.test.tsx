@@ -2,9 +2,10 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import type { DocPassageMarginMessage, DocPassageMarginThread } from './docPassageMargin';
+import type { DocPassageMarginThread } from './docPassageMargin';
 
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit');
@@ -23,17 +24,19 @@ afterEach(() => standardCleanup());
 const ref = { kind: 'doc' as const, artifactId: 'runbook', serverId: 'home' };
 const firstPassage: DocPassageRefV1 = { ref, revision: { headerVersion: 1, bodyVersion: 2 }, range: { start: 0, end: 11 }, quote: 'Up to 5 tries' };
 const laterPassage: DocPassageRefV1 = { ref, revision: { headerVersion: 1, bodyVersion: 5 }, range: { start: 4, end: 20 }, quote: 'Up to 3 attempts' };
-const root: DocPassageMarginMessage = {
+const root: DiscussionOpenedMessageV1 = {
   id: 'm1', discussionId: 'thread-1', seq: 1, authorAccountId: 'ben', accountActor: null, createdAt: 1,
+  localId: null, mentionedAccountIds: [],
+  messageRef: { kind: 'discussion', discussion: { serverId: 'home', discussionId: 'thread-1' }, messageId: 'm1' },
   replyTarget: { kind: 'doc_passage', doc: { ref, revision: firstPassage.revision } },
   content: { kind: 'doc_passage_comment', passage: firstPassage, content: { v: 1, parts: [{ t: 'text', text: 'Still right?' }] } },
 };
 const thread = (
   location: DocPassageMarginThread['location'], passage: DocPassageRefV1 = firstPassage,
-): DocPassageMarginThread => ({ discussionId: 'thread-1', passage, original: firstPassage, location, root,
+): DocPassageMarginThread<DiscussionOpenedMessageV1> => ({ discussionId: 'thread-1', passage, original: firstPassage, location, root,
   replies: [], proposal: null, acceptedProposal: null });
 
-async function mount(input: Readonly<{ thread: DocPassageMarginThread; attaching?: boolean }>) {
+async function mount(input: Readonly<{ thread: DocPassageMarginThread<DiscussionOpenedMessageV1>; attaching?: boolean }>) {
   const handlers = { onReattach: vi.fn(), onCancelReattach: vi.fn(), onOpenHistory: vi.fn() };
   const screen = await renderScreen(
     <ArtifactPassageThreadCard thread={input.thread} focused={false} attaching={input.attaching === true}

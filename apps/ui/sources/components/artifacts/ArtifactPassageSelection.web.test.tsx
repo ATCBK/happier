@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { View } from 'react-native';
 import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
 
 vi.mock('react-native', async () => {
@@ -53,6 +54,7 @@ afterEach(() => {
 });
 
 async function mountPassages(width: number, attach?: NonNullable<Parameters<typeof ArtifactPassageSelection>[0]['margin']>['attach']) {
+  // `moved`: a passage that changed after its comment; it has no place in the body and is never marked.
   const onFocus = vi.fn();
   const onOpen = vi.fn();
   const onOpenThreadList = vi.fn();
@@ -61,8 +63,9 @@ async function mountPassages(width: number, attach?: NonNullable<Parameters<type
       passages: [
         { id: 'paragraph', location: { state: 'exact', range: { start: 0, end: markdown.length } } },
         { id: 'quote', location: { state: 'exact', range: { start: 9, end: 26 } } },
+        { id: 'moved', location: { state: 'detached' } },
       ],
-      focusedId: null, onFocus, onOpen, onOpenThreadList, renderCard: () => null, attach,
+      focusedId: null, onFocus, onOpen, onOpenThreadList, renderCard: id => <View testID={`card:${id}`} />, attach,
     }} />, { createNodeMock: () => body });
   await act(async () => {
     screen.findAllByType('View').find(node => typeof node.props.onLayout === 'function')!.props.onLayout({
@@ -139,5 +142,35 @@ describe('web passage re-attachment', () => {
       range: { start: 9, end: 26 },
       quote: markdown.slice(9, 26),
     });
+  });
+});
+
+describe('web changed passages without a margin', () => {
+  it('shows the changed passage\'s own card above the body, and no placed thread, where no margin fits', async () => {
+    const { screen } = await mountPassages(400);
+    expect(screen.findAllHostsByTestId('artifact:passage-margin')).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('artifact:passage-changed')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('card:moved')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('card:paragraph')).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('card:quote')).toHaveLength(0);
+  });
+
+  it('leaves the changed passage to the margin when the margin fits, so its card is drawn once', async () => {
+    const { screen } = await mountPassages(1000);
+    expect(screen.findAllHostsByTestId('artifact:passage-changed')).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('card:moved')).toHaveLength(1);
+  });
+
+  it('hands a narrow selection to the thread being re-attached through the same capture', async () => {
+    const complete = vi.fn();
+    const { screen } = await mountPassages(400, { discussionId: 'moved', complete });
+    const selected = document.createRange();
+    selected.setStart(body.firstChild!, 9);
+    selected.setEnd(body.firstChild!, 26);
+    document.getSelection()!.addRange(selected);
+    await act(async () => { document.dispatchEvent(new Event('selectionchange')); });
+    await act(async () => { screen.findAllHostsByTestId('artifact:passage-comment')[0]!.props.onPress(); });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete.mock.calls[0]![0]).toMatchObject({ range: { start: 9, end: 26 }, quote: markdown.slice(9, 26) });
   });
 });
