@@ -534,6 +534,43 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
     "sourceKind": "kiroChatStore"
   },
   {
+    "agentId": "devin",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "devinHome"
+        },
+        {
+          "field": "devinHome",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "devinHome"
+        },
+        {
+          "kind": "string",
+          "min": 1,
+          "name": "devinHome",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "devinHome"
+  },
+  {
     "agentId": "fx",
     "instances": [
       {

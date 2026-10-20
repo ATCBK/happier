@@ -636,11 +636,18 @@ excluding tool inputs and model-only summaries. Unknown versions remain
 unsupported; the shared observer drives Memory append, rewrite and confirmed
 deletion. This replaces the undeployed resume-only Qwen source declaration.
 
-Devin's schema-16 native database contains conversation bodies, but its reader
-remains disabled: the available SQLite read-only boundary can modify SHM or
-create WAL sidecars, including on an unsuccessful open. A non-mutating live-WAL
-boundary is required before activation. Custom ACP history is definition-specific;
-list/resume alone does not provide a native content reader or indexing source.
+Devin's 0.3 development reader covers the native schema-16 database characterized
+from CLI 3000.6.7. Each read byte-copies `sessions.db` and any `-wal` into a
+private temporary directory, opens only that copy through the SDK's read-only
+SQLite boundary, then deletes the copy and its sidecars. The vendor database is
+never opened by SQLite. A copy during a write may be slightly stale; unreadable
+copies and unknown schemas remain unavailable/unsupported. One active-ancestry
+decoder serves content search, pages and read-after, excluding abandoned branches,
+private thinking and tool-input metadata. DB/WAL observation uses the incumbent
+Memory worker; failed reads retain indexed rows and confirmed session deletion
+retires them. No export, vendor process, checkpoint or second watcher is used.
+Custom ACP history remains definition-specific; list/resume alone does not
+provide a native content reader or indexing source.
 Codex shares root-family discovery across each requested candidate page and
 projects JSONL records as they are read, retaining identities and possible
 snippets rather than every decoded body. Rollback selection still completes

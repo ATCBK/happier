@@ -172,7 +172,8 @@ window works within the machine's existing backfill and coverage choices.
 
 Standard on-demand search supports Claude Code, Codex, Pi, OhMyPi, Antigravity,
 OpenCode, Copilot's event-v1 history, Droid's schema-2 history,
-CodeBuddy's CLI 2.170.0 JSONL history, Kilo's CLI 1.0.25 JSON-file history,
+CodeBuddy's CLI 2.170.0 JSONL history, Devin's CLI 3000.6.7 schema-16 history,
+Kilo's CLI 1.0.25 JSON-file history,
 Auggie's CLI 0.36.0 native
 session format, FX's CLI v0.0.14 schema-4 history and Kimi Code's protocol 1.4
 history (characterized from CLI 0.18.0). Indexed search uses existing
@@ -192,6 +193,10 @@ JSONL transcripts with v1 metadata, and Kiro's v1 CLI chat store also supply
 standard search and opt-in indexing. Transcript and metadata changes use
 the same observation pipeline. Unknown formats stay incomplete or
 unsupported; Kiro's separate ACP V3 store is outside the v1 reader.
+
+Devin's reader observes its native database and WAL through the same pipeline,
+reading only private temporary byte copies. Unknown schemas and failed reads
+retain previously indexed history; confirmed session deletion removes it.
 
 The index follows native transcript changes through the existing source
 observation. Confirmed source removal drops its indexed content; an incomplete

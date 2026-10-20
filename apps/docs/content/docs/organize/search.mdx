@@ -152,7 +152,8 @@ incomplete on repeated attempts; continuation does not guarantee a full scan.
 
 Standard search supports Claude Code, Codex, Pi, OhMyPi, Antigravity,
 OpenCode, Copilot's event-v1 history, Droid's schema-2 history,
-CodeBuddy's CLI 2.170.0 JSONL history, Kilo's CLI 1.0.25 JSON-file history,
+CodeBuddy's CLI 2.170.0 JSONL history, Devin's CLI 3000.6.7 schema-16 history,
+Kilo's CLI 1.0.25 JSON-file history,
 Auggie's CLI 0.36.0 native
 session format, FX's CLI v0.0.14 schema-4 history and Kimi Code's protocol 1.4
 history (characterized from CLI 0.18.0) in this development channel.
@@ -189,8 +190,12 @@ FX reads committed local turns and referenced tool results without an export
 or vendor process. Model-context checkpoints do not hide earlier archived
 messages. Legacy formats, opt-in sessions-v2 and unknown frames remain incomplete
 or unsupported.
-Devin and custom ACP do not currently advertise native conversation search.
-Their list/resume support alone is not transcript coverage.
+Devin reads a private temporary byte copy of its native database and WAL;
+it never opens the vendor database with SQLite. Reads during a write may be
+slightly stale. Unknown schemas and unreadable copies remain incomplete or
+unsupported. No export or running vendor process is required.
+Custom ACP history remains definition-specific; list/resume support alone
+is not transcript coverage.
 
 In this development channel, the **Browse Existing Sessions** conversation view
 also reads eligible indexes as you type. Choose **Search** to include an explicit
