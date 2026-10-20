@@ -9,7 +9,11 @@ import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-de
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeControlRegistry';
+import {
+    readClaimedBrowserRuntimeWorkspaceOpenRegion,
+    readRegisteredBrowserRuntimeWorkspaceOpeningAdapter,
+    type BrowserWorkspaceOpenerRegion,
+} from './runtimeControlRegistry';
 import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
 import {
@@ -71,7 +75,11 @@ export type BrowserRuntimeDiagnosticsAdapter = Readonly<{ execute: RuntimeAction
 export type BrowserRuntimeWorkspaceOpeningAdapter = Readonly<{
     scopeId: string;
     accountLifetime: ServerAccountScopeLifetime | null;
-    open: (input: PublicActionInputById['browser.workspace.open'], context: ActionExecutorContext) => Promise<unknown>;
+    open: (
+        input: PublicActionInputById['browser.workspace.open'],
+        context: ActionExecutorContext,
+        presentation?: Readonly<{ openerRegion: BrowserWorkspaceOpenerRegion }>,
+    ) => Promise<unknown>;
 }>;
 
 export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
@@ -243,7 +251,7 @@ async function executeBrowserControlAction(
         const request = parsed.data;
         const scope = args.context.serverId && args.context.runtimeAccountId
             ? { serverId: args.context.serverId, accountId: args.context.runtimeAccountId } : null;
-        const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId, request.commandId) : null;
+        const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId) : null;
         if (!owner || owner.scopeId !== request.scopeId) return browserRuntimeActionDisabledResult('browser_view_unavailable');
         const lifetime = owner.accountLifetime;
         if (!lifetime?.isCurrent() || args.context.signal?.aborted
@@ -251,7 +259,8 @@ async function executeBrowserControlAction(
             || args.context.runtimeAccountId !== lifetime.scope.accountId) {
             return browserRuntimeActionDisabledResult('browser_view_unavailable');
         }
-        return await owner.open(request, args.context);
+        const openerRegion = readClaimedBrowserRuntimeWorkspaceOpenRegion(lifetime.scope, request.scopeId, request.commandId);
+        return await owner.open(request, args.context, openerRegion ? { openerRegion } : undefined);
     }
 
     const parsed = parseRuntimeActionInput(args);

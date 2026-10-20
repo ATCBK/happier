@@ -43,36 +43,39 @@ export function registerBrowserRuntimeWorkspaceOpeningAdapter(owner: BrowserRunt
     return () => { retirement.dispose(); dispose(); };
 }
 
-// A UI caller's open request is fulfilled by that caller's own opener, which records where in the
-// pane layout Details was opened from. An Agent or external caller has no opener of its own and is
-// served by the scope's most recently mounted one.
-const claimedWorkspaceOpenCommands = new Map<string, BrowserRuntimeWorkspaceOpeningAdapter>();
+/** The pane column a UI open came from; Details is kept off it (drawer over a side list). */
+export type BrowserWorkspaceOpenerRegion = 'main' | 'side';
+
+// The scope's current opener keeps deciding every open (platform, policy, tab). A UI caller in
+// another pane column only lends the region it opened from, for the duration of its own command.
+// Agents and external callers lend nothing, so their opens keep the owner's own region.
+const claimedWorkspaceOpenRegions = new Map<string, BrowserWorkspaceOpenerRegion>();
 
 function workspaceOpenCommandKey(scope: ServerAccountScope, scopeId: string, commandId: string): string {
     return JSON.stringify([serverAccountScopedResourceKey(scope, scopeId), commandId]);
 }
 
-/** Routes one open command, for its duration, to the opener that issued it. */
-export function claimBrowserRuntimeWorkspaceOpenCommand(
-    owner: BrowserRuntimeWorkspaceOpeningAdapter,
-    commandId: string,
+/** Records, for one open command's duration, the pane column its UI caller sits in. */
+export function claimBrowserRuntimeWorkspaceOpenRegion(
+    input: Readonly<{ scope: ServerAccountScope; scopeId: string; commandId: string; region: BrowserWorkspaceOpenerRegion }>,
 ): () => void {
-    const lifetime = owner.accountLifetime;
-    if (!lifetime?.isCurrent()) return () => {};
-    const key = workspaceOpenCommandKey(lifetime.scope, owner.scopeId, commandId);
-    claimedWorkspaceOpenCommands.set(key, owner);
-    return () => {
-        if (claimedWorkspaceOpenCommands.get(key) === owner) claimedWorkspaceOpenCommands.delete(key);
-    };
+    const key = workspaceOpenCommandKey(input.scope, input.scopeId, input.commandId);
+    claimedWorkspaceOpenRegions.set(key, input.region);
+    return () => { claimedWorkspaceOpenRegions.delete(key); };
+}
+
+export function readClaimedBrowserRuntimeWorkspaceOpenRegion(
+    scope: ServerAccountScope,
+    scopeId: string,
+    commandId: string,
+): BrowserWorkspaceOpenerRegion | null {
+    return claimedWorkspaceOpenRegions.get(workspaceOpenCommandKey(scope, scopeId, commandId)) ?? null;
 }
 
 export function readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(
     scope: ServerAccountScope,
     scopeId: string,
-    commandId?: string,
 ): BrowserRuntimeWorkspaceOpeningAdapter | null {
-    const claimed = commandId ? claimedWorkspaceOpenCommands.get(workspaceOpenCommandKey(scope, scopeId, commandId)) : undefined;
-    if (claimed?.accountLifetime?.isCurrent()) return claimed;
     const owners = workspaceOpeners.get(serverAccountScopedResourceKey(scope, scopeId)) ?? [];
     for (let index = owners.length - 1; index >= 0; index--) {
         if (owners[index].accountLifetime?.isCurrent()) return owners[index];
@@ -144,5 +147,5 @@ export function readRegisteredBrowserRuntimeDiagnosticsAdapter(browserSessionId:
 export function clearBrowserRuntimeControlRegistryForTests(): void {
     registrationsBySessionId.clear();
     workspaceOpeners.clear();
-    claimedWorkspaceOpenCommands.clear();
+    claimedWorkspaceOpenRegions.clear();
 }

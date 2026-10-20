@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useDesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/useDesktopWebViewNativeAvailability';
 import { registerBrowserRuntimeWorkspaceOpeningAdapter } from '@/sync/domains/browser/actions/runtimeControlRegistry';
+import { usePaneRegion } from '@/components/appShell/panes/paneRegion';
 import { createOpenBrowserTargetInWorkspace, type CreateOpenBrowserTargetInWorkspaceDeps } from './openBrowserTargetInWorkspace';
 
 /** Workspace presentation lifetime exists before any Browser view is rendered. */
@@ -12,6 +13,9 @@ export function useOpenBrowserTargetInWorkspace(deps: CreateOpenBrowserTargetInW
     const desktopWebViewAvailability = useDesktopWebViewNativeAvailability({
         platform: deps.platform, availability: deps.desktopWebViewAvailability,
     });
+    const paneRegion = usePaneRegion();
+    const openerRegion = React.useRef(paneRegion);
+    openerRegion.current = paneRegion;
     const facts = React.useRef(deps);
     facts.current = { ...deps, browserFeatureDecision: deps.browserFeatureDecision ?? browserFeatureDecision,
         desktopWebViewAvailability };
@@ -20,6 +24,7 @@ export function useOpenBrowserTargetInWorkspace(deps: CreateOpenBrowserTargetInW
         const open = createOpenBrowserTargetInWorkspace({ ...deps,
             get signal() { return lifetime.controller.signal; },
             readOpenFacts: () => facts.current,
+            readOpenerRegion: () => (openerRegion.current === 'main' || openerRegion.current === 'side' ? openerRegion.current : null),
             isCurrent: () => lifetime.current && facts.current.accountLifetime === deps.accountLifetime
                 && facts.current.scopeId === deps.scopeId && facts.current.scope === deps.scope
                 && facts.current.openDetailsTab === deps.openDetailsTab,
