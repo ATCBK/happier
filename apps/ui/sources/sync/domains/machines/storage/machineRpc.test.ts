@@ -51,7 +51,7 @@ describe('storage Action and Machine RPC boundary', () => {
             payload: { machineId: key.machineId, serverId: HOME, items: [{ ref: item.ref, expect: 'checked-log' }] } }));
     });
 
-    it('still asks for an unreviewed permanent delete and for an explicit Ask first, keeping a decline quiet without a receipt or mutation', async () => {
+    it('still asks for an unreviewed permanent delete, and an explicit Ask first goes to approval without a receipt or mutation', async () => {
         const item = reviewed();
         expect(await storageRpc.deleteMachineStorageNowViaAction({ ...key, items: [item] })).toEqual({ ok: false, reason: 'declined' });
         expect(Modal.confirm).toHaveBeenCalledOnce();
@@ -59,8 +59,10 @@ describe('storage Action and Machine RPC boundary', () => {
         homes.answer(key.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'machines.storage.deleteNow': { approvalRequiredSurfaces: ['ui'] } } }),
         } }, version: 1 } });
-        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] })).toEqual({ ok: false, reason: 'declined' });
-        expect(Modal.confirm).toHaveBeenCalledOnce();
+        // An explicit Ask first is the person's own Action policy and the review does not replace it: the request waits
+        // for that approval, and nothing reaches the machine until it is given.
+        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] })).toEqual({ ok: false, reason: 'approval_requested' });
+        expect(Modal.confirm).not.toHaveBeenCalled();
         expect(boundary.rpc).not.toHaveBeenCalled();
         expect(machineStorageStore.getReceipt(key)).toBeNull();
     });
