@@ -118,7 +118,19 @@ activity, including nested SDK agents that outlive their launching agent.
 `SubagentStop` is progress evidence
 because Claude can veto that stop and continue working. Synchronous children
 finish on their tool results; asynchronous children finish on the provider's
-settled task evidence. Workflow correlation folds every tool block in a message,
+settled task evidence. Claude 2.1.302 reports an Agent `completed` each time it
+stops, including when it stops to wait on backgrounded work it still owns (SDK
+`task_started` rows carrying `parent_task_id`). That terminal leaves the Agent
+awaiting its children (a child Agent that is itself awaiting its own children still
+counts): the children keep their own activity, and only the Agent's
+own typed SDK `task_progress` after it wakes reactivates it until its next
+terminal. Hook `SubagentStop` progress cannot reactivate an awaiting Agent, so an
+Agent that never wakes cannot hold runtime activity open. A later stop or failure
+settles an awaiting Agent and prevents typed progress from reactivating it.
+Confirmed TaskOutput hooks retain the task's terminal status, while confirmed
+TaskStop hooks settle it as stopped. Neither remembers unknown task identities;
+a completed TaskOutput preserves the pending wake.
+Workflow correlation folds every tool block in a message,
 keeps each child's native task alias, and closes an implicit Agent activity group
 when all children settle. A successful native resume can reopen that group.
 A successful SendMessage `resumedAgentId` proves an asynchronous invocation,
