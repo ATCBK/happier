@@ -36,6 +36,16 @@ export function CodeIntelligencePaneTab(
     React.useState<CodeReferenceRow | null>(null);
   const [asked, setAsked] = React.useState(false);
   const [askBusy, setAskBusy] = React.useState(false);
+  // The last Find references answer stays in the tab while the pointer asks about other names (LS1 L1).
+  const lastReferences = React.useRef<
+    Readonly<{ controller: unknown; snapshot: typeof snapshot }> | null
+  >(null);
+  if (snapshot.kind === 'references')
+    lastReferences.current = { controller: producer?.controller, snapshot };
+  const referencesSnapshot =
+    lastReferences.current?.controller === producer?.controller
+      ? (lastReferences.current?.snapshot ?? null)
+      : null;
   const diagnosticsKey = snapshot.diagnostics?.items;
   React.useEffect(() => {
     setAsked(false);
@@ -61,7 +71,8 @@ export function CodeIntelligencePaneTab(
   });
   const progressLine = progress?.kind === 'progress' ? progress : null;
   if (props.kind === 'references') {
-    const result = snapshot.kind === 'references' ? snapshot.result : null;
+    const answer = referencesSnapshot ?? snapshot;
+    const result = answer.kind === 'references' ? answer.result : null;
     const rows: CodeReferenceRow[] =
       result && 'locations' in result
         ? result.locations.map((location) => ({
@@ -75,7 +86,7 @@ export function CodeIntelligencePaneTab(
             lineText: 'lineText' in location ? location.lineText : '',
           }))
         : [];
-    if (snapshot.kind !== 'references') {
+    if (answer.kind !== 'references') {
       return (
         <View style={styles.empty}>
           <EmptyState
@@ -93,12 +104,13 @@ export function CodeIntelligencePaneTab(
       >
         <CodeReferencesList
           rows={rows}
-          textMatches={snapshot.mode === 'fallback'}
+          textMatches={answer.mode === 'fallback'}
           partial={Boolean(
             result && 'coverage' in result && result.coverage === 'partial',
           )}
           searching={
-            snapshot.status === 'searching' || snapshot.status === 'loading'
+            snapshot.kind === 'references' &&
+            (snapshot.status === 'searching' || snapshot.status === 'loading')
           }
           progress={progressLine}
           selected={selectedReference}

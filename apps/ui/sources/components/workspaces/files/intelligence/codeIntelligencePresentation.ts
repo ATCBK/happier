@@ -144,15 +144,17 @@ export function resolveLanguageStateNote(
       (server.state === 'ready' && server.loading),
   );
   if (starting || snapshot.status === 'loading') {
+    const server =
+      starting?.label ??
+      readLanguageServerLabel(servers) ??
+      t('files.pane.intelligence.languageServer');
+    // A running server that is still reading the project says so; anything earlier is "Starting".
+    const loadingProject = starting?.state === 'ready' && starting.loading;
     return {
       kind: 'progress',
-      text: t('files.pane.intelligence.starting', {
-        server:
-          starting?.label ??
-          readLanguageServerLabel(servers) ??
-          t('files.pane.intelligence.languageServer'),
-        machine: machineName,
-      }),
+      text: loadingProject
+        ? t('files.pane.intelligence.loadingProject', { server, machine: machineName })
+        : t('files.pane.intelligence.starting', { server, machine: machineName }),
       detail: t('files.pane.intelligence.startingDetail'),
     };
   }

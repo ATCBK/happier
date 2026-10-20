@@ -28,6 +28,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
     let acknowledged: { text: string; unsaved: boolean; version: number; generation: string } | null = null;
     let queue: Promise<unknown> = Promise.resolve();
     const watchAbort = new AbortController();
+    let activeWatch: AbortController | null = null;
     let watching = false;
     let servers: readonly LanguageIntelligenceServerStatus[] = [];
     let needsSnapshot = false;
@@ -56,12 +57,22 @@ export function createCodeIntelligenceDocument(input: Readonly<{
     async function watch(): Promise<void> {
         if (watching || !current()) return;
         watching = true;
+        const controller = new AbortController();
+        activeWatch = controller;
+        const cancellation = mergeAbortSignals([watchAbort.signal, controller.signal]);
+        const signal = cancellation.signal;
         let revision: number | undefined;
         try {
-            while (current() && !watchAbort.signal.aborted) {
-                const issuedServers = servers;
-                const result = await input.port.watch({ rootPath: input.rootPath, ...(revision === undefined ? {} : { sinceRevision: revision }) }, watchAbort.signal);
-                if (!current() || watchAbort.signal.aborted) return;
+            while (current() && !signal.aborted) {
+                let issuedServers = servers;
+                // A pre-ack watch belongs to the opening lease. Once that lease
+                // acknowledges, use its identities to fence a later restart,
+                // without discarding genuine startup/project-progress events.
+                if (!acknowledged && opening) void opening.then(result => {
+                    if (result.status === 'ok') issuedServers = result.servers;
+                }, () => undefined);
+                const result = await input.port.watch({ rootPath: input.rootPath, ...(revision === undefined ? {} : { sinceRevision: revision }) }, signal);
+                if (!current() || signal.aborted) return;
                 // A sync/restart can acknowledge a new generation while this watch is parked.
                 // Re-arm at the same revision rather than letting its old response retire that acknowledgement.
                 if (sessionMoved(issuedServers)) continue;
@@ -74,8 +85,12 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                 servers = result.servers;
                 input.onWatch(result);
             }
-        } catch { if (current() && !watchAbort.signal.aborted) input.onUnavailable('transport_failed'); }
-        finally { watching = false; }
+        } catch { if (current() && !signal.aborted) input.onUnavailable('transport_failed'); }
+        finally {
+            cancellation.dispose();
+            if (activeWatch === controller) activeWatch = null;
+            watching = false;
+        }
     }
     function synchronize(activate = false): Promise<LanguageIntelligenceSyncResult | null> {
         if (!current() || (!activated && !activate)) return Promise.resolve(null);
@@ -89,11 +104,15 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                     opening = input.port.sync({ rootPath: input.rootPath, op: {
                         op: 'open', path: input.path, languageId: input.languageId, version: 1, text, unsaved,
                     } }, watchAbort.signal);
+                    // Startup/project progress is already available on the existing
+                    // root watch; initialization need not acknowledge first.
+                    void watch();
                     const result = await opening;
                     accept(result, text, unsaved, 1);
-                    if (result.status === 'ok') void watch();
+                    if (result.status !== 'ok') activeWatch?.abort();
                     return result;
                 } catch (error) {
+                    activeWatch?.abort();
                     lastResult = { status: 'unavailable', reason: 'transport_failed' };
                     throw error;
                 }

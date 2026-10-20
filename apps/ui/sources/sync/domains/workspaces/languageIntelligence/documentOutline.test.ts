@@ -22,7 +22,7 @@ describe('document outline', () => {
         expect(selectDocumentOutline({ baseline, server: { ...server, state: 'starting', loading: true } })).toEqual({
             status: 'ok', symbols: [
                 { serverId: 'language-server', name: 'Accurate', kind: 'class', line: 3, column: 3, depth: 0 },
-                { serverId: 'language-server', name: 'read', kind: 'method', line: 5, column: 8, depth: 1 },
+                { serverId: 'language-server', name: 'read', kind: 'method', line: 5, column: 8, depth: 1, container: 'Accurate' },
             ],
         });
     });

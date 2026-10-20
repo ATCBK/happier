@@ -10,6 +10,8 @@ export type DocumentOutlineEntry = Readonly<{
     line: number;
     column: number;
     depth: number;
+    /** Immediate enclosing server symbol; baseline indentation does not establish a container. */
+    container?: string;
 }>;
 
 export type DocumentOutlineBaselineInput = Readonly<{
@@ -45,13 +47,14 @@ export function selectDocumentOutline(input: Readonly<{
     if (!server?.capable || (server.state !== 'ready' && server.state !== 'starting' && server.state !== 'restarting')
         || (server.symbols.length === 0 && (server.state !== 'ready' || server.loading))) return input.baseline;
     const symbols: DocumentOutlineEntry[] = [];
-    const append = (items: readonly LanguageIntelligenceDocumentSymbol[], depth: number) => {
+    const append = (items: readonly LanguageIntelligenceDocumentSymbol[], depth: number, container?: string) => {
         for (const symbol of items) {
             symbols.push({
                 serverId: symbol.serverId, name: symbol.name, kind: serverSymbolKinds[symbol.kind - 1] ?? 'symbol',
                 line: symbol.selectionRange.start.line + 1, column: symbol.selectionRange.start.character, depth,
+                ...(container !== undefined ? { container } : {}),
             });
-            if (symbol.children) append(symbol.children, depth + 1);
+            if (symbol.children) append(symbol.children, depth + 1, symbol.name);
         }
     };
     append(server.symbols, 0);

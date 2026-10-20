@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CodeIntelligenceFallbackInput, CodeIntelligenceFallbackResult } from '@happier-dev/protocol/machines/codeIntelligenceFallback';
-import type { LanguageIntelligenceQueryResult, LanguageIntelligenceWatchInput, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { LanguageIntelligenceQueryResult, LanguageIntelligenceSyncResult, LanguageIntelligenceWatchInput, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
 import { createCodeIntelligenceController } from './createCodeIntelligenceController';
 import { selectDocumentOutline } from './documentOutline';
 import { selectCodeDiagnostics } from './codeDiagnostics';
@@ -129,6 +129,78 @@ describe('fallback code intelligence controller', () => {
 });
 
 describe('on-demand language intelligence controller', () => {
+    it.each([1, 2])('revalidates pre-ack root diagnostics version %s once the opened document version is known', async diagnosticVersion => {
+        let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
+        const server = { serverId: 'ts', label: 'TypeScript', state: 'ready' as const, loading: false, generation: 'g1' };
+        const diagnostics = { 'a.ts': { ts: { state: 'ready' as const, version: diagnosticVersion, generation: 'g1', items: [{
+            serverId: 'ts', path: 'a.ts', severity: 'error' as const, message: 'Root already opted into diagnostics',
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+        }] } } };
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'a.ts', languageId: 'typescript',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => 'answer()', query: async () => result, openLocation() {},
+            languageServer: {
+                sync: request => request.op.op === 'open' ? new Promise(resolve => { finishOpen = resolve; })
+                    : Promise.resolve({ status: 'ok', generation: 'root-g1', servers: [] }),
+                // Real root watches return a full snapshot without sinceRevision,
+                // then park. A different holder already requested Check problems.
+                watch: (request, signal) => request.sinceRevision === undefined
+                    ? Promise.resolve({ status: 'ok', revision: 1, servers: [server], diagnostics })
+                    : new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+                query: async () => ({ status: 'ok', kind: 'hover', sections: [] }),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = controller.hover({ line: 0, character: 2 });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers).toEqual([server]));
+            expect(selectCodeDiagnostics(controller.getDiagnosticsProjection()).items).toMatchObject([{ message: 'Root already opted into diagnostics' }]);
+            finishOpen({ status: 'ok', generation: 'root-g1', version: 1, servers: [server] });
+            await pending;
+            expect(selectCodeDiagnostics(controller.getDiagnosticsProjection()).items).toMatchObject(diagnosticVersion === 1 ? [{ message: 'Root already opted into diagnostics' }] : []);
+        } finally { controller.dispose(); }
+    });
+
+    it('publishes startup and project-loading to the asking surface before the first open is acknowledged', async () => {
+        let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
+        const watches: Array<{ resolve(value: LanguageIntelligenceWatchResult): void }> = [];
+        const server = { serverId: 'ts', label: 'TypeScript', state: 'starting' as const, loading: false, generation: 'g1' };
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'a.ts', languageId: 'typescript',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => 'answer()', query: async () => result, openLocation() {},
+            languageServer: {
+                sync: request => request.op.op === 'open' ? new Promise(resolve => { finishOpen = resolve; })
+                    : Promise.resolve({ status: 'ok', generation: 'g1', servers: [] }),
+                watch: (_request, signal) => new Promise((resolve, reject) => {
+                    watches.push({ resolve });
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                }),
+                query: async () => ({ status: 'ok', kind: 'hover', sections: [{ serverId: 'ts', label: 'TypeScript', markdown: 'answer(): void' }] }),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            expect(controller.getSnapshot().status).toBe('idle');
+            expect(await controller.outline()).toBeNull();
+            expect(watches).toHaveLength(0);
+            const pending = controller.hover({ line: 0, character: 2 });
+            expect(controller.getSnapshot()).toMatchObject({ mode: 'server', status: 'loading', kind: 'hover', querySelection: { identifier: { symbol: 'answer' } } });
+            await vi.waitFor(() => expect(watches).toHaveLength(1));
+            watches[0].resolve({ status: 'ok', revision: 1, servers: [server], diagnostics: {} });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers).toEqual([server]));
+            const loading = { ...server, state: 'ready' as const, loading: true };
+            watches[1].resolve({ status: 'ok', revision: 2, servers: [loading], diagnostics: {} });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers).toEqual([loading]));
+            expect(controller.getSnapshot()).toMatchObject({ status: 'loading', kind: 'hover', querySelection: { identifier: { symbol: 'answer' } } });
+            finishOpen({ status: 'ok', generation: 'g1', version: 1, servers: [{ ...loading, loading: false }],
+                capabilities: { hover: true, definition: true, references: true, documentSymbol: true, diagnostics: 'pull', acceptsExternalChanges: false } });
+            await pending;
+            expect(controller.getSnapshot()).toMatchObject({ status: 'ready', kind: 'hover', result: { kind: 'hover' } });
+        } finally { controller.dispose(); }
+    });
+
     it.each([false, true])('re-asks a loading query after an early ready watch with unrelated failed server %s', async unrelatedFailed => {
         let updateWatch!: (answer: LanguageIntelligenceWatchResult) => void;
         let finishQuery!: (answer: LanguageIntelligenceQueryResult) => void;
