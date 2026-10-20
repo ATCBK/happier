@@ -1,0 +1,24 @@
+{
+  "id": "J5",
+  "intent": "Open ordinary New Session, reselect the prepared agent/model and exact perf Machine through their real pickers, then submit one harmless first message and observe it in the new transcript. Requires B3 round-1 target and draft preparation described in lanes/B3.md.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "open", "path": "/new" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"new-session-machine-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid^=\"new-session-machine-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-agent-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"agent-input-chip-picker.option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid^=\"agent-input-chip-picker.option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"model-picker-overlay-selection-list\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid^=\"model-picker-overlay-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"new-session-composer-input\"]", "Reply with PERF_E2E_B3_OK only. Do not run tools or change files."] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const e = document.querySelector('[data-testid=\"new-session-composer-send\"]'); return e && !e.disabled && e.getAttribute('aria-disabled') !== 'true'; })()"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"new-session-composer-send\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"session-composer-input\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"transcript-message-actions-row:\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.body.textContent.includes('Reply with PERF_E2E_B3_OK only. Do not run tools or change files.')"] }
+  ]
+}

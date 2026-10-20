@@ -1,0 +1,22 @@
+{
+  "id": "J6",
+  "intent": "Authenticated desktop Settings: open Plugins installed inventory, then use the Settings sidebar to visit Connected services, Actions/approvals policy, Appearance, and revisit Plugins. Observe reads and rendering without changing settings or installing plugins. Requires the Settings sidebar to be enabled and a current selected administration Machine.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" }
+  ],
+  "steps": [
+    { "op": "open", "path": "/settings/plugins" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.page\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.marketplace.installed\"], [data-testid=\"settings.plugins.marketplace.installed.empty\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.connectedServices\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-connected-services\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"connected-services-index:privacy\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.actions\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-actions:virtualized-list\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.appearance\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-appearance-themeMode\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.plugins\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.marketplace.installed\"], [data-testid=\"settings.plugins.marketplace.installed.empty\"]"] }
+  ]
+}

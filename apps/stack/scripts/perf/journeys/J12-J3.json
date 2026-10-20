@@ -1,0 +1,209 @@
+{
+  "id": "J12-J3",
+  "intent": "J12 at 390x844 CSS pixels: Scroll the populated Session list, apply the Needs me facet, then restore it. Start from the recorded unfiltered view; wheel movement and resulting membership must be verified on the loaded export before baseline capture.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "set",
+        "viewport",
+        "390",
+        "844"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "window.innerWidth === 390"
+      ]
+    },
+    {
+      "op": "open"
+    },
+    {
+      "op": "home"
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid^=\"session-list-item-\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "eval",
+        "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "op": "browser",
+      "args": [
+        "hover",
+        "[data-testid=\"session-list-content\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-720"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-trigger\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"session-list-filter-panel\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-attention\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-done\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "!document.querySelector('[data-testid=\"session-list-filter-panel\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"], [data-testid=\"session-list-query-empty-state\"], [data-testid=\"session-list-filtered-no-results\"]')"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-trigger\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"session-list-filter-panel\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-attention\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-filter-done\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "!document.querySelector('[data-testid=\"session-list-filter-panel\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-search-trigger\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"session-list-search-input\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "fill",
+        "[data-testid=\"session-list-search-input\"]",
+        "counting"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "fill",
+        "[data-testid=\"session-list-search-input\"]",
+        ""
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-search-close\"]"
+      ]
+    }
+  ]
+}

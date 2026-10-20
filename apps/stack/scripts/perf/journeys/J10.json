@@ -1,0 +1,13 @@
+{
+  "id": "J10",
+  "intent": "Desktop Home to an existing Team through Settings, then back Home using app controls. Provisional Round 0 interpretation; requires an existing active Team and visible Settings rail.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:settings\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"team-overview-identity\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"app-shell-logo\"]"] },
+    { "op": "home" }
+  ]
+}

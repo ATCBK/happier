@@ -1,0 +1,157 @@
+{
+  "id": "J12-J5",
+  "intent": "J12 at 390x844 CSS pixels: Open ordinary New Session, reselect the prepared agent/model and exact perf Machine through their real pickers, then submit one harmless first message and observe it in the new transcript. Requires B8 round-1 target and draft preparation described in lanes/B8.md. Round 0 template: prepare one B8-owned ordinary draft with the exact perf Machine and agent/model selected; stop on missing/ambiguous controls. At phone width bind the sheet selectors after first live inspection; no arbitrary selection.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "set",
+        "viewport",
+        "390",
+        "844"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "window.innerWidth === 390"
+      ]
+    },
+    {
+      "op": "open"
+    },
+    {
+      "op": "home"
+    }
+  ],
+  "steps": [
+    {
+      "op": "open",
+      "path": "/new"
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"new-session-composer-input\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "focus",
+        "[data-testid=\"new-session-composer-input\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "type",
+        "[data-testid=\"new-session-composer-input\"]",
+        "Reply with PERF_E2E_B8_OK only. Do not run tools or change files."
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"agent-input-machine-chip\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid^=\"new-session-machine-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid^=\"new-session-machine-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"agent-input-agent-chip\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid^=\"agent-input-chip-picker.option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid^=\"agent-input-chip-picker.option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"model-picker-overlay-selection-list\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid^=\"model-picker-overlay-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "press",
+        "Escape"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "document.querySelector('[data-testid=\"new-session-composer-input\"]')?.value === 'Reply with PERF_E2E_B8_OK only. Do not run tools or change files.'"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "(() => { const e = document.querySelector('[data-testid=\"new-session-composer-send\"]'); return e && !e.disabled && e.getAttribute('aria-disabled') !== 'true'; })()"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"new-session-composer-send\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"session-composer-input\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid^=\"transcript-message-actions-row:\"]"
+      ]
+    }
+  ]
+}

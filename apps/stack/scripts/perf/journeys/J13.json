@@ -1,6 +1,6 @@
 {
   "id": "J13",
-  "intent": "Authenticated foreground Home with no interaction for five minutes; count background traffic and process work without changing freshness.",
+  "intent": "B7 background steady state: authenticated foreground Home with no interaction for five minutes; attribute server/daemon polls, socket lifetimes, encryption/requester currentness, admission/verify, Account publication/claims, transaction contention, CPU and RSS without changing freshness or approvals.",
   "prepare": [{ "op": "open" }, { "op": "home" }],
   "steps": [{ "op": "idle", "ms": 300000 }]
 }

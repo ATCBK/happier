@@ -1,0 +1,20 @@
+{
+  "id": "J9",
+  "intent": "Browse the synced Artifact inventory, open a real writable document, enter its editor and cancel unchanged; attribute inventory pages, selected body/access reads, crypto, store updates and editor mounting.",
+  "prerequisites": [
+    "Authenticated agent-qa-perf browser at desktop width; the first Artifact row must be a recorded ordinary writable text document, not a Board, Workflow, Profile or binary.",
+    "Record the inventory size and first document identity/versions before capture. If the default first row is unsuitable, replace only the first-row locator in a recorded external --journey copy with that document's exact observed row test ID; filters reset on a new browser mount. Keep the same selection for every repeat."
+  ],
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "open", "path": "/artifacts" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifacts:collection\"]"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"artifacts:row:\"][role=\"button\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact:body\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"artifact:edit\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact-editor:body\"]"] },
+    { "op": "idle", "ms": 10000 },
+    { "op": "browser", "args": ["click", "[data-testid=\"artifact-editor:cancel\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact:body\"]"] }
+  ]
+}

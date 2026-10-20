@@ -1,0 +1,18 @@
+{
+  "id": "J14",
+  "intent": "Authenticated Inbox → exact pre-reviewed QA approval → Approve → Executed. Bind __B4_APPROVAL_ARTIFACT_ID__ to one fresh, harmless QA-owned request in a run-local copy passed with --journey. Never choose the first or an arbitrary existing approval. Use an English QA document for the final visible-status assertion; independently verify the durable receipt and expected effect after capture.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" }
+  ],
+  "steps": [
+    { "op": "open", "path": "/inbox" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"inbox.content\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"inbox.approval.__B4_APPROVAL_ARTIFACT_ID__\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"inbox.approval.__B4_APPROVAL_ARTIFACT_ID__\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"approvals.header\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"approvals.approve\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"approvals.approve\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const status = document.querySelector('[data-testid=\"approvals.status\"]'); return Boolean(status && /\\bExecuted\\b/.test(status.textContent) && !document.querySelector('[data-testid=\"approvals.approve\"]')); })()"] }
+  ]
+}

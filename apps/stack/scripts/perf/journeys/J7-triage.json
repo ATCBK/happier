@@ -1,0 +1,14 @@
+{
+  "id": "J7-triage",
+  "intent": "Authenticated PRs & Issues list to an existing entry's source detail, followed by one minute with that detail open. Requires a populated Triage list and a first entry with an admitted source detail; no external source mutation is performed.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "open", "path": "/plugins/triage/triage" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-list-region\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"triage-entry-row:\"]"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"triage-entry-row:\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-detail-region\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]"] },
+    { "op": "idle", "ms": 60000 }
+  ]
+}

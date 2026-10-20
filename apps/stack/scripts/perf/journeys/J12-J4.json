@@ -1,0 +1,146 @@
+{
+  "id": "J12-J4",
+  "intent": "J12 at 390x844 CSS pixels: Open the explicitly bound B8-owned long Session, scroll older transcript content, return to the live edge, and stream one read-only turn. Round 0 template: bind REPLACE_WITH_B8_SESSION_ID and REPLACE_WITH_RUN_ID in a per-run copy passed with --journey; never substitute an arbitrary Session.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "set",
+        "viewport",
+        "390",
+        "844"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "window.innerWidth === 390"
+      ]
+    },
+    {
+      "op": "open"
+    },
+    {
+      "op": "home"
+    },
+    {
+      "op": "browser",
+      "args": [
+        "eval",
+        "(() => { if ('REPLACE_WITH_RUN_ID'.includes('REPLACE_' + 'WITH_') || !document.querySelector('[data-testid=\"session-list-item-REPLACE_WITH_B8_SESSION_ID\"]')) throw new Error('Bind J4 to the B8-owned Session and a unique run id before capture'); return true; })()"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-list-item-REPLACE_WITH_B8_SESSION_ID\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"session-composer-input\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"transcript-turn\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "find",
+        "first",
+        "[data-testid=\"transcript-turn\"]",
+        "hover"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-1400"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-1400"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "mouse",
+        "wheel",
+        "-1400"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "!document.querySelector('[data-testid=\"transcript-older-load-progress-overlay\"], [data-testid=\"transcript-older-load-retry-overlay\"], [data-testid=\"transcript-older-load-continuation-overlay\"]')"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"transcript-jump-to-bottom\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "!document.querySelector('[data-testid=\"transcript-first-paint-placeholder\"], [data-testid=\"agent-input-composer-lock\"]') && !!document.querySelector('[data-testid=\"session-composer-input\"]:not([disabled])')"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "fill",
+        "[data-testid=\"session-composer-input\"]",
+        "Performance measurement only. Do not use tools, read files, run commands, or change anything. Reply with 24 numbered short sentences about counting. End with B8, then a hyphen, then REPLACE_WITH_RUN_ID, then a hyphen, then DONE, together on a separate line."
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "(() => { const button = document.querySelector('[data-testid=\"session-composer-send\"]'); return !!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true'; })()"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"session-composer-send\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "[...document.querySelectorAll('[data-testid=\"transcript-turn\"]')].some(e => e.textContent.includes('B8-REPLACE_WITH_RUN_ID-DONE'))"
+      ]
+    }
+  ]
+}

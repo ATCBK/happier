@@ -1,0 +1,35 @@
+{
+  "id": "J12-J1",
+  "intent": "J12 at 390x844 CSS pixels: Cold document startup and dev Account restore through authenticated Home; warm mode measures authenticated reload.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "set",
+        "viewport",
+        "390",
+        "844"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "window.innerWidth === 390"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "op": "open"
+    },
+    {
+      "op": "restore",
+      "when": "cold"
+    },
+    {
+      "op": "home"
+    }
+  ]
+}

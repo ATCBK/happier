@@ -1,0 +1,6 @@
+{
+  "id": "J2",
+  "intent": "Authenticated foreground Home and app shell idle for five minutes; attribute renders, store publications and request demand without interaction.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}

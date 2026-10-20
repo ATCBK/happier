@@ -1,0 +1,23 @@
+{
+  "id": "J9-files",
+  "intent": "Open an existing Session's Files tree and one real text file, mount the editor and leave its buffer unchanged; count directory/read/stat/diff RPCs, retained subscriptions, bytes and editor work. Companion capture to J9, compared separately.",
+  "prerequisites": [
+    "Pass --url as the exact agent-qa-perf origin-preserving URL for the recorded Session Files route, including its server scope. Authenticate before capture; this declaration does not select an arbitrary Session.",
+    "Use desktop width and a repository with available ignore-rule visibility controls. The first visible leaf must be the recorded small writable UTF-8 text file on the online QA Machine; collapse unrelated remembered directories through the UI first. Record Session, root, path, file size and SCM snapshot. If ignore rules are unavailable, All files is already implicit: omit only the two visibility-menu clicks in the recorded external --journey copy."
+  ],
+  "prepare": [],
+  "steps": [
+    { "op": "open" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"repository-tree-session-files-root\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"workspace-repository-tree-view\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"workspace-repository-tree-all-files\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"repository-tree-row-\"][role=\"treeitem\"]:not([aria-expanded])"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"repository-tree-row-\"][role=\"treeitem\"]:not([aria-expanded])", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"file-details-edit\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"file-details-edit\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"file-details-editor\"]"] },
+    { "op": "idle", "ms": 60000 },
+    { "op": "browser", "args": ["click", "[data-testid=\"file-details-done\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"file-details-edit\"]"] }
+  ]
+}

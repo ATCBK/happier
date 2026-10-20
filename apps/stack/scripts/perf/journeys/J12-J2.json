@@ -1,0 +1,35 @@
+{
+  "id": "J12-J2",
+  "intent": "J12 at 390x844 CSS pixels: Authenticated foreground Home and app shell idle for five minutes; attribute renders, store publications and request demand without interaction.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "set",
+        "viewport",
+        "390",
+        "844"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "window.innerWidth === 390"
+      ]
+    },
+    {
+      "op": "open"
+    },
+    {
+      "op": "home"
+    }
+  ],
+  "steps": [
+    {
+      "op": "idle",
+      "ms": 300000
+    }
+  ]
+}
