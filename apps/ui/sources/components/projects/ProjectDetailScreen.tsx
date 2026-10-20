@@ -29,7 +29,7 @@ import { ProjectPhoneCheckoutRow, ProjectShellHeaderHost } from './shell/Project
 import { ListPresentationProvider, PageColumnProvider } from '@/components/ui/lists/listPresentation';
 import { useProjectRouteActions } from './detail/useProjectRouteActions';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
-import { resolveProjectRightSidebarTabs } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
+import { RIGHT_SIDEBAR_BUILTIN_TABS } from '@/components/appShell/rightSidebar/rightSidebarBuiltinTabs';
 import { ProjectTerminalSurface } from './detail/surfaces/ProjectTerminalSurface';
 import { resolveProjectCheckoutWorkspaceRef } from '@/sync/domains/workspaces/workspaceRefs';
 import type { WorkspaceRefResolutionV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
@@ -39,6 +39,10 @@ import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBan
 import { resolveWorkspaceRefDisplayName } from './resolveWorkspaceRefDisplayName';
 import { Text } from '@/components/ui/text/Text';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+
+const PROJECT_BUILTIN_DESTINATION_IDS = RIGHT_SIDEBAR_BUILTIN_TABS
+    .filter((tab) => tab.scopes.includes('project'))
+    .map((tab) => tab.id);
 
 export const ProjectDetailScreen = React.memo((props: Readonly<{
     workspaceRefId: string;
@@ -228,11 +232,11 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
             : null
     ), [handleSelectRootPath, props.page, resolvedActiveRootPath, resolvedActiveWorktreeId, scopeId, workspaceRef]);
     const projectRightPaneBuiltinAdapter = React.useMemo(() => ({
-        destinationIds: resolveProjectRightSidebarTabs({ presentation: deviceType === 'phone' ? 'mobile' : 'desktop' })
-            .filter(tab => tab.owner === 'builtin').map(tab => tab.id),
+        // Every built-in tab this pane can draw; availability (e.g. Problems while a File page offers them) is the panel's.
+        destinationIds: PROJECT_BUILTIN_DESTINATION_IDS,
         defaultDestinationId: 'files',
         render: renderProjectRightSidebar,
-    }), [deviceType, renderProjectRightSidebar]);
+    }), [renderProjectRightSidebar]);
     const projectRightSidebarAdapter = React.useMemo(() => ({
         render: renderProjectRightSidebar,
         renderActionRail: () => <ProjectRightSidebarRail />,

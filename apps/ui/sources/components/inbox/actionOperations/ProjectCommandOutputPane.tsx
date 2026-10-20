@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
@@ -28,6 +28,11 @@ export const ProjectCommandOutputPane = React.memo(
       operation: ActionOperationProjection;
       title: string;
       height?: number;
+      /**
+       * `page`: the output is a page's own body. The page's status line states how the run ended, so the
+       * terminal leaves its own exit line out, and it hugs its output up to `height` instead of filling it.
+       */
+      presentation?: 'inline' | 'page';
       onOpenDetail?: () => void;
       /** Opens this output as its host's bottom terminal tab (desktop); preferred over the detail. */
       onOpenInTerminal?: () => void;
@@ -72,6 +77,10 @@ export const ProjectCommandOutputPane = React.memo(
       [attachment, workspaceRefs],
     );
     const docked = useProjectCommandOutputDocked(attachment);
+    const page = props.presentation === 'page';
+    // Only the web renderer reports its output's height; a native renderer has no intrinsic height, so it
+    // keeps the page's full height.
+    const hugsOutput = page && Platform.OS === 'web';
     if (!attachment) return null;
     if (!attachment.terminalId) {
       const status = resolveActionOperationStatus(props.operation.snapshot, props.operation.observation);
@@ -106,10 +115,12 @@ export const ProjectCommandOutputPane = React.memo(
         testID="project-command-output"
         style={[
           styles.pane,
-          {
-            height: props.height ?? 240,
-            backgroundColor: theme.colors.surface.base,
-          },
+          hugsOutput
+            ? { maxHeight: props.height, backgroundColor: theme.colors.surface.base }
+            : {
+                height: props.height ?? 240,
+                backgroundColor: theme.colors.surface.base,
+              },
         ]}
       >
         <WorkspaceEmbeddedTerminalPane
@@ -123,6 +134,7 @@ export const ProjectCommandOutputPane = React.memo(
           terminalKey={`project-command:${attachment.terminalId}`}
           title={joinHappierFacts(props.title, machineName)}
           closeOnUnmount={false}
+          {...(page ? { ownerStatesExit: true, sizing: hugsOutput ? 'content' as const : 'fill' as const } : {})}
           toolbarActionsStart={
             <>
             {attachment.kind === 'projectCommand' ? (

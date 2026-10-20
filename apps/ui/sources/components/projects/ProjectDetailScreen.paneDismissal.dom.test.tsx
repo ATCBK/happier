@@ -104,6 +104,7 @@ function restoreRightPane(right: Readonly<{
     const scopeId = buildProjectPaneScopeId('wr_1', runtime.serverId);
     storage.getState().applyLocalSettings({ appPaneScopesV1: {
         [scopeId]: {
+            mainHidden: false,
             right: { ...right, tabState: {} },
             details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
             bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },

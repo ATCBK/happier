@@ -143,7 +143,7 @@ async function renderProjects(element: React.ReactElement) {
     storage.setState({ localSettings: { ...localSettingsDefaults, ...localSettingsMock,
         projectLastMobileSurfaceByWorkspaceRefId: mobileSurfaces(),
         appPaneScopesV1: Object.fromEntries(Object.entries(panes.scopes).map(([id, scope]) => [id,
-            { right: scope.right, bottom: scope.bottom, details: serializeDetailsWorkspaceState(scope.details) }])) } });
+            { mainHidden: scope.mainHidden, right: scope.right, bottom: scope.bottom, details: serializeDetailsWorkspaceState(scope.details) }])) } });
     storage.getState().applyMachines(machinesMock, true);
     // A synced Account: its Machine inventory has arrived (even when it holds none of these Machines).
     storage.getState().applyReady();
