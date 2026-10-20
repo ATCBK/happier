@@ -10,6 +10,7 @@ import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
 const vitalsRpc = vi.hoisted(() => vi.fn(async (_input: { machineId: string }) => ({ state: 'not_reported', sample: null,
     series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } })));
@@ -74,6 +75,8 @@ function setHomeMachines(machines: readonly Machine[]) {
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || 'server-active';
     storage.setState((state) => ({
         ...state,
+        settings: settingsParse({ ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
         profileScope: state.profileScope?.serverId === activeServerId && state.profileScope.accountId === 'rail-account'
             ? state.profileScope : { serverId: activeServerId, accountId: 'rail-account' },
         machines: {},
