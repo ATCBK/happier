@@ -5,7 +5,6 @@ import {
   type ScmDiffSummaryResultClearResponse, type ScmDiffSummaryResultFailure,
 } from '@happier-dev/protocol/scm';
 import { invokeUiScmAction, type UiScmActionExecutor, type UiScmActionFailure } from '@/sync/ops/scm/scmActionInvocation';
-import { getCurrentAuth } from '@/auth/context/currentAuth';
 
 /** Captured Home/Account/Machine lifetime; caller owns the destructive confirmation dialog. */
 export function createScmDiffSummarySavedResultOperations(params: Readonly<{
@@ -47,14 +46,11 @@ export function createScmDiffSummarySavedResultOperations(params: Readonly<{
     },
     async clear(input: ScmDiffSummaryResultClearInput): Promise<ScmDiffSummaryResultClearResponse | UiScmActionFailure> {
       if (!current()) return unavailable(null);
-      // The generic API-token Action remains machine-only. This combined Settings
-      // workflow requires the same captured Account host used by the UI terminal.
-      if (getCurrentAuth()?.credentialAuthorityKind === 'api_token') return unavailable(new Error('Personal reviewed marks are unavailable through API-token execution.'));
       try {
         const validated = ScmDiffSummaryResultClearInputSchema.parse(input);
         return await invokeUiScmAction({ actionId: 'scm.diffSummary.result.clear', input: validated,
           schema: ScmDiffSummaryResultClearResponseSchema, executor: params.actionExecutor,
-          shouldContinue: () => current() && getCurrentAuth()?.credentialAuthorityKind !== 'api_token',
+          shouldContinue: current,
           context: { externalActionTarget: { kind: 'machine', machineId: params.machineId },
             ...(params.serverId ? { serverId: params.serverId } : {}), ...(params.accountId ? { expectedAccountId: params.accountId } : {}),
             ...(params.signal ? { signal: params.signal } : {}) } });
