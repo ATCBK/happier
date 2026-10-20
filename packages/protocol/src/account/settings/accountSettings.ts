@@ -35,6 +35,7 @@ export { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowLists
 import { SessionReminderPresetsV1Schema } from './sessionReminderPresetsV1.js';
 import { buildSettingArtifacts, type SettingArtifacts } from '../../settings/registry/buildSettingArtifacts.js';
 import {
+  BackendTargetKeyV2Schema,
   BackendTargetKeyV2InputSchema,
   buildBackendTargetKeyV2,
   readBackendTargetRefV2,
@@ -156,6 +157,32 @@ function rekeyLegacyBuiltInAgentMap<T>(
 }
 
 export const ACCOUNT_SETTINGS_SUPPORTED_SCHEMA_VERSION = 7;
+
+/** Shared picker recovery and favorite ordering; incoming writes validate every target first. */
+export const FavoriteBackendTargetKeysV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+  const values = Array.isArray(value) ? value : [];
+  const uniqueKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    if (typeof raw !== 'string') continue;
+    const key = raw.trim();
+    if (!BackendTargetKeyV2Schema.safeParse(key).success || seen.has(key)) continue;
+    seen.add(key);
+    uniqueKeys.push(key);
+  }
+  return uniqueKeys;
+}), z.array(BackendTargetKeyV2Schema)));
+export type FavoriteBackendTargetKeysV1 = z.infer<typeof FavoriteBackendTargetKeysV1Schema>;
+
+/** The upload-folder control and its Action admit the same workspace-relative directory. */
+export function normalizeAttachmentsUploadsWorkspaceRelativeDir(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
+  const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
+  if (parts.some(part => part === '.' || part === '..')) return null;
+  return parts.join('/');
+}
+
 export const ForegroundBehaviorSchema = lazyZodSchema(() => classicZ.enum(['full', 'silent', 'off']));
 export type ForegroundBehavior = z.infer<typeof ForegroundBehaviorSchema>;
 
@@ -916,7 +943,11 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     executionRunsNotifyParentOnCompletionDefault: accountPreference(z.boolean(), false, 'execution guidance'),
     executionRunsGuidanceMaxChars: accountPreference(z.number().check(z.int(), z.minimum(1), z.maximum(64 * 1024)), 4000, 'execution guidance'),
     attachmentsUploadsUploadLocation: accountPreference(z.enum(['workspace', 'os_temp']), 'workspace', 'attachment uploads'),
-    attachmentsUploadsWorkspaceRelativeDir: accountPreference(z.string().check(z.minLength(1), z.maxLength(4 * 1024)), '.happier/uploads', 'attachment uploads'),
+    attachmentsUploadsWorkspaceRelativeDir: accountCatalogDefinition(z.string().check(z.minLength(1), z.maxLength(4 * 1024)), '.happier/uploads', {
+        semanticDomain: 'attachment uploads', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
+        mutationSchema: z.pipe(z.pipe(z.string().check(z.minLength(1), z.maxLength(4 * 1024)),
+            z.transform(normalizeAttachmentsUploadsWorkspaceRelativeDir)), z.string()),
+    }),
     attachmentsUploadsVcsIgnoreStrategy: accountPreference(z.enum(['git_info_exclude', 'gitignore', 'none']), 'git_info_exclude', 'attachment uploads'),
     attachmentsUploadsVcsIgnoreWritesEnabled: accountPreference(z.boolean(), true, 'attachment uploads'),
     attachmentsUploadsMaxFileBytes: accountPolicy(z.number().check(z.int(), z.minimum(1), z.maximum(512 * 1024 * 1024)), 25 * 1024 * 1024, 'attachment uploads'),
@@ -1032,7 +1063,11 @@ const ACCOUNT_SIMPLE_COLLECTION_CATALOG_DEFINITIONS = {
     }),
     // Preferences keep the bound, not the legacy carrier's size-tolerant read projection.
     favoriteModelSelectionsV1: accountPreference(z.core.clone(BoundedLegacyArraySchema), [], 'favorite model selections', 64 * 1024),
-    favoriteBackendTargetKeysV1: accountPreference(z.array(z.string().check(z.maxLength(1024))).check(z.maxLength(256)), [], 'favorite backend targets', 32 * 1024),
+    favoriteBackendTargetKeysV1: accountCatalogDefinition(z.array(z.string().check(z.maxLength(1024))).check(z.maxLength(256)), [], {
+        semanticDomain: 'favorite backend targets', classification: 'preference', maximumSerializedValueBytes: 32 * 1024,
+        mutationSchema: z.pipe(z.array(z.pipe(z.string().check(z.trim(), z.maxLength(1024)), BackendTargetKeyV2Schema)).check(z.maxLength(256)),
+            z.transform(value => FavoriteBackendTargetKeysV1Schema.parse(value))),
+    }),
 } as const;
 const KeyboardShortcutRuleSchema = lazyDefinition(() => z.object({
     binding: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),

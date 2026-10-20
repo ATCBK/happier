@@ -60,6 +60,59 @@ beforeEach(() => { previousAuth = getCurrentAuth(); });
 afterEach(() => { standardCleanup(); setCurrentAuth(previousAuth); storage.setState(originalState, true); routeParams.current = {}; });
 
 describe('declared setting Action writer', () => {
+    it('admits the mounted compound terminal host choice under Off, Ask and Allowed', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const { SessionRuntimeSettingsView } = await import('@/components/settings/session/SessionRuntimeSettingsView');
+        try {
+            const screen = await renderScreen(<SessionRuntimeSettingsView />);
+            const choose = () => screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                && typeof node.props?.onChange === 'function')[0]!.props.onChange('tmux');
+            await act(async () => { choose(); });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+            })); });
+            await act(async () => { choose(); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve');
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'tmux', sessionUseTmux: true }));
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            await act(async () => {
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-tmux-name'
+                    && typeof node.props?.onChangeText === 'function')[0]!.props.onChangeText('work');
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                    && typeof node.props?.onChange === 'function')[0]!.props.onChange('herdr');
+            });
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'herdr', sessionUseTmux: false, sessionTmuxSessionName: 'work' }));
+            expect(account.artifacts.list()).toHaveLength(1);
+            expect(storage.getState().settings.sessionTerminalHost).toBe('herdr');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('refuses undeclared raw Account and local user deltas instead of bypassing Settings admission', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const before = storage.getState().localSettings.themeProfiles;
+        const probe = await renderHook(() => ({ account: useApplySettings(), local: useApplyLocalSettings() }));
+        try {
+            await act(async () => {
+                await probe.getCurrent().account({ sessionTerminalHost: 'tmux', sessionUseTmux: true });
+                await probe.getCurrent().local({ themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            expect(storage.getState().localSettings.themeProfiles).toBe(before);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('keeps exported Account-secret deletion admitted while raw acquisition stays outside Action operands', async () => {
         const account = await createSecretSettingsTestHarness({ serverIdentityId: 'srv_quiet_secret', settings: settingsParse({ actionsSettingsV1: { v: 1,
             actions: { 'plugins.settings.secret.delete': { approvalRequiredSurfaces: ['ui'] } },

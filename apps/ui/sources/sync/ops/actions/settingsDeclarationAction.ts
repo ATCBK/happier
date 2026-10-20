@@ -14,7 +14,7 @@ import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/a
 import { isAccountSettingActionSurfaceAllowedV1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 import { getSettingsPageDeclarations } from '@/components/settings/catalog/settingsPageDeclarations';
-import { buildSettingHref, settingRendersOnHost, settingTargetKinds, SETTING_VALUE_UNAVAILABLE, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
+import { buildSettingHref, readBuiltInAccountSettingUiRef, settingRendersOnHost, settingTargetKinds, SETTING_VALUE_UNAVAILABLE, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
 import { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } from '@/components/settings/catalog/pageCatalog';
 import type { SettingsPageGate } from '@/components/settings/catalog/types';
 import { resolveSettingsPageGateUnavailableReason } from '@/components/settings/catalog/settingsPageGateAvailability';
@@ -38,7 +38,7 @@ import { MachineInstallablePolicyKeySchema, MachineInstallablePolicyChangeSchema
 import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
     readMachineOfflineAlertSetting, buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
 import { machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
-import { readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { normalizeProjectAtmosphere } from '@/components/atmosphere/atmosphereSettings';
@@ -199,9 +199,16 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         const declarations = getSettingsPageDeclarations(undefined, localDeclaration ? undefined : await owner.readAccountSettings());
         if (actionId === 'settings.list') {
             const parsed = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
+            const pageAnchors = new Set(declarations.flatMap(page => Object.values(page.settings).map(ref => ref.anchor)));
+            const portablePreferences = BUILT_IN_SETTINGS_DECLARATIONS_V1.flatMap(declaration => {
+                if (pageAnchors.has(declaration.anchor) || parsed.pageId && declaration.pageId !== parsed.pageId) return [];
+                const ref = readBuiltInAccountSettingUiRef(declaration.anchor);
+                return ref ? [{ pageId: declaration.pageId, ref }] : [];
+            });
             const items = await Promise.all(declarations
                 .filter((page) => !parsed.pageId || page.pageId === parsed.pageId)
-                .flatMap((page) => Object.values(page.settings).map((ref) => descriptor(page.pageId, ref, context, readHome))));
+                .flatMap((page) => Object.values(page.settings).map((ref) => descriptor(page.pageId, ref, context, readHome)))
+                .concat(portablePreferences.map(({ pageId, ref }) => descriptor(pageId, ref, context, readHome))));
             const connection = readBuiltInSettingDeclarationV1('machines.connection.direct');
             if (connection && (!parsed.pageId || parsed.pageId === 'machines')) {
                 items.push({ anchor: connection.anchor, pageId: connection.pageId, title: connection.title,
@@ -362,8 +369,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         }
         if ('key' in parsed && parsed.key !== undefined) return refuse('setting_key_unsupported');
         const page = declarations.find((candidate) => Object.values(candidate.settings).some((ref) => ref.anchor === parsed.anchor));
-        const ref = page && Object.values(page.settings).find((candidate) => candidate.anchor === parsed.anchor);
-        if (!page || !ref) return refuse('setting_not_found');
+        const ref = page ? Object.values(page.settings).find((candidate) => candidate.anchor === parsed.anchor)
+            : readBuiltInAccountSettingUiRef(parsed.anchor);
+        const pageId = page?.pageId ?? readBuiltInSettingDeclarationV1(parsed.anchor)?.pageId;
+        if (!pageId || !ref) return refuse('setting_not_found');
         const versionedRead = actionId === 'settings.get' && SettingsDeclarationActionInputSchemasV1['settings.get'].parse(input).includeVersion === true;
         const settingWrite = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input) : undefined;
         const resetRequest = actionId === 'settings.reset' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input) : undefined;
@@ -379,7 +388,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             return { ...refuse('setting_target_mismatch'), details: { targetKinds } };
         }
         if (actionId !== 'settings.invoke' && (ref.storage?.scope === 'team' || ref.storage?.scope === 'project') && !target) return { ...refuse('setting_target_required'), details: { targetKinds } };
-        const access = await descriptor(page.pageId, ref, context, readHome);
+        const access = await descriptor(pageId, ref, context, readHome);
         const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && (!ref.contribution || owner.canUseRuntimeContributions?.() === true);
         throwIfAborted(context?.signal);
         if (!isCurrent()) return refuse('setting_not_bound');
@@ -424,7 +433,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             if (!access.operation || !ref.operation) return refuse(`setting_${access.unavailableReason ?? 'operation_unavailable'}`);
             if (!isCurrent()) return refuse('setting_not_bound');
             if (ref.operation.kind === 'interaction') {
-                const route = page.subpage?.route ?? flattenSettingsPageCatalog(SETTINGS_PAGE_CATALOG).find((candidate) => candidate.id === page.pageId)?.route;
+                const route = page?.subpage?.route ?? flattenSettingsPageCatalog(SETTINGS_PAGE_CATALOG).find((candidate) => candidate.id === pageId)?.route;
                 const href = route ? buildSettingHref(route, ref) : null;
                 if (!href || !owner.openHumanInteraction) return { anchor: ref.anchor, status: 'unavailable' as const, reason: 'human_interaction_unavailable' };
                 throwIfAborted(context?.signal);
