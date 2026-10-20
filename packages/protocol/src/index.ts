@@ -3527,6 +3527,14 @@ export {
   type DaemonWorkspaceFileSearchResponse,
   type WorkspaceFileSearchFileV1,
 } from './machines/workspaceFiles.js';
+export {
+  computeFileReplacement,
+  decodeReplaceFileText,
+  type ReplaceMatcher,
+  type ReplaceMatch,
+  type ReplaceMatchPosition,
+  type FileReplacement,
+} from './machines/workspaceFilesReplace.js';
 
 // Canonical create-or-rejoin vocabulary shared with host consumers. The
 // strict Action input itself excludes predecessor metadata labels.
@@ -7907,6 +7915,10 @@ export {
 
 // Diff helpers
 export { splitUnifiedDiffByFile } from './diff/splitUnifiedDiffByFile.js';
+export { parseUnifiedDiffHunks, revertHunks, applyHunks, formatHunk, describeHunkRange, applyInverseEdits } from './diff/hunks.js';
+export type { Hunk, HunkLine, HunkApplyResult, InverseEdit } from './diff/hunks.js';
+export { locateComparisonOccurrences, isMetadataOccurrence, buildReviewUnits, buildScmChangeKeys, buildScmReviewScopeId, REVIEW_UNIT_GRANULARITY } from './scm/comparisonOccurrences.js';
+export type { LocatedOccurrence, ComparisonOccurrences, ReviewUnit } from './scm/comparisonOccurrences.js';
 
 // Push notifications (mobile)
 export {
