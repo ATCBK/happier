@@ -39,6 +39,7 @@ import { readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/s
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import type { SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
 import { buildTrustedHostSessionInputAdmissionV1, settleSessionInputRequestV1, settleSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { clearSessionExplicitStopV1FromMetadata, writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
@@ -212,7 +213,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 managerSessionId: null, expectedManagerSessionId: destination.id, authentication })).toMatchObject({ ok: true });
         };
         const acceptedPrompts: string[] = [];
-        const originals = async (usePublisherSocket = false) => {
+        const originals = async (usePublisherSocket = false, entry: 'receiver' | 'source' = 'receiver') => {
             const homeId = await getOrCreateServerIdentityId();
             const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, installationId: randomUUID(),
                 active: true, metadata: encodePlainMachineStoredContent({}), dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
@@ -222,7 +223,22 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 metadata: JSON.stringify({ machineId: machine.id, path: '/receiver', host: 'host' }),
                 runtimeMachineTarget: { homeId, accountId: account.id, sessionId: destination.id,
                     machineId: machine.id, installationId: machine.installationId! } } });
+            if (entry === 'source') {
+                await db.accessKey.create({ data: { accountId: account.id, sessionId: source.id, machineId: machine.id, data: 'opaque' } });
+                await db.session.update({ where: { id: source.id }, data: {
+                    metadata: JSON.stringify({ machineId: machine.id, path: '/worker', host: 'host' }),
+                    runtimeMachineTarget: { homeId, accountId: account.id, sessionId: source.id,
+                        machineId: machine.id, installationId: machine.installationId! },
+                } });
+            }
             const presence = createSessionPublisherPresence();
+            if (entry === 'source') {
+                const sourceSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
+                expect(await presence.registerPublisher({ socket: sourceSocket,
+                    binding: { accountId: account.id, sessionId: source.id, machineId: machine.id },
+                    completeActivitySnapshot: { state: 'idle', activeCount: 0 } })).toMatchObject({ status: 'registered' });
+                cleanups.push(() => presence.forgetDisconnectedPublisher({ socket: sourceSocket }));
+            }
             const binding = { accountId: account.id, sessionId: destination.id, machineId: machine.id };
             let publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
             const replacePublisher = async () => {
@@ -303,6 +319,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                     isCurrent: () => Promise<boolean>; subscribeInvalidation: () => () => void;
                     isPersonalCurrent: () => boolean;
                     resolveSourceKeyContext: () => Promise<null>; dispatchPersonal: () => Promise<void> }): {
+                        dispatch(occurrence: SessionFollowRuleSourceOccurrenceV1): Promise<unknown>;
                         dispatchReceiverRange(input: { observations: SessionFollowPendingObservationV1[]; destinationSessionId: string }): Promise<unknown>;
                         dispose(): void;
                     };
@@ -319,9 +336,36 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             // at every preparation boundary.
             let originalReconcile = makeReconciler();
             const restart = () => { originalReconcile = makeReconciler(); };
-            const dispatchPending = async () => dispatcher.dispatchReceiverRange({
-                observations: (await observe()).observations, destinationSessionId: destination.id,
-            });
+            const dispatchPending = async () => {
+                if (entry === 'receiver') return dispatcher.dispatchReceiverRange({
+                    observations: (await observe()).observations, destinationSessionId: destination.id,
+                });
+                const { readCommittedSessionFollowSourceOccurrence } = await vi.importActual<{
+                    readCommittedSessionFollowSourceOccurrence(input: {
+                        sourceSessionId: string; serverId: string; ownerAccountId: string; origin: null;
+                        row: unknown; mode: 'plain'; ctx: null;
+                    }): { status: 'occurrence'; occurrence: Omit<Extract<SessionFollowRuleSourceOccurrenceV1,
+                        { sourceMessage: unknown }>, 'sourcePublisher'> } | { status: 'not_semantic' | 'unavailable' };
+                }>('../../../../../cli/src/agent/runtime/session/follow/sessionFollowRuleSourceEvidence');
+                const { fetchEncryptedTranscriptMessagesPage } = await vi.importActual<{
+                    fetchEncryptedTranscriptMessagesPage(input: { token: string; sessionId: string; afterSeq: number; limit: number }):
+                        Promise<{ messages: readonly unknown[]; hasMore: boolean }>;
+                }>('../../../../../cli/src/session/replay/fetchEncryptedTranscriptMessages');
+                const currentSource = await db.session.findUniqueOrThrow({ where: { id: source.id } });
+                const page = await runWithServerHttpBaseUrl('http://original-follow.test', () => fetchEncryptedTranscriptMessagesPage({
+                    token, sessionId: source.id, afterSeq: 0, limit: SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1,
+                }));
+                expect(page.hasMore).toBe(false);
+                // Each persisted source original notifies the source daemon independently.
+                // An earlier failed Pending POST must not let a later notification skip it.
+                for (const row of page.messages) {
+                    const read = readCommittedSessionFollowSourceOccurrence({ sourceSessionId: source.id, serverId: homeId,
+                        ownerAccountId: account.id, origin: null, row, mode: 'plain', ctx: null });
+                    if (read.status !== 'occurrence') continue;
+                    await dispatcher.dispatch({ ...read.occurrence, sourcePublisher: { machineId: machine.id,
+                        publisherGeneration: currentSource.publisherGeneration.toString(), committedFenceMs: currentSource.lastActiveAt.getTime() } });
+                }
+            };
             const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number, collectRetainedContext = false) => {
                 await dispatchPending();
                 for (;;) {
@@ -351,9 +395,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                         sessionId: destination.id, localId: delivery.localInputId } } });
                     if (!row?.acceptedTurnId) unsettled.push(delivery);
                 }
-                expect(deliveries.length, JSON.stringify(requests)).toBeGreaterThan(0);
-                return originalReconcile({ signal: new AbortController().signal, deliveryIntent: intent,
+                const prepared = await originalReconcile({ signal: new AbortController().signal, deliveryIntent: intent,
                     followDeliveries: unsettled, ...(maxFollowContextUtf8Bytes === undefined ? {} : { maxFollowContextUtf8Bytes }) });
+                if (prepared) expect(deliveries.length, JSON.stringify(requests)).toBeGreaterThan(0);
+                return prepared;
             };
             const settleAcceptance = async (localId: string) => {
                 expect(await resolveAcceptedPendingDelivery({ actorUserId: account.id, sessionId: destination.id,
@@ -753,11 +798,14 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect(await db.sessionMessage.count({ where: { sessionId: f.destination.id, acceptedTurnId: 'receiver-turn' } })).toBe(2);
     });
 
-    it.each(['admission', 'routes'] as const)('retains the earlier held original after an %s failure instead of accepting its later suffix on Resume', async boundary => {
+    it.each([
+        { entry: 'receiver', boundary: 'admission' }, { entry: 'receiver', boundary: 'routes' },
+        { entry: 'source', boundary: 'admission' }, { entry: 'source', boundary: 'routes' },
+    ] as const)('retains the earlier held original after a $boundary failure through $entry admission instead of accepting its later suffix on Resume', async ({ entry, boundary }) => {
         const f = await fixture();
         await f.detachManager();
         await f.follow({ preset: 'custom', events: { update_posted: { delivery: 'interrupt' } } });
-        const original = await f.originals();
+        const original = await f.originals(false, entry);
         const receiver = await db.session.findUniqueOrThrow({ where: { id: f.destination.id } });
         const metadata = writeSessionExplicitStopV1ToMetadata(JSON.parse(receiver.metadata), {
             v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 1,
@@ -768,16 +816,21 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         original.admissionFault.originalSeq = firstSeq;
         original.admissionFault.boundary = boundary;
         await original.dispatchPending();
+        expect(f.acceptedPrompts).toEqual([]);
+        await db.session.update({ where: { id: f.destination.id }, data: { active: true,
+            metadata: JSON.stringify(clearSessionExplicitStopV1FromMetadata(metadata, 'person-stop')) } });
+        original.restart();
+        await original.replacePublisher();
+        const blocked = await original.prepare('wake');
+        if (blocked) await original.accept(blocked);
+        expect(await db.sessionFollowEdge.findMany({ where: { destinationSessionId: f.destination.id },
+            select: { deliveredTranscriptSeq: true } })).toEqual([{ deliveredTranscriptSeq: firstSeq - 1 }]);
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect(f.acceptedPrompts).toEqual([]);
         expect((await f.observe()).observations).toEqual([
             expect.objectContaining({ delivered: expect.objectContaining({ transcriptSeq: firstSeq - 1 }) }),
         ]);
         original.admissionFault.originalSeq = null;
-        await db.session.update({ where: { id: f.destination.id }, data: { active: true,
-            metadata: JSON.stringify(clearSessionExplicitStopV1FromMetadata(metadata, 'person-stop')) } });
-        original.restart();
-        await original.replacePublisher();
         const first = await original.prepare('wake');
         expect(first?.workerUpdates).toMatchObject([{ result: 'Held reverseA', transcriptPointer: { seq: firstSeq } }]);
         await original.accept(first!);
@@ -789,11 +842,11 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect((await f.observe()).observations).toEqual([]);
     });
 
-    it('preserves the CONT14 originals 7–11 and private deliverable across held publisher replacement and bounded intake', async () => {
+    it.each(['receiver', 'source'] as const)('preserves the CONT14 originals 7–11 and private deliverable across held publisher replacement and bounded intake (%s)', async entry => {
         const f = await fixture('in_progress', { preset: 'important' });
         for (let index = 0; index < 5; index++) await f.appendTurnInput(`earlier-turn-${index}`);
         await f.follow({ preset: 'quiet' });
-        const original = await f.originals(true);
+        const original = await f.originals(true, entry);
         const receiver = await db.session.findUniqueOrThrow({ where: { id: f.destination.id } });
         const held = writeSessionExplicitStopV1ToMetadata(JSON.parse(receiver.metadata), {
             v: 1, cause: 'explicit_stop', requestId: 'cont14-person-stop', requestedAtMs: 1,

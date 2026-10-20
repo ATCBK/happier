@@ -15,7 +15,7 @@ import { notificationCatalogFixture } from '@/notifications/activity/activityNot
 
 afterEach(() => vi.restoreAllMocks());
 
-it('opens the first original range for a fresh rule without an edge or encountered source and keeps an unreadable range pending', async () => {
+it.each(['receiver', 'source'] as const)('opens the first original range for a fresh rule without an edge or encountered source and keeps an unreadable range pending (%s)', async entry => {
   const sourceSessionId = 'c111111111111111111111111';
   const destinationSessionId = 'c222222222222222222222222';
   const token = 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
@@ -69,17 +69,25 @@ it('opens the first original range for a fresh rule without an edge or encounter
     throw new Error(`Unexpected POST ${path}`);
   });
   const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: { token, encryption: null },
-    serverId: 'home', serverHttpBaseUrl: 'http://home.test', machineId: 'receiver-machine', installationId: 'installation',
+    serverId: 'home', serverHttpBaseUrl: 'http://home.test', machineId: entry === 'source' ? 'source-machine' : 'receiver-machine', installationId: 'installation',
     signal: new AbortController().signal, isCurrent: async () => true, subscribeInvalidation: () => () => {},
     resolveSourceKeyContext: async () => null, isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
   try {
-    await dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] });
+    const dispatch = () => entry === 'receiver' ? dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] })
+      : dispatcher.dispatch(SessionFollowRuleSourceOccurrenceV1Schema.parse({ sourceSessionId,
+          sourcePublisher: { machineId: 'source-machine', publisherGeneration: '1', committedFenceMs: 1 },
+          sourceMessage: { localId: 'new-original', seq: 2 }, evidence: { v: 1, ownerAccountId: 'account-1',
+            event: { kind: 'goal_changed' }, facts: { serverId: 'home', kind: 'session', source: 'persisted' } } }));
+    await dispatch();
     expect(pending).toEqual([]);
     readable = true;
-    const available = await dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] });
+    const available = await dispatch();
     expect(afterSequences).toEqual([1]);
-    expect(available.coveredEvents).toEqual([{ sourceSessionId, kind: 'goal_changed' }]);
+    if (entry === 'receiver') expect(available).toMatchObject({ coveredEvents: [{ sourceSessionId, kind: 'goal_changed' }] });
     expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ followSources: [entry === 'source'
+      ? { expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'installation' }
+      : { evaluation: 'receiver' }] });
   } finally { dispatcher.dispose(); }
 });
 

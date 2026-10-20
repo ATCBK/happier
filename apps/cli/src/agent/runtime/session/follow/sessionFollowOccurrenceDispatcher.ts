@@ -186,7 +186,8 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   };
   const readRoutes = async (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence, destinationSessionId?: string) => {
     const request = SessionFollowObserveSourceRoutesRequestV1Schema.parse({ v: 1,
-      ...(destinationSessionId ? { destinationSessionId } : 'sourcePublisher' in occurrence ? { sourcePublisher: occurrence.sourcePublisher } : {}),
+      ...('sourcePublisher' in occurrence ? { sourcePublisher: occurrence.sourcePublisher }
+        : destinationSessionId ? { destinationSessionId } : {}),
       ...('sourceMessage' in occurrence ? { sourceMessage: occurrence.sourceMessage } : { sourceRequests: occurrence.sourceRequests }) });
     const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.occurrenceRoutes.replace(':sourceSessionId', encodeURIComponent(occurrence.sourceSessionId));
     const response = await axios.post(`${input.serverHttpBaseUrl}${path}`, request, {
@@ -196,7 +197,8 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     const parsed = SessionFollowObserveSourceRoutesResponseV1Schema.safeParse(response.data);
     return parsed.success && parsed.data.ok && parsed.data.sourceSessionId === occurrence.sourceSessionId ? parsed.data : null;
   };
-  const dispatch = async (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence, receiverSessionId?: string): Promise<SessionActivityChangedResult | void> => {
+  const dispatch = async (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence, receiverSessionId?: string,
+    fromSourceRange = false): Promise<SessionActivityChangedResult | void> => {
       let personalFollow: SessionActivityChangedResult['personalFollow'];
       if (!await current() || !receiverSessionId && (!('sourcePublisher' in occurrence) || occurrence.sourcePublisher.machineId !== input.machineId)) return;
       const opened = await rules.read();
@@ -233,8 +235,8 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           personalRequestPassComplete = false;
           continue;
         } // Unsupported/denied is pending, not an empty route set.
-        const evaluated = evaluateSessionFollowRuleOccurrenceV1({ accountId: input.accountId, evaluator: receiverSessionId ? 'receiver' : 'source',
-          production: receiverSessionId ? 'recovery' : 'source', sourceSessionId: original.sourceSessionId, evidence, currentFacts: facts,
+        const evaluated = evaluateSessionFollowRuleOccurrenceV1({ accountId: input.accountId, evaluator: 'sourcePublisher' in original ? 'source' : 'receiver',
+          production: 'sourcePublisher' in original ? 'source' : 'recovery', sourceSessionId: original.sourceSessionId, evidence, currentFacts: facts,
           rules: opened.rules.filter(rule => !rule.inception || ordinary.originalCreatedAt !== undefined
             && ordinary.originalCreatedAt >= rule.inception.createdAt),
           ...(opened.defaultPreferences && ordinary.currentAccountFacts ? { defaults: { preferences: opened.defaultPreferences,
@@ -250,6 +252,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         const candidates = new Map<string, { policies: FollowPolicyV1[]; witnesses: SessionFollowSourceOccurrenceWitnessV1[];
           relations: SessionFollowRelationWitnessV1[] }>();
         for (const route of ordinary.routes) {
+          if (receiverSessionId && route.destinationSessionId !== receiverSessionId) continue;
           if (!resolveFollowDeliveryV1({ policies: [route.policy], event: evidence.event }).selected) continue;
           const candidate = candidates.get(route.destinationSessionId) ?? { policies: [], witnesses: [], relations: [] };
           candidate.policies.push(route.policy);
@@ -326,10 +329,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           }
           const candidate = candidates.get(route.receiver.sessionId) ?? { policies: [], witnesses: [], relations: [] };
           for (const { rule, policy } of contributions) {
-            const proof = receiverSessionId ? { evaluation: 'receiver' as const }
-              : 'sourcePublisher' in original ? {
+            const proof = 'sourcePublisher' in original ? {
                 expectedSourcePublisherGeneration: original.sourcePublisher.publisherGeneration,
-                machineId: input.machineId, installationId: input.installationId } : null;
+                machineId: input.machineId, installationId: input.installationId }
+              : receiverSessionId ? { evaluation: 'receiver' as const } : null;
             if (!proof) continue;
             candidate.policies.push(policy);
             candidate.witnesses.push({ sourceSessionId: original.sourceSessionId, destinationSessionId: route.receiver.sessionId,
@@ -342,6 +345,15 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         for (const [destinationSessionId, candidate] of candidates) {
           const selected = resolveFollowDeliveryV1({ policies: candidate.policies, event: evidence.event });
           if (!selected.selected || !await current()) continue;
+          if ('sourceMessage' in original && !fromSourceRange) {
+            // A source notification can arrive after an earlier admission failed.
+            // Reuse catch-up's ordered traversal before admitting this receiver's
+            // next original; its own seq - 1 baseline cannot prove that prefix.
+            await dispatchReceiverRange({ destinationSessionId, sourceSessionId: original.sourceSessionId,
+              observations: ordinary.routes.filter(route => route.destinationSessionId === destinationSessionId) },
+              'sourcePublisher' in original ? original.sourcePublisher : undefined);
+            continue;
+          }
           const common = { v: 1 as const, delivery: selected.session.wake ? 'wake' as const : 'next_turn' as const };
           const delivery: SessionFollowInputV1 = 'sourceMessage' in original
             ? { ...common, original: { sourceSessionId: original.sourceSessionId, sourceMessage: original.sourceMessage }, event: evidence.event }
@@ -398,23 +410,26 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       return personalFollow ? { personalFollow } : {};
   };
   const dispatchReceiverRange = async (request: Readonly<{ destinationSessionId: string;
-    observations: readonly SessionFollowSessionPendingObservationV1[]; sourceSessionId?: string }>): Promise<SessionFollowReceiverRangeResult> => {
+    observations: readonly SessionFollowSessionPendingObservationV1[]; sourceSessionId?: string }>,
+    sourcePublisher?: SessionFollowRuleSourceOccurrenceV1['sourcePublisher']): Promise<SessionFollowReceiverRangeResult> => {
     const coveredEvents: { sourceSessionId: string; kind: FollowEventV1['kind'] }[] = [];
     if (!await current()) return { coveredEvents };
     // Reconnect and source invalidation re-read the real configured Run
     // sources. Their retained original is never inferred from a parent turn.
-    let cursor: string | undefined;
-    do {
-      const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));
-      const response = await axios.get(`${input.serverHttpBaseUrl}${path}`, { headers: { Authorization: `Bearer ${input.credentials.token}` },
-        ...(cursor ? { params: { cursor } } : {}), signal: input.signal, validateStatus: () => true });
-      const page = response.status === 200 ? ListSessionFollowSourcesResponseSchema.safeParse(response.data) : null;
-      if (!page?.success || !await current()) break;
-      for (const relation of page.data.sources) if ('source' in relation
-        && (relation.source.kind === 'execution_run' || relation.source.kind === 'workflow_run')
-        && relation.deliveryState === 'eligible') await dispatchRun({ source: relation.source }, request.destinationSessionId);
-      cursor = page.data.continuation;
-    } while (cursor && await current());
+    if (!request.sourceSessionId) {
+      let cursor: string | undefined;
+      do {
+        const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));
+        const response = await axios.get(`${input.serverHttpBaseUrl}${path}`, { headers: { Authorization: `Bearer ${input.credentials.token}` },
+          ...(cursor ? { params: { cursor } } : {}), signal: input.signal, validateStatus: () => true });
+        const page = response.status === 200 ? ListSessionFollowSourcesResponseSchema.safeParse(response.data) : null;
+        if (!page?.success || !await current()) break;
+        for (const relation of page.data.sources) if ('source' in relation
+          && (relation.source.kind === 'execution_run' || relation.source.kind === 'workflow_run')
+          && relation.deliveryState === 'eligible') await dispatchRun({ source: relation.source }, request.destinationSessionId);
+        cursor = page.data.continuation;
+      } while (cursor && await current());
+    }
     // Progress changes independently of rule configuration. Refresh once at
     // this existing catch-up boundary, never for each original in the range.
     const opened = await rules.read({ refresh: true });
@@ -484,7 +499,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           if (!evidence || !await current()) continue;
           await dispatch({ sourceSessionId, sourceRequests: { agentStateVersion: source.agentStateVersion,
             requests: [{ requestId, createdAt: foregroundRequest.createdAt, ...(foregroundRequest.turnId ? { turnId: foregroundRequest.turnId } : {}) }] },
-            requestEvidence: [{ requestId, evidence }] }, request.destinationSessionId);
+            requestEvidence: [{ requestId, evidence }], ...(sourcePublisher ? { sourcePublisher } : {}) }, request.destinationSessionId, true);
           coveredEvents.push({ sourceSessionId, kind: evidence.event.kind });
         }
       }
@@ -503,7 +518,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             row, mode: transport.mode, ctx: transport.ctx });
           if (read.status === 'unavailable') { unavailable = true; break; }
           if (read.status === 'occurrence' && 'sourceMessage' in read.occurrence) {
-            const dispatched = await dispatch(read.occurrence, request.destinationSessionId);
+            const dispatched = await dispatch({ ...read.occurrence, ...(sourcePublisher ? { sourcePublisher } : {}) }, request.destinationSessionId, true);
             coveredEvents.push({ sourceSessionId, kind: read.occurrence.evidence.event.kind });
             // A later original's accepted ACK advances this same source cursor.
             // Leave the suffix for the next existing catch-up boundary when

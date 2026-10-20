@@ -12,6 +12,7 @@ import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follo
 import { createSessionFollowSourceMaterialResolver } from '@/agent/runtime/session/follow/sessionFollowSourceMaterialResolver';
 import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionPendingAdmissionSettlementRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { readFile } from 'node:fs/promises';
@@ -26,6 +27,7 @@ import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/p
 import { waitForProcessExit } from '@/testkit/process/spawn';
 
 import { ApiSessionClient } from './session/sessionClient';
+import type { SessionMessageContent } from './types';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
 import {
     createMockSession,
@@ -857,6 +859,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         let accepted = false;
         let blocked = false;
         let sourceReads = 0;
+        let admittedContent: SessionMessageContent | undefined;
         const sessionSocket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
             if (event === 'pending-materialize-next') return accepted || blocked
                 ? { ok: true, didMaterialize: false, pendingCount: 0, pendingBlockedCount: blocked ? 1 : 0, pendingVersion: 4 }
@@ -864,8 +867,15 @@ describe('ApiSessionClient pending queue materialization', () => {
                     deliveryState: { mode: 'provider', unresolved: true }, message: { id: null, seq: null, localId,
                         messageRole: 'user', content, ...(failure === 'missing_receipt' ? {} : { inputAdmissionReceipt: receipt }),
                         requestedAction: { v: 1, kind: 'enqueue' }, providerAction: 'send', createdAt: 1, updatedAt: 1 } };
-            if (event === 'session-pending-admission-settlement-v1') return { v: 1, result: failure === 'missing_receipt'
-                ? { status: 'rejected', code: 'session_input_untrusted_assertion' } : { status: 'accepted', localId } };
+            if (event === 'session-pending-admission-settlement-v1') {
+                const settlement = SessionPendingAdmissionSettlementRequestV1Schema.parse(payload);
+                expect(settlement.localId).toBe(localId);
+                if (failure === 'missing_receipt') return { v: 1, result: { status: 'rejected', code: 'session_input_untrusted_assertion' } };
+                if (settlement.decision.kind !== 'admit') throw new Error('Expected Follow original admission');
+                const alreadyAdmitted = admittedContent !== undefined;
+                admittedContent = settlement.decision.finalContent;
+                return { v: 1, result: { status: alreadyAdmitted ? 'alreadyAccepted' : 'accepted', localId } };
+            }
             if (event === 'session-follow-observe-pending-v1') return { ok: true, v: 1, sessionId: session.id,
                 publisherGeneration: '1', currentSourceSessionIds: [sourceSessionId], observations: [{ kind: 'admitted_input',
                     localInputId: localId, delivery, sourceSessionId, destinationSessionId: session.id, delivered, observed }] };
@@ -876,6 +886,11 @@ describe('ApiSessionClient pending queue materialization', () => {
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
         installAxiosGetBoundaryMock(async url => {
             if (url.includes('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+            if (url.endsWith(`/v2/sessions/${session.id}/messages/by-local-id/${encodeURIComponent(localId)}`)) {
+                if (!admittedContent) throw new Error('Follow original was read before receiver admission');
+                return { status: 200, data: { message: { id: 'committed-follow-original', seq: 1, localId,
+                    messageRole: 'user', content: admittedContent, inputAdmissionReceipt: receipt, createdAt: 1, updatedAt: 1 } } };
+            }
             if (url.endsWith(`/v2/sessions/${sourceSessionId}`)) {
                 sourceReads += 1;
                 if (sourceReads === 1) throw new AxiosError('timeout of 10000ms exceeded', 'ECONNABORTED');
@@ -965,6 +980,8 @@ describe('ApiSessionClient pending queue materialization', () => {
                 client.emit('metadata-updated');
                 expect(failures).toEqual([]);
                 expect(blocked).toBe(false);
+                expect(axios.get).toHaveBeenCalledWith(expect.stringContaining(
+                    `/v2/sessions/${session.id}/messages/by-local-id/${encodeURIComponent(localId)}`), expect.any(Object));
             }
             expect(sent).toHaveLength(failure === 'forbidden' || failure === 'missing_receipt' ? 0 : 1);
         } finally {
