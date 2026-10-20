@@ -21,6 +21,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { resolveThemeColor } from '@/theme/parseThemeColor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { composeDiffLineSlots } from '../hunks/composeDiffLineSlots';
 
 export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((props) => {
     const wrapLines = props.wrapLines ?? true;
@@ -60,14 +61,19 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         setExpansion({ filePath: props.filePath, lines, indices });
     }
 
-    const canFold = foldingEnabled
-        && !props.onPressAddComment
-        && !props.renderAfterLine
-        && !props.isCommentActive;
+    const canFold = foldingEnabled;
+    const expandedForComments = React.useMemo(() => {
+        if (!canFold || !props.isCommentActive) return expansion.indices;
+        const indices = new Set(expansion.indices);
+        lines.forEach((line, index) => {
+            if (props.isCommentActive?.(line)) indices.add(index);
+        });
+        return indices;
+    }, [canFold, expansion.indices, lines, props.isCommentActive]);
 
     const folded = React.useMemo(() => {
         if (!canFold) return { lines, regions: [] as const };
-        const expandedLineIndices = new Set(expansion.indices);
+        const expandedLineIndices = new Set(expandedForComments);
         if (props.findActive && props.scrollToLineId && refoldedFindLine !== props.scrollToLineId) {
             const currentIndex = lines.findIndex((line) => line.id === props.scrollToLineId);
             if (currentIndex >= 0) expandedLineIndices.add(currentIndex);
@@ -78,14 +84,14 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             contextRadius,
             expandedLineIndices,
         });
-    }, [canFold, contextRadius, contextThreshold, expansion.indices, lines, props.findActive, props.scrollToLineId, refoldedFindLine]);
+    }, [canFold, contextRadius, contextThreshold, expandedForComments, lines, props.findActive, props.scrollToLineId, refoldedFindLine]);
 
     const findOpenedRegion = React.useMemo(() => {
         if (!canFold || !props.findActive || !props.scrollToLineId || refoldedFindLine === props.scrollToLineId) return null;
-        const ordinary = collapseUnifiedDiffContext({ lines, contextThreshold, contextRadius, expandedLineIndices: expansion.indices });
+        const ordinary = collapseUnifiedDiffContext({ lines, contextThreshold, contextRadius, expandedLineIndices: expandedForComments });
         const index = lines.findIndex((line) => line.id === props.scrollToLineId);
         return ordinary.regions.find((region) => index >= region.hiddenStartIndex && index < region.hiddenStartIndex + region.hiddenCount) ?? null;
-    }, [canFold, props.findActive, props.scrollToLineId, refoldedFindLine, lines, contextThreshold, contextRadius, expansion.indices]);
+    }, [canFold, props.findActive, props.scrollToLineId, refoldedFindLine, lines, contextThreshold, contextRadius, expandedForComments]);
 
     const foldRegionsByAfterLineId = React.useMemo(() => {
         const map = new Map<string, { hiddenStartIndex: number; hiddenCount: number }>();
@@ -130,6 +136,9 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             />
         );
     }, [foldRegionsByAfterLineId, findOpenedRegion, openedBandColor, refold, theme.colors.text.tertiary]);
+    const composedAfterLine = React.useMemo(() => canFold
+        ? composeDiffLineSlots(props.renderAfterLine, renderAfterLine)
+        : props.renderAfterLine, [canFold, props.renderAfterLine, renderAfterLine]);
 
     const view = (
         <View style={props.virtualized ? styles.virtualizedBody : undefined}>
@@ -143,7 +152,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 pressLineWhenNotSelectable={props.pressLineWhenNotSelectable}
                 onPressAddComment={props.onPressAddComment}
                 isCommentActive={props.isCommentActive}
-                renderAfterLine={canFold ? renderAfterLine : props.renderAfterLine}
+                renderAfterLine={composedAfterLine}
                 showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}

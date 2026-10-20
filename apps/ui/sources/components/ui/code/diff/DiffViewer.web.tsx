@@ -12,6 +12,7 @@ import { isPierreDiffKillSwitchEnabled, supportsPierreRuntime } from './pierre/p
 import { useInitialPresentationReadiness } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { useEffectiveDiffWrapLines } from './diffPresentationStyle';
 import { ProseDiffViewer } from './prose/ProseDiffViewer';
+import { useDiffHunkSlots } from './hunks/useDiffHunkSlots';
 
 const PierreDiffViewer = retryableLazy(async () => {
     const renderer = await import('./pierre/PierreDiffViewer.web');
@@ -22,20 +23,13 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     const rendererMode = useSetting('filesDiffRendererMode');
     const initialPresentationReadiness = useInitialPresentationReadiness();
     const wrapLines = useEffectiveDiffWrapLines(props.wrapLines);
+    const { renderAfterLine } = useDiffHunkSlots(props);
 
     // Prose is its own face on every renderer: a reading layout, not a code diff.
     if (props.mode === 'text' && props.face === 'prose') return <ProseDiffViewer {...props} />;
 
     const wantsPierre = rendererMode === 'pierre';
-    const rangeInteractionRequired = typeof props.onPressLineRange === 'function'
-        && (props.interactionMode ?? 'read') !== 'read';
     const pierreAllowed = wantsPierre
-        && !rangeInteractionRequired
-        // Find uses the canonical CodeLine range renderer and line virtualizer target.
-        // @pierre/diffs 1.1.0-beta.13 exposes neither a FileDiff line-target handle nor
-        // a Virtualizer offscreen line-reveal API. Its DOM-only reveal misses unmounted rows.
-        // Keep the saved renderer preference untouched; closing Find restores Pierre.
-        && props.findActive !== true
         && isPierreDiffKillSwitchEnabled()
         && supportsPierreRuntime();
 
@@ -46,11 +40,11 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         const loading = props.virtualized === true
             ? <PaneLoadingFallback testID="pierre-diff-loading" />
             : props.mode === 'unified'
-                ? <HappierUnifiedDiffViewer {...props} wrapLines={wrapLines} />
-                : <HappierTextDiffViewer {...props} wrapLines={wrapLines} />;
+                ? <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />
+                : <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
         const viewer = (
             <React.Suspense fallback={loading}>
-                <PierreDiffViewer {...props} wrapLines={wrapLines} />
+                <PierreDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />
             </React.Suspense>
         );
         return props.virtualized === true ? (
@@ -63,7 +57,7 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     }
 
     if (props.mode === 'unified') {
-        return <HappierUnifiedDiffViewer {...props} wrapLines={wrapLines} />;
+        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
     }
-    return <HappierTextDiffViewer {...props} wrapLines={wrapLines} />;
+    return <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
 });

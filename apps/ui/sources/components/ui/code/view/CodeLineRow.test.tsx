@@ -39,7 +39,7 @@ describe('CodeLineRow', () => {
         const { CodeLineRow } = await import('./CodeLineRow');
         const onPressLine = vi.fn();
         const screen = await renderScreen(<HappierMaterialRoleProvider role="floating" resolveMaterialColor={() => 'rgba(0, 0, 0, 0.1)'}>
-            <CodeLineRow line={{ id: 'selected', sourceIndex: 0, kind: 'context', oldLine: 1, newLine: 1,
+            <CodeLineRow line={{ id: 'selected', sourceIndex: 0, hunkIndex: null, kind: 'context', oldLine: 1, newLine: 1,
                 renderPrefixText: '', renderCodeText: 'const exact = true;', renderIsHeaderLine: false, selectable: true }} selected onPressLine={onPressLine} />
         </HappierMaterialRoleProvider>);
         const row = screen.findAll(node => typeof node.type === 'string' && String(node.type) === 'View')[0]!;
@@ -54,7 +54,7 @@ describe('CodeLineRow', () => {
         const { glassSurfaceBackgroundColor } = await import('@/components/ui/glass/glassSurfacePaint');
         const { theme } = await import('react-native-unistyles').then(module => module.useUnistyles());
         const screen = await renderScreen(<CodeLineRow
-            line={{ id: 'glass-add', sourceIndex: 0, kind: 'add', oldLine: null, newLine: 1,
+            line={{ id: 'glass-add', sourceIndex: 0, hunkIndex: null, kind: 'add', oldLine: null, newLine: 1,
                 renderPrefixText: '+', renderCodeText: 'const added = true;', renderIsHeaderLine: false, selectable: true }}
             selected={false}
         />);
@@ -67,7 +67,7 @@ describe('CodeLineRow', () => {
     it('decorates Find ranges inside syntax-highlighted code without changing the displayed text', async () => {
         const { CodeLineRow } = await import('./CodeLineRow');
         const screen = await renderScreen(<CodeLineRow
-            line={{ id: '1', sourceIndex: 0, kind: 'add', oldLine: null, newLine: 1,
+            line={{ id: '1', sourceIndex: 0, hunkIndex: null, kind: 'add', oldLine: null, newLine: 1,
                 renderPrefixText: '+', renderCodeText: 'const target = 1;', renderIsHeaderLine: false, selectable: true }}
             selected={false}
             findRanges={[{ start: 6, end: 12, current: true }]}
@@ -84,7 +84,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'add',
                 oldLine: null,
                 newLine: 1,
@@ -108,7 +108,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -141,7 +141,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -175,7 +175,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -208,7 +208,7 @@ describe('CodeLineRow', () => {
 
         const line = {
             id: '1',
-            sourceIndex: 0,
+            sourceIndex: 0, hunkIndex: null,
             kind: 'context' as const,
             oldLine: 1,
             newLine: 1,
@@ -265,7 +265,7 @@ describe('CodeLineRow', () => {
         const onPressLine = vi.fn();
         const line = {
             id: 'context-line',
-            sourceIndex: 0,
+            sourceIndex: 0, hunkIndex: null,
             kind: 'context' as const,
             oldLine: 4,
             newLine: 4,
@@ -302,7 +302,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: 'selected-line',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'add',
                 oldLine: null,
                 newLine: 1,
@@ -330,7 +330,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -356,7 +356,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -382,7 +382,7 @@ describe('CodeLineRow', () => {
         const screen = await renderScreen(<CodeLineRow
             line={{
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'add',
                 oldLine: null,
                 newLine: 1,

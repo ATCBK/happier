@@ -2,10 +2,39 @@ import type { CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import type { ReactNode } from 'react';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
+import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 
 export type DiffViewerMode = 'unified' | 'text';
 
+export type DiffHunkInfo = Readonly<{
+    index: number;
+    hunkIndex: number;
+    key: string;
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    sectionHeading: string;
+    firstChangeLineId: string;
+}>;
+
+export type DiffHunkReviewState = 'open' | 'kept' | 'discarding';
+export type DiffHunkAction = 'keep' | 'discard' | 'ask' | 'copy';
+
+export type DiffViewerHunks = Readonly<{
+    onHunks?: (hunks: readonly DiffHunkInfo[]) => void;
+    currentIndex?: number | null;
+    stateOf?: (hunk: DiffHunkInfo) => DiffHunkReviewState;
+    actions?: Readonly<Partial<Record<DiffHunkAction, (hunk: DiffHunkInfo) => void>>>;
+    disabledReason?: (hunk: DiffHunkInfo, action: DiffHunkAction) => string | null;
+    numberOffset?: number;
+    renderNote?: (hunk: DiffHunkInfo) => ReactNode;
+}>;
+
 export type DiffViewerBaseProps = Readonly<{
+    hunks?: DiffViewerHunks;
+    /** Captured evidence supplies its canonical per-layer keys to the shared table. */
+    reviewUnits?: readonly ReviewUnit[];
     /** Surface-owned evidence state, used instead of raw patch bytes when rendering fails. */
     errorFallback?: ReactNode;
     filePath?: string | null;
