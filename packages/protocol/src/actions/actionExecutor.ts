@@ -1668,6 +1668,12 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     } catch { return null; }
   }
   const externalTarget = params.context.externalActionTarget;
+  const publication = params.actionId === 'artifact.publish_from_file'
+    ? ArtifactActionInputSchemasV1['artifact.publish_from_file'].safeParse(params.admittedInput ?? params.input) : null;
+  if (publication && !publication.success) return null;
+  const publicationMachineId = publication?.success ? publication.data.workspace?.machineId : undefined;
+  if (publicationMachineId && ((externalTarget?.kind === 'machine' && externalTarget.machineId !== publicationMachineId)
+    || (externalAuthorization && externalAuthorization.binding.machineId !== publicationMachineId))) return null;
   const targetSessionId = params.targetSessionId
     || (externalTarget?.kind === 'session' ? normalizeId(externalTarget.sessionId) : '')
     // Account-placed automatic returns still retain their exact original
@@ -1712,7 +1718,8 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     : settingsTarget?.kind === 'account' && !externalAuthorization && caller.kind === 'host'
       && externalTarget?.kind !== 'machine'
       ? ''
-    : normalizeId(params.context.executionRunTargetMachineId)
+    : normalizeId(publicationMachineId)
+    || normalizeId(params.context.executionRunTargetMachineId)
     || externalAuthorization?.binding.machineId
     // Placement parses the admitted payload; durable approval input may omit live-only values.
     || (resolveActionExecutionPlacementForInput(getActionSpec(params.actionId), params.admittedInput ?? params.input) === 'machine'

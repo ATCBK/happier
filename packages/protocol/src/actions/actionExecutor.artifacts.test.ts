@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
-import { createActionExecutor, type ActionExecutorDeps, type ActionExecutorContext } from './actionExecutor.js';
+import { buildApprovalExecutionOriginV1, createActionExecutor, type ActionExecutorDeps, type ActionExecutorContext } from './actionExecutor.js';
 import { isApprovalRequiredByActionsSettings, resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { prepareArtifactHeaderForRevisionV1 } from '../artifacts/artifactHeaderRestorationV1.js';
@@ -86,6 +86,20 @@ const ids = ['artifact.create', 'artifact.get', 'artifact.list', 'artifact.updat
   'artifact.publish_from_file', 'artifact.revisions.list', 'artifact.revisions.restore', 'artifact.storage.usage'] as const;
 
 describe('ordinary Artifact Actions', () => {
+  it('captures the explicit publication Machine instead of the ambient Session Machine in approval origin', () => {
+    const request = { actionId: 'artifact.publish_from_file' as const,
+      input: { path: 'docs/note.txt', workspace: { machineId: 'selected-machine', rootPath: '/selected' } },
+      context: { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const },
+        serverId: 'home', serverIdentityId: 'physical-home', runtimeAccountId: 'owner', actionRequestId: 'publication-request',
+        defaultSessionMachineId: 'ambient-machine' },
+      targetSessionId: null };
+    const origin = buildApprovalExecutionOriginV1(request);
+    expect(origin).toMatchObject({ machineId: 'selected-machine', accountId: 'owner', serverIdentityId: 'physical-home' });
+    expect(buildApprovalExecutionOriginV1({ ...request, context: { ...request.context,
+      externalActionTarget: { kind: 'machine', machineId: 'different-machine' } } })).toBeNull();
+    expect(buildApprovalExecutionOriginV1({ ...request, input: { path: 'docs/note.txt' } }))
+      .toMatchObject({ machineId: 'ambient-machine' });
+  });
   it.each(['cli', 'agent', 'mcp'] as const)('admits own-Account %s notice read, mark-read and CAS dismissal without producer authority', async surface => {
     const initial = accountNoticeArtifact();
     const boundary = openedArtifactBoundary(initial);
