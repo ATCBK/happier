@@ -2579,6 +2579,7 @@ const zhHans: EntityDragDropTranslations = {
     surface: {
         scopeMismatch: '它在另一个 Home 或账户中',
         widgetMoveUnavailable: '此组件无法移到这个界面区域',
+        widgetChecking: '仍在确认可以移到哪里',
         widgetReadOnly: '你可以查看此布局，但不能更改。请向所有者申请编辑权限',
         widgetAlreadyHere: '它已在这个界面区域。请在那里重新排序',
         widgetCantLiveHere: '此组件无法放在这个界面区域。请从“添加组件”在这里添加',

@@ -2586,6 +2586,7 @@ const it: EntityDragDropTranslations = {
     surface: {
         scopeMismatch: 'Si trova in un’altra Home o in un altro account',
         widgetMoveUnavailable: 'Questo widget non può essere spostato su questa superficie',
+        widgetChecking: 'Sto ancora verificando dove può andare',
         widgetReadOnly: 'Puoi vedere questo layout ma non modificarlo. Chiedi l’accesso in modifica al proprietario',
         widgetAlreadyHere: 'È già su questa superficie. Riordinalo lì',
         widgetCantLiveHere: 'Questo widget non può stare su questa superficie. Aggiungilo qui da Aggiungi widget',

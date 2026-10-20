@@ -2584,6 +2584,7 @@ const ja: EntityDragDropTranslations = {
     surface: {
         scopeMismatch: '別の Home またはアカウントにあります',
         widgetMoveUnavailable: 'このウィジェットはこの表示領域に移動できません',
+        widgetChecking: '移動先をまだ確認しています',
         widgetReadOnly: 'このレイアウトは表示できますが変更できません。所有者に編集権限を依頼してください',
         widgetAlreadyHere: 'すでにこの表示領域にあります。そこで並べ替えてください',
         widgetCantLiveHere: 'このウィジェットはこの表示領域に置けません。「ウィジェットを追加」からここに追加してください',

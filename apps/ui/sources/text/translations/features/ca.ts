@@ -2586,6 +2586,7 @@ const ca: EntityDragDropTranslations = {
     surface: {
         scopeMismatch: 'És en un altre Home o compte',
         widgetMoveUnavailable: 'Aquest giny no es pot moure a aquesta superfície',
+        widgetChecking: 'Encara s’està comprovant on pot anar',
         widgetReadOnly: 'Pots veure aquest disseny però no canviar-lo. Demana accés d’edició al propietari',
         widgetAlreadyHere: 'Ja és en aquesta superfície. Reordena’l allà',
         widgetCantLiveHere: 'Aquest giny no pot viure en aquesta superfície. Afegeix-lo aquí des d’Afegeix un giny',

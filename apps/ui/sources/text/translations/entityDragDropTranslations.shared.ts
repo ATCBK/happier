@@ -10,6 +10,7 @@ export const en = {
     surface: {
         scopeMismatch: 'It’s in another Home or account',
         widgetMoveUnavailable: 'This widget can’t move to this surface',
+        widgetChecking: 'Still checking where it can go',
         widgetReadOnly: 'You can view this layout but not change it. Ask its owner for edit access',
         widgetAlreadyHere: 'It’s already on this surface. Reorder it there instead',
         widgetCantLiveHere: 'This widget can’t live on this surface. Add it here from Add widget instead',
