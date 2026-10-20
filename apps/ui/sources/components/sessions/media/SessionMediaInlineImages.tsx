@@ -4,15 +4,12 @@ import { Image } from 'expo-image';
 import { HappierStoredImage, type HappierStoredImageHost } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { Modal } from '@/modal';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
-import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
+import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
+import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import { Icon } from '@/components/ui/icons/Icon';
-import {
-    AttachmentImagePreviewModal,
-    type AttachmentImagePreviewModalImage,
-} from '@/components/sessions/attachments/preview/AttachmentImagePreviewModal';
 import {
     resolveSessionMediaInlineImageLayout,
 } from '@/components/sessions/media/resolveSessionMediaInlineImageLayout';
@@ -25,6 +22,37 @@ import type {
     SessionMediaInlineImageUnavailableSummary,
     SessionMediaInlineVideoAvailableSummary,
 } from '@/sync/domains/session/media/sessionMediaMessageMeta';
+
+/** One preview identity per tile, shared with its Media stage item so the stage reuses the loaded bytes. */
+function inlineImagePreviewInput(
+    media: SessionMediaInlineImageAvailableSummary,
+    sessionId: string,
+    workspaceScope: WorkspaceScopeBase | null | undefined,
+): UseFilePreviewSourceInput {
+    return {
+        source: media.attachmentHandle
+            ? { kind: 'attachment', handle: media.attachmentHandle, fileName: media.path }
+            : workspaceScope
+                ? { kind: 'workspace', scope: workspaceScope, filePath: media.path }
+                : { kind: 'session', sessionId, filePath: media.path },
+        enabled: true,
+        cacheKey: media.sha256 ?? null,
+        mimeType: media.mimeType,
+        sizeBytes: media.sizeBytes,
+    };
+}
+
+function inlineVideoPreviewInput(media: SessionMediaInlineVideoAvailableSummary, sessionId: string): UseFilePreviewSourceInput {
+    return {
+        source: media.attachmentHandle
+            ? { kind: 'attachment', handle: media.attachmentHandle, fileName: media.path }
+            : { kind: 'session', sessionId, filePath: media.path },
+        enabled: true,
+        cacheKey: media.sha256 ?? null,
+        mimeType: media.mimeType,
+        sizeBytes: media.sizeBytes,
+    };
+}
 
 type SessionMediaInlineRenderableSummary =
     | SessionMediaInlineImageSummary
@@ -108,31 +136,24 @@ function SessionMediaInlineVideoTile(props: Readonly<{
     sessionId: string;
     media: SessionMediaInlineVideoAvailableSummary;
     testIdPrefix: string;
-    onOpenPath: (path: string) => void;
-    fileOpenEnabled: boolean;
+    originRef: React.RefObject<View | null>;
+    onOpenPreview: () => void;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const preview = useFilePreviewSource({
-        source: props.media.attachmentHandle
-            ? { kind: 'attachment', handle: props.media.attachmentHandle, fileName: props.media.path }
-            : { kind: 'session', sessionId: props.sessionId, filePath: props.media.path },
-        enabled: true,
-        cacheKey: props.media.sha256 ?? null,
-        mimeType: props.media.mimeType,
-        sizeBytes: props.media.sizeBytes,
-    });
+    const preview = useFilePreviewSource(inlineVideoPreviewInput(props.media, props.sessionId));
     const accessibilityLabel = resolveInlineVideoAccessibilityLabel(props.media);
 
     return (
         <Pressable
+            ref={props.originRef}
             testID={`${props.testIdPrefix}-inline-video:${props.media.path}`}
-            accessibilityRole={props.fileOpenEnabled ? 'button' : 'image'}
+            accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
             accessibilityHint={preview.status === 'error'
                 ? t('files.sessionMedia.previewUnavailableA11y')
                 : undefined}
-            onPress={props.fileOpenEnabled ? () => props.onOpenPath(props.media.path) : undefined}
+            onPress={props.onOpenPreview}
             style={[styles.tile, { width: 168, height: 104 }]}
         >
             {preview.status === 'loaded' ? (
@@ -164,24 +185,16 @@ function SessionMediaInlineImageTile(props: Readonly<{
     testIdPrefix: string;
     onOpenPath: (path: string) => void;
     fileOpenEnabled: boolean;
+    originRef: React.RefObject<View | null>;
     onOpenPreview: (index: number) => void;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
 
-    const preview = useFilePreviewSource({
-        source: props.media.attachmentHandle
-            ? { kind: 'attachment', handle: props.media.attachmentHandle, fileName: props.media.path }
-            : props.workspaceScope
-                ? { kind: 'workspace', scope: props.workspaceScope, filePath: props.media.path }
-                : { kind: 'session', sessionId: props.sessionId, filePath: props.media.path },
-        enabled: true,
-        cacheKey: props.media.sha256 ?? null,
-        mimeType: props.media.mimeType,
-        sizeBytes: props.media.sizeBytes,
-    });
+    const preview = useFilePreviewSource(inlineImagePreviewInput(props.media, props.sessionId, props.workspaceScope));
     const actionable = preview.status !== 'error' || props.fileOpenEnabled;
 
     return (
+        <View ref={props.originRef} collapsable={false}>
         <HappierStoredImage
             identity={JSON.stringify([props.media.path, props.media.sha256])}
             status={preview.status}
@@ -213,6 +226,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
                     />
             )}
         />
+        </View>
     );
 }
 
@@ -301,40 +315,50 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
     const styles = stylesheet;
     const testIdPrefix = props.testIdPrefix ?? 'message-session-media';
 
+    const stage = useMediaStage();
+    const originRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
+    const originRefFor = (key: string) => {
+        let ref = originRefs.current.get(key);
+        if (!ref) {
+            ref = React.createRef<View | null>();
+            originRefs.current.set(key, ref);
+        }
+        return ref;
+    };
+    // The gallery is this message's images and videos in order, frozen by the stage when it opens.
     const images = React.useMemo(() => {
-        let nextModalIndex = 0;
+        let nextStageIndex = 0;
         return props.media.map((media): Readonly<{
             media: SessionMediaInlineRenderableSummary;
-            modalImage: AttachmentImagePreviewModalImage | null;
-            modalIndex: number | null;
+            key: string;
+            stageItem: Omit<MediaStageItem, 'originRef'> | null;
+            stageIndex: number | null;
         }> => {
-            if (isUnavailableInlineImage(media) || isInlineVideo(media)) {
-                return {
-                    media,
-                    modalImage: null,
-                    modalIndex: null,
-                };
-            }
-
-            const modalIndex = nextModalIndex;
-            nextModalIndex += 1;
+            if (isUnavailableInlineImage(media)) return { media, key: media.id, stageItem: null, stageIndex: null };
+            const key = `${media.id}:${media.path}`;
+            const stageIndex = nextStageIndex;
+            nextStageIndex += 1;
+            const openFile = props.fileOpenEnabled ? () => props.onOpenPath(media.path) : undefined;
             return {
                 media,
-                modalImage: {
-                    kind: 'session-image',
+                key,
+                stageItem: {
+                    kind: isInlineVideo(media) ? 'video' : 'image',
                     title: media.name,
-                    sessionId: props.sessionId,
-                    filePath: media.path,
-                    mimeType: media.mimeType,
-                    sizeBytes: media.sizeBytes,
-                    cacheKey: media.sha256 ?? null,
-                    attachmentHandle: media.attachmentHandle,
-                    workspaceScope: props.workspaceScope ?? null,
+                    source: isInlineVideo(media)
+                        ? inlineVideoPreviewInput(media, props.sessionId)
+                        : inlineImagePreviewInput(media, props.sessionId, props.workspaceScope),
+                    sizeBytes: media.sizeBytes ?? null,
+                    ...(openFile ? { openFile } : {}),
                 },
-                modalIndex,
+                stageIndex,
             };
         });
-    }, [props.media, props.sessionId, props.workspaceScope]);
+    }, [props.fileOpenEnabled, props.media, props.onOpenPath, props.sessionId, props.workspaceScope]);
+    const openStage = (stageIndex: number) => {
+        const items = images.flatMap((entry) => (entry.stageItem ? [{ ...entry.stageItem, originRef: originRefFor(entry.key) }] : []));
+        if (items.length > 0) stage.open(items, Math.min(stageIndex, items.length - 1));
+    };
 
     if (images.length === 0) return null;
 
@@ -359,8 +383,8 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                         sessionId={props.sessionId}
                         media={entry.media}
                         testIdPrefix={testIdPrefix}
-                        onOpenPath={props.onOpenPath}
-                        fileOpenEnabled={props.fileOpenEnabled}
+                        originRef={originRefFor(entry.key)}
+                        onOpenPreview={() => openStage(entry.stageIndex ?? 0)}
                     />
                 ) : (
                     <SessionMediaInlineImageTile
@@ -368,22 +392,12 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                         key={`${entry.media.id}:${entry.media.path}`}
                         sessionId={props.sessionId}
                         media={entry.media}
-                        imageIndex={entry.modalIndex ?? 0}
+                        imageIndex={entry.stageIndex ?? 0}
+                        originRef={originRefFor(entry.key)}
                         testIdPrefix={testIdPrefix}
                         onOpenPath={props.onOpenPath}
                         fileOpenEnabled={props.fileOpenEnabled}
-                        onOpenPreview={(imageIndex) => {
-                            const modalImages = images.flatMap((imageEntry) => (
-                                imageEntry.modalImage ? [imageEntry.modalImage] : []
-                            ));
-                            Modal.show({
-                                component: AttachmentImagePreviewModal,
-                                props: {
-                                    images: modalImages,
-                                    initialIndex: Math.min(imageIndex, Math.max(0, modalImages.length - 1)),
-                                },
-                            });
-                        }}
+                        onOpenPreview={openStage}
                     />
                 )
             ))}

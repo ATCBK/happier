@@ -21,10 +21,6 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal', () => ({
-    AttachmentImagePreviewModal: () => null,
-}));
-
 describe('AttachmentsInlineImages (svg previews)', () => {
     it('does not render svg attachments as inline transcript images in the V1 media policy', async () => {
         const { AttachmentsInlineImages } = await import('./AttachmentsInlineImages');

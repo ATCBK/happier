@@ -1,13 +1,12 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import type { ArtifactBlobReferenceV1 } from '@happier-dev/protocol';
-import { FileUriPreview } from '@/components/workspaces/files/file/FileUriPreview';
+import { FileViewerBody } from '@/components/workspaces/files/file/FileViewerBody';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
-import { Modal } from '@/modal';
 import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { saveFileBytes } from '@/sync/runtime/files/saveFileBytes';
@@ -29,13 +28,14 @@ export function ArtifactBinaryBody(props: Readonly<{ artifactId: string; name: s
     const { theme } = useUnistyles();
     const reference = props.reference;
     const key = `${props.artifactId}:${reference.blobId}:${reference.sha256}`;
-    const previewable = resolveFileViewerKind({ path: props.name, mimeType: reference.mime }).previewable;
+    const viewer = resolveFileViewerKind({ path: props.name, mimeType: reference.mime });
+    const previewable = viewer.previewable;
+    const window = useWindowDimensions();
     const [preview, setPreview] = React.useState<Preview>({ key, phase: 'loading' });
     const [attempt, setAttempt] = React.useState(0);
     const [downloading, setDownloading] = React.useState(false);
     const [downloadFailed, setDownloadFailed] = React.useState(false);
     const downloadController = React.useRef<AbortController | null>(null);
-    const imagePreviewModal = React.useRef<string | null>(null);
     React.useEffect(() => {
         setDownloading(false); setDownloadFailed(false);
         return () => {
@@ -56,8 +56,6 @@ export function ArtifactBinaryBody(props: Readonly<{ artifactId: string; name: s
         });
         return () => {
             controller.abort();
-            if (imagePreviewModal.current) Modal.hide(imagePreviewModal.current);
-            imagePreviewModal.current = null;
         };
     }, [props.artifactId, props.name, props.readBytes, props.initialBytes, reference.blobId, reference.mime, reference.sha256, reference.sizeBytes, previewable, key, attempt]);
     const ready = preview.key === key && preview.phase === 'ready' ? preview : null;
@@ -91,22 +89,22 @@ export function ArtifactBinaryBody(props: Readonly<{ artifactId: string; name: s
         <Text style={{ color: theme.colors.text.secondary }}>{`${reference.mime} · ${formatHappierDataBytes(reference.sizeBytes, { kind: 'storage' })}`}</Text>
     </View>;
     return <View style={{ gap: theme.space.s16 }} testID="artifact:binaryBody">
-        {ready && filePreview.status === 'loaded' ? <FileUriPreview uri={filePreview.uri} mime={reference.mime} title={props.name} fallback={card}
-            onOpenImage={() => {
-                void import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal').then(({ AttachmentImagePreviewModal }) => {
-                    if (ready.signal.aborted) return;
-                    if (imagePreviewModal.current) Modal.hide(imagePreviewModal.current);
-                    imagePreviewModal.current = Modal.show({ component: AttachmentImagePreviewModal, props: { images: [{ kind: 'direct', uri: filePreview.uri, title: props.name }] } });
-                }).catch(() => {
-                    if (!ready.signal.aborted) setPreview({ key, phase: 'failed' });
-                });
-            }} />
+        {ready && filePreview.status === 'loaded' ? (
+            // Pages, players and wells are the File page's bodies over these bytes (lab files AD1); a
+            // scrolling page bounds the scrolling kinds to most of the window so the page still scrolls past.
+            <View style={viewer.kind === 'pdf' || viewer.kind === 'video' ? { height: Math.round(window.height * 0.75) } : null}>
+                <FileViewerBody viewer={viewer} title={props.name} source={previewInput} sizeBytes={reference.sizeBytes}
+                    isActive findSurfaceId={`artifact:${props.artifactId}`} layout="inline" testID="artifact:viewerBody" />
+            </View>
+        )
             : previewable && preview.key === key && (preview.phase === 'failed' || filePreview.status === 'error') ? <SurfaceStateCard testID="artifact:previewFailed" kind="error"
                 title={t('artifacts.error')}
                 reason={filePreview.error === t('files.imagePreviewTooLarge') ? filePreview.error : t('artifacts.browser.loadFailedBody')}
                 detail={filePreview.error ?? undefined}
-                action={{ label: t('common.retry'), onPress: props.onRetry ?? (() => setAttempt(value => value + 1)) }} /> : card}
-        <RoundButton testID="artifact:download" title={t('files.repositoryTree.actions.download')} size="small" display="secondary" loading={downloading} onPress={() => { void download(); }} />
+                action={{ label: t('common.retry'), onPress: props.onRetry ?? (() => setAttempt(value => value + 1)) }} />
+            : !previewable ? <FileViewerBody viewer={viewer} title={props.name} source={previewInput} sizeBytes={reference.sizeBytes}
+                isActive findSurfaceId={`artifact:${props.artifactId}`} onDownload={() => { void download(); }} testID="artifact" /> : card}
+        {!previewable ? null : <RoundButton testID="artifact:download" title={t('files.repositoryTree.actions.download')} size="small" display="secondary" loading={downloading} onPress={() => { void download(); }} />}
         {downloadFailed ? <Text accessibilityRole="alert" testID="artifact:downloadFailed">{t('artifacts.browser.loadFailedBody')}</Text> : null}
     </View>;
 }

@@ -1,51 +1,42 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import type {
     ComposerAttachmentViewV1,
     ComposerContentHandleV1,
 } from '@happier-dev/protocol';
 
-import {
-    AttachmentImagePreviewModal,
-    type AttachmentImagePreviewModalImage,
-} from '@/components/sessions/attachments/preview/AttachmentImagePreviewModal';
 import { ComposerStagedMediaPreview } from '@/components/sessions/attachments/preview/ComposerStagedMediaPreview';
-import { ComposerStagedMediaPreviewModal } from '@/components/sessions/attachments/preview/ComposerStagedMediaPreviewModal';
+import { openMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import type {
     ComposerAttachmentCatalogRowDescriptor,
     ComposerAttachmentRowMediaPresentation,
 } from '@/components/sessions/agentInput/agentInputContracts';
-import { Modal } from '@/modal';
+
+const FILL = { width: '100%', height: '100%' } as const;
 
 function createHostPreviewAction(input: Readonly<{
     attachment: ComposerAttachmentViewV1;
     catalog: ComposerAttachmentCatalogRowDescriptor;
     handle: ComposerContentHandleV1;
+    originRef: React.RefObject<View | null>;
 }>): (() => void) | undefined {
     const preview = input.catalog.preview;
     if (preview?.kind !== 'host' || preview.presentation !== input.handle.mediaKind) return undefined;
-
-    if (input.handle.mediaKind === 'image') {
-        return () => {
-            const image: AttachmentImagePreviewModalImage = {
-                kind: 'composer-staged-image',
-                title: input.attachment.presentation.label,
-                handle: input.handle,
-            };
-            Modal.show({
-                component: AttachmentImagePreviewModal,
-                props: { images: [image] },
-            });
-        };
-    }
-
+    // The tile and the stage share one preview identity, so the stage shows the staged bytes it already holds.
     return () => {
-        Modal.show({
-            component: ComposerStagedMediaPreviewModal,
-            props: {
-                handle: input.handle,
-                title: input.attachment.presentation.label,
+        openMediaStage([{
+            kind: input.handle.mediaKind === 'video' ? 'video' : 'image',
+            title: input.attachment.presentation.label,
+            source: {
+                source: { kind: 'composerStage', handle: input.handle },
+                enabled: true,
+                cacheKey: input.handle.sha256,
+                mimeType: input.handle.mimeType,
+                sizeBytes: input.handle.sizeBytes,
             },
-        });
+            sizeBytes: input.handle.sizeBytes,
+            originRef: input.originRef,
+        }], 0);
     };
 }
 
@@ -59,14 +50,16 @@ export function createComposerStagedMediaAttachmentPresentation(input: Readonly<
     catalog: ComposerAttachmentCatalogRowDescriptor;
     handle: ComposerContentHandleV1;
 }>): ComposerAttachmentRowMediaPresentation {
-    const onPress = createHostPreviewAction(input);
+    const originRef = React.createRef<View>();
+    const onPress = createHostPreviewAction({ ...input, originRef });
     return {
         media: input.handle.mediaKind,
-        renderedPreview: React.createElement(ComposerStagedMediaPreview, {
-            handle: input.handle,
-            accessibilityLabel: input.attachment.presentation.label,
-            testID: `composer-staged-media:${input.attachment.instanceId}`,
-        }),
+        renderedPreview: React.createElement(View, { ref: originRef, collapsable: false, style: FILL },
+            React.createElement(ComposerStagedMediaPreview, {
+                handle: input.handle,
+                accessibilityLabel: input.attachment.presentation.label,
+                testID: `composer-staged-media:${input.attachment.instanceId}`,
+            })),
         ...(onPress === undefined ? {} : { onPress }),
     };
 }

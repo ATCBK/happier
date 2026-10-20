@@ -110,7 +110,16 @@ describe('SessionMediaInlineImages', () => {
         expect(tile?.props.accessibilityRole).toBe('button');
         expect(tile?.props.accessibilityLabel).toBe(t('files.sessionMedia.toolArtifactVideoA11y', { name: 'browser-recording.webm' }));
 
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.show).mockClear();
         screen.pressByTestId('message-session-media-inline-video:.happier/uploads/artifacts/session-1/message-1/browser-recording.webm');
+        // The video opens in the Media stage; its "Open file" reaches the File page.
+        expect(Modal.show).toHaveBeenCalledTimes(1);
+        const [config] = vi.mocked(Modal.show).mock.calls[0] ?? [];
+        expect(config?.props?.items).toHaveLength(1);
+        expect(config?.props?.items[0]).toMatchObject({ kind: 'video', title: 'browser-recording.webm' });
+        expect(onOpenPath).not.toHaveBeenCalled();
+        config?.props?.items[0].openFile();
         expect(onOpenPath).toHaveBeenCalledWith('.happier/uploads/artifacts/session-1/message-1/browser-recording.webm');
     });
 
@@ -261,7 +270,8 @@ describe('SessionMediaInlineImages', () => {
 
         expect(Modal.show).toHaveBeenCalledTimes(1);
         const [config] = vi.mocked(Modal.show).mock.calls[0] ?? [];
-        expect(config?.props?.images).toHaveLength(2);
+        expect(config?.props?.items).toHaveLength(2);
+        expect(config?.props?.items.map((item: { kind: string }) => item.kind)).toEqual(['image', 'image']);
         expect(config?.props?.initialIndex).toBe(0);
     });
 

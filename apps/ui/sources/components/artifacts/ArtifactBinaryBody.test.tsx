@@ -194,20 +194,15 @@ describe('ArtifactBinaryBody', () => {
         try {
             const screen = await renderScreen(<ArtifactBinaryBody artifactId="image" name="image.png" {...source} />);
             await flushHookEffects();
-            expect(screen.findByTestId('file:imagePreview')).not.toBeNull();
+            expect(screen.findByTestId('artifact:viewerBody-picture')).not.toBeNull();
             expect(new Uint8Array(await urls[0]!.arrayBuffer())).toEqual(source.bytes);
-            // The modal presentation is the boundary; the real shared image viewer is loaded.
-            await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
-            const imageButton = screen.tree.root.find(node => typeof node.type === 'string'
-                && node.props.accessibilityLabel === 'image.png' && node.props.accessibilityRole === 'button');
-            await act(async () => { imageButton.props.onPress(); await Promise.resolve(); });
+            // The modal presentation is the boundary; the press opens the one Media stage.
+            await screen.pressByTestIdAsync('artifact:viewerBody-open');
             await vi.waitFor(() => expect(Modal.show).toHaveBeenCalled());
-            imageButton.props.onPress();
             await screen.unmount();
             await flushHookEffects();
             expect(Modal.show).toHaveBeenCalledOnce();
             expect(revoke).toHaveBeenCalledWith('blob:private-image');
-            expect(Modal.hide).toHaveBeenCalledWith('modal-id');
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });
         }

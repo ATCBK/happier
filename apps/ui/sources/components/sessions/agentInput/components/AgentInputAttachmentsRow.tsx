@@ -19,13 +19,8 @@ import { LazyMountOnScreen } from '@/components/ui/performance/LazyMountOnScreen
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
-import {
-    AttachmentImagePreviewModal,
-    type AttachmentImagePreviewModalImage,
-} from '@/components/sessions/attachments/preview/AttachmentImagePreviewModal';
+import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import { Typography } from '@/constants/Typography';
-import { Modal } from '@/modal';
-import { useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { t } from '@/text';
 
 import type {
@@ -33,7 +28,8 @@ import type {
     AgentInputAttachmentUploadProgress,
 } from '../agentInputContracts';
 
-type ComposerAttachmentImagePreviewItem = Extract<AttachmentImagePreviewModalImage, Readonly<{ kind: 'direct' }>>;
+/** A draft image the composer already holds as a direct URI (the draft owns and revokes it). */
+type ComposerAttachmentImagePreviewItem = Readonly<{ key: string; uri: string; title: string }>;
 
 type AttachmentVerticalViewport = Readonly<{
     offset: number;
@@ -94,7 +90,7 @@ function resolveAttachmentImagePreviewItems(items: readonly AgentInputAttachment
                 : null;
         if (!imagePreviewUri) continue;
         previews.push({
-            kind: 'direct',
+            key: attachment.key,
             uri: imagePreviewUri,
             title: attachment.label,
         });
@@ -369,7 +365,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const modalPortalTarget = useModalPortalTarget();
+    const stage = useMediaStage();
     const [surfaceLayouts, setSurfaceLayouts] = React.useState<Readonly<Record<string, AttachmentSurfaceLayout>>>({});
     const [contentSurfaceBandTop, setContentSurfaceBandTop] = React.useState<number | null>(null);
     const [compactRailViewport, setCompactRailViewport] = React.useState<CompactRailViewport>({
@@ -788,14 +784,12 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     key={att.key}
                     item={att}
                     fallbackOnPress={() => {
-                        Modal.show({
-                            component: AttachmentImagePreviewModal,
-                            webPortalTarget: modalPortalTarget ?? null,
-                            props: {
-                                images: attachmentImagePreviewItems,
-                                initialIndex: imagePreviewIndex >= 0 ? imagePreviewIndex : 0,
-                            },
-                        });
+                        stage.open(attachmentImagePreviewItems.map((item) => ({
+                            kind: 'image' as const,
+                            title: item.title,
+                            source: { enabled: true, source: { kind: 'uri' as const, uri: item.uri } },
+                            originRef: { current: (attachmentFocusTargetsRef.current.get(item.key) ?? null) as View | null },
+                        })), imagePreviewIndex >= 0 ? imagePreviewIndex : 0);
                     }}
                 >
                     {({ anchorRef, onPress, onRemove }) => (

@@ -26,6 +26,7 @@ import { projectMarkdownFindSpans } from '@/components/markdown/rendering/markdo
 import type { MarkdownImageResolver, MarkdownImageDocument } from './markdownImages';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { MarkdownWorkspaceFileLinksContext } from './rendering/MarkdownLinkPolicyContext';
+import { MarkdownImageBlock } from './MarkdownImageBlock';
 
 // Option type for callback
 export type Option = {
@@ -104,6 +105,9 @@ export const MarkdownBlockView = React.memo((props: MarkdownBlockViewProps) => {
         return <MermaidRenderer content={block.content} />;
     } else if (block.type === 'options') {
         return <RenderOptionsBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} onOptionPress={props.onOptionPress} onOptionLongPress={props.onOptionLongPress} textStyle={props.textStyle} findRanges={props.findOptionRanges} />;
+    } else if (block.type === 'image') {
+        if (!props.images || !props.imageDocument || props.imageSourceStart === undefined) return null;
+        return <MarkdownImageBlock sourceStart={props.imageSourceStart} destination={block.destination} document={props.imageDocument} images={props.images} scope={props.imageScope} />;
     } else if (block.type === 'table') {
         return <RenderTableBlock headers={block.headers} rows={block.rows} alignments={block.alignments} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} profile={props.profile} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} agentTexMath={props.agentTexMath} findRanges={props.findTableRanges} />;
     }

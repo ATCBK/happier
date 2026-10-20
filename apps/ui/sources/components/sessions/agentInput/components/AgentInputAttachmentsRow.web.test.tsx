@@ -43,10 +43,6 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/components/ui/theme/haptics', () => ({ hapticsLight: vi.fn() }));
 
-vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal', () => ({
-    AttachmentImagePreviewModal: () => null,
-}));
-
 describe('AgentInputAttachmentsRow web', () => {
     it('keeps offscreen content-surface bodies unrendered until their own screen sentinel intersects', async () => {
         const runtime = globalThis as typeof globalThis & {

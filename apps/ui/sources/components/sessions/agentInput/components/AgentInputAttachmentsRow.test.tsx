@@ -67,10 +67,6 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/components/ui/theme/haptics', () => ({ hapticsLight: vi.fn() }));
 
-vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal', () => ({
-    AttachmentImagePreviewModal: () => null,
-}));
-
 // Configure the native SDK boundary before renderer consumers import it, and
 // collect the component graph before entering any timed mounted interaction.
 const { View } = await import('react-native');
