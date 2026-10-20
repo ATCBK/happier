@@ -190,7 +190,20 @@ export const WorkflowRunStepProgressCurrentnessV1Schema = lazyZodSchema(() => z.
 }));
 export type WorkflowRunStepProgressCurrentnessV1 = z.infer<typeof WorkflowRunStepProgressCurrentnessV1Schema>;
 
+/** How the caller that stopped a Run declared itself: a present person, an agent, or an Automation. */
+export const WORKFLOW_RUN_STOPPED_VIA_V1 = ['person', 'agent', 'automation'] as const;
+export type WorkflowRunStoppedViaV1 = (typeof WORKFLOW_RUN_STOPPED_VIA_V1)[number];
+export function isWorkflowRunStoppedVia(value: unknown): value is WorkflowRunStoppedViaV1 {
+  return (WORKFLOW_RUN_STOPPED_VIA_V1 as readonly unknown[]).includes(value);
+}
+
 export const WorkflowRunSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+  /** Who asked for the Stop, as its caller declared it; absent when the Run was not stopped or nobody declared. */
+  stoppedBy: z.optional(z.strictObject({
+    via: z.enum(WORKFLOW_RUN_STOPPED_VIA_V1),
+    /** The Account that made the call; a Team editor may differ from the Run's owner. */
+    accountId: preservedBoundedNfcString(191, 'Account ids'),
+  })),
   /** Opened private projections; null is unavailable, omission is a control-only response. */
   startedBy: zMini.optional(zMini.nullable(WorkflowRunStartedByV1Schema)),
   stepProgress: z.optional(z.nullable(WorkflowRunStepProgressV1Schema)),

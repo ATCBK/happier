@@ -142,3 +142,15 @@ it("refuses expired-claim settlement if the incumbent lease renewed without a re
     expect(row).toMatchObject({ state: "claimed", revision: 140, finishedAt: null });
     expect(children.map(child => child.contentRevision)).toEqual([3n, 3n]);
 });
+
+it("records who asked for the Stop on the Run, and says nothing when the caller did not declare it", async () => {
+    row.leaseExpiresAt = null;
+    const stopped = await cancelWorkflowRun({ accountId: "account", runId: "run", expectedRevision: 140, stoppedVia: "person" });
+    expect(stopped.run).toMatchObject({ stoppedBy: { via: "person", accountId: "account" } });
+    row.revision = 200;
+    row.stopRequestedVia = null;
+    row.stopRequestedByAccountId = null;
+    row.state = "claimed";
+    const undeclared = await cancelWorkflowRun({ accountId: "account", runId: "run", expectedRevision: 200 });
+    expect(undeclared.run.stoppedBy).toBeUndefined();
+});

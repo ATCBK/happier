@@ -63,6 +63,7 @@ import { useNavigationBackControl } from '@/components/ui/layout/NavigationBackC
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { SessionInPane } from '@/components/sessions/panes/SessionInPane';
 import { useSessionInteractionSource } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useDeviceType } from '@/utils/platform/responsive';
@@ -789,6 +790,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     const failureReason = (props.run.state !== 'failed' && props.run.state !== 'interrupted') || failurePresentation == null
         || (!phone && props.selectedInvocationId === failurePresentation.invocationId) ? null
         : formatWorkflowRunFailureCauseLine(failurePresentation);
+    const viewerAccountId = storage((state) => state.profile?.id ?? null);
     const outcomeWord = formatWorkflowRunOutcomeLabel({
         state: props.run.state,
         workflowCustodyState: props.run.workflowCustodyState,
@@ -799,6 +801,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         historyComplete: props.invocationHistoryComplete,
         inAttentionWindow: props.run.attentionRequired === true || attentionRows.length > 0,
         waitingOnlyForYou: attentionRows.length > 0 ? attentionRows.every(attentionWaitsForYou) : undefined,
+        stoppedBy: props.run.stoppedBy,
+        viewerAccountId,
     });
     const consequence = React.useMemo(() => formatWorkflowRunConsequenceSentence({
         run: props.run,

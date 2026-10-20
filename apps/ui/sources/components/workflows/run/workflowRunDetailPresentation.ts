@@ -623,8 +623,20 @@ export function formatWorkflowRunOutcomeLabel(params: Readonly<{
      * step: the Run is then waiting for you, not for your review.
      */
     waitingOnlyForYou?: boolean;
+    /** Who asked for the Stop, as its caller declared it (the Run summary's own fact). */
+    stoppedBy?: WorkflowRunSummaryV1['stoppedBy'];
+    /** The Account reading this Run; a person's Stop reads as "you" only for that Account. */
+    viewerAccountId?: string | null;
 }>): string {
     if (isWorkflowRunStopPending(params)) return describeWorkflowRunState(params.state, params).label;
+    if (params.state === 'cancelled' && params.stoppedBy) {
+        switch (params.stoppedBy.via) {
+            case 'person': return params.viewerAccountId === params.stoppedBy.accountId
+                ? t('workflows.run.stoppedBy.you') : t('workflows.run.stoppedBy.anotherPerson');
+            case 'agent': return t('workflows.run.stoppedBy.agent');
+            case 'automation': return t('workflows.run.stoppedBy.automation');
+        }
+    }
     if (params.state === 'succeeded' && params.coverage.knownFailure) {
         return t('workflows.runState.completed_with_failures');
     }
