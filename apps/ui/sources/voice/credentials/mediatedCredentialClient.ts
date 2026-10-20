@@ -98,7 +98,7 @@ export function createVoiceClientAccountOperationExecutor(input: Readonly<{
       const cause = readSafeCause(error);
       throw failure(
         'machine_rpc',
-        cause === 'machine_unavailable' ? 'execution_machine_unavailable' : 'credential_unavailable',
+        cause === 'machine_unavailable' ? 'execution_machine_unavailable' : 'service_temporarily_unavailable',
         cause,
       );
     }
