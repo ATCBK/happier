@@ -186,6 +186,21 @@ describe('Channels V1 pairing cancellation management contract', () => {
         } as const;
 
         expect(ConversationPairingCreateInputV1Schema.parse(createInput)).toEqual(createInput);
+        const sharedProofInput = {
+            ...createInput,
+            proofEndpointSelection: {
+                query: 'Proof topic',
+                selected: { kind: 'thread', audience: 'shared', id: 'room-1:7', parentId: 'room-1' },
+            },
+        } as const;
+        expect(ConversationPairingCreateInputV1Schema.parse(sharedProofInput)).toEqual(sharedProofInput);
+        expect(ConversationPairingCreateInputV1Schema.safeParse({
+            ...sharedProofInput,
+            proofEndpointSelection: {
+                ...sharedProofInput.proofEndpointSelection,
+                selected: { ...sharedProofInput.proofEndpointSelection.selected, principalId: 'invented' },
+            },
+        }).success).toBe(false);
 
         const { endpointSelection: _omitted, ...withoutDestination } = createInput;
         expect(ConversationPairingCreateInputV1Schema.safeParse(withoutDestination).success).toBe(false);
@@ -235,11 +250,22 @@ describe('Channels V1 pairing cancellation management contract', () => {
                 expectedConnectionRevision: 7,
                 expiresAt: 1_700_000_600_000,
                 endpointLabel: 'Ada',
+                proofEndpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Ada' },
+                principalId: 'person-1',
                 state: 'proposed',
             }],
         } as const;
 
         expect(ConversationPairingResourceV1Schema.parse(projection)).toEqual(projection);
+        const proofEndpoint = { kind: 'thread', audience: 'shared', id: 'room-1:7', parentId: 'room-1' } as const;
+        const sharedProjection = {
+            ...projection,
+            challenges: [{ ...projection.challenges[0], proofEndpoint, deepLinkUrl: null }],
+            proposals: [{ ...projection.proposals[0], proofEndpoint }],
+        };
+        expect(ConversationPairingResourceV1Schema.parse(sharedProjection)).toEqual(sharedProjection);
+        const { principalId: _principalId, ...withoutPrincipal } = projection.proposals[0];
+        expect(ConversationPairingResourceV1Schema.safeParse({ ...projection, proposals: [withoutPrincipal] }).success).toBe(false);
         expect(ConversationPairingResourceV1Schema.safeParse({
             ...projection,
             proposals: [{

@@ -233,7 +233,8 @@ first-party GitHub Channels provider currently selects checkpointed polling.
 
 ## Thread routing and conversation starts (development)
 
-The unreleased 0.3 core supports a `threadRouter` binding target. Its
+The unreleased 0.3 core supports a `threadRouter` binding target on a
+provider-supported parent with authenticated direct or shared audience. Its
 `principalGroups` supply the sender allowlist and the audiences for new
 conversations. Ordered routes match a group (or `any`) and forwarded provenance
 (true, false, or `any`); each route uses the existing Session spawn recipe and
@@ -297,6 +298,63 @@ GitHub currently ignore the HTML alternative and refuse starts.
 These contracts are development source, not a claim of published package or
 loaded mailbox availability. The router editor and composed live mailbox journey
 are integrated separately from this protocol boundary.
+
+## Pairing proof and router bootstrap (unreleased development contract)
+
+The development pairing extension adds optional
+`proofEndpointSelection: ConversationBindingEndpointSelectionV1` to
+`ConversationPairingCreateInputV1`. Its existing fields remain `connectionId`,
+`expectedConnectionRevision`, `pairingRequestId`, `endpointSelection` and
+`target`. With no proof selector, the existing direct-audience, original-human
+proof path remains available independently of the selected destination.
+
+With a proof selector, management resolves both endpoints on the same current
+connection/provider basis before creating the challenge. The selected proof
+must have shared audience and equal the selected destination. For a
+`threadRouter` only, it can instead be an authenticated thread whose `parentId`
+is the selected parent's id. A Telegram forum router therefore selects the
+forum parent as its destination and one exact topic as proof location; a
+Discord parent channel can serve both roles.
+
+The pairing owner freezes that endpoint and requires
+`areConversationEndpointIdentitiesEqual` at prepare and commit, including kind,
+audience, id and parentId. A private endpoint, sibling thread, parent in place
+of the selected topic, or different connection cannot redeem the challenge.
+Equal create-request retries must also match the proof endpoint. Existing
+token entropy, ten-minute deadline, requester accounting, durable ingress
+census before token consumption, single use and memory-only unfinished state
+remain with their existing owners. Pairing never becomes a Session prompt.
+
+The authenticated challenge presentation projects optional `proofEndpoint`
+for shared proof; the authenticated proposal projects the actual
+`proofEndpoint` and immutable `principalId`, preserving `endpointLabel` for
+presentation. Shared challenges offer the manual `/pair <code>` at that
+location, with no private-chat deep link or QR that changes the scope. Original
+human proof still requires a non-null authenticated principal and refuses
+forwarded, viaBot, bot, integration, integration-self, anonymous and unknown
+senders.
+
+A visible shared token can be copied and raced by another human in the same
+endpoint. One winner produces one proposal identifying the actual sender, not
+an assertion that the sender is the owner or a group administrator. The owner
+must review that principal before enabling the paused binding. If the wrong
+person wins, cancel the proposal or retain/unlink the paused result and start
+a fresh challenge; a consumed challenge is never reopened. Input allowlisting
+does not restrict who can read provider-visible replies in a shared endpoint.
+
+For paired router bootstrap, the initial `threadRouter` target contains exactly
+one owner-named `principalGroups` entry with `principalIds: []` and the configured
+routes. Pairing-create rejects supplied members. Finalize accepts no target or
+principal overrides: it fills the sole group from `proposal.principalId`, runs
+the existing target, recipe, route-policy and binding validation, and persists
+one paused router whose allowlist is derived only from its groups. An empty
+audience is never persisted. Existing edits may reorganize proved retained
+principals; adding identities still needs current authoritative proof.
+Provider-resolved router creation and Automation-target verification retain
+their existing owners. The protocol extension adds no store, migration,
+transport, feature flag, deadline or retry owner. Setup rendering and loaded
+provider validation are integrated separately; this is not published-package
+or stable-release availability evidence.
 
 ## V1 role contract
 

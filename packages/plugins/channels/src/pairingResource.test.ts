@@ -1,5 +1,5 @@
 import type { PluginAccountStorageScope } from '@happier-dev/plugin-sdk/storage';
-import type { ConversationBindingTargetV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationPairingCreateResultV1Schema, ConversationPairingResourceV1Schema, type ConversationBindingTargetV1 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { classifyConversationCommand } from './commands.js';
@@ -126,6 +126,39 @@ function createManager() {
 }
 
 describe('Channels pairing Resource', () => {
+  it('publishes shared proof location and the immutable winner through the strict private Resource contract', async () => {
+    const account = new MemoryAccountCollection();
+    addConnection(account, 'connection-a');
+    const pairing = createManager();
+    const proofEndpoint = { kind: 'thread', audience: 'shared', id: 'topic-a', parentId: 'forum-a', label: 'Proof topic' } as const;
+    const challenge = pairing.createChallenge({
+      connectionId: 'connection-a', expectedConnectionRevision: 1, pairingRequestId: 'shared-request',
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin), destinationLabel: 'Forum',
+      endpoint: { kind: 'shared', audience: 'shared', id: 'forum-a', label: 'Forum' },
+      proofEndpoint, target,
+    });
+    expect(ConversationPairingCreateResultV1Schema.parse(challenge)).toMatchObject({ proofEndpoint, deepLinkUrl: null });
+    const resource = createConversationPairingResourceRuntime(pairing);
+    const read = async () => ConversationPairingResourceV1Schema.parse(JSON.parse(resourceText(
+      await resource.read(resourceOptions(accountStorageFor(account))),
+    )));
+    expect((await read()).challenges).toEqual([expect.objectContaining({ proofEndpoint, deepLinkUrl: null })]);
+    const prepared = pairing.preparePreBindingMessage({
+      censusId: 'shared-resource-proof', connectionId: 'connection-a',
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
+      endpoint: { ...proofEndpoint, label: 'Observed proof topic' },
+      actor: { principalId: 'immutable-person', kind: 'human', isIntegrationSelf: false },
+      contentProvenance: 'original', command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
+    });
+    expect(prepared).toMatchObject({ kind: 'reserved' });
+    if (prepared.kind !== 'reserved') throw new Error('Expected shared proof reservation.');
+    expect(pairing.commitPreBindingMessage(prepared)).toMatchObject({ kind: 'matched' });
+    expect((await read()).proposals).toEqual([expect.objectContaining({
+      proofEndpoint: { ...proofEndpoint, label: 'Observed proof topic' },
+      principalId: 'immutable-person', endpointLabel: 'Observed proof topic',
+    })]);
+  });
+
   it('keeps each Account Resource snapshot within its canonical connection membership', async () => {
     const accountA = new MemoryAccountCollection();
     const accountB = new MemoryAccountCollection();

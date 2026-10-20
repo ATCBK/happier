@@ -119,16 +119,42 @@ rather than at the first silent failure:
   connection time. Replies post as issue comments, so the credential needs
   write access to that same collection.
 
-Linking a Discord or Telegram conversation runs a **pairing challenge** that
-you then finalize —
-or cancel. You choose the conversation to connect; whoever claims it proves who
-they are by sending the challenge token to the bot in a **private message**, and
-is answered there once the request has been recorded. That keeps the token out
-of a group everyone can read while still connecting the group you picked.
-Pairing exists so that linking a conversation is something somebody has to
-agree to, rather than something you can do to a channel from the outside. A
-paired conversation is saved **paused**: review who can talk to it and what it
-sends back, then turn it on.
+Linking a Discord or Telegram conversation uses a **pairing challenge** when
+the integration cannot resolve the sender's immutable identity directly. You
+choose the destination and target, then an original human message carrying the
+challenge token proves the sender's platform identity. Forwarded, via-bot, bot,
+integration-self and anonymous messages cannot provide that proof. You then
+finalize or cancel the proposal. A paired conversation is saved **paused**:
+review who can talk to it and what it sends back, then turn it on.
+
+### Shared proof (unreleased development contract)
+
+Shared-space proof and pairing-based router setup are development changes for
+0.3; their setup UI and loaded-provider validation are being integrated. They
+are not stable-release availability claims.
+
+Private proof remains the default: send the token to the bot in a private
+message while linking the destination you selected. For shared proof, explicitly
+select a provider-verified shared location before creating the challenge. Send
+the manual `/pair <code>` command at that exact location. The challenge cannot
+be redeemed privately, in a sibling topic, or through another connection. A
+private-chat link or QR code is not an alternative for a shared challenge.
+
+Shared proof normally uses the selected destination itself. A thread router can
+instead use one authenticated child thread of its parent destination: for a
+Telegram forum router, select the forum parent as the destination and one topic
+as the proof location. For a Discord router, the parent channel can serve as
+both destination and proof location.
+
+Everyone who can read that location can see the code, and another human there
+can copy it and win the race to use it. Only one proof becomes a proposal. The
+proposal identifies the **actual authenticated principal** and proof location;
+it does not prove that person is the Happier owner or a group administrator.
+Check that immutable identity before enabling the paused result. If the wrong
+person claimed it, cancel the proposal, or leave the finalized result paused
+and unlink it, then create a fresh challenge. A consumed code is not reopened.
+The sender allowlist controls input to Happier; it does not prevent other
+members of a shared conversation from reading replies posted there.
 
 ### Telegram polling conflicts
 
@@ -229,11 +255,21 @@ out.
 
 ### Routers and child threads
 
-A `threadRouter` binding links a parent destination, such as a mailbox, to
-ordered recipes. Principal groups supply both its sender allowlist and the
+A `threadRouter` binding links a parent destination, such as a mailbox,
+Telegram forum or Discord channel, to ordered recipes. Principal groups supply
+both its sender allowlist and the
 audiences used to start conversations. Routes match a group (or `any`) and
 forwarded provenance (`true`, `false` or `any`); the first match wins. Unmatched
 messages are dropped with a content-free `routeNotMatched` record.
+
+The unreleased pairing contract supports a router on a provider-supported
+parent with either a direct or shared audience. Without provider-resolved
+principals, configure one named initial group and its routes with no members,
+then complete pairing. Finalization fills that group with only the proved
+principal, validates the recipe and route policy, and saves one paused router.
+Typed member IDs are not proof of identity. Review the actual sender, group and
+recipe before enabling it. Later group edits can reorganize already proved
+principals; adding someone else requires current authoritative proof.
 
 The first admitted message in an unknown child thread creates one Session and
 an ordinary child binding, allowing only its verified originating sender.
