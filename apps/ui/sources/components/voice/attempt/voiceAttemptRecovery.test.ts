@@ -267,14 +267,14 @@ describe('the one Voice recovery dispatch every placement fires', () => {
 
   it('retries through the canonical voice session manager', async () => {
     await admitFailedConversation('s1');
-    (await dispatch('retry'))();
+    await (await dispatch('retry'))();
     await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'idle', canStop: true }));
     expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 's1' });
   });
 
   it('retries the conversation the surface named rather than falling back to a global start', async () => {
     await admitFailedConversation('named-session');
-    (await dispatch('retry', vi.fn(), {
+    await (await dispatch('retry', vi.fn(), {
       attemptSessionId: null,
       startSessionId: 'named-session',
       globalStartAuthorized: false,

@@ -558,7 +558,7 @@ export const HomeHub = React.memo(function HomeHub() {
     const headerActions = (
         <View style={styles.headerActions}>
             {!heroActive ? <LookChip target={HOME_LOOK_TARGET} /> : null}
-            {phone ? null : <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} />}
+            {phone ? null : <VoiceBriefButton open={briefOpen} />}
             <HubCustomizeButton open={customizeOpen} onOpenChange={next => next ? openCustomize() : closeCustomize()} />
         </View>
     );
@@ -568,7 +568,7 @@ export const HomeHub = React.memo(function HomeHub() {
             {phone && !briefOpen ? (
                 // Phone (lab B0p): the brief's entry spans the page under the greeting.
                 <ItemGroup surface="none">
-                    <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} block />
+                    <VoiceBriefButton open={briefOpen} block />
                 </ItemGroup>
             ) : null}
             {briefOpen ? <VoiceBriefBlock onClose={() => setBriefOpen(false)} /> : null}

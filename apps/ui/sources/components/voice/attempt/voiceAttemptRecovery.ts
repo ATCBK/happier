@@ -177,6 +177,10 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
         return false;
 }
 
-export function createVoiceAttemptRecoveryDispatch(params: Parameters<typeof executeVoiceAttemptRecovery>[0]): () => void {
-    return () => fireAndForget(executeVoiceAttemptRecovery(params), { tag: 'VoiceAttemptControl.recover' });
+export function createVoiceAttemptRecoveryDispatch(params: Parameters<typeof executeVoiceAttemptRecovery>[0]): () => Promise<boolean> {
+    return () => {
+        const pending = executeVoiceAttemptRecovery(params);
+        fireAndForget(pending, { tag: 'VoiceAttemptControl.recover' });
+        return pending;
+    };
 }

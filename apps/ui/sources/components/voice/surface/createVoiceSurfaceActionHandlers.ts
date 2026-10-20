@@ -1,6 +1,9 @@
-import { teleportVoiceAgentToSessionRoot } from '@/voice/agent/teleportVoiceAgentToSessionRoot';
-import { voiceSessionManager } from '@/voice/session/voiceSession';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { getVoiceSessionPresentedAttemptId } from '@/voice/session/voiceSessionStore';
+import { VoiceConversationActionOutputSchemas } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+
+const executeAction = createFrontDoorUiActionExecutor();
 
 
 /**
@@ -11,24 +14,26 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 export function createVoiceSurfaceActionHandlers(params: Readonly<{
     sessionId: string | null | undefined;
     snapSessionId: string | null;
+    expectedAttempt?: string | null;
 }>) {
+    const expectedAttempt = params.expectedAttempt ?? getVoiceSessionPresentedAttemptId();
+    const turnControl = async (control: 'interrupt' | 'cancel') => {
+        if (!params.snapSessionId?.trim() || !expectedAttempt) return false;
+        try {
+            const result = await executeAction('ui.voice_global.turn_control', { expectedAttempt, control });
+            return VoiceConversationActionOutputSchemas['ui.voice_global.turn_control'].parse(result).status === 'completed';
+        } catch (error) {
+            fireAndForget(Promise.reject(error), { tag: `VoiceSurface.${control}` });
+            return false;
+        }
+    };
     return {
-        onBargeIn: () => {
-            if (typeof params.snapSessionId !== 'string') return;
-            const sessionId = params.snapSessionId.trim();
-            if (!sessionId) return;
-            fireAndForget(voiceSessionManager.bargeIn(sessionId), { tag: 'VoiceSurface.bargeIn' });
-        },
-        onCancelTurn: () => {
-            if (typeof params.snapSessionId !== 'string') return;
-            const sessionId = params.snapSessionId.trim();
-            if (!sessionId) return;
-            fireAndForget(voiceSessionManager.interrupt(sessionId), { tag: 'VoiceSurface.cancelTurn' });
-        },
+        onBargeIn: () => turnControl('interrupt'),
+        onCancelTurn: () => turnControl('cancel'),
         onTeleport: () => {
             const sessionId = String(params.sessionId ?? '').trim();
             if (!sessionId) return;
-            fireAndForget(teleportVoiceAgentToSessionRoot({ sessionId }), { tag: 'VoiceSurface.teleport' });
+            fireAndForget(executeAction('ui.voice_agent.teleport', { sessionId }), { tag: 'VoiceSurface.teleport' });
         },
     };
 }
