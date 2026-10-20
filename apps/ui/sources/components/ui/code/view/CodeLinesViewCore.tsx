@@ -1,5 +1,6 @@
 import React from 'react';
 import { FlatList, Platform, View } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
@@ -51,6 +52,11 @@ export type CodeLinesViewProps = {
     onPressAddComment?: (line: CodeLine) => void;
     isCommentActive?: (line: CodeLine) => boolean;
     renderAfterLine?: (line: CodeLine) => React.ReactNode;
+    /**
+     * A lane before the line numbers, one cell per line (Blame's run column). The cell sits outside the
+     * line's own press target, so it can be its own control; it stretches to the line's wrapped height.
+     */
+    renderLeadingLane?: (line: CodeLine) => React.ReactNode;
     showInactiveCommentAffordance?: boolean;
     contentPaddingHorizontal?: number;
     contentPaddingVertical?: number;
@@ -67,6 +73,9 @@ export type CodeLinesViewProps = {
     externalScrollView?: CodeLinesExternalScrollView;
     highlightLineId?: string;
     highlightLineIds?: ReadonlySet<string>;
+    reviewedLineIds?: ReadonlySet<string>;
+    /** An agent's write landing while you read (P3-R8): these lines take the add tint, faded by `opacity`. */
+    liveTint?: Readonly<{ lineIds: ReadonlySet<string>; opacity: SharedValue<number> }>;
     findRangesByLineId?: ReadonlyMap<string, readonly FindTextRange[]>;
     intelligence?: Readonly<{
         onPointerToken: (lineId: string, offset16: number) => void;
@@ -315,12 +324,16 @@ export function CodeLinesViewCore(
                 else lineRefs.current.delete(item.id);
             }}
         >
-            <CodeLineRow
+            {/* A blanked header (a review separator with no hidden lines) keeps only its slot below. */}
+            {item.renderIsHeaderLine && item.renderCodeText === '' ? null : <CodeLineRow
                 line={item}
                 lineNumberDigits={lineNumberDigits}
                 reviewLaneWidth={reviewLaneWidth}
+                leadingLane={props.renderLeadingLane?.(item)}
                 selected={selected.has(item.id)}
                 highlighted={isHighlighted(item.id)}
+                reviewed={props.reviewedLineIds?.has(item.id) === true}
+                liveTintOpacity={props.liveTint?.lineIds.has(item.id) ? props.liveTint.opacity : undefined}
                 findRanges={props.findRangesByLineId?.get(item.id)}
                 onActivateToken={rangeGesturesEnabled ? undefined : onActivateToken}
                 onPressLine={handlePressLine}
@@ -336,7 +349,7 @@ export function CodeLinesViewCore(
                 showPrefix={showPrefix}
                 syntaxHighlighting={effectiveSyntaxHighlighting}
                 advancedTokens={effectiveSyntaxHighlighting.mode === 'advanced' ? (props.getAdvancedTokens?.(index) ?? undefined) : undefined}
-            />
+            />}
             {props.renderAfterLine ? props.renderAfterLine(item) : null}
         </View>
     ), [
@@ -353,11 +366,14 @@ export function CodeLinesViewCore(
         handlePressLine,
         handlePressOutLine,
         isHighlighted,
+        props.reviewedLineIds,
+        props.liveTint,
         props.getAdvancedTokens,
         props.isCommentActive,
         props.onPressAddComment,
         props.pressLineWhenNotSelectable,
         props.renderAfterLine,
+        props.renderLeadingLane,
         props.showInactiveCommentAffordance,
         rangeGesturesEnabled,
         selected,
@@ -528,6 +544,7 @@ export function CodeLinesViewCore(
         reviewLaneWidth,
         selectedLineIds: props.selectedLineIds,
         renderAfterLine: props.renderAfterLine,
+        renderLeadingLane: props.renderLeadingLane,
         onPressLine: handlePressLine,
         onPressInLine: rangeGesturesEnabled && Platform.OS === 'web' ? handlePressInLine : undefined,
         onHoverLine: rangeGesturesEnabled && Platform.OS === 'web' ? handleHoverLine : undefined,
@@ -545,6 +562,8 @@ export function CodeLinesViewCore(
         syntaxHighlighting: effectiveSyntaxHighlighting,
         highlightLineId: props.highlightLineId,
         highlightLineIds: props.highlightLineIds,
+        reviewedLineIds: props.reviewedLineIds,
+        liveTint: props.liveTint,
         findRangesByLineId: props.findRangesByLineId,
         advancedTokensRevision,
     } as const), [
@@ -560,6 +579,8 @@ export function CodeLinesViewCore(
         rangeGesturesEnabled,
         props.highlightLineId,
         props.highlightLineIds,
+        props.reviewedLineIds,
+        props.liveTint,
         props.findRangesByLineId,
         props.isCommentActive,
         props.onPressAddComment,
@@ -568,6 +589,7 @@ export function CodeLinesViewCore(
         props.showInactiveCommentAffordance,
         props.rangeSelectionActive,
         props.renderAfterLine,
+        props.renderLeadingLane,
         props.selectedLineIds,
         showLineNumbers,
         showPrefix,

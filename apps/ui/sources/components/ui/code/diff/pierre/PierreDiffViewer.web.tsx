@@ -460,6 +460,7 @@ export function resolvePierreSelectionStyle(theme: { colors?: Record<string, any
     const materialPaint = (color: string | undefined, nested = false) => color ? glassSurfaceBackgroundColor(color, 'content', nested) : undefined;
     const diffPalette: Record<string, string | undefined> = {
         '--happier-diff-material-background': materialPaint(diff?.context?.background ?? surface, true),
+        '--happier-diff-reviewed-edge': typeof (colors.border as Record<string, unknown> | undefined)?.strong === 'string' ? (colors.border as Record<string, string>).strong : undefined,
         '--diffs-bg-buffer-override': materialPaint(diff?.context?.background ?? surface, true),
         '--diffs-bg-hover-override': materialPaint(typeof surfaceColors.elevated === 'string' ? surfaceColors.elevated : surface),
         '--diffs-bg-context-override': materialPaint(diff?.context?.background, true),
@@ -843,13 +844,27 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return `${lineSelectors.join(',\n')} {\n  box-shadow: inset 0 0 0 1px var(--diffs-selection-base);\n}\n${numberSelectors.join(',\n')} {\n  box-shadow: inset 0 0 0 1px var(--diffs-selection-base);\n}\n`;
     }, [codeLines, props.highlightLineId, props.highlightLineIds]);
 
+    // Kept review changes let go of their tint and keep a reviewed hairline (lab ade-shell RV2 R1).
+    const reviewedLineUnsafeCSS = React.useMemo(() => {
+        if (!codeLines || !props.reviewedLineIds || props.reviewedLineIds.size === 0) return '';
+        const lineSelectors: string[] = [];
+        const numberSelectors: string[] = [];
+        for (const target of codeLines) {
+            if (!props.reviewedLineIds.has(target.id) || (target.kind !== 'add' && target.kind !== 'remove')) continue;
+            lineSelectors.push(pierreCodeLineSelector(target));
+            numberSelectors.push(pierreCodeLineSelector(target, 'data-column-number'));
+        }
+        if (lineSelectors.length === 0) return '';
+        return `${lineSelectors.join(',\n')} {\n  background-color: var(--diffs-bg);\n  transition: background-color 140ms ease-out;\n}\n${numberSelectors.join(',\n')} {\n  background-color: var(--diffs-bg);\n  box-shadow: inset -2px 0 0 var(--happier-diff-reviewed-edge);\n}\n@media (prefers-reduced-motion: reduce) { [data-line] { transition: none; } }\n`;
+    }, [codeLines, props.reviewedLineIds]);
+
     const reviewCommentHoverSlotUnsafeCSS = props.onPressAddComment
         ? PIERRE_REVIEW_COMMENT_HOVER_SLOT_UNSAFE_CSS
         : '';
 
     const composedUnsafeCSS = React.useMemo(() => {
-        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS].filter(Boolean).join('\n');
-    }, [highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS]);
+        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
+    }, [highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
 
     const options = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return {

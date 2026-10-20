@@ -15,7 +15,9 @@ export function useDiffHunkSlots(props: DiffViewerProps, renderRow?: DiffHunkRow
             const hunks = table.hunksByAfterLineId.get(line.id);
             if (!hunks) return null;
             const nodes = hunks.flatMap((hunk) => {
-                const row = renderRow?.(hunk, review);
+                // The review row draws review verbs; when a host offers its own choices instead (the editor's
+                // Compare: Use mine · Use theirs) and no review row applies, those choices are the hunk's row.
+                const row = renderRow?.(hunk, review) ?? review.renderActions?.(hunk);
                 const note = review.renderNote?.(hunk);
                 const visible = [row, note].some((node) => node !== null && node !== undefined && typeof node !== 'boolean');
                 return visible ? [<React.Fragment key={hunk.key}>{row}{note}</React.Fragment>] : [];
@@ -23,5 +25,13 @@ export function useDiffHunkSlots(props: DiffViewerProps, renderRow?: DiffHunkRow
             return nodes.length > 0 ? <>{nodes}</> : null;
         });
     }, [props.renderAfterLine, renderRow, review, table]);
-    return { table, renderAfterLine };
+    // Kept units let go of their tint; their rows keep the "Kept" label (lab ade-shell RV2 R1).
+    const stateOf = review?.stateOf;
+    const keptKeys = table.hunks.filter(hunk => stateOf?.(hunk) === 'kept').map(hunk => hunk.key).join('\n');
+    const reviewedLineIds = React.useMemo(() => {
+        if (!keptKeys) return undefined;
+        const kept = new Set(keptKeys.split('\n'));
+        return new Set(table.hunks.filter(hunk => kept.has(hunk.key)).flatMap(hunk => hunk.changeLineIds));
+    }, [keptKeys, table]);
+    return { table, renderAfterLine, reviewedLineIds };
 }

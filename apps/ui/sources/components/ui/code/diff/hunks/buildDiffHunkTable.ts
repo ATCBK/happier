@@ -42,10 +42,29 @@ export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
             if (line.kind !== 'add') oldLine += 1;
             if (line.kind !== 'remove') newLine += 1;
         }
+        // The label names the lines the change lands on: new-side lines, or the removed lines of a pure deletion.
+        let added: [number, number] | null = null;
+        let removed: [number, number] | null = null;
+        {
+            let o = hunk.oldStart; let n = hunk.newStart;
+            for (const line of hunk.lines) {
+                if (line.kind === 'add') added = added ? [added[0], n] : [n, n];
+                if (line.kind === 'remove') removed = removed ? [removed[0], o] : [o, o];
+                if (line.kind !== 'add') o += 1;
+                if (line.kind !== 'remove') n += 1;
+            }
+        }
+        const range = added ?? removed ?? [hunk.newStart, hunk.newStart];
         const firstChange = hunk.lines[hunk.firstChange]!;
         const lineIndex = lineIndices.get(`${unit.hunkIndex}:${firstChange.kind}:${firstChange.kind === 'add' ? newLine : oldLine}`);
         if (lineIndex === undefined) throw new Error('Review unit has no matching diff line');
         const firstLine = lines[lineIndex]!;
+        const changeLineIds: string[] = [];
+        for (let index = lineIndex; index < lines.length; index += 1) {
+            const line = lines[index]!;
+            if (line.hunkIndex !== unit.hunkIndex || (line.kind !== 'add' && line.kind !== 'remove')) break;
+            changeLineIds.push(line.id);
+        }
         const anchor = lines[lineIndex - 1];
         if (!anchor || anchor.hunkIndex !== unit.hunkIndex) throw new Error('Review unit has no preceding diff anchor');
         const info: DiffHunkInfo = {
@@ -57,7 +76,11 @@ export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
             newStart: hunk.newStart,
             newLines: hunk.newLines,
             sectionHeading: hunk.sectionHeading,
+            rangeStart: range[0],
+            rangeEnd: range[1],
+            rangeSide: added ? 'new' : 'old',
             firstChangeLineId: firstLine.id,
+            changeLineIds,
         };
         hunks.push(info);
         const anchored = hunksByAfterLineId.get(anchor.id);

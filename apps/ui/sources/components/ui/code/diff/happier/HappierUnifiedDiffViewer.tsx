@@ -22,6 +22,22 @@ import { Typography } from '@/constants/Typography';
 import { resolveThemeColor } from '@/theme/parseThemeColor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { composeDiffLineSlots } from '../hunks/composeDiffLineSlots';
+import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
+
+function applyReviewSeparators(lines: readonly CodeLine[], unifiedDiff: string): readonly CodeLine[] {
+    const hunks = parseUnifiedDiffHunks(unifiedDiff);
+    return lines.map((line) => {
+        if (line.kind !== 'header' || line.hunkIndex === null) return line;
+        const hunk = hunks[line.hunkIndex];
+        if (!hunk) return line;
+        const previous = hunks[line.hunkIndex - 1];
+        const hidden = Math.max(0, hunk.newStart - (previous ? previous.newStart + previous.newLines : 1));
+        const text = hidden > 0
+            ? [t('hunkReview.unchangedLines', { count: hidden }), hunk.sectionHeading].filter(Boolean).join('  ')
+            : '';
+        return text === line.renderCodeText ? line : { ...line, renderCodeText: text };
+    });
+}
 
 export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((props) => {
     const wrapLines = props.wrapLines ?? true;
@@ -35,14 +51,18 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
     const [refoldedFindLine, setRefoldedFindLine] = React.useState<string | null>(null);
     React.useEffect(() => { setRefoldedFindLine(null); }, [props.scrollToLineId, props.findActive, props.findRangesByLineId]);
 
+    // With change rows drawn, a hunk's raw `@@` band becomes the quiet separator the rows sit under:
+    // "N unchanged lines · section heading" (lab ade-shell RV2), blank when no lines are hidden.
+    const reviewSeparators = props.hunks !== undefined
+        && Boolean(props.hunks.actions?.keep || props.hunks.actions?.discard || props.hunks.stateOf);
     const lines = React.useMemo(() => {
-        if (props.precomputedLines) return props.precomputedLines;
-        return buildCodeLinesFromUnifiedDiff({
+        const built = props.precomputedLines ?? buildCodeLinesFromUnifiedDiff({
             unifiedDiff: props.unifiedDiff,
             hideFilePrelude: true,
             intraLineDiff,
         });
-    }, [intraLineDiff, props.precomputedLines, props.unifiedDiff]);
+        return reviewSeparators ? applyReviewSeparators(built, props.unifiedDiff) : built;
+    }, [intraLineDiff, props.precomputedLines, props.unifiedDiff, reviewSeparators]);
 
     const [expansion, setExpansion] = React.useState(() => ({
         filePath: props.filePath,
@@ -153,6 +173,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 onPressAddComment={props.onPressAddComment}
                 isCommentActive={props.isCommentActive}
                 renderAfterLine={composedAfterLine}
+                renderLeadingLane={props.renderLeadingLane}
                 showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}
@@ -165,6 +186,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 externalScrollView={props.externalScrollView}
                 highlightLineId={props.highlightLineId}
                 highlightLineIds={props.highlightLineIds}
+                reviewedLineIds={props.reviewedLineIds}
                 findRangesByLineId={props.findRangesByLineId}
                 syntaxHighlighting={syntaxHighlighting}
                 testID={props.testID}

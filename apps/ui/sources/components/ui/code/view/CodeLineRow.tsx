@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, View, Platform, StyleSheet } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import type { GestureResponderEvent, TextLayoutEventData, TextStyle, ViewStyle } from 'react-native';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
@@ -56,8 +57,14 @@ export function CodeLineRow(props: {
     line: CodeLine;
     lineNumberDigits?: number;
     reviewLaneWidth?: number;
+    /** The view's leading lane cell for this line (Blame), outside the line's press target. */
+    leadingLane?: React.ReactNode;
     selected: boolean;
     highlighted?: boolean;
+    /** A kept review change: its add/remove tint lets go and a reviewed hairline stays at its edge. */
+    reviewed?: boolean;
+    /** A line an agent just wrote while you read: the add tint over the row, faded by the view's one clock. */
+    liveTintOpacity?: SharedValue<number>;
     onPressLine?: (line: CodeLine, event?: CodeLinePressEvent) => void;
     onPressInLine?: (line: CodeLine, event?: PreventableInteractionEvent) => void;
     onHoverLine?: (line: CodeLine, event?: PreventableInteractionEvent) => void;
@@ -102,6 +109,7 @@ export function CodeLineRow(props: {
     const [isHovered, setIsHovered] = React.useState(false);
     const commentActive = props.commentActive === true;
     const highlighted = props.highlighted === true;
+    const reviewed = props.reviewed === true && (props.line.kind === 'add' || props.line.kind === 'remove');
     const showInactiveCommentAffordance = props.showInactiveCommentAffordance !== false;
     const canShowCommentAffordance = Boolean(onPressAddComment)
         && !line.renderIsHeaderLine
@@ -234,19 +242,22 @@ export function CodeLineRow(props: {
         <View
             style={[
                 styles.row,
+                reviewed && !highlighted ? [styles.rowReviewed, { borderLeftColor: theme.colors.border.strong }] : null,
                 highlighted ? [
                     styles.rowHighlighted,
                     { borderLeftColor: theme.colors.text.link ?? theme.colors.text.secondary },
                 ] : null,
                 { backgroundColor: selected && materialRole !== undefined
                     ? paintColor(backgroundColor, theme.colors.surface.selected)
-                    : glassSurfaceBackgroundColor(backgroundColor, 'content') },
+                    : glassSurfaceBackgroundColor(reviewed && !selected ? 'transparent' : backgroundColor, 'content') },
                 selected ? [
                     styles.rowSelected,
                     { borderLeftColor: theme.colors.state.success.foreground },
                 ] : null,
             ]}
         >
+            {props.liveTintOpacity ? <CodeLineLiveTint opacity={props.liveTintOpacity} color={theme.colors.diff.added.background} /> : null}
+            {props.leadingLane != null ? <View style={styles.leadingLane}>{props.leadingLane}</View> : null}
             <Pressable
                 style={[
                     styles.rowPressable,
@@ -364,6 +375,12 @@ export function CodeLineRow(props: {
     );
 }
 
+/** The live-edit tint (P3-R8): one compositor-only layer behind the line's text, driven by a shared clock. */
+function CodeLineLiveTint(props: Readonly<{ opacity: SharedValue<number>; color: string }>) {
+    const style = useAnimatedStyle(() => ({ opacity: props.opacity.value }));
+    return <Reanimated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: props.color }, style]} />;
+}
+
 const stylesheet = StyleSheet.create({
     row: {
         flexDirection: 'row',
@@ -378,6 +395,14 @@ const stylesheet = StyleSheet.create({
     rowSelected: {
         borderLeftWidth: 3,
         paddingLeft: 5,
+    },
+    rowReviewed: {
+        borderLeftWidth: 2,
+        paddingLeft: 6,
+    },
+    leadingLane: {
+        alignSelf: 'stretch',
+        flexShrink: 0,
     },
     rowPressable: {
         flexDirection: 'row',

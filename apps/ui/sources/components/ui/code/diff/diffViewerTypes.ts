@@ -15,7 +15,13 @@ export type DiffHunkInfo = Readonly<{
     newStart: number;
     newLines: number;
     sectionHeading: string;
+    /** The changed lines the unit lands on (new side; old side for a pure deletion), for its label. */
+    rangeStart: number;
+    rangeEnd: number;
+    rangeSide: 'new' | 'old';
     firstChangeLineId: string;
+    /** CodeLine ids of the unit's changed lines (its run), for the kept tint release. */
+    changeLineIds: readonly string[];
 }>;
 
 export type DiffHunkReviewState = 'open' | 'kept' | 'discarding';
@@ -28,13 +34,22 @@ export type DiffViewerHunks = Readonly<{
     actions?: Readonly<Partial<Record<DiffHunkAction, (hunk: DiffHunkInfo) => void>>>;
     disabledReason?: (hunk: DiffHunkInfo, action: DiffHunkAction) => string | null;
     numberOffset?: number;
+    /** Changes in the whole comparison, for each row's accessible name ("change 2 of 7"). */
+    numberTotal?: number;
     renderNote?: (hunk: DiffHunkInfo) => ReactNode;
+    /**
+     * Host-chosen choices for a hunk that are not review verbs (the editor's Compare: Use mine · Use theirs).
+     * Drawn in the hunk row's action position; never relabels Keep / Discard.
+     */
+    renderActions?: (hunk: DiffHunkInfo) => ReactNode;
 }>;
 
 export type DiffViewerBaseProps = Readonly<{
     hunks?: DiffViewerHunks;
     /** Captured evidence supplies its canonical per-layer keys to the shared table. */
     reviewUnits?: readonly ReviewUnit[];
+    /** Host-private: changed lines of kept units let go of their tint (composed by the wrapper from `hunks`). */
+    reviewedLineIds?: ReadonlySet<string>;
     /** Surface-owned evidence state, used instead of raw patch bytes when rendering fails. */
     errorFallback?: ReactNode;
     filePath?: string | null;
@@ -73,6 +88,8 @@ export type DiffViewerBaseProps = Readonly<{
     onPressAddComment?: CodeLinesViewProps['onPressAddComment'];
     isCommentActive?: CodeLinesViewProps['isCommentActive'];
     renderAfterLine?: CodeLinesViewProps['renderAfterLine'];
+    /** The code view's leading lane (Blame on the new side); removed lines get an empty cell. */
+    renderLeadingLane?: CodeLinesViewProps['renderLeadingLane'];
     showInactiveCommentAffordance?: CodeLinesViewProps['showInactiveCommentAffordance'];
 }>;
 

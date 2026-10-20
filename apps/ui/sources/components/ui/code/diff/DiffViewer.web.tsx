@@ -13,6 +13,7 @@ import { useInitialPresentationReadiness } from '@/components/ui/presentation/In
 import { useEffectiveDiffWrapLines } from './diffPresentationStyle';
 import { ProseDiffViewer } from './prose/ProseDiffViewer';
 import { useDiffHunkSlots } from './hunks/useDiffHunkSlots';
+import { renderDiffHunkRow } from './hunks/DiffHunkRow';
 
 const PierreDiffViewer = retryableLazy(async () => {
     const renderer = await import('./pierre/PierreDiffViewer.web');
@@ -23,7 +24,7 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     const rendererMode = useSetting('filesDiffRendererMode');
     const initialPresentationReadiness = useInitialPresentationReadiness();
     const wrapLines = useEffectiveDiffWrapLines(props.wrapLines);
-    const { renderAfterLine } = useDiffHunkSlots(props);
+    const { renderAfterLine, reviewedLineIds } = useDiffHunkSlots(props, renderDiffHunkRow);
 
     // Prose is its own face on every renderer: a reading layout, not a code diff.
     if (props.mode === 'text' && props.face === 'prose') return <ProseDiffViewer {...props} />;
@@ -40,11 +41,11 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         const loading = props.virtualized === true
             ? <PaneLoadingFallback testID="pierre-diff-loading" />
             : props.mode === 'unified'
-                ? <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />
-                : <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
+                ? <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />
+                : <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
         const viewer = (
             <React.Suspense fallback={loading}>
-                <PierreDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />
+                <PierreDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />
             </React.Suspense>
         );
         return props.virtualized === true ? (
@@ -57,7 +58,7 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     }
 
     if (props.mode === 'unified') {
-        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
+        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
     }
-    return <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} wrapLines={wrapLines} />;
+    return <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
 });
