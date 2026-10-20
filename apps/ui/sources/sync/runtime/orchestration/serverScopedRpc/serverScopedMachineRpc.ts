@@ -118,6 +118,7 @@ async function withMachineRpcAbort<T>(
     signal: AbortSignal | undefined,
     run: () => Promise<T>,
     socketRpcAbortScope?: Readonly<{ issued: boolean }>,
+    waitForResultOnCancel = false,
 ): Promise<T> {
     if (!signal) {
         return await run();
@@ -143,7 +144,8 @@ async function withMachineRpcAbort<T>(
             },
             (error) => {
                 signal.removeEventListener('abort', onAbort);
-                reject(signal.aborted ? createMachineRpcAbortError(method, error) : error);
+                reject(signal.aborted && !(waitForResultOnCancel && socketRpcAbortScope?.issued)
+                    ? createMachineRpcAbortError(method, error) : error);
             },
         );
     });
@@ -309,6 +311,7 @@ async function machineRpcWithServerTransport<R, A>(
                             ...(params.requestId ? { requestId: params.requestId } : {}),
                             ...(params.authorization ? { authorization: params.authorization } : {}),
                             onIssued: activeOnIssued,
+                            ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
                             ...(params.signal ? { signal: params.signal } : {}),
                         },
                     ),
@@ -317,6 +320,7 @@ async function machineRpcWithServerTransport<R, A>(
             } catch (error) {
                 const noEffect = readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE;
                 if (noEffect) onNoEffect();
+                if (params.waitForResultOnCancel && params.signal?.aborted && socketRpcAbortScope.issued) throw error;
                 if (exactIssuanceAttempted || (params.method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE && socketRpcAbortScope.issued)) {
                     throw error;
                 }
@@ -502,6 +506,7 @@ async function machineRpcWithServerTransport<R, A>(
                                 params.onDispatched?.();
                             },
                             signal: params.signal,
+                            ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
                         });
                     } catch (error) {
                         if (isSocketIoAckTimeoutError(error) && timeoutMs !== null) {
@@ -535,7 +540,7 @@ async function machineRpcWithServerTransport<R, A>(
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            return await withMachineRpcAbort(params.method, params.signal, () => runOnce(), socketRpcAbortScope);
+            return await withMachineRpcAbort(params.method, params.signal, () => runOnce(), socketRpcAbortScope, params.waitForResultOnCancel);
         } catch (error) {
             lastError = error;
             const rpcErrorCode = readRpcErrorCode(error);
@@ -544,6 +549,7 @@ async function machineRpcWithServerTransport<R, A>(
                 throw createPrivateContinuationTransportError(error, true);
             }
             if (params.signal?.aborted) {
+                if (params.waitForResultOnCancel && socketRpcAbortScope.issued) throw error;
                 throw createMachineRpcAbortError(params.method, error);
             }
             if (exactIssuanceAttempted) {
@@ -593,7 +599,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
     const socketRpcAbortScope = { issued: false };
 
     try {
-        const result = effectiveParams.onIssued || effectiveParams.requireEncryptedPayload
+        const result = effectiveParams.onIssued || effectiveParams.requireEncryptedPayload || effectiveParams.waitForResultOnCancel
             ? await machineRpcWithServerTransport<R, A>(effectiveParams, socketRpcAbortScope, timeoutBudget, onNoEffect, observeScope)
             : await withMachineRpcAbort(
                 effectiveParams.method,
@@ -655,6 +661,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
                     }, socketRpcAbortScope, timeoutBudget, onNoEffect, observeScope),
                 }),
                 socketRpcAbortScope,
+                effectiveParams.waitForResultOnCancel,
             );
         if (requestEvidence.scope) {
             recordMachineRequestSucceeded({
@@ -690,6 +697,7 @@ export function createOrderedMachineRpcCaller(
         const dispatched = new Promise<void>((resolve) => { releaseDispatch = resolve; });
         // A cancelled waiter must not let its successor overtake the previous dispatch.
         dispatchTail = previous.then(() => dispatched);
+        const abortScope = { issued: false };
         try {
             return await withMachineRpcAbort(params.method, params.signal, async () => {
                 await previous;
@@ -697,11 +705,12 @@ export function createOrderedMachineRpcCaller(
                 return await call<R, A>({
                     ...params,
                     onDispatched: () => {
+                        abortScope.issued = true;
                         releaseDispatch();
                         params.onDispatched?.();
                     },
                 });
-            });
+            }, params.waitForResultOnCancel ? abortScope : undefined, params.waitForResultOnCancel);
         } finally {
             // Setup failure or cancellation must release the admission fence as well.
             releaseDispatch();

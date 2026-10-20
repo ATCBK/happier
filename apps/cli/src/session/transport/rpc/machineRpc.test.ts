@@ -1585,6 +1585,37 @@ describe('callMachineRpc', () => {
     });
   });
 
+  it('returns the replace Action receipt after cooperative cancellation without closing its socket early', async () => {
+    const controller = new AbortController();
+    axiosGet.mockResolvedValue({ data: { machine: { storageMode: 'plain', id: 'replace-machine',
+      dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    } } });
+    const result = { ok: true, results: [{ path: 'a.txt', status: 'replaced', hash: 'b'.repeat(64), matchCount: 1,
+      edits: [{ startUtf16: 0, deleteLength: 3, insertText: 'new', originalText: 'old' }] }], cancelled: ['b.txt'] };
+    let acknowledge!: (value: unknown) => void;
+    let issuedRequestId: string | undefined;
+    socket.emit.mockImplementation((event, payload, callback) => {
+      if (event === SOCKET_RPC_EVENTS.CALL) {
+        expect(payload.waitForResultOnCancel).toBe(true);
+        issuedRequestId = payload.requestId;
+        acknowledge = callback;
+        controller.abort();
+      } else if (event === SOCKET_RPC_EVENTS.CANCEL) {
+        expect(payload.requestId).toBe(issuedRequestId);
+        expect(socket.close).not.toHaveBeenCalled();
+        acknowledge({ ok: true, result });
+      }
+    });
+    const credentials = { token: 'replace-token', encryption: null };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'cli-global', serverId: 'home', serverHttpBaseUrl: 'https://api.example.test', mode: 'plain', ctx: null }));
+    await expect(executor.execute('workspace.files.replace', { machineId: 'replace-machine', rootPath: '/workspace',
+      query: 'old', replacement: 'new', matchCase: true, regex: false,
+      files: ['a.txt', 'b.txt'].map(path => ({ path, expectedHash: 'a'.repeat(64) })),
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home', signal: controller.signal })).resolves.toEqual({ ok: true, result });
+    expect(socket.close).toHaveBeenCalled();
+  });
+
   it('preserves a confirmed retirement acknowledgement when cancellation arrives during response consumption', async () => {
     const controller = new AbortController();
     const request = ProjectWorkerActionInputSchemasV1['projects.worker.copy.retire'].parse(
