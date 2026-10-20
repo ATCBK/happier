@@ -32,7 +32,7 @@ it('saves a multi-project selection without losing historical native creation de
         mounted = await createPluginUiTestkit({
             identity: { instanceId: 'jira-settings', mountNonce: 'jira-settings-mount' },
             authorPlugin: { id: JIRA_PLUGIN_ID, version: '0.0.0' }, surface: renderSurface,
-            surfaceContext: createSurfaceContextFixture(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            surfaceContext: createSurfaceContextFixture(), adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
             handlers: { executeAction: async ({ action, input }): Promise<JsonValue> => {
                 if (action.localId === JIRA_ACTIONS.listInstances) return { kind: 'complete', candidates: [draft], failures: [] };
                 if (action.localId === JIRA_ACTIONS.listScopeUnits) {
@@ -58,12 +58,16 @@ it('saves a multi-project selection without losing historical native creation de
     });
     const page = mounted!;
     const press = async (name: string, role: 'button' | 'radio' | 'checkbox' = 'button') => {
-        await act(async () => { await page.press(await page.getByRole(role, { name })); });
+        await act(async () => {
+            const target = await page.queryByRole(role, { name });
+            expect(target, `${role}: ${name}`).toBeDefined();
+            await page.press(target!);
+        });
     };
-    await press('Update Work Jira');
+    await press('Update Work Jira from the provider');
     await expect(page.getByText('Issue type for new issues')).resolves.toBeDefined();
     await press('Selected…', 'radio');
-    await press('Mobile', 'checkbox');
+    await press('Mobile: MOB', 'checkbox');
     await press('Save selection');
     expect(administrations).toBe(1);
     expect(saved.binding).toEqual(draft.binding);
