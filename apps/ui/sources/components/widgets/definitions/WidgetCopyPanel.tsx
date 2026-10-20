@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { View } from 'react-native';
 import type { JsonValue } from '@happier-dev/protocol';
-import { isWidgetTargetHostableV1, projectWidgetBindingInputV1, readWidgetDefinitionNetworkOverrideV1,
+import { composeWidgetGroupContextV1, isWidgetTargetHostableV1, projectWidgetBindingInputV1, readWidgetDefinitionNetworkOverrideV1,
     type WidgetDefinitionV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 
 import { useWorkBoardReadState, useWorkBoardSummaries } from '@/components/boards/model/useWorkBoards';
@@ -129,9 +129,9 @@ export function buildWidgetCopySetup(input: Readonly<{
 }>): WidgetSetup {
     const { candidate, destination, promoted, current, instance } = input;
     const attempt = input.attempt ?? {};
-    const owner = destination.surface.owner;
-    const context: WidgetSurfaceContext = owner.kind === 'project' ? { slots: {
-        projects: { label: t('widgetAdd.thisProject'), value: { value: [owner.projectId], label: destination.label } },
+    const projects = composeWidgetGroupContextV1({ surfaceOwner: destination.surface.owner, providedContext: {} }).projects?.[0];
+    const context: WidgetSurfaceContext = projects !== undefined ? { slots: {
+        projects: { label: t('widgetAdd.thisProject'), value: { value: projects, label: destination.label } },
     } } : {};
     const copiedInput = projectWidgetBindingInputV1({ instance: instance, fields: candidate.inputs?.fields ?? [],
         context: input.providedContext, viewerValues: {} });

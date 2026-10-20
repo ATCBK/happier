@@ -27,14 +27,18 @@ export type ProjectWidgetAreaValue = Readonly<{ value: JsonValue; label: string;
 /**
  * What a Project's widgets follow (lab `dashboards` P1, Q4): repository-wide inputs follow
  * "This project" (its portable source); checkout-local inputs follow "This checkout", the page's
- * checkout chip. A slot the page cannot fill yet is never followed, so its input is asked for.
+ * checkout chip. Usage's plural projects slot follows the admitted Project identity independently
+ * of either Source or checkout availability. A slot the page cannot fill yet asks for its input.
  */
 export function projectWidgetAreaContext(input: Readonly<{
     project: ProjectWidgetAreaValue | null;
+    projects?: ProjectWidgetAreaValue | null;
     checkout: ProjectWidgetAreaValue | null;
 }>): WidgetSurfaceContext {
     const slot = (label: string, value: ProjectWidgetAreaValue | null): WidgetSurfaceContextSlot => ({ label, value });
-    return { slots: { project: slot(t('widgetAdd.thisProject'), input.project), checkout: slot(t('widgetAdd.thisCheckout'), input.checkout) } };
+    return { slots: { project: slot(t('widgetAdd.thisProject'), input.project),
+        projects: slot(t('widgetAdd.thisProject'), input.projects ?? null),
+        checkout: slot(t('widgetAdd.thisCheckout'), input.checkout) } };
 }
 
 export type ProjectWidgetAreaBindingInput = Readonly<{
@@ -91,9 +95,11 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
     const layoutId = locallySelected ? selection.layoutId : props.layoutId;
     const context = React.useMemo(() => {
         const project = read.providedContext.project?.[0];
+        const projects = read.providedContext.projects?.[0];
         const checkout = read.providedContext.checkout?.[0];
         return projectWidgetAreaContext({
             project: project === undefined ? null : { value: project, label: props.projectName },
+            projects: projects === undefined ? null : { value: projects, label: props.projectName },
             checkout: checkout === undefined ? null : { value: checkout, label: props.activeCheckoutLabel ?? props.projectName },
         });
     }, [props.activeCheckoutLabel, props.projectName, read]);
