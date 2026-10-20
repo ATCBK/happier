@@ -12,6 +12,7 @@ import { JIRA_ACCOUNT_PURPOSE } from '../contracts.js';
 import { createJiraClient, invalidJira, jiraCloudOrigin, jiraFailure, numericId, object, string, type JiraClient } from '../api.js';
 import { readJiraConfiguration, readJiraIssue, projectJiraIssue, jiraTaskFields, type JiraConfiguration, type JiraIssue } from './model.js';
 import { readJiraTaskCapabilities } from './metadata.js';
+import { encodeJiraConfiguration, jiraProjectIncluded } from './configurationContract.js';
 
 function sameAccount(a: ConnectedAccountRef, b: ConnectedAccountRef): boolean {
     return a.accountId === b.accountId && a.service.pluginId === b.service.pluginId && a.service.localId === b.service.localId;
@@ -35,27 +36,15 @@ export async function listJiraInstances(input: unknown, context: PluginInvocatio
             try {
                 const origin = entry.connectedAccountOrigins.length === 1 ? jiraCloudOrigin(entry.connectedAccountOrigins[0]) : null;
                 if (origin === null) throw invalidJira('jira/siteUndeclared');
-                const client = createJiraClient(context, entry.account, origin);
-                let startAt = 0;
-                for (;;) {
-                    const page = object(await client.request(`/rest/api/3/project/search?startAt=${startAt}`));
-                    if (!Array.isArray(page.values) || typeof page.isLast !== 'boolean') throw invalidJira();
-                    for (const raw of page.values) {
-                        const project = object(raw);
-                        if (!numericId(project.id)) { incomplete = true; continue; }
-                        const draft = TriageSourceInstanceDraftV1Schema.safeParse({
-                            v: 1, binding, localInstanceKey: `${origin}#${project.id}`, keyStability: 'locatorDerived',
-                            configuration: { v: 1, token: JSON.stringify({ v: 1, projectId: project.id, involvement: 'mine' }) },
-                            locator: { v: 1, displayLabel: String(project.name ?? project.key ?? project.id), displayPath: new URL(origin).hostname,
-                                webUrl: `${origin}/plugins/servlet/project-config/${encodeURIComponent(String(project.key ?? project.id))}` },
-                        });
-                        if (draft.success) candidates.push(draft.data); else incomplete = true;
-                    }
-                    if (page.isLast) break;
-                    const next = Number(page.startAt) + Number(page.maxResults);
-                    if (!Number.isSafeInteger(next) || next <= startAt) throw invalidJira('jira/projectPageInvalid');
-                    startAt = next;
-                }
+                const configuration = encodeJiraConfiguration({ v: 2, scope: { kind: 'all' }, involvement: 'mine' });
+                if (configuration === null) throw invalidJira('jira/configurationInvalid');
+                const draft = TriageSourceInstanceDraftV1Schema.safeParse({
+                    v: 1, binding, localInstanceKey: origin, keyStability: 'locatorDerived',
+                    configuration,
+                    locator: { v: 1, displayLabel: entry.displayName ?? new URL(origin).hostname,
+                        displayPath: new URL(origin).hostname, webUrl: origin },
+                });
+                if (draft.success) candidates.push(draft.data); else incomplete = true;
             } catch (error) { failures.push({ binding, failure: jiraFailure(error) }); }
         }
         return TriageListInstancesResultV1Schema.parse({ kind: incomplete ? 'incomplete' : 'complete', candidates, failures });
@@ -67,8 +56,9 @@ export async function openJiraInstance(instance: Pick<TriageConfiguredSourceInst
     if (!isTriageSourceConnectedAccountInstanceV1(instance) || instance.binding.purpose !== JIRA_ACCOUNT_PURPOSE) throw invalidJira('jira/bindingInvalid');
     const configuration = readJiraConfiguration(instance.configuration.token);
     const separator = instance.localInstanceKey.lastIndexOf('#');
-    const origin = jiraCloudOrigin(instance.localInstanceKey.slice(0, separator));
-    if (origin === null || instance.localInstanceKey.slice(separator + 1) !== configuration.projectId) throw invalidJira('jira/instanceMismatch');
+    const origin = jiraCloudOrigin(separator < 0 ? instance.localInstanceKey : instance.localInstanceKey.slice(0, separator));
+    // Retained project instances keep their original key when explicitly reconfigured.
+    if (origin === null || (separator >= 0 && !numericId(instance.localInstanceKey.slice(separator + 1)))) throw invalidJira('jira/instanceMismatch');
     if (ref !== undefined && (ref.kindId !== 'issue' || ref.collisionScope !== `jira:${origin}` || !numericId(ref.entryId))) throw invalidJira('jira/entryMismatch');
     const listing = await listedAccounts(context);
     const accountRef = instance.binding.account;
@@ -82,12 +72,13 @@ export async function jiraViewer(client: JiraClient): Promise<string> {
     if (id === undefined) throw invalidJira('jira/viewerUnavailable');
     return id;
 }
-const SCAN_FIELDS = ['summary', 'project', 'status', 'issuetype', 'priority', 'creator', 'assignee', 'watches', 'created', 'updated', 'parent', 'subtasks', 'issuelinks'];
+const SCAN_FIELDS = ['summary', 'project', 'status', 'issuetype', 'priority', 'creator', 'assignee', 'watches', 'created', 'updated', 'duedate', 'resolutiondate', 'parent', 'subtasks', 'issuelinks'];
 
 function jql(configuration: JiraConfiguration): string {
     const clauses = { assignee: 'assignee = currentUser()', author: 'creator = currentUser()', subscribed: 'watcher = currentUser()',
         mine: '(assignee = currentUser() OR creator = currentUser() OR watcher = currentUser())', all: '' };
-    return `project = ${configuration.projectId}${clauses[configuration.involvement] ? ` AND ${clauses[configuration.involvement]}` : ''} ORDER BY updated DESC, id DESC`;
+    const project = configuration.scope.kind === 'selected' ? `project IN (${configuration.scope.unitIds.join(',')})` : '';
+    return `${[project, clauses[configuration.involvement]].filter(Boolean).join(' AND ')}${project || clauses[configuration.involvement] ? ' ' : ''}ORDER BY updated DESC, id DESC`;
 }
 
 export async function scanJiraSource(raw: unknown, context: PluginInvocationContext): Promise<TriageScanResultV1> {
@@ -111,7 +102,7 @@ export async function scanJiraSource(raw: unknown, context: PluginInvocationCont
         let omitted = 0;
         for (const rawIssue of page.issues) {
             const issue = readJiraIssue(rawIssue);
-            if (issue === null || object(issue.fields.project).id !== configuration.projectId) { omitted++; continue; }
+            if (issue === null || !jiraProjectIncluded(configuration, String(object(issue.fields.project).id))) { omitted++; continue; }
             try { observations.push(projectJiraIssue(issue, client.origin, viewer)); } catch { omitted++; }
         }
         const evidence = omitted > 0 ? { kind: 'partial' as const, reason: 'jira/providerRowsInvalid', omittedItemCount: omitted } : { kind: 'walkFinished' as const };
@@ -126,7 +117,7 @@ export async function scanJiraSource(raw: unknown, context: PluginInvocationCont
 
 export async function readExactJiraIssue(client: JiraClient, configuration: JiraConfiguration, id: string): Promise<JiraIssue> {
     const issue = readJiraIssue(await client.request(`/rest/api/3/issue/${encodeURIComponent(id)}?fields=*all&expand=names,schema`));
-    if (issue === null || issue.id !== id || object(issue.fields.project).id !== configuration.projectId) throw invalidJira('jira/entryMoved');
+    if (issue === null || issue.id !== id || !jiraProjectIncluded(configuration, String(object(issue.fields.project).id))) throw invalidJira('jira/entryMoved');
     return issue;
 }
 

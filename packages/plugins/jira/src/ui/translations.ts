@@ -1,4 +1,4 @@
-const keys = ["detail.loading","detail.noDescription","detail.retry","detail.unavailable","settings.all","settings.assignee","settings.author","settings.cancel","settings.invalid","settings.issues","settings.mine","settings.retry","settings.save","settings.subscribed","settings.type","settings.typeDescription","settings.typeNone","settings.typesLoading","settings.typesUnavailable"] as const;
+const keys = ["detail.loading","detail.noDescription","detail.retry","detail.unavailable","settings.all","settings.assignee","settings.author","settings.cancel","settings.invalid","settings.issues","settings.mine","settings.retry","settings.save","settings.subscribed","settings.type","settings.typeDescription","settings.typeNone","settings.typesLoading","settings.typesUnavailable","settings.createProject","settings.createProjectDescription","settings.projectsLoading","settings.projectsUnavailable"] as const;
 type TranslatedKeys<T extends readonly string[]> = { readonly [Index in keyof T]: string };
 const messages = {
   "en": [
@@ -6,7 +6,7 @@ const messages = {
     "No description", // detail.noDescription
     "Retry", // detail.retry
     "Jira issue unavailable", // detail.unavailable
-    "All project issues", // settings.all
+    "All issues", // settings.all
     "Assigned to me", // settings.assignee
     "Created by me", // settings.author
     "Cancel", // settings.cancel
@@ -21,13 +21,17 @@ const messages = {
     "Not selected", // settings.typeNone
     "Reading Jira issue types", // settings.typesLoading
     "Jira issue types unavailable", // settings.typesUnavailable
+    "Create issues in",
+    "Choose the default project for new issues.",
+    "Reading Jira projects",
+    "Jira projects unavailable",
   ],
   "de": [
     "Jira-Vorgang wird gelesen", // detail.loading
     "Keine Beschreibung", // detail.noDescription
     "Erneut versuchen", // detail.retry
     "Jira-Vorgang nicht verfügbar", // detail.unavailable
-    "Alle Vorgänge des Projekts", // settings.all
+    "Alle Vorgänge", // settings.all
     "Mir zugewiesen", // settings.assignee
     "Von mir erstellt", // settings.author
     "Abbrechen", // settings.cancel
@@ -42,13 +46,17 @@ const messages = {
     "Nicht ausgewählt", // settings.typeNone
     "Jira-Vorgangstypen werden gelesen", // settings.typesLoading
     "Jira-Vorgangstypen nicht verfügbar", // settings.typesUnavailable
+    "Vorgänge erstellen in",
+    "Wähle das Standardprojekt für neue Vorgänge.",
+    "Jira-Projekte werden gelesen",
+    "Jira-Projekte nicht verfügbar",
   ],
   "ru": [
     "Читаем задачу Jira", // detail.loading
     "Нет описания", // detail.noDescription
     "Повторить", // detail.retry
     "Задача Jira недоступна", // detail.unavailable
-    "Все задачи проекта", // settings.all
+    "Все задачи", // settings.all
     "Назначены мне", // settings.assignee
     "Созданы мной", // settings.author
     "Отмена", // settings.cancel
@@ -63,13 +71,17 @@ const messages = {
     "Не выбран", // settings.typeNone
     "Читаем типы задач Jira", // settings.typesLoading
     "Типы задач Jira недоступны", // settings.typesUnavailable
+    "Создавать задачи в",
+    "Выберите проект по умолчанию для новых задач.",
+    "Читаем проекты Jira",
+    "Проекты Jira недоступны",
   ],
   "pl": [
     "Odczytywanie zgłoszenia Jira", // detail.loading
     "Brak opisu", // detail.noDescription
     "Spróbuj ponownie", // detail.retry
     "Zgłoszenie Jira niedostępne", // detail.unavailable
-    "Wszystkie zgłoszenia projektu", // settings.all
+    "Wszystkie zgłoszenia", // settings.all
     "Przypisane do mnie", // settings.assignee
     "Utworzone przeze mnie", // settings.author
     "Anuluj", // settings.cancel
@@ -84,13 +96,17 @@ const messages = {
     "Nie wybrano", // settings.typeNone
     "Odczytywanie typów zgłoszeń Jira", // settings.typesLoading
     "Typy zgłoszeń Jira niedostępne", // settings.typesUnavailable
+    "Twórz zgłoszenia w",
+    "Wybierz domyślny projekt dla nowych zgłoszeń.",
+    "Odczytywanie projektów Jira",
+    "Projekty Jira niedostępne",
   ],
   "es": [
     "Leyendo la incidencia de Jira", // detail.loading
     "Sin descripción", // detail.noDescription
     "Reintentar", // detail.retry
     "Incidencia de Jira no disponible", // detail.unavailable
-    "Todas las incidencias del proyecto", // settings.all
+    "Todas las incidencias", // settings.all
     "Asignadas a mí", // settings.assignee
     "Creadas por mí", // settings.author
     "Cancelar", // settings.cancel
@@ -105,13 +121,17 @@ const messages = {
     "Sin seleccionar", // settings.typeNone
     "Leyendo los tipos de incidencia de Jira", // settings.typesLoading
     "Tipos de incidencia de Jira no disponibles", // settings.typesUnavailable
+    "Crear incidencias en",
+    "Elige el proyecto predeterminado para las nuevas incidencias.",
+    "Leyendo los proyectos de Jira",
+    "Proyectos de Jira no disponibles",
   ],
   "fr": [
     "Lecture du ticket Jira", // detail.loading
     "Aucune description", // detail.noDescription
     "Réessayer", // detail.retry
     "Ticket Jira indisponible", // detail.unavailable
-    "Tous les tickets du projet", // settings.all
+    "Tous les tickets", // settings.all
     "Qui me sont assignés", // settings.assignee
     "Créés par moi", // settings.author
     "Annuler", // settings.cancel
@@ -126,13 +146,17 @@ const messages = {
     "Non sélectionné", // settings.typeNone
     "Lecture des types de ticket Jira", // settings.typesLoading
     "Types de ticket Jira indisponibles", // settings.typesUnavailable
+    "Créer des tickets dans",
+    "Choisissez le projet par défaut pour les nouveaux tickets.",
+    "Lecture des projets Jira",
+    "Projets Jira indisponibles",
   ],
   "it": [
     "Lettura della issue di Jira", // detail.loading
     "Nessuna descrizione", // detail.noDescription
     "Riprova", // detail.retry
     "Issue di Jira non disponibile", // detail.unavailable
-    "Tutte le issue del progetto", // settings.all
+    "Tutte le issue", // settings.all
     "Assegnate a me", // settings.assignee
     "Create da me", // settings.author
     "Annulla", // settings.cancel
@@ -147,13 +171,17 @@ const messages = {
     "Non selezionato", // settings.typeNone
     "Lettura dei tipi di issue di Jira", // settings.typesLoading
     "Tipi di issue di Jira non disponibili", // settings.typesUnavailable
+    "Crea issue in",
+    "Scegli il progetto predefinito per le nuove issue.",
+    "Lettura dei progetti Jira",
+    "Progetti Jira non disponibili",
   ],
   "pt": [
     "Lendo a issue do Jira", // detail.loading
     "Sem descrição", // detail.noDescription
     "Tentar novamente", // detail.retry
     "Issue do Jira indisponível", // detail.unavailable
-    "Todas as issues do projeto", // settings.all
+    "Todas as issues", // settings.all
     "Atribuídas a mim", // settings.assignee
     "Criadas por mim", // settings.author
     "Cancelar", // settings.cancel
@@ -168,13 +196,17 @@ const messages = {
     "Não selecionado", // settings.typeNone
     "Lendo os tipos de issue do Jira", // settings.typesLoading
     "Tipos de issue do Jira indisponíveis", // settings.typesUnavailable
+    "Criar issues em",
+    "Escolha o projeto padrão para novas issues.",
+    "Lendo os projetos do Jira",
+    "Projetos do Jira indisponíveis",
   ],
   "ca": [
     "S’està llegint la incidència de Jira", // detail.loading
     "Sense descripció", // detail.noDescription
     "Torna-ho a provar", // detail.retry
     "Incidència de Jira no disponible", // detail.unavailable
-    "Totes les incidències del projecte", // settings.all
+    "Totes les incidències", // settings.all
     "Assignades a mi", // settings.assignee
     "Creades per mi", // settings.author
     "Cancel·la", // settings.cancel
@@ -189,13 +221,17 @@ const messages = {
     "Sense seleccionar", // settings.typeNone
     "S’estan llegint els tipus d’incidència de Jira", // settings.typesLoading
     "Tipus d’incidència de Jira no disponibles", // settings.typesUnavailable
+    "Crea incidències a",
+    "Tria el projecte predeterminat per a les incidències noves.",
+    "S’estan llegint els projectes de Jira",
+    "Projectes de Jira no disponibles",
   ],
   "zh-Hans": [
     "正在读取 Jira 事项", // detail.loading
     "无描述", // detail.noDescription
     "重试", // detail.retry
     "Jira 事项不可用", // detail.unavailable
-    "项目的所有事项", // settings.all
+    "所有事项", // settings.all
     "分配给我的", // settings.assignee
     "由我创建的", // settings.author
     "取消", // settings.cancel
@@ -210,13 +246,17 @@ const messages = {
     "未选择", // settings.typeNone
     "正在读取 Jira 事项类型", // settings.typesLoading
     "Jira 事项类型不可用", // settings.typesUnavailable
+    "创建事项的项目",
+    "选择新事项的默认项目。",
+    "正在读取 Jira 项目",
+    "Jira 项目不可用",
   ],
   "zh-Hant": [
     "正在讀取 Jira 工作項目", // detail.loading
     "無描述", // detail.noDescription
     "重試", // detail.retry
     "Jira 工作項目無法使用", // detail.unavailable
-    "專案的所有工作項目", // settings.all
+    "所有工作項目", // settings.all
     "指派給我的", // settings.assignee
     "由我建立的", // settings.author
     "取消", // settings.cancel
@@ -231,13 +271,17 @@ const messages = {
     "未選取", // settings.typeNone
     "正在讀取 Jira 工作項目類型", // settings.typesLoading
     "Jira 工作項目類型無法使用", // settings.typesUnavailable
+    "建立工作項目的專案",
+    "選擇新工作項目的預設專案。",
+    "正在讀取 Jira 專案",
+    "Jira 專案無法使用",
   ],
   "ja": [
     "Jira 課題を読み込み中", // detail.loading
     "説明なし", // detail.noDescription
     "再試行", // detail.retry
     "Jira 課題を利用できません", // detail.unavailable
-    "プロジェクトのすべての課題", // settings.all
+    "すべての課題", // settings.all
     "自分に割り当て", // settings.assignee
     "自分が作成", // settings.author
     "キャンセル", // settings.cancel
@@ -252,6 +296,10 @@ const messages = {
     "未選択", // settings.typeNone
     "Jira の課題タイプを読み込み中", // settings.typesLoading
     "Jira の課題タイプを利用できません", // settings.typesUnavailable
+    "課題を作成するプロジェクト",
+    "新しい課題の既定のプロジェクトを選択します。",
+    "Jira プロジェクトを読み込み中",
+    "Jira プロジェクトを利用できません",
   ],
 } satisfies Record<string, TranslatedKeys<typeof keys>>;
 
