@@ -3,6 +3,9 @@ export function parseInstalledVersionFromOutput(command: string, stdout: string)
   const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const commandMatch = new RegExp(`\\b${escaped}\\s+version\\s*:?[\\t ]*v?([0-9]+(?:\\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)`, 'i').exec(stdout);
   if (commandMatch?.[1]) return commandMatch[1];
+  // `cua --version` prints a bare `cua 0.5.0` line: no `version` label.
+  const bareMatch = new RegExp(`^[\\t ]*${escaped}[\\t ]+v?([0-9]+(?:\\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)[\\t ]*$`, 'im').exec(stdout);
+  if (bareMatch?.[1]) return bareMatch[1];
   const genericMatch = /\bversion\s*:?[\t ]*v?([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)/i.exec(stdout);
   return genericMatch?.[1] ?? null;
 }
