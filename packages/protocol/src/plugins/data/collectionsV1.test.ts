@@ -160,10 +160,10 @@ describe('Collection migration Artifact ownership', () => {
 });
 
 describe('Plugin Account Collection contracts', () => {
-  it('requires a versioned migration for Channels freshness widening inside the retained state union', () => {
-    // Actual v5 declaration published at 6386879ac0, not reconstructed from
-    // current types. Compare against the projection the CLI actually consumes.
-    const historical = JSON.parse(readFileSync(new URL('../../../../plugins/channels/src/testkit/fixtures/channelStateV5.json', import.meta.url), 'utf8'));
+  it.each(['channelStateV5.json', 'channelStateV9.json'])('requires a versioned migration for retained Channels union widening: %s', (fixture) => {
+    // Actual generated declarations, not reconstructed from current types.
+    // Compare against the projection the CLI actually consumes.
+    const historical = JSON.parse(readFileSync(new URL(`../../../../plugins/channels/src/testkit/fixtures/${fixture}`, import.meta.url), 'utf8'));
     const manifest = JSON.parse(readFileSync(new URL('../../../../../apps/cli/assets/bundled-plugin-manifests/channels.json', import.meta.url), 'utf8'));
     const declarations: readonly unknown[] = manifest.contributes.accountCollections;
     const source = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id,
@@ -186,7 +186,8 @@ describe('Plugin Account Collection contracts', () => {
       { id: 'channel-state-v6-to-v7', fromSchemaVersion: 6, toSchemaVersion: 7 },
       { id: 'channel-state-v7-to-v8', fromSchemaVersion: 7, toSchemaVersion: 8 },
       { id: 'channel-state-v8-to-v9', fromSchemaVersion: 8, toSchemaVersion: 9 },
-    ]);
+      { id: 'channel-state-v9-to-v10', fromSchemaVersion: 9, toSchemaVersion: 10 },
+    ].filter(step => step.fromSchemaVersion >= source.schemaVersion));
   });
 
   it('admits same-version nested schema widenings without granting a retained reader write authority', () => {
