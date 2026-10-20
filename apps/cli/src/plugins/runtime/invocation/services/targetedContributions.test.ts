@@ -423,7 +423,7 @@ describe('targeted contribution observation service', () => {
                     }) } },
                 },
             } as unknown as PluginInvocationContext;
-            let adoption: Promise<void> | undefined;
+            let adoption: ReturnType<typeof controller.adoptPreparedRuntimeRegistry> | undefined;
             try {
                 const initial = await observation.readCurrent();
                 expect(initial.contributions.map((entry) => entry.contributor.pluginId))
@@ -443,17 +443,17 @@ describe('targeted contribution observation service', () => {
                     },
                 });
                 await publicationEntered.promise;
-                expect(incumbent.readPluginSourceCustody(GITHUB_PLUGIN_MANIFEST.id)).toBeNull();
+                expect(incumbent.readPluginSourceCustody?.(GITHUB_PLUGIN_MANIFEST.id)).toBeNull();
                 expect(controller.readCurrentDurableRevision()).toBe(1);
 
                 let failure: unknown;
-                const list = createTriageListEntriesActionHandler()({
+                const list = Promise.resolve(createTriageListEntriesActionHandler()({
                     v: 1,
                     sources: selection === 'allConfigured'
                         ? { kind: 'allConfigured' }
                         : { kind: 'selected', sourceInstanceIds: ['11111111-1111-4111-8111-111111111111'] },
                     order: 'newest', limit: 10,
-                }, context).catch((error: unknown) => { failure = error; });
+                }, context)).catch((error: unknown) => { failure = error; });
                 try {
                     // Cross a real event-loop turn: admission must be owned
                     // before the independently blocked storage read settles.

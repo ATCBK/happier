@@ -37,6 +37,8 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         caller: Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
         /** Re-read the admitted source authority immediately before target effect. */
         isMountedCallerCurrent: () => Promise<boolean>;
+        /** Account callers retain their current source closure across Inbox decisions. */
+        approvalInputCustody?: 'live_only';
     }>
 > {
     const invocation = input.request.invocation;
@@ -47,6 +49,16 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
             : undefined;
     if (!binding) return Object.freeze({ status: 'absent' as const });
     const contributes = input.registry.contributes;
+    let resolvedMachineContext: Readonly<{ serverIdentityId: string; machineId: string }> | null;
+    try {
+        resolvedMachineContext = await input.resolveExecutionOriginContext?.() ?? null;
+    } catch {
+        return Object.freeze({ status: 'unavailable' as const });
+    }
+    const machineContext = resolvedMachineContext;
+    if (!machineContext || machineContext.machineId !== input.request.machineId) {
+        return Object.freeze({ status: 'unavailable' as const });
+    }
 
     const accountSourceCustody = binding.sourceCustody;
     if (accountSourceCustody?.kind === 'account_release' || binding.declarationDigest !== undefined) {
@@ -79,6 +91,7 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
             }
             return Object.freeze({
                 status: 'available' as const,
+                approvalInputCustody: 'live_only' as const,
                 caller: Object.freeze({
                     kind: 'plugin' as const, pluginId: binding.pluginId,
                     contribution: Object.freeze({ id: binding.contributionLocalId, qualifiedId: buildQualifiedPluginContributionKey({
@@ -90,6 +103,9 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
                 }),
                 isMountedCallerCurrent: async (): Promise<boolean> => {
                     try {
+                        const currentMachineContext = await input.resolveExecutionOriginContext?.() ?? null;
+                        if (currentMachineContext?.serverIdentityId !== machineContext.serverIdentityId
+                            || currentMachineContext.machineId !== machineContext.machineId) return false;
                         const current = await resolveSelection(binding.pluginId);
                         return current.kind === 'available' && current.custodyId === selection.custodyId
                             && matchesAccountDeclaration(current);
@@ -99,12 +115,6 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         } catch { return Object.freeze({ status: 'unavailable' as const }); }
     }
 
-    let machineContext: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
-    try {
-        machineContext = await input.resolveExecutionOriginContext?.() ?? null;
-    } catch {
-        return Object.freeze({ status: 'unavailable' as const });
-    }
     const pluginId = binding.pluginId;
     const materialization = binding.materializationRef;
     let occurrenceId: ReturnType<NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginOccurrenceId']>> = null;
@@ -116,11 +126,9 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         return Object.freeze({ status: 'unavailable' as const });
     }
     if (
-        !machineContext
-        || !occurrenceId
+        !occurrenceId
         || !sourceCustody
         || (binding.sourceCustody !== undefined && !pluginSourceCustodyEqual(binding.sourceCustody, sourceCustody))
-        || machineContext.machineId !== input.request.machineId
         || occurrenceId !== binding.occurrenceId
         || (materialization !== undefined && materialization.machineId !== machineContext.machineId)
     ) {

@@ -224,7 +224,7 @@ function action(params: Readonly<{
                 },
             }),
         scopes: ['global'],
-        contributionSurfaces,
+        contributionSurfaces: [...contributionSurfaces],
     };
     const definition: ResolvedActionDefinition = dangerLevel === 'safe'
         ? {

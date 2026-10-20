@@ -14,7 +14,7 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { StoredCredentials } from '@/persistence';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
-import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { normalizeParsedPluginManifestV2 } from '@/plugins/manifest/normalize';
 import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/install/ui/generatedArtifacts';
 import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
@@ -136,19 +136,27 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
             daemonEntryPath: hostDeclaration.daemonEntryPath, devDaemonEntryPath: hostDeclaration.devDaemonEntryPath,
             ...(hostAccountAction?.execution.target === 'account' ? { account: hostAccountAction.execution.account } : {}),
             provenance: 'first_party' as const, source: { kind: 'bundled' as const } } : null;
-        const hostSource = hostTarget ? input.resolveBundledActivationSource(hostTarget, { realm: 'account' }) : null;
-        const hostCustody = hostSource?.sourceAuthority?.kind === 'bundled_first_party'
-            ? resolvePluginSourceCustody(hostSource.sourceAuthority) : null;
-        const bundledSelection = hostDeclaration && hostCustody ? { manifest: hostDeclaration.manifest,
-            sourceCustody: hostCustody, custodyId: computePluginAccountBundledCustodyIdV1({
-                packageName: hostDeclaration.sourceSpec.locator, manifest: hostDeclaration.manifest,
-                artifacts: hostDeclaration.generatedUiArtifactsManifest?.entries ?? [],
-            }) } : undefined;
-        const selection = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read,
-            ...(bundledSelection ? { bundled: bundledSelection } : {}) });
+        let accountSelection = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read });
+        let hostSource: PluginActivationSource<PluginDaemonModuleNamespace> | null = null;
+        let bundledSelection: AccountBundledSelection;
+        // An explicit Account override is authoritative independently of the
+        // optional host bundle. Only the shared selector's no-selection result
+        // needs the existing bundled declaration/root owner.
+        if (accountSelection.kind === 'unavailable' && accountSelection.code === 'plugin_account_execution_unavailable' && hostTarget) {
+            hostSource = input.resolveBundledActivationSource(hostTarget, { realm: 'account' });
+            const hostCustody = hostSource?.sourceAuthority?.kind === 'bundled_first_party'
+                ? resolvePluginSourceCustody(hostSource.sourceAuthority) : null;
+            if (hostDeclaration && hostCustody) {
+                bundledSelection = { manifest: hostDeclaration.manifest, sourceCustody: hostCustody,
+                    custodyId: computePluginAccountBundledCustodyIdV1({ packageName: hostDeclaration.sourceSpec.locator,
+                        manifest: hostDeclaration.manifest, artifacts: hostDeclaration.generatedUiArtifactsManifest?.entries ?? [] }) };
+                accountSelection = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read, bundled: bundledSelection });
+            }
+        }
+        const selection = accountSelection;
         selected.set(pluginId, { selection, read, ...(bundledSelection ? { bundled: bundledSelection } : {}) });
         if (selection.kind !== 'available') continue;
-        const manifest = normalizePluginManifestV2(selection.manifest);
+        const manifest = normalizeParsedPluginManifestV2(selection.manifest);
         const root = selection.release ? join(input.paths.cacheDir, 'account-artifacts', selection.release.archiveDigestSha256.slice(7), pluginId)
             : hostSource?.sourceAuthority?.kind === 'bundled_first_party' ? hostSource.sourceAuthority.resolvedRoot : null;
         if (!root) continue;

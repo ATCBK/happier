@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import fastify from 'fastify';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testkit';
+import { registerAuthoredAccountActionRelease } from '@/plugins/runtime/accountPluginActions.testkit';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { writeStoredCredentialsForServerId } from '@/persistence';
 import type { HappyMcpSessionClient } from './startHappyServer';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 
@@ -34,6 +41,42 @@ function sessionClient(sessionId: string): HappyMcpSessionClient {
 }
 
 describe('createHappierMcpServer plugin tools', () => {
+  it('executes an authored Account Action from the native Agent tool entry without a Machine', async () => {
+    await withTempDir('happier-agent-account-', async homeDir => {
+      const originalEnv = process.env;
+      process.env = { ...originalEnv, HAPPIER_HOME_DIR: homeDir };
+      reloadConfiguration();
+      const app = fastify();
+      const endpoint = 'http://session-account.test';
+      const accountId = 'session-account-owner';
+      const features = registerAccountHomeHttp(app, { accountId, serverId: 'session-account' });
+      const { pluginId } = await registerAuthoredAccountActionRelease(app, accountId);
+      await app.ready();
+      const restore = installAxiosFastifyAdapter({ app, origin: endpoint });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(features));
+      const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+        encryption: null, credentialProvenance: 'stored_session' as const };
+      await writeStoredCredentialsForServerId('session-account', credentials);
+      const { mcp, executeTool } = createHappierMcpServer({ ...sessionClient('session-account-agent'),
+        getServerBinding: () => ({ serverId: 'session-account', serverUrl: endpoint }),
+        getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features }),
+      }, { credentials, pluginToolCatalog: [] });
+      boundary.daemonPost.mockClear();
+      try {
+        const result = await executeTool({ toolName: 'action_execute', args: {
+          actionId: 'action.invoke', input: { action: { pluginId, localId: 'echo' }, input: { key: 'agent' } },
+        } });
+        expect(result).toMatchObject({ ok: true, result: { key: 'agent', surface: 'agent' } });
+        await writeStoredCredentialsForServerId('session-account', { ...credentials, token: 'replacement-account' });
+        const retired = await executeTool({ toolName: 'action_execute', args: {
+          actionId: 'action.invoke', input: { action: { pluginId, localId: 'echo' }, input: { key: 'retired' } },
+        } });
+        expect(retired).toMatchObject({ ok: false, errorCode: 'plugin_action_generation_retired' });
+        expect(boundary.daemonPost).not.toHaveBeenCalled();
+      } finally { restore(); await mcp.close(); await app.close(); process.env = originalEnv; reloadConfiguration(); }
+    });
+  });
+
   it('advertises and dispatches a daemon-projected tool through real session-agent MCP wiring', async () => {
     const entry = {
       toolId: 'acme.review.plugin/review-tool', actionId: 'acme.review.plugin/actions/review-start',

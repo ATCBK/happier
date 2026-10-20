@@ -14,6 +14,7 @@ import { createConnectedAccountContributionRegistry } from './contributionRegist
 import { createConnectedAccountConfigurationOwner } from './configurationOwner';
 import { createConnectedAccountAuthenticationAttemptOwner, type ConnectedAccountAttemptSettlementRequest } from './authenticationAttemptOwner';
 import { createConnectedAccountHostRuntimeInvoker } from './runtimeInvoker';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 type ManualFixture = Readonly<{
     provider: 'telegram' | 'discord' | 'email';
@@ -41,8 +42,9 @@ describe('manual Connected Account production invocation', () => {
         // Exercise a third-party installed contribution using the published
         // descriptor/runtime, not special handling of bundled plugin identities.
         const service = { pluginId: 'external.manual-accounts', localId: `${fixture.provider}-bot` };
+        const manifest = normalizePluginManifestV2(fixture.manifest);
         const descriptor = PluginConnectedAccountDescriptorContributionV2Schema.parse({
-            ...fixture.manifest.contributes.connectedAccountDescriptors[0], id: service.localId,
+            ...manifest.contributes.connectedAccountDescriptors[0], id: service.localId,
         });
         const mode = descriptor.authentication.modes.find(mode => mode.id === fixture.modeId)!;
         const occurrenceId = createPluginRuntimeOccurrenceId(service.pluginId);
@@ -77,7 +79,7 @@ describe('manual Connected Account production invocation', () => {
         });
         const invoker = createConnectedAccountHostRuntimeInvoker({
             resolveRuntime: ref => registry.resolve(ref),
-            resolvePlugin: () => ({ version: '1.0.0', hostAccessRequests: fixture.manifest.hostAccess.required
+            resolvePlugin: () => ({ version: '1.0.0', hostAccessRequests: manifest.hostAccess.required
                 .map(request => ({ request, required: true })) }),
             resolveHostPolicy: owners.resolveInvocationHostPolicy,
             createServices: owners.createServices, registerRawForRedaction: owners.registerRawForRedaction,

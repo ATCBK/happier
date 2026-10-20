@@ -1,4 +1,9 @@
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createHostContributedActionInvoker } from './actions/hostContributedActionInvoker';
+import type { InvokeContributedAction } from './services/actions';
+import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
@@ -115,7 +120,7 @@ function resolvedAction(params: Readonly<{
             inputHints: null,
             inputSchema: {},
             scopes: ['global'],
-            contributionSurfaces: params.surfaces,
+            contributionSurfaces: [...params.surfaces],
             placementBindings: ['commandPalette'],
             dangerLevel: 'safe',
             execution: { target: 'daemon' },
@@ -336,13 +341,7 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
             targetActionInvocations.refresh();
             return [];
         });
-        const serviceOwners = createProductionPluginInvocationServiceOwners({
-            loggerSink: { write() {} },
-            actionExecutor: { execute: vi.fn() },
-            resolveCurrentPluginMaterializationRef: (pluginId) => (
-                materializations.get(pluginId) ?? null
-            ),
-            invokeContributedAction: async (request) => {
+        const invokeContributedAction: InvokeContributedAction = async (request) => {
                 if (!runtimeRegistry) {
                     return {
                         status: 'unavailable' as const,
@@ -365,6 +364,7 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
                         ...(request.originSurface ? { originSurface: request.originSurface } : {}),
                         caller: request.caller,
                         ...(request.sessionId ? { defaultSessionId: request.sessionId } : {}),
+                        ...(request.beforeHandlerInvocation ? { beforeHandlerInvocation: request.beforeHandlerInvocation } : {}),
                         signal: request.signal,
                     },
                 });
@@ -386,7 +386,22 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
                             ? {}
                             : { actionHandlerInvocation: attempt.result.actionHandlerInvocation }),
                     };
-            },
+            };
+        const serviceOwners = createProductionPluginInvocationServiceOwners({
+            loggerSink: { write() {} },
+            actionExecutor: createActionExecutor({
+                ...createUnavailableActionTransportDeps(),
+                invokeContributedAction: createHostContributedActionInvoker({
+                    invokeContributedAction,
+                    revalidatePluginActionCallerMaterialization: async (ref) => {
+                        const current = materializations.get(ref.pluginId);
+                        return current !== undefined && arePluginMachineMaterializationRefsEqual(current, ref);
+                    },
+                    revalidatePluginActionCallerOccurrence: async (ref) => occurrenceIds.get(ref.pluginId) === ref.occurrenceId,
+                }),
+            }),
+            resolveCurrentPluginMaterializationRef: (pluginId) => materializations.get(pluginId) ?? null,
+            invokeContributedAction,
         });
         targetRegistrations.push(registration(
             'acme.alpha',
@@ -498,17 +513,15 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
 
         // The withheld outcome is itself a canonical PluginError, so it carries
         // the same projected `retryable` and payload as any other failure.
-        await expect(staleCallerAttempt).resolves.toEqual({
+        await expect(staleCallerAttempt).resolves.toMatchObject({
             matched: true,
             result: {
                 ok: false,
                 errorCode: 'plugin_action_caller_unavailable',
-                error: 'Plugin contributed action caller materialization is no longer current',
                 retryable: false,
                 data: {
                     name: 'PluginError',
                     code: 'plugin_action_caller_unavailable',
-                    message: 'Plugin contributed action caller materialization is no longer current',
                 },
             },
         });

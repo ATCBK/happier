@@ -437,6 +437,8 @@ export async function executeContributedAction(params: Readonly<{
      * target Action owner consumes it exactly before invoking its handler.
      */
     isMountedCallerCurrent?: () => boolean | Promise<boolean>;
+    /** Private admitted Account caller placement; never supplied through the wire or SDK. */
+    approvalInputCustody?: 'live_only';
     /** Untrusted transient settlement from the mounted UI ingress only. */
     selectedActionInputCarrier?: PluginUiSelectedActionInputCarrierV1;
     /** Bounded whole-message disclosure stamped by the ingress host. */
@@ -579,7 +581,8 @@ export async function executeContributedAction(params: Readonly<{
     : null;
   if (accountTarget !== (runtimeRegistry?.executionRealm === 'account')) {
     return { matched: true, result: actionHandlerNotStartedFailure(
-      'plugin_action_execution_placement_unavailable', 'The Action is unavailable in this execution host',
+      runtimeRegistry?.executionRealm === 'account' ? 'plugin_action_machine_required' : 'plugin_action_execution_placement_unavailable',
+      'The Action is unavailable in this execution host',
     ) };
   }
   const checkManagedCustody = () => checkManagedProviderOperationCustody({
@@ -816,7 +819,9 @@ export async function executeContributedAction(params: Readonly<{
     const sharedRequester = params.approvalContext !== undefined && isSharedRequesterActionV1(params.approvalContext);
     const requestCurrentIntent = params.requestCurrentIntent
       ? async (request: TargetActionCurrentIntentRequest): Promise<TargetActionCurrentIntentResult> => {
-          if (accountTarget) return await params.requestCurrentIntent!({ ...request, approvalInputCustody: 'live_only' });
+          if (accountTarget || params.context.approvalInputCustody === 'live_only') {
+            return await params.requestCurrentIntent!({ ...request, approvalInputCustody: 'live_only' });
+          }
           const requestedSurface = request.invocationSurface ?? request.surface;
           const deferredSurface = requestedSurface === 'api' || requestedSurface === 'cli'
             || requestedSurface === 'agent' || requestedSurface === 'mcp' ? requestedSurface : null;

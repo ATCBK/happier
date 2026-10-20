@@ -7,6 +7,7 @@ import type { PluginContributionIdentityV1, ProviderRuntimeBindingBasisV1 } from
 
 import type { PluginStorePaths } from '../../store/paths';
 import type { PluginSourceCustody } from '../sourceAuthority';
+import { isMachinePluginSourceCustody } from '../sourceAuthority';
 import { attestRetainedPluginSource } from '../retainedPluginSourceAttestation';
 
 export type RetainedManagedProviderAttestation = Readonly<{
@@ -43,6 +44,7 @@ export async function attestRetainedManagedProvider(input: Readonly<{
     if (
         !sessionId
         || !occurrenceId
+        || !isMachinePluginSourceCustody(input.sourceCustody)
         || input.sourceCustody.kind === 'development'
         || (input.sourceCustody.kind === 'managed'
             ? input.manifestAuthority !== 'external'

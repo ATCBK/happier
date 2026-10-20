@@ -25,6 +25,7 @@ import { createCliActionExecutorHarness } from '@/session/actions/createCliActio
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
 import { createDaemonPluginActionExecutor } from '@/session/actions/createDaemonPluginActionExecutor';
+import { executeAccountPluginAction } from '@/session/actions/executeAccountPluginAction';
 import {
   requestDaemonPluginActionExecution,
   requestDaemonSignedRootActionExecution,
@@ -156,18 +157,19 @@ export function createExternalMcpServer(params: Readonly<{
             resolveServerFeaturesSnapshot,
           }),
         });
-        const { executor: baseExecutor } = createCliActionExecutorHarness(
-          {
-            ...cryptoContext,
-            token: params.credentials.token,
-            credentials: params.credentials,
-            isCredentialCurrent,
-            serverId,
-            ...(serverIdentityId ? { serverIdentityId } : {}),
-            serverHttpBaseUrl,
-            sessionId: 'cli-global',
-            ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
-          },
+        const host = {
+          ...cryptoContext,
+          token: params.credentials.token,
+          credentials: params.credentials,
+          isCredentialCurrent,
+          serverId,
+          ...(serverIdentityId ? { serverIdentityId } : {}),
+          serverHttpBaseUrl,
+          sessionId: 'cli-global',
+          ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
+        };
+        const { executor: baseExecutor, deps } = createCliActionExecutorHarness(
+          host,
           {
             invokeContributedAction: async (request) => pluginExecutor.invokeContributedAction(request),
             ...accountServerActionPorts,
@@ -209,6 +211,9 @@ export function createExternalMcpServer(params: Readonly<{
               });
         const pluginExecutor = createDaemonPluginActionExecutor({
           base: pinnedBaseExecutor,
+          executeInCurrentProcess: (actionId, input, context) => executeAccountPluginAction({
+            host, deps, actionId, input, ...(context ? { context } : {}),
+          }),
           ...(requestPluginActionExecution ? { requestPluginActionExecution } : {}),
         });
         return {

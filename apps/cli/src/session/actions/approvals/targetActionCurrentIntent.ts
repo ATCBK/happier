@@ -162,13 +162,21 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
       || !targetActionApprovalSubjectsEqual(request, decidedRequest.data)) {
       return { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' };
     }
+    if (result.decision === 'approve') {
+      if (!update) return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+      const executionClaim = TargetActionApprovalRequestV1Schema.parse({ ...decidedRequest.data,
+        status: 'executing', updatedAtMs: Math.max((deps.now ?? Date.now)(), decidedRequest.data.updatedAtMs),
+      });
+      const claimed = await update({ artifactId, request: executionClaim });
+      if (!claimed.ok) return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+    }
     return result.decision === 'approve'
       ? { status: 'approved', fingerprint, artifactId,
           settleExecution: async ({ artifactId: admittedArtifactId, execution }) => {
             if (admittedArtifactId !== artifactId || !update) throw new Error('approval_stale');
             const latest = await deps.read(artifactId);
             if (!latest || latest.approvalInputCustody !== 'live_only'
-              || !['approved', 'executing'].includes(latest.status) || latest.decision?.kind !== 'approve'
+              || latest.status !== 'executing' || latest.decision?.kind !== 'approve'
               || !targetActionApprovalSubjectsEqual(request, latest)) throw new Error('approval_stale');
             const executedAtMs = Math.max((deps.now ?? Date.now)(), latest.updatedAtMs);
             const terminal = TargetActionApprovalRequestV1Schema.parse({ ...latest,

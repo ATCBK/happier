@@ -1,0 +1,96 @@
+import fastify from 'fastify';
+import { afterEach, expect, it, vi } from 'vitest';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
+import { defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
+import { DaemonPluginUiTargetedContributionsReadRequestSchema, DaemonPluginUiTargetedContributionsReadResponseSchema,
+    DaemonPluginTargetedSourceDeclarationV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { markRpcRequestDisposition } from '@happier-dev/sync-client';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testkit';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { registerAuthoredAccountActionRelease } from './accountPluginActions.testkit';
+
+const { machineRpc } = vi.hoisted(() => ({ machineRpc: vi.fn() }));
+vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
+    ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(),
+    // The exact Machine RPC transport is the external system boundary. Strict
+    // producer/consumer schemas and the whole local invocation stay real.
+    callExactMachineRpc: machineRpc,
+}));
+afterEach(() => vi.restoreAllMocks());
+
+const inputSchema = defineProtocolObject({ key: defineProtocolString() }, { policy: 'closed' });
+const resultSchema = defineProtocolObject({ key: defineProtocolString(), machine: defineProtocolLiteral(true) }, { policy: 'closed' });
+const protocol = defineContributionProtocol({ id: 'account-machine-read', version: 1, operations: {
+    read: { required: true, input: { kind: 'protocolDefined', schema: inputSchema }, resultSchema,
+        action: { surfaces: ['plugin'], dangerLevel: 'safe' } },
+} });
+const provider = definePlugin({ id: 'acme.account-source-provider', version: '1.0.0', actions: {
+    read: { title: 'Read provider', surfaces: ['plugin'], dangerLevel: 'safe', inputSchema, resultSchema,
+        run: async ({ key }) => ({ key, machine: true as const }) },
+}, contributesTo: { 'acme.account-actions': { sources: {
+    provider: protocol.contribute({ operations: { read: protocol.operations.read.bind('read') } }),
+} } } });
+
+it.each(['acknowledged', 'lostAck', 'notSent'] as const)('keeps an authored Account aggregate local and preserves its selected Machine source outcome (%s)', async outcome => {
+    const app = fastify();
+    const endpoint = 'http://account-machine.test';
+    const features = registerAccountHomeHttp(app, { accountId: 'owner', serverId: 'account-machine' });
+    const { pluginId } = await registerAuthoredAccountActionRelease(app, 'owner');
+    const manifest = normalizePluginManifestV2(provider.manifest);
+    const source = DaemonPluginTargetedSourceDeclarationV1Schema.parse({ manifest: { id: manifest.id, contributes: {
+        actions: manifest.contributes.actions, pluginContributionPoints: [],
+        targetedPluginContributions: manifest.contributes.targetedPluginContributions, ui: { renderers: [] },
+    } }, occurrenceId: 'provider-machine-occurrence', sourceCustody: {
+        kind: 'managed', immutableGenerationId: 'provider-machine-generation', installSource: 'archive',
+    } });
+    let providerEffects = 0;
+    const requests: Parameters<typeof import('@/session/transport/rpc/machineRpc').callExactMachineRpc>[0][] = [];
+    machineRpc.mockImplementation(async (request: Parameters<typeof import('@/session/transport/rpc/machineRpc').callExactMachineRpc>[0]) => {
+        requests.push(request);
+        if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) {
+            return DaemonPluginUiTargetedContributionsReadResponseSchema.parse({ status: 'sourceDeclarations',
+                pluginId, sourceDeclarations: [source] });
+        }
+        if (outcome === 'notSent') throw markRpcRequestDisposition(new Error('Machine retired before emission'), 'notSent');
+        providerEffects++;
+        if (outcome === 'lostAck') throw new Error('Machine acknowledgement lost after effect');
+        return { ok: true, result: { key: 'provider', machine: true } };
+    });
+    await app.ready();
+    const restore = installAxiosFastifyAdapter({ app, origin: endpoint });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(features));
+    try {
+        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`,
+            encryption: null, credentialProvenance: 'stored_session' as const };
+        const cli = createCliActionExecutorFromCredentials({ credentials, serverId: 'account-machine',
+            serverIdentityId: 'account-machine', serverApiUrl: endpoint, machineId: 'selected-machine' });
+        const result = await cli.execute('action.invoke', { action: { pluginId, localId: 'source' }, input: { key: 'provider' } },
+            { surface: 'cli', runtimeAccountId: 'owner', serverId: 'account-machine', serverIdentityId: 'account-machine' });
+        expect(requests.length).toBeGreaterThanOrEqual(2);
+        for (const request of requests) {
+            expect(request.machineId).toBe('selected-machine');
+            expect(request.requireCurrentMachine).toBe(true);
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) {
+                expect(DaemonPluginUiTargetedContributionsReadRequestSchema.parse(request.request))
+                    .toMatchObject({ pluginId, readMode: 'sourceDeclarations' });
+            } else {
+                expect(request.method).toBe(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
+                const input = DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.request);
+                expect(input).toMatchObject({ qualifiedActionId: `${manifest.id}/read`, expectedContributorOccurrenceId: source.occurrenceId,
+                    invocation: { kind: 'clientPluginAction', clientActionBinding: { pluginId, contributionLocalId: 'source',
+                        sourceCustody: { kind: 'account_release', pluginId } } } });
+                expect(input.invocation?.kind === 'clientPluginAction' && input.invocation.clientActionBinding.materializationRef).toBeUndefined();
+            }
+        }
+        expect(result, JSON.stringify(result)).toMatchObject(outcome === 'notSent'
+            ? { ok: false, errorCode: 'plugin_action_execution_origin_unavailable' }
+            : outcome === 'lostAck' ? { ok: false, errorCode: 'plugin_action_outcome_unknown' }
+            : { ok: true, result: { key: 'provider', machine: true } });
+        expect(providerEffects).toBe(outcome === 'notSent' ? 0 : 1);
+    } finally { restore(); await app.close(); }
+});

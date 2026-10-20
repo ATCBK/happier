@@ -89,7 +89,8 @@ describe('Account nested Action caller provenance', () => {
             expect(await derive('aggregate', { ...bundledBinding, declarationDigest: `sha256:${'e'.repeat(64)}` })).toEqual({ status: 'unavailable' });
             expect(await derive('aggregate', { ...bundledBinding, declarationDigest: undefined })).toEqual({ status: 'unavailable' });
             currentManifest = normalizePluginManifestV2({ ...manifest, contributes: { ...manifest.contributes,
-                actions: manifest.contributes.actions.map(action => ({ ...action, dangerLevel: 'writesRemote' })),
+                actions: manifest.contributes.actions.map(action => ({ ...action, dangerLevel: 'writesRemote',
+                    confirmation: { title: 'Confirm changed declaration' } })),
             } });
             expect(await bundledCaller.isMountedCallerCurrent()).toBe(false);
             archiveDigestSha256 = binding.sourceCustody.archiveDigestSha256;

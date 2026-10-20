@@ -48,6 +48,11 @@ import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createHostContributedActionInvoker } from '@/plugins/runtime/invocation/actions/hostContributedActionInvoker';
+import type { InvokeContributedAction } from '@/plugins/runtime/invocation/services/actions';
+import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { channelsTargetedContributionServices } from '../../../../../../packages/plugins/channels/src/testkit/operationOnlyTargetedContributionsFixture';
 
 type SafeResolvedActionContribution = Omit<ResolvedActionContribution, 'definition'> & Readonly<{
@@ -195,7 +200,7 @@ function createRegistry(
 
 function createAction(
   daemonEntryPath: string,
-  actionId = 'acme.review.start',
+  actionId = 'review/start',
 ): SafeResolvedActionContribution {
   return {
     provenance: 'external',
@@ -265,7 +270,7 @@ function createCommandContribution(
       title: 'Acme',
       path: ['acme'],
       action: action.definition.id,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
     },
   };
 }
@@ -290,7 +295,7 @@ function createToolContribution(
       safety: action.definition.safety,
       surfaces: ['cli', 'mcp', 'agent'],
       action: action.definition.id,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
     },
   };
 }
@@ -363,7 +368,7 @@ describe('executeContributedAction', () => {
             targetActionInvocations,
             activateContributionsOnDemand,
           })),
-          actionId: action.definition.id,
+          actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
           input: {},
           context: { surface: 'cli' },
         })).resolves.toEqual({
@@ -415,7 +420,7 @@ describe('executeContributedAction', () => {
             api: true,
             plugin: true,
           },
-          contributionSurfaces: ['api', 'plugin'],
+          contributionSurfaces: ['plugin'],
         },
       };
       const handler = vi.fn(async () => ({ executed: true }));
@@ -431,7 +436,7 @@ describe('executeContributedAction', () => {
           targetActionInvocations,
           activateContributionsOnDemand,
         })),
-        actionId: action.definition.id,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
         input: {},
         context: { surface: 'api', invocationSurface: 'api' },
       })).resolves.toEqual({
@@ -455,7 +460,7 @@ describe('executeContributedAction', () => {
           targetActionInvocations,
           activateContributionsOnDemand,
         })),
-        actionId: action.definition.id,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
         input: {},
         context: {
           surface: 'plugin',
@@ -477,7 +482,7 @@ describe('executeContributedAction', () => {
           targetActionInvocations,
           activateContributionsOnDemand,
         })),
-        actionId: action.definition.id,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
         input: {},
         context: {
           surface: 'api',
@@ -559,7 +564,7 @@ describe('executeContributedAction', () => {
         Readonly<{ status: 'approved'; fingerprint: string } | { status: 'rejected' | 'unavailable'; code: string }>
       >) => await executeContributedAction({
         runtimeRegistry,
-        actionId: action.definition.id,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
         input: {},
         ...(requestCurrentIntent ? { requestCurrentIntent } : {}),
         context: {
@@ -672,7 +677,7 @@ describe('executeContributedAction', () => {
       const action = projected.actions?.find(entry => entry.definition.id === 'connection/setup-remediate-v1');
       const prepareAction = projected.actions?.find(entry => entry.definition.id === 'connection/prepare-v1');
       if (!action || !prepareAction) throw new Error('Expected the current Channels setup repair and prepare Action declarations.');
-      const providerRepair = TELEGRAM_MANIFEST.contributes.actions.find(entry => entry.id === 'telegram/remove-webhook');
+      const providerRepair = normalizePluginManifestV2(TELEGRAM_MANIFEST).contributes.actions.find(entry => entry.id === 'telegram/remove-webhook');
       if (!providerRepair) throw new Error('Expected the current provider repair Action declaration.');
       // The nested provider role is a trusted-plugin invocation: its default
       // does not add a second Ask, but explicit per-Action policy still wins.
@@ -751,7 +756,7 @@ describe('executeContributedAction', () => {
           activateContributionsOnDemand: async () => [],
           resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'home-approval', machineId: 'machine-approval' }),
         })),
-        actionId: action.definition.id,
+        actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
         input: {},
         requestCurrentIntent,
         context: { surface: 'cli' },
@@ -808,7 +813,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { destination: 'preview' },
       context: { surface: 'ui' },
     })).resolves.toEqual({
@@ -899,7 +904,7 @@ describe('executeContributedAction', () => {
       executeClientAction: async () => { throw new Error('A refused caller must not issue a client Action'); },
     };
     expect(await executeContributedAction({
-      runtimeRegistry, actionId: action.definition.id, input: {},
+      runtimeRegistry, actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }), input: {},
       context: { surface: 'agent', caller: {
         kind: 'plugin', pluginId: 'acme.caller',
         occurrenceId: 'caller:1', sourceCustody: { kind: 'development', registeredRootId: 'caller-root' },
@@ -909,13 +914,13 @@ describe('executeContributedAction', () => {
       ok: false, errorCode: 'plugin_action_client_target_unavailable', actionHandlerInvocation: 'notStarted',
     } });
     expect(await executeContributedAction({
-      runtimeRegistry, actionId: action.definition.id, input: {},
+      runtimeRegistry, actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }), input: {},
       expectedContributorOccurrenceId: 'retired-occurrence', context: { surface: 'agent' },
     })).toMatchObject({ matched: true, result: {
       ok: false, errorCode: 'plugin_action_generation_retired', actionHandlerInvocation: 'notStarted',
     } });
     expect(await executeContributedAction({
-      runtimeRegistry, actionId: action.definition.id, input: {},
+      runtimeRegistry, actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }), input: {},
       actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'acme.action.plugin/actions/open-client': { enabled: false } } }),
       context: { surface: 'agent' },
     })).toMatchObject({ matched: true, result: {
@@ -976,11 +981,7 @@ describe('executeContributedAction', () => {
       ['acme.gamma', gammaMaterialization],
     ]);
     let runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry | null = null;
-    const serviceOwners = createProductionPluginInvocationServiceOwners({
-      loggerSink: { write: () => {} },
-      actionExecutor: { execute: vi.fn() },
-      resolveCurrentPluginMaterializationRef: (pluginId) => materializations.get(pluginId) ?? null,
-      invokeContributedAction: async (request) => {
+    const invokeContributedAction: InvokeContributedAction = async (request) => {
         if (!runtimeRegistry) {
           return {
             status: 'unavailable' as const,
@@ -997,6 +998,7 @@ describe('executeContributedAction', () => {
             ...(request.originSurface ? { originSurface: request.originSurface } : {}),
             caller: request.caller,
             ...(request.sessionId ? { defaultSessionId: request.sessionId } : {}),
+            ...(request.beforeHandlerInvocation ? { beforeHandlerInvocation: request.beforeHandlerInvocation } : {}),
             signal: request.signal,
           },
         });
@@ -1015,7 +1017,20 @@ describe('executeContributedAction', () => {
           code: attempt.result.errorCode,
           message: attempt.result.error,
         };
-      },
+      };
+    const serviceOwners = createProductionPluginInvocationServiceOwners({
+      loggerSink: { write: () => {} },
+      actionExecutor: createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        invokeContributedAction: createHostContributedActionInvoker({ invokeContributedAction,
+          revalidatePluginActionCallerMaterialization: async ref => {
+            const current = materializations.get(ref.pluginId);
+            return current !== undefined && arePluginMachineMaterializationRefsEqual(current, ref);
+          },
+          revalidatePluginActionCallerOccurrence: async ref => readFixtureOccurrenceId(ref.pluginId) === ref.occurrenceId,
+        }),
+      }),
+      resolveCurrentPluginMaterializationRef: (pluginId) => materializations.get(pluginId) ?? null,
+      invokeContributedAction,
     });
     let betaInvocation: Readonly<{ surface: string; caller: unknown }> | null = null;
     let gammaInvocation: Readonly<{ surface: string; caller: unknown }> | null = null;
@@ -1190,7 +1205,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: {
         surface: 'ui',
@@ -1266,7 +1281,7 @@ describe('executeContributedAction', () => {
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
       expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.target' },
@@ -1344,7 +1359,7 @@ describe('executeContributedAction', () => {
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       ...expectation,
       context: {
@@ -1403,7 +1418,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
       context: {
@@ -1474,7 +1489,7 @@ describe('executeContributedAction', () => {
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
       expectedExecutionOrigin: {
@@ -1559,7 +1574,7 @@ describe('executeContributedAction', () => {
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
       context: {
@@ -1633,7 +1648,7 @@ describe('executeContributedAction', () => {
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       context: {
         surface: 'plugin',
@@ -1704,15 +1719,15 @@ describe('executeContributedAction', () => {
         ...baseRuntimeRegistry.contributes,
         actions: [replacementAction, unrelatedAction],
         actionsById: new Map([
-          [replacementAction.definition.id, replacementAction],
-          [unrelatedAction.definition.id, unrelatedAction],
+          [buildQualifiedPluginContributionKey({ pluginId: replacementAction.pluginId ?? '', localId: replacementAction.definition.id }), replacementAction],
+          [buildQualifiedPluginContributionKey({ pluginId: unrelatedAction.pluginId ?? '', localId: unrelatedAction.definition.id }), unrelatedAction],
         ]),
       },
     };
 
     const staleRequest = {
       runtimeRegistry,
-      actionId: replacementAction.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: replacementAction.pluginId ?? '', localId: replacementAction.definition.id }),
       input: { title: 'Ready' },
       expectedContributorOccurrenceId: 'occurrence-a-retired',
       context: {
@@ -1745,7 +1760,7 @@ describe('executeContributedAction', () => {
 
     const unrelatedRequest = {
       runtimeRegistry,
-      actionId: unrelatedAction.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: unrelatedAction.pluginId ?? '', localId: unrelatedAction.definition.id }),
       input: { title: 'Ready' },
       expectedContributorOccurrenceId: 'occurrence-b-stable',
       context: {
@@ -1804,7 +1819,7 @@ describe('executeContributedAction', () => {
 
     const request = {
       runtimeRegistry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       expectedContributorOccurrenceId: 'occurrence-a',
       context: {
@@ -1876,7 +1891,7 @@ describe('executeContributedAction', () => {
 
     const request = {
       runtimeRegistry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { title: 'Ready' },
       expectedContributorOccurrenceId: 'occurrence-a',
       expectedContributorMaterializationId: 'materialization-a',
@@ -2001,7 +2016,7 @@ describe('executeContributedAction', () => {
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: { surface: 'cli' },
     })).resolves.toEqual({
@@ -2031,7 +2046,7 @@ describe('executeContributedAction', () => {
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: { surface: 'cli' },
     })).resolves.toEqual({
@@ -2095,7 +2110,7 @@ describe('executeContributedAction', () => {
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: { surface: 'cli' },
     })).resolves.toEqual({
@@ -2125,7 +2140,7 @@ describe('executeContributedAction', () => {
     }));
 
     await expect(executeContributedAction({
-      runtimeRegistry: registry, actionId: 'run', input: {}, context: { surface: 'cli' },
+      runtimeRegistry: registry, actionId: 'acme.action.plugin/run', input: {}, context: { surface: 'cli' },
     })).resolves.toMatchObject({
       matched: true,
       result: { ok: false, errorCode: 'plugin_action_handler_missing' },
@@ -2181,7 +2196,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       registry: createRegistry(action),
-      actionId: 'acme.review.start',
+      actionId: 'acme.action.plugin/review/start',
       input: { scope: 'diff' },
       context: {
         defaultSessionId: 'sess-1',
@@ -2211,14 +2226,14 @@ describe('executeContributedAction', () => {
     });
     const registry = (await createExecutableRegistry({
       action,
-      commands: [createCommandContribution(action, 'acme.command.start')],
+      commands: [createCommandContribution(action, 'command/start')],
       targetActionInvocations,
       activateContributionsOnDemand: async (demands) => {
         activationDemands.push(...demands);
         targetActions = [createTargetActionRegistration({
           action,
           handler: async (input, context) => ({
-            actionId: action.definition.id,
+            actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
             input,
             pluginId: context.plugin.id,
             surface: context.surface ?? 'cli',
@@ -2231,7 +2246,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { scope: 'command' },
       context: {
         surface: 'cli',
@@ -2248,7 +2263,7 @@ describe('executeContributedAction', () => {
       result: {
         ok: true,
         result: {
-          actionId: 'start',
+          actionId: 'acme.action.plugin/start',
           input: {
             scope: 'command',
           },
@@ -2270,14 +2285,14 @@ describe('executeContributedAction', () => {
     });
     const registry = (await createExecutableRegistry({
       action,
-      tools: [createToolContribution(action, 'acme.tool.inspect')],
+      tools: [createToolContribution(action, 'tool/inspect')],
       targetActionInvocations,
       activateContributionsOnDemand: async (demands) => {
         activationDemands.push(...demands);
         targetActions = [createTargetActionRegistration({
           action,
           handler: async (input, context) => ({
-            actionId: action.definition.id,
+            actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
             input,
             pluginId: context.plugin.id,
             surface: context.surface ?? 'cli',
@@ -2290,7 +2305,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { scope: 'tool' },
       context: {
         surface: 'cli',
@@ -2307,7 +2322,7 @@ describe('executeContributedAction', () => {
       result: {
         ok: true,
         result: {
-          actionId: 'inspect',
+          actionId: 'acme.action.plugin/inspect',
           input: {
             scope: 'tool',
           },
@@ -2319,7 +2334,7 @@ describe('executeContributedAction', () => {
   });
 
   it('returns activation diagnostics before invoking an action handler when lazy activation fails', async () => {
-    const action = createAction('/unused/daemon.mjs', 'acme.action.fail');
+    const action = createAction('/unused/daemon.mjs', 'action/fail');
     const handler = vi.fn(async () => null);
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [],
@@ -2339,7 +2354,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: {
         surface: 'cli',
@@ -2377,7 +2392,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: {},
       context: { surface: 'cli' },
     });
@@ -2473,7 +2488,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { selection },
       context: { surface: 'cli' },
     });
@@ -2516,7 +2531,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
       })),
-      actionId: action.definition.id,
+      actionId: buildQualifiedPluginContributionKey({ pluginId: action.pluginId ?? '', localId: action.definition.id }),
       input: { selection },
       context: { surface: 'cli' },
     });
@@ -2540,7 +2555,7 @@ describe('executeContributedAction', () => {
 
     const result = await executeContributedAction({
       registry: createRegistry(createAction(daemonEntryPath)),
-      actionId: 'acme.review.start',
+      actionId: 'acme.action.plugin/review/start',
       input: {},
       context: {
         defaultSessionId: 'sess-1',

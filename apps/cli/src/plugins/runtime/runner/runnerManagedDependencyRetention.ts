@@ -1,18 +1,17 @@
 import { z } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
-import { PluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { MachinePluginSourceCustodySchema, isMachinePluginSourceCustody } from '../sourceAuthority';
 
 const HostPluginIdSchema = asHostProtocolZod(PluginIdSchema);
-const HostPluginSourceCustodyV1Schema = asHostProtocolZod(
-    PluginSourceCustodyV1Schema,
-);
 
 export function runnerPluginSourceCustodyIdentity(
     value: PluginSourceCustodyV1,
 ): string {
+    if (!isMachinePluginSourceCustody(value)) throw new Error('Runner custody does not establish a Machine executable source');
     if (value.kind === 'managed') {
         return `managed:${value.installSource}:${value.immutableGenerationId}`;
     }
@@ -44,7 +43,7 @@ const SortedUniqueBoundedStringsSchema = (
 
 export const RunnerManagedProviderRetainedAuthorityV1Schema = z.strictObject({
     pluginId: HostPluginIdSchema,
-    sourceCustody: HostPluginSourceCustodyV1Schema,
+    sourceCustody: MachinePluginSourceCustodySchema,
     manifestAuthority: z.enum(['external', 'bundled_first_party']),
     hardRevocationRevisionAtAdmission:
         z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
@@ -57,7 +56,7 @@ export type RunnerManagedProviderRetainedAuthorityV1 = Readonly<z.infer<
 export const RunnerManagedDependencySourceCandidateV1Schema = z.strictObject({
     qualifiedDependencyId:
         z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
-    sourceCustody: HostPluginSourceCustodyV1Schema,
+    sourceCustody: MachinePluginSourceCustodySchema,
     manifestAuthority:
         z.enum(['external', 'bundled_first_party']),
 });
@@ -110,7 +109,7 @@ export const RunnerManagedDependencyRetentionV1Schema = z.strictObject({
     v: z.literal(1),
     adoptedManagedProviderAuthority:
         z.optional(RunnerManagedProviderRetainedAuthorityV1Schema),
-    sourceCustodies: z.array(HostPluginSourceCustodyV1Schema).check(z.maxLength(64), z.superRefine((values, context) => {
+    sourceCustodies: z.array(MachinePluginSourceCustodySchema).check(z.maxLength(64), z.superRefine((values, context) => {
             const identities = values.map(runnerPluginSourceCustodyIdentity);
             if (identities.some((value, index) => (
                 index > 0 && identities[index - 1]! >= value

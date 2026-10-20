@@ -53,6 +53,8 @@ import type {
     PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
 import type { ActionHandler, PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import { PLUGIN_ACCOUNT_STORAGE_UNAVAILABLE_CODE } from '../context/storage';
 import {
     readPluginActionInputParser,
     readPluginActionResultParser,
@@ -118,17 +120,22 @@ function invokeCapturedActionHandler(
     context: PluginInvocationContext,
     account = false,
 ): ReturnType<ActionHandler> {
-    const invocationContext = account ? Object.freeze({
+    if (!account) return Reflect.apply(handler, undefined, [input, context]);
+    const invocationContext = Object.freeze({
         plugin: context.plugin, contribution: context.contribution, surface: context.surface,
         invokedAtMs: context.invokedAtMs, signal: context.signal,
         ...(context.caller ? { caller: context.caller } : {}),
         services: Object.freeze({
-            storage: Object.freeze({ account: context.services.storage.account }),
+            storage: Object.freeze({ get account() {
+                const accountStorage = context.services.storage.account;
+                if (!accountStorage) throw new PluginError({ code: PLUGIN_ACCOUNT_STORAGE_UNAVAILABLE_CODE, message: 'Account storage is unavailable' });
+                return accountStorage;
+            } }),
             actions: Object.freeze({ execute: context.services.actions.execute,
                 executeAdmittedTargetedOperation: context.services.actions.executeAdmittedTargetedOperation }),
             targetedContributions: context.services.targetedContributions,
         }),
-    }) satisfies PluginAccountActionContext : context;
+    }) satisfies PluginAccountActionContext;
     return Reflect.apply(handler, undefined, [input, invocationContext]);
 }
 

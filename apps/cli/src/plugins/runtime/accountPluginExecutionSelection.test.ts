@@ -44,8 +44,8 @@ describe('captured Account execution selection transport', () => {
             sourceSpec: { kind: 'bundled', locator: packageName, trustPolicy: 'prompt', installPolicy: 'copy' } as const };
         try {
             const source = await resolveAccountPluginActivationSources({
-                contributes: projectLoadedPluginContributes({ provenance: 'first_party',
-                    loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } }),
+                contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
+                    loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } })),
                 paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'captured-account', encryption: null },
                 serverUrl: 'http://captured-home.test', isCurrent: () => true,
                 resolveBundledActivationSource: createBundledActivationSourceResolver({ bundledPackageNames: [packageName],
@@ -168,17 +168,20 @@ describe('captured Account execution selection transport', () => {
         const home = await mkdtemp(join(tmpdir(), 'disabled-account-selection-'));
         const pluginId = 'com.acme.account';
         let returnedPluginId = pluginId;
+        let httpStatus = 200;
         const response = () => PluginAvailabilityIntentReadActionOutputV1Schema.parse({ availabilityCursor: 1,
             hostingCapability: { enabled: false }, intent: { pluginId: returnedPluginId, desiredVersion: null,
                 enabled: false, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
             release: null, uiArtifacts: [], packageAssets: [] });
-        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async request => {
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async (request, reply) => {
             expect(request.headers.authorization).toBe('Bearer captured-account');
             expect(request.body).toEqual({ pluginId });
+            if (httpStatus !== 200) return reply.code(httpStatus).send({ error: 'Home unavailable' });
             return response();
         });
-        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async () => ({
-            availabilityCursor: 1, pluginIds: [pluginId], intentReads: [{ pluginId, response: response() }], failedPluginIds: [] }));
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async (_request, reply) =>
+            httpStatus !== 200 ? reply.code(httpStatus).send({ error: 'Home unavailable' }) : {
+                availabilityCursor: 1, pluginIds: [pluginId], intentReads: [{ pluginId, response: response() }], failedPluginIds: [] });
         await app.ready();
         const restore = installAxiosFastifyAdapter({ app, origin: 'http://captured-home.test' });
         try {
@@ -192,6 +195,11 @@ describe('captured Account execution selection transport', () => {
             expect(source.contributes.pluginDeclarations).toEqual([]);
             returnedPluginId = 'com.acme.other';
             await expect(readCurrentAccountPluginExecutionSelection(input)).rejects.toThrow('plugin_account_execution_identity_mismatch');
+            httpStatus = 503;
+            await expect(readCurrentAccountPluginExecutionSelection(input)).rejects.toMatchObject({ response: { status: 503 } });
+            await expect(resolveAccountPluginActivationSources({ ...input, contributes: createResolvedContributionRegistry({}),
+                paths: resolvePluginStorePaths({ happyHomeDir: home }), isCurrent: () => true, resolveBundledActivationSource: () => null }))
+                .rejects.toMatchObject({ response: { status: 503 } });
         } finally { restore(); await app.close(); await rm(home, { force: true, recursive: true }); }
     });
 });

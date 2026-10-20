@@ -15255,6 +15255,7 @@ export async function startDaemonSessionControlRuntime(
     requesterAccountContext?: RequesterAccountActionContext,
     sessionStopEffect?: ActionExecutorDeps['sessionStop'],
     postAgentDiscussionMessage?: Parameters<typeof createCliActionExecutorFromCredentials>[0]['postAgentDiscussionMessage'],
+    accountPluginActions?: Readonly<{ accountPluginActions: true }>,
   ): Pick<
     ReturnType<typeof createCliActionExecutorFromCredentials>,
     'execute' | 'replayApprovedApprovalRequest' | 'continueConfidentialApprovalRequest'
@@ -15674,6 +15675,7 @@ export async function startDaemonSessionControlRuntime(
             }
           : {}),
         pluginActionExecutionOwner: 'current_process',
+        ...accountPluginActions,
         ...(params.pluginChangeService ? { pluginChangeService: params.pluginChangeService } : {}),
         revalidatePluginActionCallerMaterialization: async (reference) => {
           const lease = await acquireDaemonPluginRuntimeRegistryLease();
@@ -16491,7 +16493,7 @@ export async function startDaemonSessionControlRuntime(
               elapsedMs: Math.max(0, Date.now() - requesterStartedAt), requesterRuntimeBound: Boolean(requesterRuntime) },
             postAgentDiscussionMessage: async (request, witness, options) => await relayDiscussionAgentPublication(
               credentials, serverHttpBaseUrl, { request, witness }, options?.signal),
-            createExecutor: (getCurrentTurnWorkDepth, isCallerCurrent, postAgentDiscussionMessage) =>
+            createExecutor: (getCurrentTurnWorkDepth, isCallerCurrent, postAgentDiscussionMessage, accountPluginActions) =>
               createExternalActionExecutor(
                 credentials,
                 getCurrentTurnWorkDepth,
@@ -16502,6 +16504,7 @@ export async function startDaemonSessionControlRuntime(
                 undefined,
                 undefined,
                 postAgentDiscussionMessage,
+                accountPluginActions,
               ),
             prepareExternalActionAuthorization: createSessionAccountActionAuthorizationPreparer(
               credentials, requesterRuntime, serverHttpBaseUrl,

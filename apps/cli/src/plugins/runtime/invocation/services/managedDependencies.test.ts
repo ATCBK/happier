@@ -242,6 +242,23 @@ describe('ready-only preflight executable resolution', () => {
 });
 
 describe('stable plugin managed dependencies host', () => {
+    it.each([
+        { kind: 'account_release', pluginId: 'acme.plugin', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/plugin', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+    ] satisfies PluginSourceCustodyV1[])('refuses portable declaration custody at runner dependency retention: $kind', (sourceCustody) => {
+        const host = v2Host({
+            contributions: [v2Contribution('acme.plugin', 'tool', [{ kind: 'system', executableNames: ['tool'] }])],
+            resolveSourceAdapter: async () => adapter('unused'),
+            sourceCustodiesByPluginId: new Map([['acme.plugin', sourceCustody]]),
+        });
+        const inputs = retainedRunnerInputs({ pluginId: 'acme.plugin', immutableGenerationId: 'runner-generation',
+            executableIds: [{ pluginId: 'acme.plugin', localId: 'tool' }] });
+        expect(() => host.snapshotRunnerRetention(inputs.binding, inputs.hostAccessRequests)).toThrowError(expect.objectContaining({
+            code: 'plugin_managed_dependency_retention_generation_unavailable',
+        }));
+    });
+
     it('retains bundled dependencies from the runner snapshot across a daemon snapshot change', () => {
         const daemonCustody = {
             kind: 'bundled_first_party' as const,

@@ -304,7 +304,6 @@ describe('bundled plugin locators', () => {
         expect(loadBundledPluginLocators([locator()])).toEqual([
             expect.objectContaining({
                 pluginId: 'happier.provider.fixture',
-                pluginRootPath: '@happier-dev/plugins-fixture',
                 daemonEntryPath: null,
                 sourceSpec: expect.objectContaining({ kind: 'bundled' }),
             }),

@@ -6,6 +6,8 @@ import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime
 import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
 import { logger } from '@/ui/logger';
 import { activateContributionModule } from './activateContributionModule';
+import { loadBundledPluginLocators } from '@/plugins/projection/registry/builtIn/locators';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 
 type PluginMcpServerRuntime = Parameters<PluginApi['mcp']['registerServer']>[1];
 
@@ -33,6 +35,24 @@ function mcpRuntime(dispose: PluginMcpServerRuntime['dispose']): PluginMcpServer
 }
 
 describe('contribution module activation', () => {
+    it('activates the current bundled Triage root with exactly its declared daemon Action rights', async () => {
+        const triage = await import('@happier-dev/plugins-triage');
+        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(row => row.pluginId === triage.PLUGIN_MANIFEST.id);
+        if (!locator) throw new Error('Missing canonical bundled Triage locator');
+        const bundled = loadBundledPluginLocators([locator])[0];
+        if (!bundled) throw new Error('Missing current bundled Triage declaration');
+        const expected = bundled.manifest.contributes.actions.filter(action => action.execution.target === 'daemon').map(action => action.id).sort();
+        const result = await activateContributionModule({ pluginId: bundled.manifest.id, occurrenceId: 'triage-daemon-checkpoint',
+            isOccurrenceCurrent: () => true, manifest: bundled.manifest, manifestAuthority: 'bundled_first_party', moduleNamespace: triage });
+        try {
+            expect(result.status, JSON.stringify(result.diagnostics)).toBe('active');
+            const registeredActions = result.registrations.filter(row => row.family === 'actions').map(row => row.localId).sort();
+            expect(registeredActions).toEqual(expected);
+            expect(registeredActions).toContain('internal/tasks/configure-v1');
+            expect(bundled.manifest.contributes.actions.find(action => action.id === 'internal/tasks/configure-v1')?.execution.target).toBe('daemon');
+        } finally { await result.dispose(); }
+    });
+
     it('activates a portable Account export with only its declared Account Action rights', async () => {
         let capturedApi: unknown;
         const result = await activateContributionModule({

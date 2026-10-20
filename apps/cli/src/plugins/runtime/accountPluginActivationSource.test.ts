@@ -1,22 +1,175 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { describe, expect, it, vi } from 'vitest';
+import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { resolveAccountPluginActivationSources } from './accountPluginActivationSource';
 import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
 import { createCommittedContributedActionInvoker, createCommittedContributedActionDefinitionLister,
     createCommittedContributedActionSchemaReader } from './invocation/actions/createCommittedContributedActionDeps';
-import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutor, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { registerAuthoredAccountActionRelease } from './accountPluginActions.testkit';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/install/ui/generatedArtifacts';
+import { createBundledActivationSourceResolver } from './bundledActivationSource';
+import * as daemonControlClient from '@/daemon/controlClient';
+import { executeAccountPluginAction } from '@/session/actions/executeAccountPluginAction';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 describe('Account activation source assembly', () => {
+    it('reports one missing bundled root without losing another Account source', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-source-isolation-'));
+        const app = fastify();
+        const declarations = ['missing', 'ready'].map(name => ({
+            pluginId: `happier.${name}`, pluginRootPath: join(home, name), manifestPath: `bundled:${name}`,
+            daemonEntryPath: null, devDaemonEntryPath: null,
+            sourceSpec: { kind: 'bundled' as const, locator: `@happier-dev/plugins-${name}`,
+                trustPolicy: 'prompt' as const, installPolicy: 'copy' as const },
+            manifest: normalizePluginManifestV2(createPluginManifestV2Fixture({ id: `happier.${name}` })),
+        }));
+        const ready = declarations[1]!;
+        await mkdir(ready.pluginRootPath);
+        await writeFile(join(ready.pluginRootPath, 'package.json'), JSON.stringify({ name: ready.sourceSpec.locator }));
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async () => ({
+            availabilityCursor: 1, pluginIds: declarations.map(declaration => declaration.pluginId), failedPluginIds: [],
+            intentReads: declarations.map(declaration => ({ pluginId: declaration.pluginId,
+                response: { availabilityCursor: 1, hostingCapability: { enabled: false }, intent: null,
+                    release: null, uiArtifacts: [], packageAssets: [] } })),
+        }));
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-source-isolation.test' });
+        try {
+            const sources = await resolveAccountPluginActivationSources({
+                contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
+                    loadResult: { loadedPlugins: declarations, diagnosticsByPluginId: {} } })),
+                paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'fixture', encryption: null },
+                serverUrl: 'http://account-source-isolation.test', isCurrent: () => true,
+                resolveBundledActivationSource: createBundledActivationSourceResolver({
+                    bundledPackageNames: declarations.map(declaration => declaration.sourceSpec.locator), bundledDeclarations: declarations }),
+            });
+            expect(sources.readSelection('happier.missing')).toEqual({ kind: 'unavailable', code: 'plugin_account_execution_unavailable' });
+            expect(sources.sourcesByPluginId.has('happier.missing')).toBe(false);
+            expect(sources.readSelection(ready.pluginId)).toMatchObject({ kind: 'available' });
+            expect(sources.isCurrent(ready.pluginId)).toBe(true);
+            expect(sources.sourcesByPluginId.has(ready.pluginId)).toBe(true);
+        } finally { restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
+    it('checks fresh Account placement for repeated Machine Actions without rebuilding the full Account census', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-machine-placement-'));
+        const app = fastify();
+        const action = getResolvedContributionRegistry().actions.find(action => {
+            const execution = action.definition.execution;
+            return action.pluginId && typeof execution === 'object' && execution !== null
+                && 'target' in execution && execution.target === 'daemon';
+        });
+        if (!action?.pluginId) throw new Error('Missing bundled Machine Action fixture');
+        let enabled = true;
+        let censusReads = 0;
+        let exactReads = 0;
+        const response = () => ({ availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: enabled ? null : { pluginId: action.pluginId, desiredVersion: '1.0.0', enabled: false, offlineUiHosting: 'disabled',
+                revision: '1', writableCollections: [] }, release: null, uiArtifacts: [], packageAssets: [] });
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async request => {
+            expect(PluginAvailabilityIntentReadActionInputV1Schema.parse(request.body).pluginId).toBe(action.pluginId);
+            exactReads++;
+            return response();
+        });
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async () => {
+            censusReads++;
+            return { availabilityCursor: 1, pluginIds: [action.pluginId],
+                intentReads: [{ pluginId: action.pluginId, response: response() }], failedPluginIds: [] };
+        });
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-machine-placement.test' });
+        const invoke = () => executeAccountPluginAction({ host: { token: 'fixture',
+            credentials: { token: 'fixture', encryption: null }, happyHomeDir: home, sessionId: 'cli-global',
+            mode: 'plain', ctx: null, serverId: 'machine-placement', serverHttpBaseUrl: 'http://account-machine-placement.test' },
+            deps: createUnavailableActionTransportDeps(), actionId: 'action.invoke',
+            input: { action: { pluginId: action.pluginId, localId: action.definition.id }, input: {} }, context: { surface: 'cli' } });
+        try {
+            for (let i = 0; i < 3; i++) expect(await invoke()).toEqual({ matched: false, accountSelectionUnavailable: true });
+            enabled = false;
+            expect(await invoke()).toMatchObject({ matched: true, result: { ok: false, errorCode: 'plugin_disabled' } });
+            expect(censusReads).toBe(0);
+            expect(exactReads).toBe(4);
+        } finally { restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
+    it('refuses cold corrupt Account bytes through the CLI ingress without replaying on a Machine', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-corrupt-source-'));
+        const app = fastify();
+        const { pluginId, artifactId, artifacts } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const artifact = artifacts.read(artifactId);
+        if (!artifact) throw new Error('authored fixture artifact missing');
+        artifacts.seed(artifactId, artifact.header, encodePlainArtifactStoredContent({ body: 'not an artifact archive' }));
+        let artifactReads = 0;
+        app.addHook('onRequest', async request => { if (request.url === `/v1/artifacts/${artifactId}`) artifactReads += 1; });
+        app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+        app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-corrupt-source.test' });
+        // The daemon request is the genuine cross-process boundary. A replay
+        // would succeed visibly, so the Account refusal cannot hide one.
+        const daemon = vi.spyOn(daemonControlClient, 'requestDaemonPluginActionExecution').mockResolvedValue({ matched: true,
+            result: { ok: true, result: { replayedOnMachine: true } } });
+        try {
+            const cli = createCliActionExecutor({ token: 'fixture',
+                credentials: { token: 'fixture', encryption: null, credentialProvenance: 'stored_session' },
+                happyHomeDir: home, sessionId: 'cli-global', mode: 'plain', ctx: null,
+                serverId: 'account-corrupt-source', serverHttpBaseUrl: 'http://account-corrupt-source.test' });
+            expect(await cli.execute('action.invoke', { action: { pluginId, localId: 'echo' }, input: { key: 'cold' } }, { surface: 'cli' }))
+                .toMatchObject({ ok: false, errorCode: 'plugin_action_handler_missing' });
+            expect(artifactReads).toBeGreaterThan(0);
+            expect(daemon).not.toHaveBeenCalled();
+        } finally { daemon.mockRestore(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
+    it('loads a current host-bundled portable declaration without an Account release or Machine installation', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-bundled-source-'));
+        const app = fastify();
+        const { pluginId, manifest, generated, files, setBundledFallback, setEnabled } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const packageName = '@happier-dev/plugins-account-host-fixture';
+        const pluginRootPath = join(home, 'host-bundle');
+        await mkdir(pluginRootPath, { recursive: true });
+        await writeFile(join(pluginRootPath, 'package.json'), JSON.stringify({ name: packageName }));
+        for (const file of files) {
+            const path = join(pluginRootPath, GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH, file.relativePath);
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, file.bytes);
+        }
+        const declaration = { pluginId, manifest, pluginRootPath, manifestPath: 'bundled:account-host-fixture',
+            daemonEntryPath: null, devDaemonEntryPath: null, generatedUiArtifactsManifest: generated,
+            sourceSpec: { kind: 'bundled', locator: packageName, trustPolicy: 'prompt', installPolicy: 'copy' } as const };
+        setBundledFallback();
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-bundled-source.test' });
+        try {
+            const source = await resolveAccountPluginActivationSources({
+                contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
+                    loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } })),
+                paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'fixture', encryption: null },
+                serverUrl: 'http://account-bundled-source.test', isCurrent: () => true,
+                resolveBundledActivationSource: createBundledActivationSourceResolver({ bundledPackageNames: [packageName],
+                    bundledDeclarations: [declaration] }),
+            });
+            expect(source.readSelection(pluginId)).toMatchObject({ kind: 'available',
+                sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName } } });
+            expect(source.contributes.activationTargets).toMatchObject([{ daemonEntryPath: null,
+                account: { artifactId: 'account-runtime', exportName: 'activate' } }]);
+            expect(typeof (await source.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime'))?.module.activate).toBe('function');
+            setBundledFallback(false);
+            setEnabled(false);
+            expect(await source.revalidate(pluginId)).toBe(false);
+            await expect(source.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime')).rejects.toThrow('plugin_account_execution_retired');
+        } finally { restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
     it('loads an Account release through canonical Artifact bytes without a Machine and retires on disable', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-source-'));
         const app = fastify();
@@ -30,7 +183,7 @@ describe('Account activation source assembly', () => {
             const result = await resolveAccountPluginActivationSources({ contributes: createResolvedContributionRegistry({}),
                 paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'fixture', encryption: null },
                 serverUrl: 'http://account-source.test', isCurrent: () => true, resolveBundledActivationSource: () => null });
-            expect(result.contributes.actions.map(action => action.definition.id)).toEqual(manifest.contributes.actions.map(action => action.id));
+            expect(result.contributes.actions.map(action => action.definition.id).sort()).toEqual(manifest.contributes.actions.map(action => action.id).sort());
             expect(result.contributes.activationTargets).toMatchObject([{ account: { artifactId: 'account-runtime', exportName: 'activate' } }]);
             const module = await result.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime');
             expect(typeof module?.module.activate).toBe('function');

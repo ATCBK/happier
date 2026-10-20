@@ -146,19 +146,15 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await h.close();
     }
   });
-  it('preserves original Account CLI Service Ask despite a UI waiver and replays with Machine admission', async () => {
+  it('does not publish an original Account CLI declared-Service Ask without native compound review despite a UI waiver', async () => {
     const h = await createHarness('localServices.launcher.start', 'ask', false, 'srv_n2', undefined, false, false,
       { authentication: 'account', askWithUiWaiver: true });
     try {
       const input = await h.serviceInput();
-      expect(await h.runOriginalCli(input, 'localServices.launcher.start')).toMatchObject({ ok: true,
-        result: { kind: 'approval_request_created' } });
+      expect(await h.runOriginalCli(input, 'localServices.launcher.start')).toMatchObject({ ok: false,
+        errorCode: 'approval_context_unavailable' });
+      expect(h.hasApproval()).toBe(false);
       expect(h.serviceInstances()).toHaveLength(0);
-      expect(await h.approval()).toMatchObject({ status: 'open', requestedSurface: 'cli', actionId: 'localServices.launcher.start' });
-      expect(await h.decideFromCli()).toMatchObject({ ok: true });
-      const approval = await h.approval();
-      expect(approval, JSON.stringify(approval.execution)).toMatchObject({ status: 'executed', execution: { ok: true, result: { status: 'succeeded' } } });
-      expect(h.serviceInstances()).toHaveLength(1);
     } finally {
       await Promise.all(h.serviceInstances().map(service => service.stop()));
       await h.close();
@@ -995,17 +991,18 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       expect(h.spawned).toEqual([]);
     } finally { await h.close(); }
   });
-  it('does not lend the installed Account relationship to a requester with a different target root', async () => {
+  it('does not lend the installed Account relationship when the requester target root changes before preparation', async () => {
     const h = await createHarness('projects.script.run', 'allowed', false, 'srv_portableHome', undefined, true);
     try {
-      await h.changeRequesterWorkerRoot();
+      await h.changeRequesterWorkerRootBeforePreparation();
       const result = await h.run({ workspace: { serverId: h.ref.serverId, workspaceId: h.ref.id, machineId: h.ref.machineId, rootPath: h.rootPath },
         selection: { kind: 'named', name: 'lint' }, choice: { kind: 'workers', destination: { kind: 'machine', machineId: h.workerRef.machineId } } },
         'ui', false, 'present_user');
       expect(result, JSON.stringify({ result, rpcOutcomes: h.rpcOutcomes })).toMatchObject({ ok: true });
       const output = ProjectCommandActionOutputV1Schema.parse(result.ok ? result.result : null);
-      await expect.poll(() => h.readOperation(output.operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'failed' } });
-      expect(h.copies()).toBe(0);
+      expect(await h.waitForTerminal(output.operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'failed' } });
+      expect(h.copies(), JSON.stringify({ operation: await h.readOperation(output.operation.operationId), rpcOutcomes: h.rpcOutcomes,
+        networkPaths: [...new Set(h.networkPaths)] })).toBe(0);
       expect(h.spawned).toEqual([]);
     } finally { await h.close(); }
   });
@@ -1127,47 +1124,18 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await h.close();
     }
   });
-  it.each([false, true])('admits the first approved Machine Service Start with current requester custody (setup=%s)', async setup => {
+  it.each([false, true])('refuses declared Machine Service approval publication without native compound review (setup=%s)', async setup => {
     const h = await createHarness('localServices.launcher.start', 'ask', setup);
     try {
       const input = await h.serviceInput();
       const proposal = await h.run(input, 'ui', 'unsigned-ui', 'present_user');
-      expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
-      expect(requiresExactDaemonApprovalReplay(await h.approval())).toBe(true);
-      expect(await h.decide('approve')).toMatchObject({ ok: true });
-      const execution = (await h.approval()).execution;
-      expect(execution, JSON.stringify(execution)).toMatchObject({ ok: true,
-        result: setup ? { status: 'denied', reasonCode: 'project_setup_consent_required' } : { status: 'succeeded' } });
-      if (!execution?.ok) throw new Error('Missing real Service execution');
-      assertActionOutputContract('localServices.launcher.start', execution.result);
-      const response = DaemonLocalServiceLauncherStartResponseV1Schema.parse(execution.result);
-      expect(response).toMatchObject({ machineId: h.ref.machineId, targetId: input.targetId });
-      if (setup) {
-        expect(response).toMatchObject({ reviewedEffectDigest: expect.any(String), reviewedEffect: { purpose: 'setup' } });
-        expect(h.serviceInstances()).toEqual([]);
-      } else {
-        expect(response).toMatchObject({ currentTarget: { kind: 'managed_service', machineId: h.ref.machineId,
-          workspaceId: h.ref.id, declaration: input.declaration } });
-        expect(h.serviceInstances()).toContainEqual(expect.objectContaining({ instanceId: response.currentTarget?.managedServiceId }));
-      }
-      const succeeded = vi.fn();
-      const failed = vi.fn();
-      const continuation = createActionApprovalContinuation({ artifactId: 'approval-seam', actionId: 'localServices.launcher.start',
-        scope: { serverId: 'srv_n2', accountId: 'account' }, expectedInput: input, onSucceeded: succeeded, onFailed: failed });
-      const receipt = await h.approval();
-      expect(await continuation.onExecuted({ id: 'approval-seam', title: null, header: buildApprovalRequestArtifactHeaderV1(receipt),
-        body: JSON.stringify(receipt), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2, isDecrypted: true })).toBe('consumed');
-      if (setup) {
-        expect(failed).toHaveBeenCalledWith(response.reasonCode, {
-          ok: false, errorCode: response.reasonCode, error: response.reasonCode,
-        });
-        expect(succeeded).not.toHaveBeenCalled();
-      } else {
-        expect(succeeded).toHaveBeenCalledWith(response);
-        expect(failed).not.toHaveBeenCalled();
-      }
-      expect(h.finiteIngress.length).toBeGreaterThan(0);
-      for (const ingress of h.finiteIngress) expect(ingress).toMatchObject({ accountId: 'account', homeId: 'srv_n2', current: true });
+      // Main71/B8's compound target/setup/Start subject is not yet produced.
+      // Input-only approval must not grant execution of this native declaration.
+      expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: false, errorCode: 'approval_context_unavailable' });
+      expect(h.hasApproval()).toBe(false);
+      expect(h.finiteIngress).toEqual([]);
+      expect(h.spawned).toEqual([]);
+      expect(h.serviceInstances()).toEqual([]);
     } finally {
       await h.close();
       expect(h.serviceInstances()).toEqual([]);

@@ -14,7 +14,7 @@ import {
   hasStoredSessionCredentialProvenance,
   type StoredCredentials,
 } from '@/persistence';
-import { createDaemonPluginActionExecutor } from './createDaemonPluginActionExecutor';
+import { createDaemonPluginActionExecutor, createPluginActionExecutor } from './createDaemonPluginActionExecutor';
 import { createCommittedContributedActionSchemaReader, createCommittedInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import type { CliActionExactHomeTarget } from './createCliActionDeps';
 import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
@@ -86,6 +86,8 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
     pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
+    /** Credentialed capability receiver; captured parent registries omit this. */
+    accountPluginActions?: true;
   }>;
 
 export function createCliActionExecutor(
@@ -255,11 +257,12 @@ export function createCliActionExecutor(
     },
   );
   const base = harness.executor;
+  const executeInCurrentProcess: NonNullable<Parameters<typeof createDaemonPluginActionExecutor>[0]['executeInCurrentProcess']> =
+    (actionId, input, context) => executeAccountPluginAction({ host: params, deps: harness.deps,
+      actionId, input, ...(context ? { context } : {}) });
   const pluginExecutor = params.pluginActionExecutionOwner === 'current_process'
-    ? null : createDaemonPluginActionExecutor({ base,
-      executeInCurrentProcess: (actionId, input, context) => executeAccountPluginAction({ host: params, deps: harness.deps,
-        actionId, input, ...(context ? { context } : {}) }),
-    });
+    ? params.accountPluginActions ? createPluginActionExecutor({ base, executeInCurrentProcess }) : null
+    : createDaemonPluginActionExecutor({ base, executeInCurrentProcess });
   const daemonAware = pluginExecutor ?? base;
   const resolveContext = async (context: RpcActionExecutorContext | undefined) => {
     const currentWorkspaceWrites = harness.deps.getCurrentWorkspaceWrites?.();

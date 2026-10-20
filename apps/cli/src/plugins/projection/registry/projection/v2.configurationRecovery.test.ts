@@ -11,6 +11,7 @@ import { buildPluginProjectionV2 } from './v2';
 import { readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import { projectLoadedPluginContributes } from '../resolvePluginContributions';
 import { createResolvedContributionRegistry } from '../createResolvedContributionRegistry';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 /**
  * UI-T28 — configuration reachability.
@@ -141,7 +142,7 @@ describe('UI-T28 configuration reachability after a failed activation', () => {
                 devDaemonEntryPath: null, manifest,
                 sourceSpec: { kind: 'path', locator: '/plugins/acme-tracker', trustPolicy: 'local_trusted', installPolicy: 'link' },
             }],
-        } })), occurrenceIdsByPluginId: { [PLUGIN_ID]: 'acme-tracker-occurrence-1' } };
+        } })), occurrenceIdsByPluginId: { [PLUGIN_ID]: createPluginRuntimeOccurrenceId(PLUGIN_ID) } };
         const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 4 }));
         const purpose = { consumer: { pluginId: PLUGIN_ID, localId: 'sync' }, purpose: 'tracker-api' };
         expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection })).toEqual({

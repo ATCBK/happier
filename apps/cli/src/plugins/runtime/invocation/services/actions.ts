@@ -25,6 +25,7 @@ import type {
 } from '@happier-dev/plugin-sdk/interactions';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionExecuteResult, ActionExecutorContext, ActionPluginCaller, ActionCaller, ActionId } from '@happier-dev/protocol/actions';
 import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual, PluginMachineExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -133,6 +134,8 @@ export type InvokeContributedAction = (params: Readonly<{
     expectedExecutionRouting?: PluginMachineExecutionRoutingV1;
     /** Opaque target-operation evidence from one original admitted-operation handle. */
     admittedTargetedOperation?: AdmittedTargetedOperationExecutionRequest;
+    /** Host-private original-handle fence, run by the final handler owner. */
+    beforeHandlerInvocation?(): Promise<void>;
     sessionId?: string;
     signal: AbortSignal;
 }>) => Promise<ContributedActionInvocationResult>;
@@ -343,6 +346,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
         admittedTargetedOperation: AdmittedTargetedOperationExecutionBinding,
         input: JsonValue,
         options: PluginCancellationOptions | undefined,
+        originalOperation: unknown,
         captureExecutionOrigin: boolean,
         expectedExecutionOrigin?: unknown,
         expectedExecutionRouting?: unknown,
@@ -390,6 +394,12 @@ export function createPluginInvocationActionsService(params: Readonly<{
                 contributorOccurrenceId: admittedTargetedOperation.contributorOccurrenceId,
                 targetProtocol: admittedTargetedOperation.targetProtocol,
             }),
+            beforeHandlerInvocation: async () => {
+                throwIfInactive(params.seed, signal, undefined, true);
+                requireAdmittedTargetedOperationExecutionBinding(originalOperation, params.seed,
+                    await params.seed.readCurrentTargetedDeclarations?.(signal));
+                throwIfInactive(params.seed, signal, undefined, true);
+            },
             ...(params.seed.session ? { sessionId: params.seed.session.id } : {}),
             signal,
         });
@@ -433,6 +443,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
             binding,
             admittedInput,
             options,
+            operation,
             false,
         );
         return result.value as TResult;
@@ -705,6 +716,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
             binding,
             admittedInput,
             options,
+            operation,
             true,
             options?.expectedExecutionOrigin,
             options?.expectedExecutionRouting,

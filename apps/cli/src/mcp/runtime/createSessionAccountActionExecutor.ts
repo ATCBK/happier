@@ -15,6 +15,7 @@ import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/s
 import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
 import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 import { requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
+import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
 
 type ActionExecutor = Readonly<{
   execute(actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult>;
@@ -37,12 +38,12 @@ export function createSessionAccountActionExecutor(params: Readonly<{
   /** Credentialed hosts already have the shared exact-Machine Action adapter. */
   hasAccountAuthority?: boolean;
 }>): ActionExecutor {
-  return {
-    execute: async (actionId, input, context) => {
+  const execute = async (actionId: ActionId, input: unknown, context?: ActionExecutorContext,
+    routingDescriptorRead = false): Promise<ActionExecuteResult> => {
       // These reads describe the bound host's admitted catalog, not Account data.
       // Keep its live Session policy (including memory choice) at the existing
       // executor rather than replacing it with the daemon's Account catalog.
-      if (actionId === 'action.spec.search' || actionId === 'action.spec.get') {
+      if (!routingDescriptorRead && (actionId === 'action.spec.search' || actionId === 'action.spec.get')) {
         return await params.base.execute(actionId, input, context);
       }
       // Restricted child reads use the bound Session's admitted corpus reader.
@@ -54,7 +55,17 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       const builtIn = ActionIdSchema.safeParse(actionId);
       const spec = builtIn.success ? getActionSpec(builtIn.data) : null;
       if (requiresExplicitScmMachineTarget(actionId)) return await params.base.execute(actionId, input, context);
-      const executionPlacement = spec ? resolveActionExecutionPlacementForInput(spec, input) : null;
+      let executionPlacement = spec ? resolveActionExecutionPlacementForInput(spec, input) : null;
+      if (actionId === 'action.invoke' && !params.hasAccountAuthority) {
+        // Account-only releases need not exist in the bound Machine catalog.
+        // This host-private read uses the same capability, witness and lifetime;
+        // author-facing discovery above retains the bound Session policy.
+        const actual = await readContributedActionExecutionPlacement(input,
+          request => execute('action.spec.get', request, context, true));
+        if (!actual) return await params.base.execute(actionId, input, context);
+        if (!actual.ok) return actual.failure;
+        executionPlacement = actual.placement;
+      }
       const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
         && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;
       // The bound host holds its own Board stored-content key. Other
@@ -161,6 +172,6 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         if (isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition(error)) return uncertain();
         throw error;
       }
-    },
-  };
+    };
+  return { execute: (actionId, input, context) => execute(actionId, input, context) };
 }

@@ -118,7 +118,9 @@ describe('createHostContributedActionInvoker', () => {
             }, actionExecutor: executor, invokeContributedAction,
         });
         try {
-            const failure = await service[method]({ pluginId: 'acme.target', localId: 'write' }, {}).then(() => null, error => error);
+            const action = { pluginId: 'acme.target', localId: 'write' };
+            const pending = method === 'execute' ? service.execute(action, {}) : service.executeWithExecutionOrigin(action, {});
+            const failure = await pending.then(() => null, (error: unknown) => error);
             expect(effects).toBe(0);
             expect(failure).toMatchObject({ code: 'credential_scope_denied' });
         } finally { targets.dispose(); await owners.dispose(); }

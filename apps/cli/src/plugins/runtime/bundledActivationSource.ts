@@ -495,12 +495,19 @@ export function createBundledActivationSourceResolver(params: Readonly<{
             const declarationDigest = computePluginAccountBundledDeclarationDigestV1(declaration.manifest);
             if (computePluginAccountBundledDeclarationDigestV1(target.manifest) !== declarationDigest) return null;
             if (!isAbsolute(declaration.pluginRootPath) || !isAbsolute(target.pluginRootPath)) return null;
-            const packageRoot = realpathSync(declaration.pluginRootPath);
-            if (realpathSync(target.pluginRootPath) !== packageRoot) return null;
-            if (params.packagedRuntimeRoot) {
-                const expectedRoot = realpathSync(resolve(params.packagedRuntimeRoot, 'node_modules',
-                    ...parseContainedPackageNameSegments(packageName)));
-                if (expectedRoot !== packageRoot || !params.packagedRuntime) return null;
+            let packageRoot: string;
+            try {
+                packageRoot = realpathSync(declaration.pluginRootPath);
+                if (realpathSync(target.pluginRootPath) !== packageRoot) return null;
+                if (params.packagedRuntimeRoot) {
+                    const expectedRoot = realpathSync(resolve(params.packagedRuntimeRoot, 'node_modules',
+                        ...parseContainedPackageNameSegments(packageName)));
+                    if (expectedRoot !== packageRoot || !params.packagedRuntime) return null;
+                }
+            } catch {
+                // Missing/unreadable bytes refuse this source through the existing
+                // per-plugin selection, rather than aborting the entire census.
+                return null;
             }
             const sourceAuthority = bindPluginRuntimeSourceAuthority({ custody: {
                 kind: 'bundled_first_party', packagedRuntime: params.packagedRuntimeRoot && params.packagedRuntime

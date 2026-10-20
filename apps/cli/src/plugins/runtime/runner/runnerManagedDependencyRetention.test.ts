@@ -4,6 +4,7 @@ import {
     areRunnerManagedProviderRetainedAuthoritiesEqual,
     mergeRunnerManagedDependencyRetentionV1,
     RunnerManagedProviderRetainedAuthorityV1Schema,
+    RunnerManagedDependencyRetentionV1Schema,
 } from './runnerManagedDependencyRetention';
 
 const bundledAuthority = Object.freeze({
@@ -18,6 +19,19 @@ const bundledAuthority = Object.freeze({
 });
 
 describe('Runner managed Provider retained authority', () => {
+    it.each([
+        { kind: 'account_release', pluginId: 'acme.provider', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/provider', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+    ])('refuses non-Machine executable custody in retained dependencies: $kind', (sourceCustody) => {
+        expect(RunnerManagedDependencyRetentionV1Schema.safeParse({
+            v: 1, sourceCustodies: [sourceCustody], qualifiedDependencyIds: [],
+        }).success).toBe(false);
+        expect(RunnerManagedProviderRetainedAuthorityV1Schema.safeParse({
+            ...bundledAuthority, sourceCustody,
+        }).success).toBe(false);
+    });
+
     it('strictly requires and preserves the private Provider source class', () => {
         expect(
             RunnerManagedProviderRetainedAuthorityV1Schema.safeParse({

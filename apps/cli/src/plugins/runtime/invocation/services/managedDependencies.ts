@@ -19,6 +19,7 @@ import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 
 import type { RuntimeInstallableAdapter } from '@/packagedRuntime/installables/registry';
 import { selectRunnerManagedDependencySourceCustody } from '@/plugins/runtime/retainedPluginSourceAttestation';
+import { isMachinePluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
 import type {
     ManagedDependencySourceModelDependency,
     ManagedDependencySourceModelEntry,
@@ -395,7 +396,7 @@ export function createStablePluginManagedDependenciesHost(params: Readonly<{
                 params.sourceCustodiesByPluginId?.get(
                     owner.dependency.identity.pluginId,
                 );
-            if (!registeredCustody) {
+            if (!registeredCustody || !isMachinePluginSourceCustody(registeredCustody)) {
                 return fail(
                     'plugin_managed_dependency_retention_generation_unavailable',
                     'Managed dependency immutable source occurrenceId is unavailable',

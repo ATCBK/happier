@@ -14,6 +14,7 @@ import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/i
 import { buildDiscussionModelSessionCreationProofPayloadV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1';
 import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import * as requesterAccountOwner from './requesterAccountActionProjection';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -84,7 +85,8 @@ describe('admitted requester Action projection', () => {
       actionId: 'discussion.second_opinion.start', requestId: envelope.requestId, target: envelope.target,
       requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
     } });
-    let current = true, archivedAt: number | null = null, creationLocalId = input.retry.creationLocalId, slotPath = launch.directory.path;
+    let current = true, archivedAt: number | null = null, creationLocalId = input.retry.creationLocalId;
+    let slotPath: string = launch.directory.path;
     const summary = () => ({ id: 'created-opinion', ownerAccountId: 'bob', encryptionMode: 'plain', anchor: null,
       access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId,
       titleContent: { t: 'plain', v: { v: 1, title: 'Review' } },
@@ -188,7 +190,7 @@ describe('admitted requester Action projection', () => {
         if (!execution) throw new Error('Missing installed source proof');
         return rpc.handleRequest({ method, params: value, requestId: 'native-opinion', originalActionEnvelope: envelope,
           callerAuthority: 'present_user', callerInputAuthorization: sealed,
-          workspaceSyncSourceExecution: { method, params: value, requestId: 'native-opinion', originalActionEnvelope: envelope,
+          workspaceSyncSourceExecution: { method, params: StrictJsonValueSchema.parse(value), requestId: 'native-opinion', originalActionEnvelope: envelope,
             externalActionExecution: execution }, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'model-owner',
             machineId: 'model-machine', installationId: installation.installationId, role: 'use', encryptionMode: 'plain' } });
       };
@@ -198,8 +200,8 @@ describe('admitted requester Action projection', () => {
     } finally { await admitted.dispose(); }
   });
   it.each([
-    { mode: 'plain', failure: 'network', expected: 'target_unavailable' },
-    { mode: 'e2ee', failure: 'network', expected: 'target_unavailable' },
+    { mode: 'plain', failure: 'network', expected: 'storage_unavailable' },
+    { mode: 'e2ee', failure: 'network', expected: 'storage_unavailable' },
     { mode: 'plain', failure: 'authentication', expected: 'invalid_envelope' },
     { mode: 'e2ee', failure: 'authentication', expected: 'invalid_encrypted_envelope' },
   ] as const)('preserves unavailable Home admission without accepting refused custody ($mode/$failure)', async ({ mode, failure, expected }) => {
@@ -369,12 +371,16 @@ describe('admitted requester Action projection', () => {
       expect(await context.refreshAccountSettings()).toBe(true);
       expect(context.savedSecretOperationContext.readSnapshot()?.settingsVersion).toBe(version);
       expect(reads).toBe(initialReads + 1);
+      const beforeInvalid = context.savedSecretOperationContext.readSnapshot();
       await channel.pushInvalidSettings('bob');
-      expect(await context.refreshAccountSettings()).toBe(false);
+      expect(context.savedSecretOperationContext.readSnapshot()).toEqual(beforeInvalid);
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(reads).toBe(initialReads + 2);
+      expect(context.savedSecretOperationContext.readSnapshot()).toMatchObject({ settingsVersion: version, settings });
       await channel.pushSettings('bob', settings, ++version);
       expect(await context.refreshAccountSettings()).toBe(true);
       await channel.disconnect();
-      expect(await context.refreshAccountSettings()).toBe(false);
+      await expect(context.refreshAccountSettings()).rejects.toMatchObject({ retryable: true });
       version++;
       await channel.reconnect();
       expect(await context.refreshAccountSettings()).toBe(true);

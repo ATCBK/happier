@@ -185,7 +185,7 @@ async function readMountedTargetedUiProjection(input: Readonly<{
         machineId: 'machine_targeted_semantics',
         pluginId: input.mountedTarget.pluginId,
     }));
-    if (response.status !== 'current') throw new Error(`targeted_contributions_read_${response.code}`);
+    if (response.status !== 'current') throw new Error(`targeted_contributions_read_${response.status === 'unavailable' ? response.code : response.status}`);
     expect(response.targetedContributions.target.occurrenceId).toBe(input.mountedTarget.occurrenceId);
     return response;
 }

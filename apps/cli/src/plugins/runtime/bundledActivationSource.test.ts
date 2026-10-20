@@ -100,6 +100,29 @@ afterEach(async () => {
 });
 
 describe('createBundledActivationSourceResolver', () => {
+  it('keeps another bundled source usable when one declared package root is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-account-missing-bundle-'));
+    tempDirs.push(root);
+    const declarations = ['missing', 'ready'].map(name => {
+      const packageName = `@happier-dev/plugins-${name}`;
+      return {
+        pluginId: `happier.${name}`, pluginRootPath: join(root, name), manifestPath: `bundled:${name}`,
+        daemonEntryPath: null, devDaemonEntryPath: null,
+        sourceSpec: { kind: 'bundled' as const, locator: packageName, trustPolicy: 'prompt' as const, installPolicy: 'copy' as const },
+        manifest: normalizePluginManifestV2(createPluginManifestV2Fixture({ id: `happier.${name}` })),
+      };
+    });
+    const ready = declarations[1]!;
+    await mkdir(ready.pluginRootPath);
+    await writeFile(join(ready.pluginRootPath, 'package.json'), JSON.stringify({ name: ready.sourceSpec.locator }));
+    const resolveSource = createBundledActivationSourceResolver({
+      bundledPackageNames: declarations.map(declaration => declaration.sourceSpec.locator), bundledDeclarations: declarations,
+    });
+    expect(resolveSource(declarations[0]!, { realm: 'account' })).toBeNull();
+    const source = resolveSource(ready, { realm: 'account' });
+    expect(source?.sourceAuthority).toMatchObject({ kind: 'bundled_first_party', resolvedRoot: await realpath(ready.pluginRootPath) });
+    await expect(source?.prepare?.()).resolves.toBeUndefined();
+  });
   it.each([
     { mode: 'packaged', daemon: false }, { mode: 'source', daemon: false },
     { mode: 'packaged', daemon: true }, { mode: 'source', daemon: true },

@@ -30,7 +30,7 @@ import {
   loadRetainedAgentRuntimeLeaf,
   verifyRunnerAgentBindingAgainstGeneration,
 } from './loadRetainedAgentRuntimeLeaf';
-import { resolveRetainedBundledPluginRoot } from '../retainedPluginSourceAttestation';
+import { attestRetainedPluginSource, resolveRetainedBundledPluginRoot } from '../retainedPluginSourceAttestation';
 import { resolveFirstPartyInstallLayout } from '@happier-dev/cli-common/firstPartyRuntime';
 import { explainPinnedRunnerSnapshotUnreadiness } from '@happier-dev/cli-common/pinnedRunnerSnapshot';
 import { publishPinnedRunnerSnapshotFixture } from '@/testkit/process/spawnHappyCliHarness';
@@ -424,6 +424,28 @@ async function prepareHostDeclarativeBinding(input: Readonly<{
 }
 
 describe('loadRetainedAgentRuntimeLeaf', () => {
+  it('rejects another bundled plugin root inside the retained source repository', async () => {
+    const cliRoot = await realpath(join(import.meta.dirname, '../../../..'));
+    const siblingRoot = await realpath(join(cliRoot, '../../packages/plugins/codex'));
+    await expect(attestRetainedPluginSource({
+      paths: resolvePluginStorePaths({ happyHomeDir: join(tmpdir(), 'happier-retained-root-refusal') }),
+      pluginId: 'happier.agent.claude', custody: { kind: 'development', registeredRootId: siblingRoot },
+      manifestAuthority: 'bundled_first_party', runnerSnapshotIdentity: `path:${cliRoot}`,
+    })).rejects.toThrow('does not belong to the runner');
+  });
+
+  it.each([
+    { kind: 'account_release', pluginId: 'acme.runner-loader', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+    { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
+    { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/runner-loader', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+  ])('refuses portable custody at the retained Agent load boundary: $kind', async (sourceCustody) => {
+    await expect(loadRetainedAgentRuntimeLeaf({
+      paths: resolvePluginStorePaths({ happyHomeDir: join(tmpdir(), 'happier-portable-no-machine-root') }),
+      binding: { kind: 'host_declarative_acp_v1', v: 1, pluginId: 'acme.runner-loader', pluginVersion: '1.0.0',
+        agentId: 'acme.runner-loader/fixture', qualifiedAgentId: 'acme.runner-loader/agents/fixture', localAgentId: 'fixture', sourceCustody },
+    })).rejects.toThrow('Machine executable source');
+  });
+
   it('retains experimental resume without Connected Accounts and retires its predicate with the leaf', async () => {
     const tempRoot = await realpath(await mkdtemp(join(tmpdir(), 'happier-retained-resume-')));
     let leaf: Awaited<ReturnType<typeof loadRetainedAgentRuntimeLeaf>> | undefined;

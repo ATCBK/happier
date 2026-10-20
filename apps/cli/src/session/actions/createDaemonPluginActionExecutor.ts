@@ -25,8 +25,9 @@ type ActionExecutorLike = Readonly<{
 type PluginActionExecutor = ActionExecutorLike & Readonly<{
   invokeContributedAction: NonNullable<ActionExecutorDeps['invokeContributedAction']>;
 }>;
-export type CurrentProcessPluginActionExecutionAttempt = PluginActionExecutionAttempt
-  | Readonly<{ matched: false; accountSelectionUnavailable: true }>;
+export type CurrentProcessPluginActionExecutionAttempt =
+  | Readonly<{ matched: false; accountSelectionUnavailable?: true }>
+  | Readonly<{ matched: true; result: ActionExecuteResult }>;
 
 const DAEMON_OWNED_PLUGIN_META_ACTION_IDS = new Set<string>([
   'action.spec.search',
@@ -75,7 +76,7 @@ export type PluginActionExecutionRequestOwner = (request: Readonly<{
 export function createPluginActionExecutor(params: Readonly<{
   base: ActionExecutorLike;
   executeInCurrentProcess?: (actionId: string, input: unknown, context?: OccurrenceBoundActionExecutorContext) => Promise<CurrentProcessPluginActionExecutionAttempt>;
-  requestPluginActionExecution: PluginActionExecutionRequestOwner;
+  requestPluginActionExecution?: PluginActionExecutionRequestOwner;
   getInitiatingActionCaller?: () => ActionCaller | null;
   /** Host-stamped descriptive fallback; an exact context caller takes precedence. */
   startedBy?: WorkflowRunStartedByV1;
@@ -94,7 +95,7 @@ export function createPluginActionExecutor(params: Readonly<{
       ? resolveWorkflowRunStartedByForActionCallerV1(admittingCaller)
       : params.startedBy;
     const local = await params.executeInCurrentProcess?.(actionId, input, context);
-    if (local?.matched && actionId !== 'action.spec.search') return local;
+    if (local?.matched && (actionId !== 'action.spec.search' || !params.requestPluginActionExecution)) return local;
     const contributedIdentity = parseQualifiedPluginActionId(actionId);
     const request = {
       actionId: contributedIdentity ? buildQualifiedPluginContributionKey(contributedIdentity) : actionId, input, surface,
@@ -106,7 +107,7 @@ export function createPluginActionExecutor(params: Readonly<{
         ? { expectedContributorOccurrenceId: context.expectedContributorOccurrenceId.trim() } : {}),
     };
     if (local?.matched) {
-      if (!local.result.ok) return local;
+      if (!local.result.ok || !params.requestPluginActionExecution) return local;
       const parsedLocal = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.search'].safeParse(local.result.result);
       if (!parsedLocal.success) return { matched: true as const, result: { ok: false as const,
         errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' } };
@@ -124,22 +125,31 @@ export function createPluginActionExecutor(params: Readonly<{
       } } };
     }
     if (local && 'accountSelectionUnavailable' in local) {
+      const metadataIdentity = actionId === 'action.spec.get' && typeof input === 'object' && input !== null
+        && 'id' in input && typeof input.id === 'string' ? parseQualifiedPluginActionId(input.id) : null;
       const reference = PluginContributionIdentityV1Schema.safeParse(actionId === 'action.invoke'
-        && typeof input === 'object' && input !== null && 'action' in input ? input.action : contributedIdentity);
+        && typeof input === 'object' && input !== null && 'action' in input ? input.action : metadataIdentity ?? contributedIdentity);
       const unavailable = { matched: true as const, result: { ok: false as const,
         errorCode: 'plugin_action_execution_placement_unavailable', error: 'plugin_action_execution_placement_unavailable' } };
+      // An Account-classified receiver may read a current Machine descriptor,
+      // but losing Account custody cannot admit a Machine effect there.
+      if (!params.requestPluginActionExecution && actionId !== 'action.spec.get') return unavailable;
       if (!reference.success) return unavailable;
       const id = formatQualifiedPluginActionId(reference.data);
       // This is the incumbent semantic descriptor read, not a second catalog
       // or an endpoint capability probe. Unknown/Account placement refuses.
-      const descriptor = await params.requestPluginActionExecution({ ...request, actionId: 'action.spec.get', input: { id } },
-        context?.signal ? { signal: context.signal } : undefined);
+      const descriptor = params.requestPluginActionExecution
+        ? await params.requestPluginActionExecution({ ...request, actionId: 'action.spec.get', input: { id } },
+          context?.signal ? { signal: context.signal } : undefined)
+        : { matched: true as const, result: await params.base.execute('action.spec.get', { id }, context) };
       if (!descriptor.matched || !descriptor.result.ok) return unavailable;
       const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].safeParse(descriptor.result.result);
       if (!parsed.success || parsed.data.actionSpec.id !== id || parsed.data.actionSpec.executionPlacement !== 'machine') return unavailable;
+      if (!params.requestPluginActionExecution || actionId === 'action.spec.get') return descriptor;
       // The daemon's ordinary final owner rechecks its current declaration and
       // refuses Account placement immediately before any handler invocation.
     }
+    if (!params.requestPluginActionExecution) return { matched: false as const };
     return context?.signal
       ? await params.requestPluginActionExecution(request, { signal: context.signal })
       : await params.requestPluginActionExecution(request);

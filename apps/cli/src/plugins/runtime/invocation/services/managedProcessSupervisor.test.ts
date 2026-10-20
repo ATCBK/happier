@@ -367,6 +367,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                 const terminateTree = processTree.terminateProcessTree;
                 let capturedTree: Extract<Awaited<ReturnType<typeof processTree.captureProcessTree>>, { status: 'ok' }> | undefined;
                 let restoreTerminationBoundary = () => {};
+                let cleanupComplete = false;
                 try {
                     let childPid = 0;
                     await vi.waitFor(async () => {
@@ -413,11 +414,16 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                     expect(retried.reasonCode ?? retried.status).toBe('succeeded');
                     await handle.dispose();
                     expect(release).toHaveBeenCalledOnce();
+                    cleanupComplete = true;
                 } finally {
                     restoreTerminationBoundary();
-                    if (capturedTree) await terminateTree({ targets: capturedTree.capturedTargets, tree: false });
-                    await handle.dispose().catch(() => undefined);
-                    if (rootPid > 0) await terminateTree({ pid: rootPid }, { ownedProcessGroup: true });
+                    // Successful Stop already proved physical settlement. Repeat
+                    // emergency cleanup only when an earlier assertion failed.
+                    if (!cleanupComplete) {
+                        if (capturedTree) await terminateTree({ targets: capturedTree.capturedTargets, tree: false });
+                        await handle.dispose().catch(() => undefined);
+                        if (rootPid > 0) await terminateTree({ pid: rootPid }, { ownedProcessGroup: true });
+                    }
                 }
             });
         },
@@ -963,11 +969,11 @@ describe('createManagedServiceProcessSupervisorHost', () => {
             const handle = await services.supervise(managedSpec('logged', { durableLog: { enabled: true, keepCount: 1 } }));
             try {
                 expect(handle.snapshot().diagnostics).toEqual([]);
-                emit?.({ stream: 'stdout', data: new TextEncoder().encode('a'.repeat(1_024)) });
+                emit?.({ sequence: 1, stream: 'stdout', data: new TextEncoder().encode('a'.repeat(1_024)) });
                 expect(handle.snapshot().diagnostics).toContainEqual(expect.objectContaining({
                     code: 'plugin_managed_service_log_truncated', severity: 'warning',
                 }));
-                emit?.({ stream: 'stderr', data: new TextEncoder().encode('b'.repeat(1_024)) });
+                emit?.({ sequence: 2, stream: 'stderr', data: new TextEncoder().encode('b'.repeat(1_024)) });
                 expect(handle.snapshot().diagnostics.filter(item => item.code === 'plugin_managed_service_log_truncated')).toHaveLength(1);
                 expect(handle.snapshot().state).toBe('healthy');
             } finally {

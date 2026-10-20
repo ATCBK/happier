@@ -1791,7 +1791,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     params?: Readonly<{
         /** Source and lifetime of the authenticated invoking Account process. */
         accountExecution?: Pick<AccountPluginActivationSourcesInput, 'credentials' | 'serverUrl' | 'isCurrent'>
-            & Readonly<{ machineId?: string }>;
+            & Readonly<{ machineId?: string; serverId?: string; serverIdentityId?: string }>;
         signal?: AbortSignal;
         readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
         happyHomeDir?: string;
@@ -2813,6 +2813,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
                     source.sourceAuthority.registeredRootId,
                     source.sourceAuthority.observedRevision,
                 ].join(':');
+            case 'account_release':
+                return undefined;
         }
     };
     const resolveExactCurrentCollectionMigrationArtifactDigest = (input: Readonly<{
@@ -4294,7 +4296,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             });
         }
         if (params?.accountExecution) {
-            const definition = runtimeRegistry.contributes.actionsById.get(buildQualifiedPluginContributionKey(request.action))?.definition;
+            const definition = runtimeRegistry.contributes.actionsById?.get(buildQualifiedPluginContributionKey(request.action))?.definition;
             const localAccountAction = typeof definition?.execution === 'object' && definition.execution !== null
                 && 'target' in definition.execution && definition.execution.target === 'account';
             if (!localAccountAction) {
@@ -4314,6 +4316,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 catch { return { status: 'unavailable' as const, code: 'plugin_action_execution_origin_unavailable',
                     message: 'Current Machine source declarations are unavailable', actionHandlerInvocation: 'notStarted' as const }; }
                 const source = sources.find(row => row.manifest.id === request.action.pluginId
+                    && (request.admittedTargetedOperation === undefined
+                        || row.occurrenceId === request.admittedTargetedOperation.contributorOccurrenceId)
                     && row.manifest.contributes.actions.some(action => action.id === request.action.localId && action.execution.target === 'daemon'));
                 if (!source) return { status: 'unavailable' as const, code: 'plugin_action_handler_missing',
                     message: 'The selected Machine has no current source Action', actionHandlerInvocation: 'notStarted' as const };
@@ -4362,6 +4366,13 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 caller: request.caller,
                 ...(request.initiatingActionCaller ? { initiatingActionCaller: request.initiatingActionCaller } : {}),
                 ...(request.sessionId ? { defaultSessionId: request.sessionId } : {}),
+                ...(params?.accountExecution || request.beforeHandlerInvocation ? { beforeHandlerInvocation: async () => {
+                    if (params?.accountExecution
+                        && await accountActivationSources?.revalidate(request.caller.pluginId, request.signal) !== true) {
+                        throw new PluginError({ code: 'plugin_action_generation_retired', message: 'The Account caller is retired' });
+                    }
+                    await request.beforeHandlerInvocation?.();
+                } } : {}),
                 signal: request.signal,
             },
         });
@@ -4408,6 +4419,17 @@ export async function resolveExecutablePluginRuntimeRegistry(
         ? createCliActionExecutorFromCredentials({
             credentials: sessionCredentials,
             readCredentials: readSessionCredentials,
+            serverId: configuration.activeServerId,
+            serverApiUrl: configuration.apiServerUrl,
+            ...(params?.accountExecution ? {
+                // This runtime already owns Account admission and any explicit
+                // nested Machine dispatch; do not re-enter daemon placement.
+                pluginActionExecutionOwner: 'current_process' as const,
+                serverId: params.accountExecution.serverId ?? configuration.activeServerId,
+                serverApiUrl: params.accountExecution.serverUrl,
+                ...(params.accountExecution.serverIdentityId
+                    ? { serverIdentityId: params.accountExecution.serverIdentityId } : {}),
+            } : {}),
             ...(params?.scopedActionRuntime
                 ? { actionsSettingsProvider: params.scopedActionRuntime.actionsSettingsProvider }
                 : {}),

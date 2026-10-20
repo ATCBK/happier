@@ -49,6 +49,8 @@ import {
 } from './createHostDeclarativeAcpAgentRuntimeFactory';
 import {
     attestRetainedPluginSource,
+    readRetainedFirstPartyDevelopmentManifest,
+    resolveRetainedFirstPartyDevelopmentRoot,
     resolveRetainedBundledPluginRoot,
 } from '../retainedPluginSourceAttestation';
 import { readRetainedBundledAgentFactory } from '../retainedBundledAgentFactory';
@@ -59,22 +61,7 @@ async function readDevelopmentManifestAuthority(
     pluginId: string,
     registeredRoot: string,
 ): Promise<'external' | 'bundled_first_party'> {
-    const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(
-        (candidate) => candidate.pluginId === pluginId,
-    );
-    if (!locator?.daemonEntryPath || locator.sourceSpec.kind !== 'bundled') return 'external';
-    let selectedRoot: string | null = null;
-    const resolveSource = createBundledActivationSourceResolver({
-        bundledPackageNames: [locator.daemonEntryPath],
-        resolveDevelopmentSourceAuthority: ({ rootPath }) => {
-            selectedRoot = rootPath;
-            return null;
-        },
-    });
-    // Reuse the daemon's root selection without loading or activating its code.
-    // A reserved plugin id alone does not establish first-party authority.
-    resolveSource(locator);
-    return selectedRoot && await realpath(selectedRoot) === registeredRoot
+    return await resolveRetainedFirstPartyDevelopmentRoot({ pluginId }) === registeredRoot
         ? 'bundled_first_party'
         : 'external';
 }
@@ -437,6 +424,8 @@ export async function verifyRunnerAgentBindingAgainstGeneration(
     }
     const manifest = retainedSource
         ? Object.freeze({ ok: true as const, manifest: retainedSource.manifest })
+        : developmentRoot && manifestAuthority === 'bundled_first_party'
+            ? { ok: true as const, manifest: readRetainedFirstPartyDevelopmentManifest({ pluginId: binding.pluginId }) }
         : await readPluginManifest({
             manifestPath: join(rootPath, '.happier-plugin', 'plugin.json'),
             manifestAuthority,

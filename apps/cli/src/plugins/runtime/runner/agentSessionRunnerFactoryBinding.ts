@@ -1,15 +1,10 @@
 import { maxCodeUnits } from '@happier-dev/protocol/strings/maxCodeUnits';
 import { MAX_AGENT_ROUTING_ID_BYTES } from '@happier-dev/protocol/agents/agentIdV1';
-import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { MAX_PLUGIN_IDENTIFIER_BYTES } from '@happier-dev/protocol/plugins/plugin-id';
 import type { AgentSessionRunnerFactoryLocatorV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { z } from 'zod/mini';
-import { asHostProtocolZod } from '../protocolComposableZodAdapter';
-
-const HostPluginSourceCustodyV1Schema = asHostProtocolZod(
-    PluginSourceCustodyV1Schema,
-);
+import { MachinePluginSourceCustodySchema, type MachinePluginSourceCustody } from '../sourceAuthority';
 
 // Contribution authority carries the literal `/agents/` namespace. Local ids
 // permit `/`, which the canonical formatter percent-encodes, so reserve the
@@ -26,7 +21,7 @@ export const AgentSessionRunnerFactoryBindingV1Schema = z.strictObject({
     // Canonical host routing id; qualified for an installed Agent.
     agentId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES)),
     localAgentId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_PLUGIN_IDENTIFIER_BYTES)),
-    sourceCustody: HostPluginSourceCustodyV1Schema,
+    sourceCustody: MachinePluginSourceCustodySchema,
     locator: z.strictObject({
         module: z.string().check(z.regex(/^\.[/][A-Za-z0-9._/-]+$/u)),
         export: z.string().check(z.regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/u)),
@@ -53,7 +48,7 @@ export const HostDeclarativeAcpRunnerBindingV1Schema = z.strictObject({
     agentId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES)),
     qualifiedAgentId: z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_AGENT_CONTRIBUTION_QUALIFIED_ID_LENGTH)),
     localAgentId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_PLUGIN_IDENTIFIER_BYTES)),
-    sourceCustody: HostPluginSourceCustodyV1Schema,
+    sourceCustody: MachinePluginSourceCustodySchema,
 });
 
 export const AgentSessionRunnerBindingV1Schema = z.union([
@@ -67,7 +62,7 @@ export type AgentSessionRunnerFactoryBindingV1 = Readonly<{
     pluginVersion: string;
     agentId: string;
     localAgentId: string;
-    sourceCustody: PluginSourceCustodyV1;
+    sourceCustody: MachinePluginSourceCustody;
     locator: AgentSessionRunnerFactoryLocatorV1;
     normalizedModulePath: string;
     loadMode: 'immutable-js' | 'source-ts';
@@ -83,7 +78,7 @@ export type HostDeclarativeAcpRunnerBindingV1 = Readonly<{
     /** Always-qualified activation/service authority contribution key. */
     qualifiedAgentId: string;
     localAgentId: string;
-    sourceCustody: PluginSourceCustodyV1;
+    sourceCustody: MachinePluginSourceCustody;
 }>;
 
 export type AgentSessionRunnerBindingV1 =
@@ -91,7 +86,7 @@ export type AgentSessionRunnerBindingV1 =
     | HostDeclarativeAcpRunnerBindingV1;
 
 export function createAgentSessionRunnerFactoryBinding(
-    input: AgentSessionRunnerFactoryBindingV1,
+    input: Omit<AgentSessionRunnerFactoryBindingV1, 'sourceCustody'> & Readonly<{ sourceCustody: PluginSourceCustodyV1 }>,
 ): AgentSessionRunnerFactoryBindingV1 {
     return Object.freeze(AgentSessionRunnerFactoryBindingV1Schema.parse({
         ...input,
@@ -108,7 +103,7 @@ export function verifyAgentSessionRunnerFactoryBindingV1(
 }
 
 export function createHostDeclarativeAcpRunnerBinding(
-    input: HostDeclarativeAcpRunnerBindingV1,
+    input: Omit<HostDeclarativeAcpRunnerBindingV1, 'sourceCustody'> & Readonly<{ sourceCustody: PluginSourceCustodyV1 }>,
 ): HostDeclarativeAcpRunnerBindingV1 {
     return Object.freeze(
         HostDeclarativeAcpRunnerBindingV1Schema.parse(input),

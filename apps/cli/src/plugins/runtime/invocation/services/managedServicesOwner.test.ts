@@ -323,12 +323,15 @@ describe('shared managed Provider physical Exec custody', () => {
 function deferred<T>(): Readonly<{
     promise: Promise<T>;
     resolve(value: T): void;
+    reject(error: unknown): void;
 }> {
     let resolve!: (value: T) => void;
-    const promise = new Promise<T>((nextResolve) => {
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((nextResolve, nextReject) => {
         resolve = nextResolve;
+        reject = nextReject;
     });
-    return Object.freeze({ promise, resolve });
+    return Object.freeze({ promise, resolve, reject });
 }
 
 function explicitStartOutcome(cleanup: () => void | Promise<void> = () => {}) {
@@ -765,7 +768,7 @@ describe('managed-services SVC09 owner', () => {
         const start = createSharedManagedProviderSessionStart({ readProjection: () => captured,
             start: async () => {
                 const service = await services.supervise(spec);
-                const projection = await harness.owner.projectManagedProviderEndpointAccess({ service,
+                const projection = await harness.owner.projectManagedProviderEndpointAccess!({ service,
                     endpoints: [{ endpointTemplateId: 'responses', servicePath: '/v1' }], signal, isCurrent: () => true });
                 if (!projection) throw new Error('Expected admitted local consumer');
                 captured = { service, projection, endpointTemplateId: 'responses', materialize: async () => ({ v: 1, kind: 'spawnEnv', env: [] }) };
@@ -972,7 +975,7 @@ describe('managed-services SVC09 owner', () => {
             if (result.status === 'rejected') throw result.reason;
             expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
             await joined.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh second input') });
-            expect(result.value.snapshot().instanceId).toBe(joined.snapshot().instanceId);
+            expect(result.value.instanceId).toBe(joined.instanceId);
             await result.value.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh first input') });
             await result.value.dispose();
             expect(replacement.dispose).not.toHaveBeenCalled();
@@ -6768,7 +6771,7 @@ describe('managed-services SVC09 owner', () => {
 });
 
 describe('Project Local Services control composition', () => {
-    it.each(['machineRpc', 'machineTransport', 'action', 'actionIngress'] as const)('delivers %s cancellation to the canonical native control without reporting stopped', async entry => {
+    it.each(['machineRpc', 'machineTransport', 'action', 'actionIngress'] as const)('keeps the native service running after %s cancellation', async entry => {
         const { owner } = createLifecycleHarness([], 'daemon');
         const input = createProjectLifecycleInput();
         let nativeStopped = false;
@@ -6880,9 +6883,12 @@ describe('Project Local Services control composition', () => {
                     }
                     result = await pending;
                 } else {
-                    result = await rpc.invokeLocal(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE, confirmed, { signal: controller.signal });
+                    // Local admission rejects an already-aborted caller before
+                    // entering its handler; transported cancellation has a reply.
+                    await expect(rpc.invokeLocal(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE, confirmed,
+                        { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
                 }
-                expect(result).toMatchObject({ ok: false, errorCode: 'cancelled' });
+                if (entry === 'machineTransport') expect(result).toMatchObject({ ok: false, errorCode: 'cancelled' });
             } else {
                 const executor = createLocalServicesDaemonRuntimeActionExecutor({ featureGate: gate, routes: { actionRoutes: routes },
                     ...(entry === 'actionIngress' ? { ingress: { signal: controller.signal } } : {}) });

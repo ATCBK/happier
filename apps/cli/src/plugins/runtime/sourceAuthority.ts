@@ -1,5 +1,30 @@
 import { normalizePluginSourceCustodyV1, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { BundledFirstPartyPluginSourceCustodyV1, BundledPackagedRuntimeCustodyV1, DevelopmentPluginSourceCustodyV1, ManagedPluginSourceCustodyV1, PluginSourceCustodyV1 } from '@happier-dev/protocol';
+import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { z } from 'zod/mini';
+import { asHostProtocolZod } from './protocolComposableZodAdapter';
+
+/** Portable Account/UI declarations do not establish a Machine executable root. */
+export type MachinePluginSourceCustody = ManagedPluginSourceCustodyV1 | DevelopmentPluginSourceCustodyV1 | Readonly<{
+    kind: 'bundled_first_party';
+    packagedRuntime: Extract<BundledPackagedRuntimeCustodyV1, { kind: 'cli_version_root' | 'pinned_runner_snapshot' }>;
+}>;
+
+export function isMachinePluginSourceCustody(custody: PluginSourceCustodyV1): custody is MachinePluginSourceCustody {
+    return custody.kind === 'managed' || custody.kind === 'development'
+        || (custody.kind === 'bundled_first_party'
+            && (custody.packagedRuntime.kind === 'cli_version_root'
+                || custody.packagedRuntime.kind === 'pinned_runner_snapshot'));
+}
+
+export const MachinePluginSourceCustodySchema = z.pipe(
+    asHostProtocolZod(PluginSourceCustodyV1Schema),
+    z.transform((custody, context): MachinePluginSourceCustody => {
+        if (isMachinePluginSourceCustody(custody)) return custody;
+        context.issues.push({ code: 'custom', message: 'Plugin custody does not establish a Machine executable source', input: custody });
+        return z.NEVER;
+    }),
+);
 
 export { PluginSourceCustodyV1Schema, normalizePluginSourceCustodyV1, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 export type {

@@ -36,6 +36,7 @@ import {
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 import { buildTargetActionInvocationRegistry } from './buildTargetActionRegistry';
+import type { ActionHandler, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     createTargetActionHostBindingResolver,
     createTargetActionHostPolicyResolver,
@@ -573,6 +574,24 @@ describe('buildTargetActionInvocationRegistry', () => {
         expect(target.evaluateCatalogPolicy('acme.alpha', localId)).toMatchObject({
             outcome: 'unavailable', code: 'plugin_host_access_service_unavailable',
         });
+    });
+
+    it.each([false, true])('admits portable Account code and refuses only demanded unavailable Account storage (storage demanded: %s)', async (demandStorage) => {
+        const portable = manifest({ execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } });
+        const invoke = vi.fn<PluginAccountActionHandler>(async (_input, context) => {
+            if (demandStorage) await context.services.storage.account.kv.get('key');
+            return { ok: true };
+        });
+        const target = buildRegistry({
+            contributes: registry({ pluginManifest: portable }), executionRealm: 'account',
+            targetActivationFacts: [fact()],
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7', registration: { family: 'actions', localId: 'run', value: invoke } }],
+        });
+        await expect(target.invoke({ pluginId: 'acme.alpha', localId: 'run', input: {}, surface: 'cli' }))
+            .resolves.toMatchObject(demandStorage
+                ? { status: 'failed', code: 'plugin_account_storage_unavailable' }
+                : { status: 'executed', value: { ok: true } });
+        expect(invoke).toHaveBeenCalledOnce();
     });
 
     it.each(['client', 'daemon'] as const)('keeps a current %s Action discoverable before daemon activation', async (executionTarget) => {

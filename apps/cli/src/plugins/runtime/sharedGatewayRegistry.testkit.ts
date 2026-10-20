@@ -28,6 +28,7 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     happyHomeDir?: string;
     controller?: PluginReloadController;
     pluginId?: string;
+    includeBundledDeclarations?: boolean;
     peerId?: string;
     resolveAccountTarget?: ConnectedAccountPurposeBindingOwnerDependencies['resolveTarget'];
     credential?: ProviderContributionV1['credential'];
@@ -149,11 +150,12 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     const createRegistry = async (changed: ReadonlySet<string>) => {
         const contributes = createMergedContributionRegistry(projectLoadedPluginContributes({
             loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'external', existingAgentIds: new Set(),
-        }), {});
+        }), input.includeBundledDeclarations ? undefined : {});
         const generationAuthority = await readCurrentCommittedPluginGenerations(resolvePluginStorePaths({ happyHomeDir }), {});
         if (!generationAuthority) throw new Error('Expected installed generation authority');
         const serving = controller.retainServingSlots?.(changed);
         return await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes, generationAuthority,
+            connectedAccounts: purposeBindingOwner,
             ...(serving ? { servingPluginOccurrences: serving.occurrencesByPluginId, retainedActivationRegistryLeases: serving.leases } : {}),
             managedProviderOperationAuthority: operationAuthority, resolveCurrentMachineId: () => 'machine',
             readDaemonRequesterWorkAttribution: () => {

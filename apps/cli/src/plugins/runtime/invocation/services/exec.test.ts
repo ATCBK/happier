@@ -115,7 +115,7 @@ describe('createStablePluginExecService', () => {
             controller.abort();
             await rejected;
             const observed = await handle.client.request('observed');
-            if (observed === null || typeof observed !== 'object' || Array.isArray(observed)) throw new Error('Invalid fixture observation');
+            if (observed === null || typeof observed !== 'object' || !('pending' in observed) || !('cancelled' in observed)) throw new Error('Invalid fixture observation');
             expect(observed.pending).toBeDefined();
             expect(observed.cancelled).toBe(observed.pending);
         } finally { await handle.dispose(); }
@@ -1373,7 +1373,9 @@ describe('createStablePluginExecService', () => {
 
     it('attributes occurrenceId retirement separately from caller disposal', async () => {
         const controller = new AbortController();
-        const release = vi.fn();
+        let markReleased!: () => void;
+        const released = new Promise<void>(resolve => { markReleased = resolve; });
+        const release = vi.fn(markReleased);
         const service = createStablePluginExecService({
             allowedExecutables: [executable],
             signal: controller.signal,
@@ -1396,10 +1398,11 @@ describe('createStablePluginExecService', () => {
             await expect(handle.wait()).resolves.toMatchObject({
                 termination: { requestedBy: { kind: 'dispose', reason: 'generationRetired' } },
             });
-            await vi.waitFor(() => {
-                expect(() => process.kill(pid, 0)).toThrow();
-                expect(release).toHaveBeenCalledOnce();
-            });
+            // Root exit is separate from native tree settlement. Observe the
+            // automatic retirement's release without adding a caller cleanup retry.
+            await released;
+            expect(() => process.kill(pid, 0)).toThrow();
+            expect(release).toHaveBeenCalledOnce();
         } finally {
             await handle.dispose();
         }

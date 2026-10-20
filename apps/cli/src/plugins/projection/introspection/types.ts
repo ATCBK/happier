@@ -9,7 +9,7 @@ export type PluginContributionIntrospectionCandidate = Readonly<{
   pluginVersion: string;
   source: PluginDiagnosticRecordV1['plugin']['source'];
   family: string;
-  runtimeRegistrationHost?: 'daemon' | 'client' | null;
+  runtimeRegistrationHost?: 'daemon' | 'client' | 'account' | null;
   runtimeRegistrationFamily?: string;
   identity:
     | Readonly<{ kind: 'localId'; localId: string }>

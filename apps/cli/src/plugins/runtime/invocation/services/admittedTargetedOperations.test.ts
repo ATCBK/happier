@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { QualifiedConnectedAccountRefSchema } from '@happier-dev/plugin-sdk/connected-accounts';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
+import { createManifestTargetedContributionsService, type TargetedContributionManifestDeclaration } from '@happier-dev/plugin-sdk/host/registration';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import {
     defineProtocolJsonValue,
     defineProtocolLiteral,
@@ -28,6 +31,68 @@ function permissiveTargetProtocol(role: string) {
 }
 
 describe('admitted targeted-operation execution', () => {
+    it.each(['target-retired', 'role-removed'] as const)('rechecks the original operation after an asynchronous dispatch wait (%s)', async change => {
+        const inputSchema = defineProtocolObject({ key: defineProtocolString() }, { policy: 'closed' });
+        const resultSchema = defineProtocolObject({ accepted: defineProtocolLiteral(true) }, { policy: 'closed' });
+        const protocol = defineContributionProtocol({ id: 'dispatch-fence', version: 1, operations: {
+            inspect: { required: true, input: { kind: 'protocolDefined', schema: inputSchema }, resultSchema,
+                action: { surfaces: ['plugin'], dangerLevel: 'safe' } },
+        } });
+        const target = definePlugin({ id: 'acme.fence-target', version: '1.0.0', contributionPoints: { sources: protocol.point() } });
+        let effects = 0;
+        const source = definePlugin({ id: 'acme.fence-source', version: '1.0.0', entrypoints: { daemon: './daemon.js' }, actions: {
+            inspect: { title: 'Inspect', surfaces: ['plugin'], dangerLevel: 'safe', inputSchema, resultSchema,
+                run: async () => { effects++; return { accepted: true as const }; } },
+        }, contributesTo: { [target.manifest.id]: { sources: {
+            source: protocol.contribute({ operations: { inspect: protocol.operations.inspect.bind('inspect') } }),
+        } } } });
+        let declarations: readonly TargetedContributionManifestDeclaration[] = [target, source].map(plugin => ({
+            manifest: normalizePluginManifestV2(plugin.manifest), occurrenceId: `${plugin.manifest.id}:current`,
+            sourceCustody: createManagedPluginSourceCustody(plugin.manifest.id),
+        }));
+        const signal = new AbortController().signal;
+        const observation = createManifestTargetedContributionsService({ readCurrentDeclarations: () => declarations,
+            subscribeToCatalogChanges: () => () => {} }).bind({ pluginId: target.manifest.id, signal, isCurrent: () => true })
+            .observeForSelf(target.contributionPoints.sources, { onInvalidated() {} });
+        const providerHost = await createPluginTestkit({ manifest: source.manifest, module: source });
+        let releaseDispatch = () => {};
+        const dispatchReady = new Promise<void>(resolve => { releaseDispatch = resolve; });
+        let reportWaiting = () => {};
+        const waiting = new Promise<void>(resolve => { reportWaiting = resolve; });
+        const service = createPluginInvocationActionsService({ seed: {
+            plugin: { id: target.manifest.id, version: target.manifest.version },
+            contribution: { id: 'aggregate', qualifiedId: `${target.manifest.id}/actions/aggregate` },
+            occurrenceId: `${target.manifest.id}:current`, sourceCustody: createManagedPluginSourceCustody(target.manifest.id),
+            surface: 'plugin', signal, isOccurrenceCurrent: () => true,
+            readCurrentTargetedDeclarations: async () => declarations,
+        }, actionExecutor: { execute: vi.fn() },
+        // This adapter is the cross-host dispatch boundary. The public SDK host
+        // below performs the real registration, parser and provider handler.
+        invokeContributedAction: async request => {
+            reportWaiting(); await dispatchReady;
+            if ('beforeHandlerInvocation' in request && typeof request.beforeHandlerInvocation === 'function') {
+                await request.beforeHandlerInvocation();
+            }
+            if (request.input === undefined) throw new Error('Expected admitted input');
+            return { status: 'executed', value: await providerHost.invokeAction('inspect', request.input, { surface: 'plugin' }) };
+        } });
+        try {
+            const snapshot = await observation.readCurrent();
+            const operation = snapshot.contributions[0]?.operations.inspect;
+            if (!operation) throw new Error('Expected the public source role');
+            const invoking = service.executeAdmittedTargetedOperation(operation, { key: 'value' });
+            await Promise.race([waiting, invoking.then(() => { throw new Error('Operation settled before the dispatch wait'); })]);
+            declarations = declarations.map(row => row.manifest.id === (change === 'target-retired' ? target.manifest.id : source.manifest.id)
+                ? change === 'target-retired' ? { ...row, occurrenceId: 'replacement-target' }
+                    : { ...row, manifest: { ...row.manifest, contributes: { ...row.manifest.contributes, targetedPluginContributions: [] } } }
+                : row);
+            releaseDispatch();
+            await expect(invoking).rejects.toMatchObject({ code: change === 'target-retired'
+                ? 'plugin_action_generation_retired' : 'plugin_admitted_targeted_operation_handle_invalid', actionHandlerInvocation: 'notStarted' });
+            expect(effects).toBe(0);
+        } finally { releaseDispatch(); observation.dispose(); await providerHost.dispose(); }
+    });
+
     it.each(['ordinary', 'withOrigin'] as const)('restores a retained selected Account through the real provider parser for %s calls', async (mode) => {
         const account = {
             service: { pluginId: 'acme.accounts', localId: 'mailbox' },

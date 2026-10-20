@@ -6,7 +6,7 @@ import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from '@happie
 import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { callExactMachineRpc, readMachineRpcRequestDisposition } from '@/session/transport/rpc/machineRpc';
 import type { StoredCredentials } from '@/persistence';
 import type { InvokeContributedAction } from '../services/actions';
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
@@ -43,6 +43,7 @@ export async function invokeAccountMachineSourceAction(input: AccountMachineTran
     const contributionLocalId = caller.contribution?.id;
     if (!contributionLocalId || !caller.occurrenceId) return { status: 'unavailable',
         code: 'plugin_action_caller_unavailable', message: 'Current Account caller is unavailable', actionHandlerInvocation: 'notStarted' };
+    await input.request.beforeHandlerInvocation?.();
     const request = DaemonPluginStructuredMessageActionExecuteRequestSchema.parse({ machineId: input.machineId,
         qualifiedActionId: buildQualifiedPluginContributionKey(input.request.action), input: input.request.input,
         executionSurface: input.request.originSurface === 'agent' ? 'agent' : input.request.originSurface === 'mcp' ? 'mcp' : 'cli',
@@ -65,7 +66,11 @@ export async function invokeAccountMachineSourceAction(input: AccountMachineTran
         return result.ok ? { status: 'executed', value: result.result }
             : { status: 'failed', code: result.code, message: result.message ?? result.code,
                 ...(result.retryable === undefined ? {} : { retryable: result.retryable }) };
-    } catch {
+    } catch (error) {
+        if (readMachineRpcRequestDisposition(error) === 'notSent') return {
+            status: 'unavailable', code: 'plugin_action_execution_origin_unavailable',
+            message: 'The selected Machine is unavailable', actionHandlerInvocation: 'notStarted',
+        };
         // The transport may have emitted the request. No fallback or automatic
         // replay can turn a missing acknowledgement into another provider effect.
         return { status: 'failed', code: 'plugin_action_outcome_unknown', message: 'The Machine Action outcome is unknown' };

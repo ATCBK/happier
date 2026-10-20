@@ -21,6 +21,7 @@ import {
   type StoredCredentials,
 } from '@/persistence';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { executeAccountPluginAction } from '@/session/actions/executeAccountPluginAction';
 import {
   createDaemonPluginActionExecutor,
   createPluginActionExecutor,
@@ -174,6 +175,9 @@ export function createHappierMcpServer(
   const credentials = opts?.authorityScope === 'session' ? null : opts?.credentials ?? null;
   const sessionCredentials = opts?.sessionCredentials ?? opts?.credentials ?? null;
   const { serverId, serverUrl: serverHttpBaseUrl } = client.getServerBinding();
+  const isCredentialCurrent = async () => credentials !== null && sameStoredCredentials(
+    credentials, await readStoredCredentialsForServerId(serverId).catch(() => null),
+  );
   const serverFeaturesSnapshot = client.getServerFeaturesSnapshot?.();
   const serverIdentityId = serverFeaturesSnapshot?.status === 'ready'
     ? normalizeServerIdentityIdCapability(
@@ -572,9 +576,18 @@ export function createHappierMcpServer(
       return await harness.executor.execute(actionId, input, { ...context, actionCaller });
     },
   };
+  const executeInCurrentProcess: NonNullable<Parameters<typeof createDaemonPluginActionExecutor>[0]['executeInCurrentProcess']> =
+    async (actionId, input, context) => credentials
+      ? await executeAccountPluginAction({
+          host: { ...cryptoContext, token: credentials.token, credentials, sessionId: client.sessionId,
+            serverId, serverHttpBaseUrl, isCredentialCurrent },
+          deps: harness.deps, actionId, input, ...(context ? { context } : {}),
+        })
+      : { matched: false };
   const localExecutor = scopedPluginRuntimeRegistryLease
     ? createPluginActionExecutor({
         base: sessionActionExecutor,
+        executeInCurrentProcess,
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' as const } : {}),
         requestPluginActionExecution: async (request, options) => {
@@ -601,7 +614,7 @@ export function createHappierMcpServer(
           });
         },
       })
-    : createDaemonPluginActionExecutor({ base: sessionActionExecutor,
+    : createDaemonPluginActionExecutor({ base: sessionActionExecutor, executeInCurrentProcess,
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' } : {}),
       });

@@ -2855,6 +2855,9 @@ export function registerDaemonContributionRegistryProjectionHandler(
                         ? {
                             caller: mountedCaller.caller,
                             isMountedCallerCurrent: mountedCaller.isMountedCallerCurrent,
+                            ...(mountedCaller.approvalInputCustody
+                                ? { approvalInputCustody: mountedCaller.approvalInputCustody }
+                                : {}),
                         }
                         : {}),
                     ...(selectedActionInputCarrier

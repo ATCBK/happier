@@ -33,6 +33,7 @@ import { prepareDocDiscussionMutationV1 } from '@happier-dev/protocol/artifacts/
 import { isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { bindScmActionToSessionWorkspace, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
+import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
 
 type SessionActionOperation = Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'action.execute' }>;
 type SessionActionAuthority = Readonly<{ sessionId: string; isCurrent(): Promise<boolean>; signal?: AbortSignal }>;
@@ -83,7 +84,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
   /** Content-free observations from the startup requester-runtime binding. */
   initialStartDiagnostic?: ActionStartDiagnosticV1;
   createExecutor: (getCurrentTurnWorkDepth: (turnId?: string) => number | undefined,
-    isCallerCurrent: () => Promise<boolean>, postAgentDiscussionMessage?: DiscussionAgentPublisher) => Pick<ReturnType<typeof createActionExecutor>, 'execute'>;
+    isCallerCurrent: () => Promise<boolean>, postAgentDiscussionMessage?: DiscussionAgentPublisher,
+    options?: Readonly<{ accountPluginActions: true }>) => Pick<ReturnType<typeof createActionExecutor>, 'execute'>;
   /** Existing Session RPC transport to the actual current client, with this operation's admitted witness. */
   postAgentDiscussionMessage?: (request: DiscussionAgentPublisherRequestV1, witness: SessionActionOperation['witness'],
     options?: Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
@@ -127,7 +129,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     };
     if (authority.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     if (!await authority.isCurrent()) return refuse('runtime_authority_unavailable');
-    const executionPlacement = resolveActionExecutionPlacementForInput(getActionSpec(operation.actionId), operation.input);
+    let executionPlacement = resolveActionExecutionPlacementForInput(getActionSpec(operation.actionId), operation.input);
     const operationSurface = operation.surface ?? 'agent';
     // An Ask-first plugin install only retains the daemon-evaluated candidate
     // in an ordinary Approval Artifact. The Machine effect is admitted later
@@ -139,13 +141,6 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
         surface: operationSurface,
         authority: 'account_automation',
       }, undefined, undefined, operation.input);
-    // Existing Session-bound Role RPCs retain their own origin channel. Every
-    // other Machine effect needs the actual original Home producer, not a
-    // second, locally maintained family allowlist.
-    const requiresMachineAuthorization = executionPlacement !== 'account'
-      && executionPlacement !== 'client'
-      && !proposesPluginInstallApproval
-      && !(Object.hasOwn(RoleActionInputSchemasV1, operation.actionId) && operation.actionId.startsWith('session.'));
     const witness = operation.witness;
     const caller = AgentStartSessionCallerV1Schema.safeParse(witness.agentStartCaller);
     if (!caller.success || caller.data.sessionId !== authority.sessionId
@@ -232,6 +227,28 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       } } : {}),
       ...(authority.signal ? { signal: authority.signal } : {}),
     };
+    const getCurrentTurnWorkDepth = (turnId?: string) =>
+      !turnId || turnId === witness.turnId ? witness.workDepth : undefined;
+    // The caller supplies no placement fact. Read the same current descriptor
+    // under the actual captured requester Home before granting Machine effects.
+    let accountPluginActions = operation.actionId === 'action.spec.get';
+    if (operation.actionId === 'action.invoke') {
+      const reader = params.createExecutor(getCurrentTurnWorkDepth, isCallerCurrent, undefined, { accountPluginActions: true });
+      const actual = await readContributedActionExecutionPlacement(operation.input,
+        request => reader.execute('action.spec.get', request, context));
+      if (!actual) return { ok: false, errorCode: 'invalid_action_input', error: 'invalid_action_input' };
+      if (!actual.ok) return actual.failure;
+      executionPlacement = actual.placement;
+      accountPluginActions = executionPlacement === 'account';
+      const reason = await readCallerRefusal();
+      if (reason) return refuse(reason, authority.signal?.aborted ? 'cancelled' : 'target_unavailable');
+    }
+    // Session-bound Role RPCs retain their incumbent origin channel. Actual
+    // Machine effects still require the original Home authorization producer.
+    const requiresMachineAuthorization = executionPlacement !== 'account'
+      && executionPlacement !== 'client'
+      && !proposesPluginInstallApproval
+      && !(Object.hasOwn(RoleActionInputSchemasV1, operation.actionId) && operation.actionId.startsWith('session.'));
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
         serverId: params.serverId, discussionAction: createDiscussionActionDeps({ credentials: params.credentials,
@@ -266,6 +283,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       if (operation.actionId === 'workflow.run.start' && !workflowTarget) return refuse('external_authorization_preparation_failed');
       const prepare = params.prepareExternalActionAuthorization;
       external = prepare && !proposesPluginInstallApproval
+        && !(operation.actionId === 'action.invoke' && executionPlacement === 'account')
         ? await runTracedExternalActionStage(operation.actionId, operation.requestId, 'session_action.authorization',
           () => readRequesterHomeWithinActionLifetime(async () => !await authority.isCurrent() ? null
             : await prepare({ operation, authority, isCallerCurrent, sessionActionOrigin,
@@ -336,8 +354,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
             signal ? { signal } : undefined));
         }
       : undefined;
-    const executor = params.createExecutor((turnId) =>
-      !turnId || turnId === witness.turnId ? witness.workDepth : undefined, isCallerCurrent, postAgentDiscussionMessage);
+    const executor = params.createExecutor(getCurrentTurnWorkDepth, isCallerCurrent, postAgentDiscussionMessage,
+      accountPluginActions ? { accountPluginActions: true } : undefined);
     // The original Home preparer verified this protected source tuple against
     // the installed Session host's proof. It is not the selected receiver: a
     // remote controller must still sign its own approvals through that receiver.

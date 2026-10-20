@@ -265,7 +265,7 @@ describe('daemon managed Machine Action factory', () => {
                 return await daemonReplay.replayApprovedApprovalRequest({ artifactId, ...(signal ? { signal } : {}), callerAuthority: 'present_user' });
             },
         });
-        let execution: Promise<ActionExecuteResult> = Promise.resolve({ ok: true });
+        let execution: Promise<ActionExecuteResult> = Promise.resolve({ ok: true, result: null });
         const runtime = wake ? createDaemonManagedMachinePolicyRuntime({
             readCensus: signal => readManagedMachinePolicyCensus({ homeId: machine.homeId, controller: machine.controller,
                 custodianAccountId: 'account', privateKey: signing.secretKey, token, serverUrl, signal }),

@@ -3,16 +3,17 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { ACTION_IDS } from '@happier-dev/protocol/actions/actionIds';
+import { PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import fastify from 'fastify';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { writeStoredCredentialsForServerId } from '@/persistence';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testkit';
+import type { PluginActionExecuteRequest } from '@/plugins/daemon/controlRoutes';
 
 const boundary = vi.hoisted(() => ({
-  daemonPost: vi.fn(async () => ({
-    matched: true as const,
-    result: {
-      ok: true as const,
-      result: { completed: true },
-    },
-  })),
+  daemonPost: vi.fn<(path: string, request: PluginActionExecuteRequest) => Promise<unknown>>(),
 }));
 
 // Daemon HTTP is the system boundary; retain the real control-client contract.
@@ -24,14 +25,48 @@ import { createExternalMcpServer } from './createExternalMcpServer';
 import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
 
 describe('createExternalMcpServer plugin tools', () => {
-  beforeEach(() => {
+  const credentials = {
+    token: `header.${Buffer.from(JSON.stringify({ sub: 'machine-tool-owner' })).toString('base64url')}.signature`,
+    encryption: null, credentialProvenance: 'stored_session' as const,
+  };
+  let homeDir: string;
+  let app: ReturnType<typeof fastify>;
+  beforeEach(async () => {
+    homeDir = await createTempDir('happier-mcp-machine-tools-');
+    app = fastify();
+    registerAccountHomeHttp(app, { accountId: 'machine-tool-owner', serverId: 'machine-tools-home' });
+    const endpoint = await app.listen({ port: 0, host: '127.0.0.1' });
+    vi.stubEnv('HAPPIER_HOME_DIR', homeDir);
+    vi.stubEnv('HAPPIER_SERVER_URL', endpoint);
+    vi.stubEnv('HAPPIER_WEBAPP_URL', endpoint);
     // This composition exercises plugin inputs. The complete built-in inventory
     // has its own registrar test; use real Account Action policy to select this scenario.
     vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({
       v: 1, actions: Object.fromEntries(ACTION_IDS.map(id => [id, { enabled: false }])),
     }));
+    reloadConfiguration();
+    await writeStoredCredentialsForServerId(configuration.activeServerId, credentials);
+    boundary.daemonPost.mockReset();
+    boundary.daemonPost.mockImplementation(async (_path, request) => {
+      // This Home has no Account availability endpoint. The daemon transport
+      // must therefore supply typed Machine placement before receiving effects.
+      const result = request.actionId === 'action.spec.get'
+        ? PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse({ actionSpec: {
+          id: PUBLIC_ACTION_INPUT_SCHEMAS['action.spec.get'].parse(request.input).id,
+          title: 'Machine plugin Action', description: null, safety: 'safe', executionPlacement: 'machine',
+          placements: [], slash: null, bindings: null, examples: null, surfaces: { mcp: true },
+          inputHints: null, inputSchema: { type: 'object' },
+        } })
+        : { completed: true };
+      return { matched: true, result: { ok: true, result } };
+    });
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(async () => {
+    await app?.close();
+    vi.unstubAllEnvs();
+    reloadConfiguration();
+    if (homeDir) await removeTempDir(homeDir);
+  });
 
   it.each(['oneOf', 'anyOf', 'allOf', 'references', 'rootReferences'] as const)('round-trips union arguments unchanged and refuses crossed variants or a mis-wired tool name (%s)', async combinator => {
     const branches: [ProjectedPluginToolCatalogEntry['inputSchema'], ProjectedPluginToolCatalogEntry['inputSchema']] = [
@@ -44,7 +79,7 @@ describe('createExternalMcpServer plugin tools', () => {
       ...branches[1], properties: { ...branches[1]!.properties, label: { $ref: '#/oneOf/0/properties/text' } },
     }] } : combinator === 'allOf' ? { allOf: [{ oneOf: branches }] } : { [combinator]: branches };
     const { mcp } = createExternalMcpServer({
-      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) } },
+      credentials,
       pluginToolCatalog: [{
         toolId: 'acme.union/union-tool', actionId: 'acme.union/actions/read', name: 'acme_union_read',
         title: 'Read variant', description: 'Read either variant', inputSchema, surfaces: ['mcp'],
@@ -83,13 +118,7 @@ describe('createExternalMcpServer plugin tools', () => {
 
   it('advertises and dispatches a daemon-projected plugin tool through the MCP SDK boundary', async () => {
     const { mcp, toolNames } = createExternalMcpServer({
-      credentials: {
-        token: 'token',
-        encryption: {
-          type: 'legacy',
-          secret: new Uint8Array([1, 2, 3, 4]),
-        },
-      },
+      credentials,
       pluginToolCatalog: [{
         toolId: 'acme.review.plugin/review-tool',
         actionId: 'acme.review.plugin/actions/review-start',

@@ -56,6 +56,7 @@ import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
 import { createCliApprovalsArtifactStore } from './approvals/artifactStore';
+import { createTargetActionApprovalDecision } from '@happier-dev/protocol/actions/targetActionApprovalDecision';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { resolveActionSessionListAccessFailure } from '@happier-dev/protocol/actions/executor/sessionListAccess';
 import { readActionSessionTargetField, replaceActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
@@ -736,6 +737,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   inputTypeDeps?: Pick<ActionExecutorDeps, 'resolveInputType' | 'readInputTypeResource'>;
   /** Daemon-owned execution bypasses its own authenticated control bridge. */
   pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
+  /** Credentialed capability receiver; not an Account grant or source selector. */
+  accountPluginActions?: true;
   /** In-process daemon owner for plugin review/apply custody. */
   pluginChangeService?: Parameters<typeof createCliActionDeps>[0]['pluginChangeService'];
   /** Root `happier actions` is a signed client of the daemon External Action API. */
@@ -1051,6 +1054,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.pluginActionExecutionOwner
         ? { pluginActionExecutionOwner: params.pluginActionExecutionOwner }
         : {}),
+      ...(params.accountPluginActions ? { accountPluginActions: true as const } : {}),
       sessionId: 'cli-global',
       ...(params.sessionMessageReplyPublisher ? { sessionMessageReplyPublisher: params.sessionMessageReplyPublisher } : {}),
       ...(params.postAgentDiscussionMessage ? { postAgentDiscussionMessage: params.postAgentDiscussionMessage } : {}),
@@ -1081,8 +1085,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ? { targetActionApprovalReplay: params.targetActionApprovalReplay }
         : !machineAdmissionTransport && params.pluginActionExecutionOwner !== 'current_process'
           ? { targetActionApprovalReplay: (async ({ artifactId, decision, context, signal }) => {
-            // Standalone clients transport a decision to the admitting daemon;
-            // its existing replay owner retains input, policy and currentness.
+            // Account live-only decisions use the same Artifact decision owner;
+            // Machine custody still returns to its exact admitting daemon.
             const store = createCliApprovalsArtifactStore({ credentials, serverId: approvalServerId,
               serverHttpBaseUrl: approvalServerApiUrl });
             let request: TargetActionApprovalRequestV1 | null;
@@ -1097,6 +1101,23 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
               return actionFailure('present_user_required');
             }
             const origin = request.executionOriginV1;
+            if (request.approvalInputCustody === 'live_only' && !origin && !request.replayPlacement) {
+              if (signal?.aborted) return actionFailure('cancelled');
+              if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+              const result = await createTargetActionApprovalDecision({
+                read: id => runWithServerHttpBaseUrl(approvalServerApiUrl,
+                  () => store.targetActionApprovalsGet({ artifactId: id })),
+                update: async args => {
+                  if (signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+                  if (!sameStoredCredentials(credentials, await readCurrentCredentials())) {
+                    return { ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' };
+                  }
+                  return runWithServerHttpBaseUrl(approvalServerApiUrl, () => store.targetActionApprovalsUpdate(args));
+                },
+              })({ artifactId, decision, context, ...(signal ? { signal } : {}) });
+              if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+              return result;
+            }
             const machineId = request.replayPlacement?.machineId ?? origin?.machineId;
             if (!origin?.serverIdentityId || !machineId) return actionFailure('approval_origin_unavailable');
             if (signal?.aborted) return actionFailure('cancelled');
@@ -1734,7 +1755,12 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         }
         const executor = await measureActionStartPhaseV1(originalContext, 'credentialed_factory',
           () => resolveExecutor(credentials, sessionMemoryEnabled, routing));
-        return await executor.execute(actionId, input, signal ? { ...originalContext, signal } : originalContext);
+        return await executor.execute(actionId, input, {
+          ...originalContext,
+          ...(params.machineId && !originalContext?.executionRunTargetMachineId
+            ? { executionRunTargetMachineId: params.machineId } : {}),
+          ...(signal ? { signal } : {}),
+        });
       },
       continueConfidentialApprovalRequest: async (input, context) => {
         const credentials = await readCurrentCredentials();

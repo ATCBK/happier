@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import fastify from 'fastify';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { DaemonPluginMountedInvocationV1 } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
@@ -9,9 +12,127 @@ import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema, normalizePluginReleaseFactsV1 } from '@happier-dev/protocol/plugins/availability';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { readCurrentAccountPluginExecutionSelection } from '@/plugins/runtime/accountPluginActivationSource';
+import { createTargetActionCurrentIntentAdapter } from '@/session/actions/approvals/targetActionCurrentIntent';
+import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { registerDaemonContributionRegistryProjectionHandler } from './daemonContributionRegistryProjection';
 
 describe('mounted caller admission through the real contributed Action RPC', () => {
+    it('admits an external Account Action caller from current release custody and refuses changed custody before effects', async () => {
+        const pluginId = 'com.acme.account-aggregate';
+        const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: pluginId, entrypoints: {}, contributes: {
+            actions: [{ id: 'aggregate', title: 'Aggregate', scopes: ['global'], surfaces: ['ui', 'cli'], dangerLevel: 'safe',
+                placementBindings: [], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }],
+        } }));
+        let enabled = true;
+        let digest = `sha256:${'a'.repeat(64)}`;
+        let revokeAfterRead = false;
+        let decision: 'approve' | 'reject' = 'approve';
+        let disableOnDecision = false;
+        // Only Artifact persistence and the user's decision are boundaries; the approval adapter and Action policy are real.
+        const approvalRows = new Map<string, TargetActionApprovalRequestV1>();
+        const requestCurrentIntent = createTargetActionCurrentIntentAdapter({
+            create: async request => {
+                const artifactId = `account-source-approval-${approvalRows.size + 1}`;
+                approvalRows.set(artifactId, request);
+                return { artifactId };
+            },
+            read: async artifactId => {
+                const row = approvalRows.get(artifactId);
+                if (!row || row.status !== 'open') return row ?? null;
+                if (disableOnDecision) enabled = false;
+                const decided = TargetActionApprovalRequestV1Schema.parse({ ...row,
+                    status: decision === 'approve' ? 'approved' : 'rejected', updatedAtMs: row.updatedAtMs + 1,
+                    decision: { kind: decision, decidedAtMs: row.updatedAtMs + 1 } });
+                approvalRows.set(artifactId, decided);
+                return decided;
+            },
+            update: async ({ artifactId, request }) => { approvalRows.set(artifactId, request); return { ok: true }; },
+        });
+        const app = fastify();
+        app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async () => {
+            const response = PluginAvailabilityIntentReadActionOutputV1Schema.parse({ availabilityCursor: 1,
+                hostingCapability: { enabled: false }, intent: { pluginId, desiredVersion: manifest.version, enabled,
+                    offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+                release: normalizePluginReleaseFactsV1({ ref: { pluginId, version: manifest.version }, archiveDigestSha256: digest,
+                    normalizedManifest: manifest, collectionContracts: [], uiSlots: [],
+                    packageAssetArchive: { archiveDigestSha256: `sha256:${'d'.repeat(64)}`, resources: [] } }),
+                uiArtifacts: [], packageAssets: [] });
+            if (revokeAfterRead) enabled = false;
+            return response;
+        });
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-caller.test' });
+        // The temporary external plugin imports the real public SDK from the host's installed package.
+        const sdkEntry = pathToFileURL(createRequire(import.meta.url).resolve('@happier-dev/plugin-sdk')).href;
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
+            manifest: createPluginManifestV2Fixture({ id: 'com.acme.machine-source', contributes: {
+                actions: [{ id: 'read', title: 'Read source', scopes: ['global'], surfaces: ['ui', 'cli'], placementBindings: [], dangerLevel: 'safe',
+                    execution: { target: 'daemon' }, inputSchema: { type: 'object', additionalProperties: false },
+                    resultSchema: { type: 'object', additionalProperties: true } },
+                { id: 'write', title: 'Write source', scopes: ['global'], surfaces: ['cli'], placementBindings: [], dangerLevel: 'writesRemote',
+                    confirmation: { title: 'Write source' }, execution: { target: 'daemon' },
+                    inputSchema: { type: 'object', properties: { uncertain: { type: 'boolean' } }, additionalProperties: false },
+                    resultSchema: { type: 'object', properties: { writes: { type: 'number' } }, required: ['writes'], additionalProperties: false } }],
+            } }), files: { 'daemon.mjs': `import { PluginError } from ${JSON.stringify(sdkEntry)};
+                let reads = 0; let writes = 0;
+                export function activate(api) {
+                    api.actions.register('read', (_input, context) => ({ reads: ++reads, writes, caller: context.caller }));
+                    api.actions.register('write', input => {
+                        writes++;
+                        if (input.uncertain) throw new PluginError({ code: 'plugin_action_outcome_unknown', message: 'Response lost after effect' });
+                        return { writes };
+                    });
+                }` },
+        }], runtimeOptions: { resolveCurrentMachineId: () => 'reading-machine',
+            resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_account-caller', machineId: 'reading-machine' }) } })
+            .catch(async error => { restore(); await app.close(); throw error; });
+        try {
+            const handlers = new Map<string, RpcHandler>();
+            registerDaemonContributionRegistryProjectionHandler({ registerHandler(method, handler) { handlers.set(method, handler); } }, {
+                resolveRuntimeRegistry: async () => fixture.registry, resolveInstalledPackages: async () => [],
+                requestCurrentIntent,
+                resolvePluginProjectionExecutionOriginContext: () => ({ serverIdentityId: 'srv_account-caller', machineId: 'reading-machine' }),
+                resolveAccountPluginExecutionSelection: currentPluginId => readCurrentAccountPluginExecutionSelection({ pluginId: currentPluginId,
+                    credentials: { token: 'fixture', encryption: null }, serverUrl: 'http://account-caller.test' }),
+            });
+            const handler = handlers.get(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
+            const targetOccurrence = fixture.registry.readPluginOccurrenceId?.('com.acme.machine-source');
+            if (!handler || !targetOccurrence) throw new Error('Expected source Action RPC');
+            expect(fixture.registry.readPluginOccurrenceId?.(pluginId)).toBeNull();
+            const clientActionBinding = { pluginId, contributionLocalId: 'aggregate', occurrenceId: 'invoking-process-occurrence',
+                sourceCustody: { kind: 'account_release' as const, pluginId, version: manifest.version, archiveDigestSha256: digest } };
+            const run = (binding = clientActionBinding, input: Record<string, unknown> = {}, localId = 'read') => handler({ machineId: 'reading-machine',
+                qualifiedActionId: `com.acme.machine-source/${localId}`, expectedContributorOccurrenceId: targetOccurrence,
+                executionSurface: 'cli', invocation: { kind: 'clientPluginAction', clientActionBinding: binding }, input });
+            expect(await run()).toEqual({ ok: true, result: { reads: 1, writes: 0, caller: { kind: 'plugin', pluginId,
+                contribution: { id: 'aggregate', qualifiedId: `${pluginId}/aggregate` }, occurrenceId: clientActionBinding.occurrenceId,
+                sourceCustody: clientActionBinding.sourceCustody, originSurface: 'cli' } } });
+            expect(await run(clientActionBinding, { unknown: true })).toMatchObject({ ok: false });
+            digest = `sha256:${'b'.repeat(64)}`;
+            expect(await run()).toEqual({ ok: false, code: 'plugin_mounted_caller_unavailable' });
+            digest = clientActionBinding.sourceCustody.archiveDigestSha256;
+            revokeAfterRead = true;
+            expect(await run()).toMatchObject({ ok: false, code: 'plugin_mounted_caller_unavailable' });
+            enabled = true;
+            revokeAfterRead = false;
+            expect(await run()).toMatchObject({ ok: true, result: { reads: 2 } });
+            expect(await run(clientActionBinding, {}, 'write')).toEqual({ ok: true, result: { writes: 1 } });
+            decision = 'reject';
+            expect(await run(clientActionBinding, {}, 'write')).toMatchObject({ ok: false, code: 'plugin_action_current_intent_rejected' });
+            decision = 'approve';
+            disableOnDecision = true;
+            expect(await run(clientActionBinding, {}, 'write')).toMatchObject({ ok: false, code: 'plugin_mounted_caller_unavailable' });
+            enabled = true;
+            disableOnDecision = false;
+            expect(await run()).toMatchObject({ ok: true, result: { writes: 1 } });
+            expect(await run(clientActionBinding, { uncertain: true }, 'write')).toMatchObject({ ok: false, code: 'plugin_action_outcome_unknown' });
+            expect(await run()).toMatchObject({ ok: true, result: { writes: 2 } });
+        } finally { restore(); await app.close(); await fixture.dispose(); }
+    });
     it('admits an ordinary installed external detail contributor through the same RPC and rejects retired custody', async () => {
         const targetId = 'acme.detail-host';
         const contributorId = 'acme.detail-source';
