@@ -154,19 +154,21 @@ describe('openPluginContributedAction', () => {
         );
     });
 
-    it('presents an unexpected opening failure without exposing its raw error or claiming startup is pending', async () => {
+    it('presents an unexpected native presentation failure without exposing its raw error or claiming startup is pending', async () => {
         const descriptor = { ...action(), inputHints: null, kind: 'direct' as const };
         const controller = createPluginContributedActionController({
-            // The placement's host snapshot is an environment boundary; keep the controller real.
-            resolveCurrent: () => { throw new Error('private transport details'); },
+            resolveCurrent: () => null,
         });
         const { Modal } = await import('@/modal');
         const { t } = await import('@/text');
+        // Native presentation is an external boundary; the real controller
+        // normalizes an absent host before presentation begins.
+        vi.mocked(Modal.alert).mockImplementationOnce(() => { throw new Error('private native details'); });
 
         await expect(openPluginContributedAction({ controller, action: descriptor })).resolves.toEqual({
             kind: 'unavailable', reason: 'host_unavailable',
         });
-        expect(Modal.alert).toHaveBeenCalledWith(t('common.error'), t('pluginRuntime.actionOpenFailed'));
+        expect(Modal.alert).toHaveBeenLastCalledWith(t('common.error'), t('pluginRuntime.actionOpenFailed'));
     });
 
     it('does not surface a direct outcome that arrives after the composer scope retires', async () => {
