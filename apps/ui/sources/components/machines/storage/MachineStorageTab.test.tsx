@@ -228,13 +228,14 @@ describe('MachineStorageTab', () => {
         expect(modal.current!.spies.confirm).not.toHaveBeenCalled();
     });
 
-    it('keeps a declined permanent review quiet and preserves its selection for retry', async () => {
+    it('asks nothing more once the person has reviewed a permanent delete in the sheet', async () => {
         const ref = resolved({ itemId: 'old-log', path: '/logs/old' });
         const calls: Rpc[] = [];
         const { screen } = await mount({ id: 'storage' }, {}, rpc => {
             calls.push(rpc);
             if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, pile: { count: 1, freesBytes: 64, droppedSinceLastView: [] } };
             if (rpc.method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [ref], summary: { count: 1, freesBytes: 64, droppedSinceLastView: [] } };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW) return { batchId: 'delete-a', mode: 'delete', inTrashBytes: 0, freedBytes: 64, outcomes: [{ itemId: 'old-log', status: 'deleted' }] };
             if (rpc.method === RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK) return { items: [{ ref, expect: 'checked-log', verdict: 'safe', reason: { code: 'rebuilds' }, size: size(64), absorbs: [] }],
                 staying: [], countedOnceBytes: 0, totalFreesBytes: 64, trashVolumes: [{ volumeId: 'mac', trashAvailable: true }] };
             return undefined;
@@ -249,12 +250,10 @@ describe('MachineStorageTab', () => {
         await act(async () => { sheet.pressByTestId('machine-storage-review-mode:delete'); });
         modal.current!.spies.confirm.mockClear().mockResolvedValue(false);
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
-        await act(async () => { await vi.waitFor(() => expect(modal.current!.spies.confirm).toHaveBeenCalledOnce()); });
-        expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW)).toBe(false);
-        expect(close).not.toHaveBeenCalled();
+        await act(async () => { await vi.waitFor(() => expect(calls.filter(call => call.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW)).toHaveLength(1)); });
+        // The sheet's own button is the one confirmation of an irreversible delete: no second dialog follows it.
+        expect(modal.current!.spies.confirm).not.toHaveBeenCalled();
         expect(sheet.getTextContent()).not.toContain(t('machineStorage.review.applyFailed'));
-        expect(sheet.findByTestId('machine-storage-review-confirm')?.props.disabled).toBe(false);
-        expect(sheet.getTextContent()).toContain(t('machineStorage.review.deleteForGood', { count: 1 }));
     });
 
     it.each(['web', 'ios', 'android'] as const)('announces a worktree group as none, mixed, all, then none on %s', async platform => {
