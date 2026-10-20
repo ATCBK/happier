@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Button, Item, ItemGroup, Row, Select, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { Button, Form, Item, ItemGroup, Select, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { TriageSourceInstanceConfigurationV1Schema } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftEditorPropsV1 } from '@happier-dev/triage-sources/ui';
 import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ACTIONS, LinearConfigurationSchema } from '../contracts.js';
@@ -10,7 +10,7 @@ function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDr
   const [involvement, setInvolvement] = React.useState(configuration.involvement);
   React.useEffect(() => setInvolvement(configuration.involvement), [configuration]);
   return <>
-    <ItemGroup><Item title={text('plugins.linear.settings.issues', 'Issues')} accessory={<Select
+    <ItemGroup><Item title={text('plugins.linear.settings.issues', 'Issues')} fieldAccessory accessoryOutsidePressable accessory={<Select
       presentation="field" label={text('plugins.linear.settings.issues', 'Issues')} disabled={busy} value={involvement}
       options={[
         { value: 'mine', label: text('plugins.linear.settings.mine', 'My issues') },
@@ -23,10 +23,11 @@ function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDr
         if (parsed.success) setInvolvement(parsed.data.involvement);
       }}
     />} /></ItemGroup>
-    <Row><Button title={text('plugins.linear.settings.save', 'Save')} disabled={busy} onPress={() => {
+    {/* The shared section action cluster: Save leads, Cancel follows, and a long translation wraps instead of clipping. */}
+    <Form.Actions><Button title={text('plugins.linear.settings.save', 'Save')} disabled={busy} onPress={() => {
       const next = TriageSourceInstanceConfigurationV1Schema.parse({ v: 1, token: JSON.stringify({ ...configuration, involvement }) });
       void onSubmit({ ...draft, configuration: next });
-    }} /><Button variant="secondary" title={text('plugins.linear.settings.cancel', 'Cancel')} disabled={busy} onPress={onCancel} /></Row>
+    }} /><Button variant="secondary" title={text('plugins.linear.settings.cancel', 'Cancel')} disabled={busy} onPress={onCancel} /></Form.Actions>
   </>;
 }
 

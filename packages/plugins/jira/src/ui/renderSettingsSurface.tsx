@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Button, ErrorState, Item, ItemGroup, LoadingState, Row, Select, useExecutePluginAction, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { Button, ErrorState, Form, Item, ItemGroup, LoadingState, Select, useExecutePluginAction, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftEditorPropsV1 } from '@happier-dev/triage-sources/ui';
 import { triageSourceBindingComponentsV1 } from '@happier-dev/triage-protocol/v1';
 import { JIRA_PLUGIN_ID, JIRA_ACCOUNT_PURPOSE, JIRA_ACTIONS } from '../contracts.js';
@@ -30,7 +30,7 @@ function ReadyEditor({ draft, busy, onSubmit, onCancel, configuration }: TriageS
     const result = directory?.request === request ? directory.result : undefined;
     return <>
         <ItemGroup>
-            <Item title={text('plugins.jira.settings.issues', 'Issues')} accessory={<Select presentation="field"
+            <Item title={text('plugins.jira.settings.issues', 'Issues')} fieldAccessory accessoryOutsidePressable accessory={<Select presentation="field"
                 label={text('plugins.jira.settings.issues', 'Issues')} disabled={busy} value={involvement}
                 options={[
                     { value: 'mine', label: text('plugins.jira.settings.mine', 'My issues') },
@@ -44,7 +44,7 @@ function ReadyEditor({ draft, busy, onSubmit, onCancel, configuration }: TriageS
                 }} />} />
             {result?.kind === 'complete' && <Item title={text('plugins.jira.settings.type', 'Issue type for new issues')}
                 subtitle={text('plugins.jira.settings.typeDescription', 'Choose a native issue type to enable creation in this project.')}
-                accessory={<Select presentation="field" label={text('plugins.jira.settings.type', 'Issue type for new issues')}
+                fieldAccessory accessoryOutsidePressable accessory={<Select presentation="field" label={text('plugins.jira.settings.type', 'Issue type for new issues')}
                     disabled={busy} value={issueTypeId} onChange={(value) => {
                         if (typeof value === 'string') setIssueTypeId(value);
                     }}
@@ -54,10 +54,11 @@ function ReadyEditor({ draft, busy, onSubmit, onCancel, configuration }: TriageS
         {!result && <LoadingState title={text('plugins.jira.settings.typesLoading', 'Reading Jira issue types')} />}
         {result?.kind === 'failed' && <ErrorState title={text('plugins.jira.settings.typesUnavailable', 'Jira issue types unavailable')}
             action={<Button variant="secondary" title={text('plugins.jira.settings.retry', 'Retry')} onPress={retry} />} />}
-        <Row><Button title={text('plugins.jira.settings.save', 'Save')} disabled={busy} onPress={() => {
+        {/* The shared section action cluster: Save leads, Cancel follows, and a long translation wraps instead of clipping. */}
+        <Form.Actions><Button title={text('plugins.jira.settings.save', 'Save')} disabled={busy} onPress={() => {
             const { issueTypeId: previousType, ...base } = configuration;
             void onSubmit({ ...draft, configuration: { v: 1, token: JSON.stringify({ ...base, involvement, ...(issueTypeId ? { issueTypeId } : {}) }) } });
-        }} /><Button variant="secondary" title={text('plugins.jira.settings.cancel', 'Cancel')} disabled={busy} onPress={onCancel} /></Row>
+        }} /><Button variant="secondary" title={text('plugins.jira.settings.cancel', 'Cancel')} disabled={busy} onPress={onCancel} /></Form.Actions>
     </>;
 }
 function DraftEditor(props: TriageSourceSettingsDraftEditorPropsV1): React.ReactElement {

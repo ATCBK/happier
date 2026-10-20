@@ -202,6 +202,8 @@ describe('PluginUiProvider', () => {
     expect(accessibilityIdentities.at(-1)).not.toBe(accessibilityIdentities[0]);
     expect(localizationIdentities.at(-1)).toBe(localizationIdentities[0]);
     expect(translationResolvers.at(-1)).toBe(translationResolvers[0]);
+    expect(themeIdentities.at(-1)).not.toBe(themeIdentities[0]);
+    expect(themeRenders).toBe(initialThemeRenders + 1);
     const highContrastTheme = themeIdentities.at(-1);
     const highContrastRenders = themeRenders;
     await act(async () => {
