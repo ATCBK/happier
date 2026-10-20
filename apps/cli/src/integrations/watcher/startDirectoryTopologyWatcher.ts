@@ -4,13 +4,14 @@ import {
     watch,
     type FSWatcher,
     type WatchListener,
-    type WatchOptions,
+    type WatchOptionsWithStringEncoding,
 } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { opendir } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 type DirectoryTopologyWatch = (
     path: string,
-    options: WatchOptions,
+    options: WatchOptionsWithStringEncoding,
     listener: WatchListener<string>,
 ) => FSWatcher;
 
@@ -33,6 +34,67 @@ function isCanonicalDirectory(path: string): boolean {
     }
 }
 
+/** Node emulates recursive fs.watch on Linux with a watch for every file.
+ * Topology needs directories only; named-file content has its own shared parent
+ * attachment. Enrol new subtrees from rename events within this same owner. */
+function watchDirectoryTree(
+    root: string,
+    watchImpl: DirectoryTopologyWatch,
+    onStructuralChange: (changedPath?: string) => void,
+    onUnavailable: (error: unknown) => void,
+) {
+    const watchers = new Map<string, FSWatcher>();
+    let active = true;
+    const contains = (directory: string, path: string) => {
+        const child = relative(directory, path);
+        return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`));
+    };
+    const closeSubtree = (directory: string) => {
+        for (const [path, watcher] of watchers) {
+            if (!contains(directory, path)) continue;
+            watchers.delete(path);
+            watcher.close();
+        }
+    };
+    const walk = async (directory: string): Promise<void> => {
+        if (!active || watchers.has(directory) || !isCanonicalDirectory(directory)) return;
+        const watcher = watchImpl(directory, { persistent: true, recursive: false }, (eventType, filename) => {
+            if (!active || watchers.get(directory) !== watcher || eventType !== 'rename') return;
+            const changedPath = filename === null ? directory : resolve(directory, String(filename));
+            // Serialize structural enrollment with the initial walk. A burst
+            // cannot leave a newer subtree attached beneath a stale disposer.
+            pending = pending.then(async () => {
+                if (!active) return;
+                closeSubtree(changedPath);
+                await walk(changedPath);
+                if (active) onStructuralChange(filename === null ? undefined : changedPath);
+            }).catch(error => { if (active) onUnavailable(error); });
+        });
+        watchers.set(directory, watcher);
+        watcher.on('error', error => { if (active && watchers.get(directory) === watcher) onUnavailable(error); });
+        try {
+            const entries = await opendir(directory);
+            for await (const entry of entries) {
+                if (!active || watchers.get(directory) !== watcher) return;
+                // Dirents avoid statting/retaining each transcript, and never
+                // follow symlinks outside the admitted canonical tree.
+                if (entry.isDirectory()) await walk(resolve(directory, entry.name));
+            }
+        } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+            closeSubtree(directory);
+        }
+    };
+    let pending = Promise.resolve().then(() => walk(root));
+    return {
+        ready: pending,
+        dispose() {
+            active = false;
+            closeSubtree(root);
+        },
+    };
+}
+
 /**
  * Watches structural changes below already-authorized canonical directories.
  *
@@ -45,13 +107,14 @@ export function startDirectoryTopologyWatchers(
     targets: readonly DirectoryTopologyWatchTarget[],
     options?: StartDirectoryTopologyWatcherOptions,
 ): () => void {
-    const watchImpl = options?.watchImpl ?? watch;
+    const watchImpl: DirectoryTopologyWatch = options?.watchImpl ?? watch;
     let active = true;
     type TargetRecord = {
         directory: string;
         targetName: string;
         onStructuralChange: DirectoryTopologyWatchTarget['onStructuralChange'];
         watcher: ReturnType<typeof watch> | null;
+        disposeTree: (() => void) | null;
         attachment: Promise<void>;
     };
     type ParentRecord = {
@@ -72,6 +135,7 @@ export function startDirectoryTopologyWatchers(
             targetName: basename(target.directory),
             onStructuralChange: target.onStructuralChange,
             watcher: null,
+            disposeTree: null,
             attachment: Promise.resolve(),
         };
         targetRecords.push(record);
@@ -97,6 +161,8 @@ export function startDirectoryTopologyWatchers(
         const current = target.watcher;
         target.watcher = null;
         current?.close();
+        target.disposeTree?.();
+        target.disposeTree = null;
     };
 
     let unavailableNotified = false;
@@ -129,7 +195,7 @@ export function startDirectoryTopologyWatchers(
         target: TargetRecord,
         emitAfterAttachment = false,
     ): void => {
-        target.attachment = target.attachment.then(() => {
+        target.attachment = target.attachment.then(async () => {
             if (!active) return;
             closeTargetWatcher(target);
             const attachable = isCanonicalDirectory(target.directory);
@@ -137,6 +203,19 @@ export function startDirectoryTopologyWatchers(
                 if (emitAfterAttachment) {
                     emitStructuralChange(target);
                 }
+                return;
+            }
+
+            if (process.platform !== 'darwin' && process.platform !== 'win32') {
+                const tree = watchDirectoryTree(target.directory, watchImpl,
+                    changedPath => emitStructuralChange(target, changedPath), error => {
+                        if (!active || target.disposeTree !== tree.dispose) return;
+                        closeTargetWatcher(target);
+                        notifyUnavailable(error);
+                    });
+                target.disposeTree = tree.dispose;
+                await tree.ready;
+                if (emitAfterAttachment) emitStructuralChange(target);
                 return;
             }
 
@@ -168,6 +247,7 @@ export function startDirectoryTopologyWatchers(
                 notifyUnavailable(error);
             });
         }).catch((error) => {
+            closeTargetWatcher(target);
             notifyUnavailable(error);
         });
     };

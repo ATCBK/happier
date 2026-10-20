@@ -174,9 +174,9 @@ describe('External Sessions topology physical watcher pooling', () => {
         });
         const demand = (files: readonly string[]) => ({
             resource: resource('concurrent-accounting'),
-            source: { kind: 'codexHome', home: 'user', homePath: home.home },
+            source: { kind: 'codexHome' as const, home: 'user' as const, homePath: home.home },
             changeObservation: 'watch_file_changes' as const,
-            watchFileChanges: { files }, onChange: () => {},
+            watchFileChanges: { files: [...files] }, onChange: () => {},
         });
         const first = join(home.sessions, 'first.jsonl');
         const second = join(home.sessions, 'second.jsonl');
@@ -248,16 +248,18 @@ describe('External Sessions topology physical watcher pooling', () => {
                 join(home.sessions, '2026', '10'), home.archivedSessions, sibling] }, onChange: changed,
         });
         try {
-            const liveRecursivePaths = () => registrations.filter(row => row.options.recursive === true && row.close.mock.calls.length === 0)
+            const liveRecursivePaths = () => registrations.filter(row => row.options.recursive !== undefined && row.close.mock.calls.length === 0)
                 .map(row => row.path).sort();
-            expect(liveRecursivePaths()).toEqual([home.sessions, home.archivedSessions, sibling].sort());
-            const root = registrations.find(row => row.path === home.sessions && row.options.recursive === true)!;
+            await vi.waitFor(() => expect(liveRecursivePaths()).toEqual((process.platform === 'darwin' || process.platform === 'win32'
+                ? [home.sessions, home.archivedSessions, sibling]
+                : [home.sessions, join(home.sessions, '2026'), join(home.sessions, '2026', '10'), day, home.archivedSessions, sibling]).sort()));
+            const root = registrations.find(row => row.path === home.sessions && row.options.recursive !== undefined)!;
             root.listener('rename', join('2026', '10', '19', 'new.jsonl'));
-            expect(changed).toHaveBeenCalledWith({ reason: 'topology_changed' });
+            await vi.waitFor(() => expect(changed).toHaveBeenCalledWith({ reason: 'topology_changed' }));
             await ancestor.dispose();
             // Removing the covering demand must restore the still-demanded
             // nested watch, including its own deletion/recreation sentinel.
-            expect(liveRecursivePaths()).toEqual([day]);
+            await vi.waitFor(() => expect(liveRecursivePaths()).toEqual([day]));
         } finally {
             await ancestor.dispose();
             await nested.dispose();
@@ -307,8 +309,8 @@ describe('External Sessions topology physical watcher pooling', () => {
 
             const failedRegistration = registrations.find(
                 ({ path, options }) => failedWatcherKind === 'target'
-                    ? path === home.sessions && options.recursive === true
-                    : path === home.home && options.recursive !== true,
+                    ? path === home.sessions && options.recursive !== undefined
+                    : path === home.home && options.recursive === undefined,
             );
             expect(failedRegistration).toBeDefined();
             for (const onError of failedRegistration?.errorListeners ?? []) {
@@ -334,7 +336,7 @@ describe('External Sessions topology physical watcher pooling', () => {
             await Promise.resolve();
 
             expect(registrations).toHaveLength(6);
-            expect(reconcileResource).toHaveBeenCalledOnce();
+            await vi.waitFor(() => expect(reconcileResource).toHaveBeenCalledOnce());
             expect(reconcileResource).toHaveBeenCalledWith(
                 expect.objectContaining({
                     purpose: 'resource_descriptors',
@@ -367,7 +369,7 @@ describe('External Sessions topology physical watcher pooling', () => {
             options: WatchOptions,
             listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true && failRecursiveAttachments) {
+            if (options.recursive !== undefined && failRecursiveAttachments) {
                 throw Object.assign(new Error('descriptor limit'), {
                     code: 'EMFILE',
                 });
@@ -446,7 +448,7 @@ describe('External Sessions topology physical watcher pooling', () => {
 
         expect(watchBoundary.watch).toHaveBeenCalledTimes(6);
         expect(registrations).toHaveLength(4);
-        expect(reconcileResource).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(reconcileResource).toHaveBeenCalledOnce());
         expect(vi.getTimerCount()).toBe(0);
 
         await reconciler.removeLink(watchedLink);
@@ -489,37 +491,37 @@ describe('External Sessions topology physical watcher pooling', () => {
 
         expect(registrations).toHaveLength(3);
         expect(registrations.filter(({ path, options }) =>
-            path === firstHome.home && options.recursive !== true
+            path === firstHome.home && options.recursive === undefined
         )).toHaveLength(1);
         expect(registrations.filter(({ path, options }) =>
             (
                 path === firstHome.sessions
                 || path === firstHome.archivedSessions
             )
-            && options.recursive === true
+            && options.recursive !== undefined
         )).toHaveLength(2);
 
         const firstParentRegistration = registrations.find(
             ({ path, options }) =>
-                path === firstHome.home && options.recursive !== true,
+                path === firstHome.home && options.recursive === undefined,
         );
         expect(firstParentRegistration).toBeDefined();
         firstParentRegistration?.listener('rename', 'archived_sessions');
         await vi.waitFor(() => {
             expect(registrations.filter(({ path, options }) =>
                 path === firstHome.archivedSessions
-                && options.recursive === true
+                && options.recursive !== undefined
             )).toHaveLength(2);
         });
         expect(registrations.filter(({ path, options }) =>
-            path === firstHome.sessions && options.recursive === true
+            path === firstHome.sessions && options.recursive !== undefined
         )).toHaveLength(1);
 
         await rm(firstHome.sessions, { recursive: true });
         firstParentRegistration?.listener('rename', 'sessions');
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(registrations.filter(({ path, options }) =>
-            path === firstHome.sessions && options.recursive === true
+            path === firstHome.sessions && options.recursive !== undefined
         )).toHaveLength(1);
 
         const outside = join(firstHome.home, 'outside');
@@ -528,7 +530,7 @@ describe('External Sessions topology physical watcher pooling', () => {
         firstParentRegistration?.listener('rename', 'sessions');
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(registrations.filter(({ path, options }) =>
-            path === firstHome.sessions && options.recursive === true
+            path === firstHome.sessions && options.recursive !== undefined
         )).toHaveLength(1);
 
         await rm(firstHome.sessions);
@@ -536,7 +538,7 @@ describe('External Sessions topology physical watcher pooling', () => {
         firstParentRegistration?.listener('rename', 'sessions');
         await vi.waitFor(() => {
             expect(registrations.filter(({ path, options }) =>
-                path === firstHome.sessions && options.recursive === true
+                path === firstHome.sessions && options.recursive !== undefined
             )).toHaveLength(2);
         });
 
@@ -544,14 +546,14 @@ describe('External Sessions topology physical watcher pooling', () => {
         const secondLink = await addHome(reconciler, secondHome, 2);
         await vi.waitFor(() => {
             expect(registrations.filter(({ path, options }) =>
-                path === secondHome.home && options.recursive !== true
+                path === secondHome.home && options.recursive === undefined
             )).toHaveLength(1);
             expect(registrations.filter(({ path, options }) =>
                 (
                     path === secondHome.sessions
                     || path === secondHome.archivedSessions
                 )
-                && options.recursive === true
+                && options.recursive !== undefined
             )).toHaveLength(2);
         });
 

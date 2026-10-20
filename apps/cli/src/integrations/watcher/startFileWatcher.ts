@@ -1,4 +1,4 @@
-import { EventEmitter, on } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { statSync, watch } from 'node:fs';
 import { lstat, stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
@@ -80,6 +80,84 @@ type DirectoryObservation = {
 };
 
 const directoryObservations = new Map<string, DirectoryObservation>();
+
+/** events.on eagerly allocates two large FixedQueues per idle subscription.
+ * Keep this owner's ordered delivery queue lazy: native transcript corpora have
+ * many logical files sharing a small number of directory attachments. */
+function fileWatcherEvents(emitter: EventEmitter, signal: AbortSignal): AsyncIterableIterator<readonly unknown[]> {
+    type QueuedEvent = { event: readonly unknown[]; next: QueuedEvent | null };
+    let first: QueuedEvent | null = null;
+    let last: QueuedEvent | null = null;
+    let finished = false;
+    let failure: { error: unknown } | null = null;
+    let waiting: Readonly<{
+        resolve(result: IteratorResult<readonly unknown[]>): void;
+        reject(error: unknown): void;
+    }> | null = null;
+    const done: IteratorReturnResult<undefined> = { done: true, value: undefined };
+    const close = () => {
+        finished = true;
+        emitter.off('change', change);
+        emitter.off('error', error);
+        emitter.off('close', close);
+        signal.removeEventListener('abort', close);
+        const current = waiting;
+        waiting = null;
+        current?.resolve(done);
+    };
+    const change = (...event: unknown[]) => {
+        if (finished) return;
+        if (!waiting) {
+            const next: QueuedEvent = { event, next: null };
+            if (last) last.next = next;
+            else first = next;
+            last = next;
+            return;
+        }
+        const current = waiting;
+        waiting = null;
+        current.resolve({ done: false, value: event });
+    };
+    const error = (cause: unknown) => {
+        if (finished) return;
+        if (waiting) {
+            const current = waiting;
+            waiting = null;
+            current.reject(cause);
+        } else failure = { error: cause };
+        close();
+    };
+    emitter.on('change', change);
+    emitter.on('error', error);
+    emitter.on('close', close);
+    signal.addEventListener('abort', close, { once: true });
+    if (signal.aborted) close();
+    return {
+        next() {
+            if (first) {
+                const event = first.event;
+                first = first.next;
+                if (!first) last = null;
+                return Promise.resolve({ done: false as const, value: event });
+            }
+            if (failure) {
+                const cause = failure.error;
+                failure = null;
+                return Promise.reject(cause);
+            }
+            if (finished) return Promise.resolve(done);
+            return new Promise<IteratorResult<readonly unknown[]>>((resolve, reject) => { waiting = { resolve, reject }; });
+        },
+        return() {
+            first = null;
+            last = null;
+            failure = null;
+            close();
+            return Promise.resolve(done);
+        },
+        [Symbol.asyncIterator]() { return this; },
+    };
+}
 
 /** Native transcript files share parent observation, not delivery or recovery. */
 function observeDirectory(directory: string, directoryVersion: string, targetName: string | null) {
@@ -185,10 +263,7 @@ export function startFileWatcher(
                 const parent = observeDirectory(watchedDirectory, directoryVersion, isDirectory ? null : targetName);
                 const watcher = parent.events;
                 closeWatcher = () => parent.close();
-                const events = on(watcher, 'change', {
-                    signal: abortController.signal,
-                    close: ['close'],
-                });
+                const events = fileWatcherEvents(watcher, abortController.signal);
                 // Parent events cover the logical entry. A symlink's content
                 // can change outside that directory, so retain native target
                 // observation within this same attachment and recovery owner.

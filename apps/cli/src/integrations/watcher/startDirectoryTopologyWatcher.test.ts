@@ -10,12 +10,17 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { FSWatcher, WatchListener, WatchOptions } from 'node:fs';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startDirectoryTopologyWatcher } from './startDirectoryTopologyWatcher';
 
 describe('startDirectoryTopologyWatcher', () => {
-    afterEach(() => {
+    let testDirectory: string;
+    beforeEach(async () => {
+        testDirectory = await realpath(await mkdtemp(join(tmpdir(), 'directory-topology-boundary-')));
+    });
+    afterEach(async () => {
+        await rm(testDirectory, { recursive: true, force: true });
         vi.useRealTimers();
     });
 
@@ -29,7 +34,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 targetAttempts += 1;
                 if (targetAttempts === 1) {
                     const error = new Error(
@@ -48,7 +53,7 @@ describe('startDirectoryTopologyWatcher', () => {
         const onReady = vi.fn();
         const onUnavailable = vi.fn();
         const dispose = startDirectoryTopologyWatcher(
-            process.cwd(),
+            testDirectory,
             onStructuralChange,
             { watchImpl, onReady, onUnavailable },
         );
@@ -58,7 +63,7 @@ describe('startDirectoryTopologyWatcher', () => {
         await Promise.resolve();
         await Promise.resolve();
         await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(targetAttempts).toBe(1);
+        await vi.waitFor(() => expect(targetAttempts).toBe(1));
         expect(onUnavailable).toHaveBeenCalledOnce();
         expect(onReady).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
@@ -78,7 +83,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             _listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive !== true) {
+            if (options.recursive === undefined) {
                 return {
                     close: vi.fn(),
                     on: vi.fn().mockReturnThis(),
@@ -100,7 +105,7 @@ describe('startDirectoryTopologyWatcher', () => {
         const onReady = vi.fn();
         const onUnavailable = vi.fn();
         const dispose = startDirectoryTopologyWatcher(
-            process.cwd(),
+            testDirectory,
             onStructuralChange,
             { watchImpl, onReady, onUnavailable },
         );
@@ -110,15 +115,15 @@ describe('startDirectoryTopologyWatcher', () => {
         await Promise.resolve();
         await Promise.resolve();
         await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(targetAttempts).toBe(1);
-        expect(onReady).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(targetAttempts).toBe(1));
+        await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
         targetError?.();
         targetError?.();
         await Promise.resolve();
         await Promise.resolve();
         await new Promise<void>((resolve) => setImmediate(resolve));
 
-        expect(targetAttempts).toBe(1);
+        await vi.waitFor(() => expect(targetAttempts).toBe(1));
         expect(firstTargetClose).toHaveBeenCalledOnce();
         expect(onUnavailable).toHaveBeenCalledOnce();
         expect(onStructuralChange).not.toHaveBeenCalled();
@@ -138,7 +143,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             _listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 return {
                     close: vi.fn(),
                     on: vi.fn().mockReturnThis(),
@@ -160,7 +165,7 @@ describe('startDirectoryTopologyWatcher', () => {
         const onReady = vi.fn();
         const onUnavailable = vi.fn();
         const dispose = startDirectoryTopologyWatcher(
-            process.cwd(),
+            testDirectory,
             onStructuralChange,
             { watchImpl, onReady, onUnavailable },
         );
@@ -171,7 +176,7 @@ describe('startDirectoryTopologyWatcher', () => {
         await Promise.resolve();
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(parentAttempts).toBe(1);
-        expect(onReady).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
         parentError?.();
         await Promise.resolve();
         await Promise.resolve();
@@ -188,13 +193,15 @@ describe('startDirectoryTopologyWatcher', () => {
     it('fences a queued unavailable notification when disposed during failed attachment', async () => {
         vi.useFakeTimers();
         let targetAttempts = 0;
+        let dispose = () => {};
         const watchImpl = vi.fn((
             _path: string,
             options: WatchOptions,
             _listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 targetAttempts += 1;
+                void Promise.resolve().then(() => dispose());
                 const error = new Error('descriptor limit') as NodeJS.ErrnoException;
                 error.code = 'EMFILE';
                 throw error;
@@ -206,21 +213,21 @@ describe('startDirectoryTopologyWatcher', () => {
         });
         const onStructuralChange = vi.fn();
         const onUnavailable = vi.fn();
-        const dispose = startDirectoryTopologyWatcher(
-            process.cwd(),
+        dispose = startDirectoryTopologyWatcher(
+            testDirectory,
             onStructuralChange,
             { watchImpl, onUnavailable },
         );
 
         await Promise.resolve();
-        expect(targetAttempts).toBe(1);
+        await vi.waitFor(() => expect(targetAttempts).toBe(1));
         dispose();
         await Promise.resolve();
         expect(onUnavailable).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
         await vi.advanceTimersByTimeAsync(120_000);
 
-        expect(targetAttempts).toBe(1);
+        await vi.waitFor(() => expect(targetAttempts).toBe(1));
         expect(onStructuralChange).not.toHaveBeenCalled();
         dispose();
     });
@@ -232,7 +239,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 recursiveListener = listener;
             }
             return {
@@ -242,19 +249,19 @@ describe('startDirectoryTopologyWatcher', () => {
         });
         const onStructuralChange = vi.fn();
         const dispose = startDirectoryTopologyWatcher(
-            process.cwd(),
+            testDirectory,
             onStructuralChange,
             { watchImpl },
         );
-        await Promise.resolve();
+        await vi.waitFor(() => expect(recursiveListener).toBeDefined());
 
         recursiveListener?.('change', 'existing.jsonl');
         expect(onStructuralChange).not.toHaveBeenCalled();
 
         recursiveListener?.('rename', join('2026', '07', '25', 'child.jsonl'));
-        expect(onStructuralChange).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(onStructuralChange).toHaveBeenCalledOnce());
         expect(onStructuralChange).toHaveBeenCalledWith(
-            join(process.cwd(), '2026', '07', '25', 'child.jsonl'),
+            join(testDirectory, '2026', '07', '25', 'child.jsonl'),
         );
 
         dispose();
@@ -299,7 +306,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 recursiveAttachments += 1;
             } else {
                 parentListener = listener;
@@ -323,7 +330,7 @@ describe('startDirectoryTopologyWatcher', () => {
         parentListener?.('rename', 'archived_sessions');
 
         await vi.waitFor(() => expect(onStructuralChange).toHaveBeenCalled());
-        expect(recursiveAttachments).toBe(1);
+        expect(recursiveAttachments).toBe(process.platform === 'darwin' || process.platform === 'win32' ? 1 : 4);
         dispose();
     });
 
@@ -343,7 +350,7 @@ describe('startDirectoryTopologyWatcher', () => {
             options: WatchOptions,
             listener: WatchListener<string>,
         ): FSWatcher => {
-            if (options.recursive === true) {
+            if (options.recursive !== undefined) {
                 recursiveAttachments += 1;
                 recursiveListener = listener;
             } else {
@@ -384,9 +391,9 @@ describe('startDirectoryTopologyWatcher', () => {
         expect(onStructuralChange).toHaveBeenCalledOnce();
         onStructuralChange.mockClear();
         recursiveListener?.('rename', 'recreated-child.jsonl');
-        expect(onStructuralChange).toHaveBeenCalledWith(
+        await vi.waitFor(() => expect(onStructuralChange).toHaveBeenCalledWith(
             join(root, 'recreated-child.jsonl'),
-        );
+        ));
         dispose();
     });
 });
