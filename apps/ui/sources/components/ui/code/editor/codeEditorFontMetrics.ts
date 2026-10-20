@@ -1,11 +1,34 @@
 export const CODE_EDITOR_BASE_FONT_SIZE = 13;
 export const CODE_EDITOR_BASE_LINE_HEIGHT = 22;
 export { CODE_EDITOR_BASE_LINE_HEIGHT as CODE_LINE_BASE_HEIGHT };
+/** Existing code-view insets; editors consume the same geometry. */
+export const CODE_GUTTER_METRICS = Object.freeze({ rowPadding: 8, numberPaddingLeft: 4, numberPaddingRight: 18, numberMinWidth: 24, numberFontSize: 11, columnGap: 6, reviewLaneWidth: 32 });
+
+export function resolveCodeEditorLineNumberDigits(text: string): number {
+    return String(text.split(/\r\n|\r|\n/).length).length;
+}
+
+export type CodeEditorGutterMetrics = Readonly<{ numberWidth: number; textOffset: number }>;
+export function resolveCodeEditorGutterMetrics(params: Readonly<{
+    lineNumberDigits: number;
+    /** Measured width of a digit in the code font, never an estimated glyph ratio. */
+    digitWidth: number;
+    reviewLaneWidth?: number;
+    showLineNumbers?: boolean;
+    columns?: 1 | 2;
+}>): CodeEditorGutterMetrics {
+    const numberWidth = params.showLineNumbers === false ? 0 : Math.max(CODE_GUTTER_METRICS.numberMinWidth, Math.round(Math.max(1, params.lineNumberDigits) * params.digitWidth));
+    const columns = params.columns ?? 1;
+    const textOffset = CODE_GUTTER_METRICS.rowPadding + (params.reviewLaneWidth ?? 0) + CODE_GUTTER_METRICS.numberPaddingLeft
+        + columns * numberWidth + (params.showLineNumbers === false ? 0 : columns - 1) * CODE_GUTTER_METRICS.columnGap + CODE_GUTTER_METRICS.numberPaddingRight;
+    return { numberWidth, textOffset };
+}
 
 export type CodeEditorFontMetrics = Readonly<{
     scale: number;
     fontSize: number;
     lineHeight: number;
+    lineNumberFontSize: number;
 }>;
 
 function clamp(value: number, min: number, max: number): number {
@@ -30,6 +53,7 @@ export function resolveCodeEditorFontMetrics(params: Readonly<{
         scale,
         fontSize: Math.max(8, Math.round(CODE_EDITOR_BASE_FONT_SIZE * scale)),
         lineHeight: Math.max(10, Math.round(CODE_EDITOR_BASE_LINE_HEIGHT * scale)),
+        lineNumberFontSize: Math.round(CODE_GUTTER_METRICS.numberFontSize * scale),
     };
 }
 

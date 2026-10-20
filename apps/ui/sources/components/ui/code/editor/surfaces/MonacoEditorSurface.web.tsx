@@ -4,15 +4,20 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import type { CodeEditorProps } from '../codeEditorTypes';
 import { resolveMonacoLanguageId } from '../codeEditorTypes';
-import type { CodeEditorFindHandle, CodeEditorFindSnapshot, CodeEditorHandle } from '../codeEditorTypes';
+import type { CodeEditorFindHandle, CodeEditorFindSnapshot, CodeEditorHandle, CodeEditorHistory } from '../codeEditorTypes';
+import { createMonacoCommands } from './monacoCommands';
 import type { CodeEditorFindSet } from '../bridge/codeEditorFindBridge';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { TextInput } from '@/components/ui/text/Text';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
-import { resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
+import { resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
+import { resolveCodeMonoFontFamily } from '../../codeTypography';
 import { buildMonacoEditorThemeData, resolveCodeEditorTheme } from '../editorTheme';
 import type { CodeEditorTheme } from '../editorTheme';
 import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
+import { createMonacoDecorations } from './monacoDecorations';
+import type { EditorDecoration, EditorDecorationLayer } from '../codeEditorTypes';
+import { useKeyboardCommand } from '@/keyboard/KeyboardShortcutProvider';
 
 
 type MonacoType = any;
@@ -29,6 +34,19 @@ const MONACO_LOADER_SCRIPT_SRC = '/monaco/vs/loader.js';
 
 let loaderPromise: Promise<void> | null = null;
 let basicLanguagesPromise: Promise<void> | null = null;
+const configuredTypeScriptInstances = new WeakSet<object>();
+
+function disableMonacoTypeScriptServices(monaco: Pick<typeof import('monaco-editor'), 'typescript'>): void {
+    if (configuredTypeScriptInstances.has(monaco)) return;
+    const off: import('monaco-editor').typescript.ModeConfiguration = {
+        completionItems: false, hovers: false, documentSymbols: false, definitions: false, references: false,
+        documentHighlights: false, rename: false, diagnostics: false, documentRangeFormattingEdits: false,
+        signatureHelp: false, onTypeFormattingEdits: false, codeActions: false, inlayHints: false,
+    };
+    monaco.typescript.typescriptDefaults.setModeConfiguration(off);
+    monaco.typescript.javascriptDefaults.setModeConfiguration(off);
+    configuredTypeScriptInstances.add(monaco);
+}
 
 function ensureMonacoLoader(): Promise<void> {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -96,6 +114,7 @@ async function ensureMonaco(): Promise<MonacoType> {
     if (window.monaco) {
         // Best-effort: register Monaco basic languages (markdown, yaml, python, etc.).
         await ensureMonacoBasicLanguages();
+        disableMonacoTypeScriptServices(window.monaco);
         return window.monaco;
     }
     if (!window.require) throw new Error('Monaco loader did not initialize require()');
@@ -121,6 +140,7 @@ async function ensureMonaco(): Promise<MonacoType> {
     await ensureMonacoBasicLanguages();
 
     if (!window.monaco) throw new Error('Monaco loaded but window.monaco is missing');
+    disableMonacoTypeScriptServices(window.monaco);
     return window.monaco;
 }
 
@@ -203,6 +223,9 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     ref,
 ) {
     const { theme } = useUnistyles();
+    const executeKeyboardCommand = useKeyboardCommand();
+    const executeKeyboardCommandRef = React.useRef(executeKeyboardCommand);
+    executeKeyboardCommandRef.current = executeKeyboardCommand;
     const uiFontScale = useLocalSetting('uiFontScale');
     const fontMetrics = React.useMemo(
         () => resolveCodeEditorFontMetrics({ uiFontScale }),
@@ -246,15 +269,73 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const latestWrapLinesRef = React.useRef(props.wrapLines ?? true);
     const latestShowLineNumbersRef = React.useRef(props.showLineNumbers ?? true);
     const latestFontMetricsRef = React.useRef(resolveCodeEditorFontMetrics({ uiFontScale }));
+    const gutterPropsRef = React.useRef({ lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0 });
+    gutterPropsRef.current = { lineNumberDigits: props.lineNumberDigits ?? 1, reviewLaneWidth: props.reviewLaneWidth ?? 0 };
     const latestEditorThemeRef = React.useRef(editorTheme);
     const pendingChangeRef = React.useRef<string | null>(null);
     const changeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const disposablesRef = React.useRef<Array<{ dispose?: () => void }> | null>(null);
     const pendingFindRef = React.useRef<CodeEditorFindSet | 'open' | null>(null);
+    const decorationControllerRef = React.useRef<ReturnType<typeof createMonacoDecorations> | null>(null);
+    const decorationsRef = React.useRef(new Map<EditorDecorationLayer, readonly EditorDecoration[]>());
+    const decorationListenersRef = React.useRef(new Set<Parameters<CodeEditorHandle['onDecorationPress']>[0]>());
     const findSnapshotRef = React.useRef<CodeEditorFindSnapshot>({
         query: '', options: { matchCase: false, regex: false }, status: { kind: 'idle' },
     });
     const findListenersRef = React.useRef(new Set<() => void>());
+    const pointerListenersRef = React.useRef(new Set<Parameters<NonNullable<CodeEditorHandle['onPointerPosition']>>[0]>());
+    const activationListenersRef = React.useRef(new Set<Parameters<NonNullable<CodeEditorHandle['onActivatePosition']>>[0]>());
+    const composingRef = React.useRef(false);
+    const commandsRef = React.useRef<ReturnType<typeof createMonacoCommands> | null>(null);
+    const historyListenersRef = React.useRef(new Set<(state: CodeEditorHistory) => void>());
+    const publishHistory = React.useCallback(() => {
+        const state = commandsRef.current?.getHistory() ?? { canUndo: false, canRedo: false };
+        for (const listener of historyListenersRef.current) listener(state);
+    }, []);
+    const pendingRevealRef = React.useRef<null | { line: number; options?: Parameters<CodeEditorHandle['revealLine']>[1] }>(
+        props.initialLine ? { line: props.initialLine, options: { behavior: 'instant' } } : null,
+    );
+    const onReadyRef = React.useRef(props.onReady);
+    onReadyRef.current = props.onReady;
+    React.useEffect(() => {
+        pendingRevealRef.current = props.initialLine ? { line: props.initialLine, options: { behavior: 'instant' } } : null;
+    }, [props.resetKey]);
+    const revealLine = React.useCallback<CodeEditorHandle['revealLine']>((requestedLine, options) => {
+        if (!commandsRef.current) { pendingRevealRef.current = { line: requestedLine, options }; return; }
+        commandsRef.current.revealLine(requestedLine, options);
+        pendingRevealRef.current = null;
+    }, []);
+    const alignGutter = React.useCallback(() => {
+        const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
+        const model = modelRef.current as MonacoEditorApi.ITextModel | null;
+        const layout = editor?.getLayoutInfo?.();
+        if (!editor || !model || !layout) return;
+        const digits = Math.max(gutterPropsRef.current.lineNumberDigits, String(model.getLineCount()).length);
+        const gutter = resolveCodeEditorGutterMetrics({ lineNumberDigits: digits, digitWidth: layout.lineNumbersWidth / digits,
+            showLineNumbers: latestShowLineNumbersRef.current, reviewLaneWidth: gutterPropsRef.current.reviewLaneWidth });
+        const widthOption = window.monaco?.editor?.EditorOption?.lineDecorationsWidth;
+        const configuredDecorationWidth = widthOption !== undefined ? editor.getOption(widthOption) : null;
+        // Monaco adds its own folding-control width to the configured decoration gap.
+        const controlsWidth = typeof configuredDecorationWidth === 'number' ? layout.decorationsWidth - configuredDecorationWidth : 0;
+        if (layout.contentLeft !== gutter.textOffset) editor.updateOptions({ lineDecorationsWidth: gutter.textOffset - layout.lineNumbersWidth - controlsWidth });
+    }, []);
+    const selectionListenersRef = React.useRef(new Set<() => void>());
+    const getSelection = React.useCallback<NonNullable<CodeEditorHandle['getSelection']>>(() => {
+        const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
+        const model = modelRef.current as MonacoEditorApi.ITextModel | null;
+        const selection = editor?.getSelection?.();
+        if (!selection || !model) return null;
+        const empty = selection.startLineNumber === selection.endLineNumber && selection.startColumn === selection.endColumn;
+        const position = editor.getScrolledVisiblePosition?.({ lineNumber: selection.startLineNumber, column: selection.startColumn });
+        const bounds = editor.getDomNode?.()?.getBoundingClientRect();
+        return {
+            startLine: selection.startLineNumber,
+            endLine: selection.endLineNumber > selection.startLineNumber && selection.endColumn === 1
+                ? selection.endLineNumber - 1 : selection.endLineNumber,
+            text: empty ? model.getLineContent(selection.startLineNumber) : model.getValueInRange(selection),
+            rect: position && bounds ? { x: bounds.left + position.left, y: bounds.top + position.top, width: 0, height: position.height } : null,
+        };
+    }, []);
     const applyFind = React.useCallback((request?: CodeEditorFindSet) => {
         const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
         if (!editor) { pendingFindRef.current = request ?? 'open'; return; }
@@ -398,8 +479,40 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             },
             focus: () => editorRef.current?.focus?.(),
             find,
+            getSelection,
+            subscribeSelection: (listener) => {
+                selectionListenersRef.current.add(listener);
+                return () => { selectionListenersRef.current.delete(listener); };
+            },
+            revealLine,
+            runCommand: (command) => commandsRef.current?.runCommand(command),
+            subscribeHistory: (listener) => {
+                historyListenersRef.current.add(listener);
+                listener(commandsRef.current?.getHistory() ?? { canUndo: false, canRedo: false });
+                return () => { historyListenersRef.current.delete(listener); };
+            },
+            setDecorations: (layer, items) => {
+                decorationsRef.current.set(layer, items);
+                decorationControllerRef.current?.set(layer, items);
+            },
+            onDecorationPress: (listener) => {
+                decorationListenersRef.current.add(listener);
+                return () => { decorationListenersRef.current.delete(listener); };
+            },
+            onPointerPosition: (listener) => {
+                pointerListenersRef.current.add(listener);
+                return () => { pointerListenersRef.current.delete(listener); };
+            },
+            onActivatePosition: (listener) => {
+                activationListenersRef.current.add(listener);
+                return () => { activationListenersRef.current.delete(listener); };
+            },
+            getCursorPosition: () => {
+                const position = (editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null)?.getPosition?.();
+                return position ? { line: position.lineNumber, character: position.column - 1 } : null;
+            },
         }),
-        [find, flushPendingChange],
+        [find, flushPendingChange, getSelection, publishHistory, revealLine],
     );
 
     React.useEffect(() => {
@@ -427,6 +540,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     model,
                     theme: initialEditorTheme.monacoThemeName,
                     readOnly: initialReadOnly,
+                    hover: { enabled: false },
                     minimap: { enabled: false },
                     // No ruler marks beside the text: the cursor's tick reads as a stray dark box in a framed editor.
                     hideCursorInOverviewRuler: true,
@@ -434,30 +548,91 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     scrollBeyondLastLine: false,
                     wordWrap: initialWrapLines ? 'on' : 'off',
                     lineNumbers: initialShowLineNumbers ? 'on' : 'off',
+                    lineNumbersMinChars: gutterPropsRef.current.lineNumberDigits,
+                    glyphMargin: false,
                     fontSize: initialFontMetrics.fontSize,
                     lineHeight: initialFontMetrics.lineHeight,
-                    fontFamily:
-                        'Menlo, ui-monospace, SFMono-Regular, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                    fontFamily: resolveCodeMonoFontFamily(),
                     tabSize: 2,
                     insertSpaces: true,
                     automaticLayout: true,
                     renderWhitespace: 'selection',
                 });
                 editorRef.current = editor;
+                // Capture before Monaco's keybinding and modifier-click contributions see the event.
+                const captureGotoKey = (event: KeyboardEvent) => {
+                    if (event.key !== 'F12' || event.isComposing || composingRef.current || event.ctrlKey || event.metaKey) return;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    executeKeyboardCommandRef.current(event.shiftKey ? 'code.findReferences' : 'code.goToDefinition');
+                };
+                const captureGotoClick = (event: MouseEvent) => {
+                    if ((!event.metaKey && !event.ctrlKey) || event.button > 0 || composingRef.current) return;
+                    const target = editor.getTargetAtClientPoint?.(event.clientX, event.clientY);
+                    const position = target?.position;
+                    if (!position) return;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    for (const listener of activationListenersRef.current) listener({ line: position.lineNumber, character: position.column - 1 });
+                };
+                node.addEventListener('keydown', captureGotoKey, true);
+                node.addEventListener('mousedown', captureGotoClick, true);
+                const publishPointer = (position: { lineNumber: number; column: number } | null) => {
+                    const point = position ? editor.getScrolledVisiblePosition?.(position) : null;
+                    const bounds = editor.getDomNode?.()?.getBoundingClientRect();
+                    const value = position && point && bounds ? { line: position.lineNumber, character: position.column - 1,
+                        rect: { x: bounds.left + point.left, y: bounds.top + point.top, width: 0, height: point.height } } : null;
+                    for (const listener of pointerListenersRef.current) listener(value);
+                };
+                alignGutter();
+                commandsRef.current = createMonacoCommands(editor, model, {
+                    isComposing: () => composingRef.current,
+                    isReadOnly: () => latestReadOnlyRef.current,
+                    openFind: () => find.open(),
+                    navigateChange: (direction) => decorationControllerRef.current?.navigate(direction),
+                    onHistory: publishHistory,
+                });
+                if (pendingRevealRef.current) revealLine(pendingRevealRef.current.line, pendingRevealRef.current.options);
+                if (editor.createDecorationsCollection && editor.onMouseDown) {
+                    const controller = createMonacoDecorations(editor, monaco, (layer, item) => {
+                        for (const listener of decorationListenersRef.current) listener(layer, item);
+                    });
+                    decorationControllerRef.current = controller;
+                    for (const [layer, items] of decorationsRef.current) controller.set(layer, items);
+                }
                 if (pendingFindRef.current) applyFind(pendingFindRef.current === 'open' ? undefined : pendingFindRef.current);
 
                 disposablesRef.current = [
+                    { dispose: () => {
+                        node.removeEventListener('keydown', captureGotoKey, true);
+                        node.removeEventListener('mousedown', captureGotoClick, true);
+                    } },
+                    editor.onMouseMove?.((event: MonacoEditorApi.IEditorMouseEvent) => publishPointer(event.target.position)),
+                    editor.onMouseLeave?.(() => publishPointer(null)),
+                    editor.onDidLayoutChange?.(alignGutter),
+                    editor.onDidCompositionStart?.(() => { composingRef.current = true; }),
+                    editor.onDidCompositionEnd?.(() => { composingRef.current = false; }),
+                    editor.onDidChangeCursorSelection?.(() => {
+                        for (const listener of selectionListenersRef.current) listener();
+                    }),
                     editor.onDidChangeModelContent(() => {
-                    if (ignoreChangeRef.current) return;
-                    const next = model.getValue();
-                    scheduleChange(next);
+                        publishHistory();
+                        for (const listener of selectionListenersRef.current) listener();
+                        if (ignoreChangeRef.current) return;
+                        const next = model.getValue();
+                        scheduleChange(next);
                     }),
                     editor.onDidBlurEditorText(() => {
                         flushPendingChange();
                     }),
                 ];
 
+                for (const listener of selectionListenersRef.current) listener();
+
+                editor.render?.(true);
                 setReady(true);
+                publishHistory();
+                onReadyRef.current?.();
             } catch {
                 // Best-effort: stay on fallback surface.
                 setReady(false);
@@ -475,6 +650,8 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 disposablesRef.current?.forEach((item) => item?.dispose?.());
             } catch {}
             try {
+                decorationControllerRef.current?.dispose();
+                decorationControllerRef.current = null;
                 editorRef.current?.dispose?.();
             } catch {}
             try {
@@ -489,6 +666,11 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             disposablesRef.current = null;
             editorRef.current = null;
             modelRef.current = null;
+            commandsRef.current = null;
+            for (const listener of pointerListenersRef.current) listener(null);
+            composingRef.current = false;
+            publishHistory();
+            for (const listener of selectionListenersRef.current) listener();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.resetKey]);
@@ -503,11 +685,13 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 readOnly,
                 wordWrap: wrapLines ? 'on' : 'off',
                 lineNumbers: showLineNumbers ? 'on' : 'off',
+                lineNumbersMinChars: props.lineNumberDigits ?? 1,
             });
+            alignGutter();
         } catch {
             // ignore
         }
-    }, [fontMetrics.fontSize, fontMetrics.lineHeight, readOnly, showLineNumbers, wrapLines]);
+    }, [alignGutter, fontMetrics.fontSize, fontMetrics.lineHeight, readOnly, showLineNumbers, wrapLines, props.lineNumberDigits, props.reviewLaneWidth]);
 
     React.useEffect(() => {
         const model = modelRef.current;
@@ -574,8 +758,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                             padding: 10,
                             color: editorTheme.syntax.defaultColor,
                             backgroundColor: editorTheme.backgroundColor,
-                            fontFamily:
-                                'Menlo, ui-monospace, SFMono-Regular, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                            fontFamily: resolveCodeMonoFontFamily(),
                             fontSize: fontMetrics.fontSize,
                             lineHeight: fontMetrics.lineHeight,
                         }}

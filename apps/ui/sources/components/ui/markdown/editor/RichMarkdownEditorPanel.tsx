@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
-import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { usePublishCodeEditorHandle } from '@/components/ui/code/editor/usePublishCodeEditorHandle';
 import { CommandMenu } from '@/components/ui/commandMenu';
 import { LinkBubble } from '@/components/ui/linkBubble';
@@ -57,7 +57,7 @@ import { t } from '@/text';
  * Props mirror `FileEditorPanel` (resetKey/editorRef/value/onChange) plus
  * `onUnavailable`, which the native surface uses to hand the freshest markdown
  * up on a bundle/`error` fallback so the host can seed raw synchronously
- * (R-A15/R-A17). The host (`useMarkdownFileEditMode`) owns the raw<->rich
+ * (R-A15/R-A17). The shared `useMarkdownEditMode` owns the raw<->rich
  * crossfade and remount, so this panel renders only the editing surface.
  *
  * The frontmatter banner reads the active theme directly via `useUnistyles()`
@@ -69,7 +69,7 @@ const CANVAS_PANEL_STYLE = { flex: 1 } as const;
 
 function RichMarkdownEditorPanelImpl(props: Readonly<{
     resetKey: string;
-    editorRef: Readonly<React.MutableRefObject<CodeEditorHandle | null>>;
+    editorRef: Readonly<React.MutableRefObject<TextEditorHandle | null>>;
     value: string;
     onChange: (next: string) => void;
     onUnavailable?: (latestMarkdown: string) => void;

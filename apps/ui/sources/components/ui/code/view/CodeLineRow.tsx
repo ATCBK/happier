@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, View, Platform, StyleSheet } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import type { GestureResponderEvent, TextStyle, ViewStyle } from 'react-native';
+import type { GestureResponderEvent, TextLayoutEventData, TextStyle, ViewStyle } from 'react-native';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { Typography } from '@/constants/Typography';
@@ -13,9 +13,10 @@ import { Text } from '@/components/ui/text/Text';
 import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { useContainingHappierMaterialRole, useHappierMaterialColorResolver, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
+import { CODE_EDITOR_BASE_FONT_SIZE, CODE_LINE_BASE_HEIGHT, CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 
 /** Shared base row metric for code display and pre-paint layout estimates. */
-export const CODE_LINE_BASE_HEIGHT = 22;
+export { CODE_LINE_BASE_HEIGHT } from '../editor/codeEditorFontMetrics';
 
 export type CodeLinePressEvent = GestureResponderEvent & Readonly<{
     shiftKey?: boolean;
@@ -53,6 +54,8 @@ function renderFindText(text: string, ranges?: readonly FindTextRange[]) {
 
 export function CodeLineRow(props: {
     line: CodeLine;
+    lineNumberDigits?: number;
+    reviewLaneWidth?: number;
     selected: boolean;
     highlighted?: boolean;
     onPressLine?: (line: CodeLine, event?: CodeLinePressEvent) => void;
@@ -73,6 +76,7 @@ export function CodeLineRow(props: {
     }>;
     advancedTokens?: readonly Readonly<{ text: string; color: string }>[];
     findRanges?: readonly FindTextRange[];
+    onActivateToken?: (lineId: string, offset16: number) => void;
 }) {
     const { theme } = useUnistyles();
     const materialRole = useContainingHappierMaterialRole();
@@ -92,6 +96,9 @@ export function CodeLineRow(props: {
     const showLineNumbers = props.showLineNumbers ?? true;
     const showPrefix = props.showPrefix ?? true;
     const isWeb = Platform.OS === 'web';
+    const textLayoutsRef = React.useRef<TextLayoutEventData['lines']>([]);
+    const longPressedRef = React.useRef(false);
+    const canActivateToken = !isWeb && Boolean(props.onActivateToken) && !line.renderIsHeaderLine && line.newLine !== null;
     const [isHovered, setIsHovered] = React.useState(false);
     const commentActive = props.commentActive === true;
     const highlighted = props.highlighted === true;
@@ -108,7 +115,26 @@ export function CodeLineRow(props: {
     const onPress = !line.renderIsHeaderLine && (line.selectable || pressLineWhenNotSelectable === true) && onPressLine
         ? (event: GestureResponderEvent) => onPressLine(line, event as CodeLinePressEvent)
         : undefined;
-    const onLongPress = !isWeb && onPressAddComment && !line.renderIsHeaderLine ? () => onPressAddComment(line) : undefined;
+    const onLongPress = !isWeb && onPressAddComment && !line.renderIsHeaderLine ? () => {
+        longPressedRef.current = true;
+        onPressAddComment(line);
+    } : undefined;
+    const activateText = canActivateToken ? (event: GestureResponderEvent) => {
+        if (longPressedRef.current) { longPressedRef.current = false; return; }
+        const { locationX, locationY } = event.nativeEvent;
+        const layouts = textLayoutsRef.current;
+        const index = layouts.findIndex((layout) => locationY >= layout.y && locationY < layout.y + layout.height);
+        const layout = layouts[index];
+        if (!layout || layout.width <= 0 || locationX < layout.x || locationX >= layout.x + layout.width) return;
+        const characters = Array.from(layout.text);
+        if (!characters.length) return;
+        const character = Math.floor((locationX - layout.x) / (layout.width / characters.length));
+        const previousLength = layouts.slice(0, index).reduce((length, item) => length + item.text.length, 0);
+        const foundStart = line.renderCodeText.indexOf(layout.text, previousLength);
+        const offset = (foundStart < 0 ? previousLength : foundStart) + characters.slice(0, character).join('').length;
+        event.stopPropagation?.();
+        props.onActivateToken?.(line.id, offset);
+    } : undefined;
     const onHoverIn = React.useCallback((event?: PreventableInteractionEvent) => {
         if (isWeb && onPressAddComment) setIsHovered(true);
         onHoverLine?.(line, event);
@@ -235,19 +261,19 @@ export function CodeLineRow(props: {
                 onHoverIn={(isWeb && onPressAddComment) || onHoverLine ? (event) => onHoverIn(event as PreventableInteractionEvent) : undefined}
                 onHoverOut={isWeb && onPressAddComment ? onHoverOut : undefined}
             >
-                {canShowCommentAffordance && onPressAddComment ? (
-                    <View testID="review-comment-line-affordance-lane" style={styles.commentButtonLane}>
-                        <ReviewCommentLineAffordance
+                {(props.reviewLaneWidth ?? (canShowCommentAffordance ? CODE_GUTTER_METRICS.reviewLaneWidth : 0)) > 0 ? (
+                    <View testID="review-comment-line-affordance-lane" style={[styles.commentButtonLane, props.reviewLaneWidth !== undefined ? { width: props.reviewLaneWidth } : null]}>
+                        {canShowCommentAffordance && onPressAddComment ? <ReviewCommentLineAffordance
                             active={commentActive}
                             color={theme.colors.text.secondary}
                             onHoverIn={() => setIsHovered(true)}
                             onHoverOut={() => setIsHovered(false)}
                             onPress={() => onPressAddComment(line)}
                             visible={commentAffordanceVisible}
-                        />
+                        /> : null}
                     </View>
                 ) : null}
-                <CodeGutter line={line} showLineNumbers={showLineNumbers} />
+                <CodeGutter line={line} showLineNumbers={showLineNumbers} lineNumberDigits={props.lineNumberDigits} />
                 <View style={styles.codeContainer}>
                     {showPrefix && line.renderPrefixText ? (
                         <Text
@@ -259,6 +285,11 @@ export function CodeLineRow(props: {
                         </Text>
                     ) : null}
                     <Text
+                        {...(isWeb ? { dataSet: { codeText: line.id } } : {})}
+                        onTextLayout={canActivateToken ? (event) => { textLayoutsRef.current = event.nativeEvent.lines; } : undefined}
+                        onPressIn={canActivateToken ? () => { longPressedRef.current = false; } : undefined}
+                        onPress={activateText}
+                        onLongPress={canActivateToken ? onLongPress : undefined}
                         numberOfLines={wrapLines ? undefined : 1}
                         ellipsizeMode={wrapLines ? undefined : 'clip'}
                         style={[styles.codeText, webWhitespaceStyle, { color: textColor }, !wrapLines ? styles.noWrap : null]}
@@ -336,8 +367,8 @@ export function CodeLineRow(props: {
 const stylesheet = StyleSheet.create({
     row: {
         flexDirection: 'row',
-        paddingVertical: 1,
-        paddingHorizontal: 8,
+        paddingVertical: 0,
+        paddingHorizontal: CODE_GUTTER_METRICS.rowPadding,
         alignItems: 'flex-start',
     },
     rowHighlighted: {
@@ -354,7 +385,7 @@ const stylesheet = StyleSheet.create({
         alignItems: 'flex-start',
     },
     commentButtonLane: {
-        width: 32,
+        width: CODE_GUTTER_METRICS.reviewLaneWidth,
         flexShrink: 0,
         alignItems: 'center',
         justifyContent: 'center',
@@ -366,8 +397,8 @@ const stylesheet = StyleSheet.create({
     },
     codeText: {
         ...resolveMonoTypography(),
-        fontSize: 13,
-        lineHeight: 20,
+        fontSize: CODE_EDITOR_BASE_FONT_SIZE,
+        lineHeight: CODE_LINE_BASE_HEIGHT,
     },
     noWrap: {
         flexShrink: 0,

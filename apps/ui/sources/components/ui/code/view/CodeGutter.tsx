@@ -5,9 +5,16 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { Text } from '@/components/ui/text/Text';
 import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
+import { CODE_EDITOR_BASE_FONT_SIZE, CODE_EDITOR_BASE_LINE_HEIGHT, CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 
+function NumberColumn(props: { value: string; digits: number }) {
+    return <View style={stylesheet.numberColumn}>
+        <Text accessible={false} aria-hidden importantForAccessibility="no-hide-descendants" style={stylesheet.measureText}>{'0'.repeat(props.digits)}</Text>
+        <Text style={stylesheet.gutterText}>{props.value}</Text>
+    </View>;
+}
 
-export function CodeGutter(props: { line: CodeLine; showLineNumbers?: boolean }) {
+export function CodeGutter(props: { line: CodeLine; showLineNumbers?: boolean; lineNumberDigits?: number }) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { line } = props;
@@ -22,13 +29,14 @@ export function CodeGutter(props: { line: CodeLine; showLineNumbers?: boolean })
 
     const left = line.oldLine ? String(line.oldLine) : '';
     const right = line.newLine ? String(line.newLine) : '';
+    const digits = Math.max(props.lineNumberDigits ?? 1, left.length, right.length);
 
     // Diff lines keep two right-aligned number columns (old, new) so "7 8" never reads as "78";
     // a file view has only its own line number.
     return (
         <View style={styles.gutter}>
-            {line.kind === 'file' ? null : <Text style={styles.gutterText}>{left}</Text>}
-            <Text style={styles.gutterText}>{right}</Text>
+            {line.kind === 'file' ? null : <NumberColumn value={left} digits={digits} />}
+            <NumberColumn value={right} digits={digits} />
         </View>
     );
 }
@@ -36,14 +44,17 @@ export function CodeGutter(props: { line: CodeLine; showLineNumbers?: boolean })
 const stylesheet = StyleSheet.create((theme) => ({
     gutter: {
         flexDirection: 'row',
-        columnGap: 6,
-        paddingRight: 18,
-        paddingLeft: 4,
+        columnGap: CODE_GUTTER_METRICS.columnGap,
+        paddingRight: CODE_GUTTER_METRICS.numberPaddingRight,
+        paddingLeft: CODE_GUTTER_METRICS.numberPaddingLeft,
     },
+    numberColumn: { minWidth: CODE_GUTTER_METRICS.numberMinWidth },
+    measureText: { fontFamily: resolveCodeMonoFontFamily(), fontSize: CODE_EDITOR_BASE_FONT_SIZE, lineHeight: CODE_EDITOR_BASE_LINE_HEIGHT, opacity: 0 },
     gutterText: {
         fontFamily: resolveCodeMonoFontFamily(),
-        fontSize: 11,
-        minWidth: 24,
+        fontSize: CODE_GUTTER_METRICS.numberFontSize,
+        position: 'absolute',
+        right: 0,
         textAlign: 'right',
         fontVariant: ['tabular-nums'],
         color: theme.colors.text.secondary,

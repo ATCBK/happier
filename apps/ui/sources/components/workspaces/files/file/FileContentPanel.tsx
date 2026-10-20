@@ -3,6 +3,7 @@ import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
+import { CODE_GUTTER_METRICS, resolveCodeEditorLineNumberDigits } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
 import { MarkdownView, type MarkdownSourceRange, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
@@ -33,6 +34,11 @@ import type { FileDisplayMode } from './FileActionToolbar';
 import type { FileViewerFindSnapshot } from '@/components/workspaces/files/details/useFileViewerFind';
 
 const MARKDOWN_PREVIEW_WIDE_VIEWPORT_WIDTH = 768;
+/** Shared View → Edit geometry; review controls keep their existing activation policy. */
+export function resolveFileCodeGeometry(params: Readonly<{ text: string; reviewCommentsEnabled?: boolean; reviewCommentModeActive?: boolean }>): Readonly<{ lineNumberDigits: number; reviewLaneWidth: number }> {
+    return { lineNumberDigits: resolveCodeEditorLineNumberDigits(params.text),
+        reviewLaneWidth: params.reviewCommentsEnabled === true && params.reviewCommentModeActive === true ? CODE_GUTTER_METRICS.reviewLaneWidth : 0 };
+}
 const MARKDOWN_PREVIEW_COMPACT_PADDING = 16;
 const MARKDOWN_PREVIEW_WIDE_HORIZONTAL_PADDING = 32;
 const MARKDOWN_PREVIEW_WIDE_TOP_PADDING = 24;
@@ -198,6 +204,7 @@ function FileContentPanelInner({
     const effectiveWrapLines = wrapLines ?? true;
     const effectiveShowLineNumbers = showLineNumbers ?? true;
     const effectiveShowPrefix = showPrefix ?? effectiveShowLineNumbers;
+    const codeGeometry = React.useMemo(() => resolveFileCodeGeometry({ text: fileContent ?? '', reviewCommentsEnabled, reviewCommentModeActive }), [fileContent, reviewCommentsEnabled, reviewCommentModeActive]);
     const markdownPreviewHorizontalPadding = viewportWidth >= MARKDOWN_PREVIEW_WIDE_VIEWPORT_WIDTH
         ? MARKDOWN_PREVIEW_WIDE_HORIZONTAL_PADDING
         : MARKDOWN_PREVIEW_COMPACT_PADDING;
@@ -261,9 +268,7 @@ function FileContentPanelInner({
         onDeleteDraft: onDeleteReviewCommentDraft,
         onError: onReviewCommentError,
     });
-    const reviewCommentLineActionsEnabled = reviewCommentsEnabled === true
-        && reviewCommentModeActive === true
-        && Boolean(reviewCommentControls);
+    const reviewCommentLineActionsEnabled = codeGeometry.reviewLaneWidth > 0 && Boolean(reviewCommentControls);
     const markdownSourceRangeActionsEnabled = reviewCommentsEnabled === true
         && reviewCommentModeActive === true
         && displayMode === 'markdown';
@@ -476,6 +481,7 @@ function FileContentPanelInner({
     const fileCodeView = fileContent && displayMode === 'file'
         ? (
             <CodeLinesView
+                {...codeGeometry}
                 lines={lines}
                 interactionMode={codeLineInteractionMode}
                 rangeSelectionActive={rangeSelectionActive}
