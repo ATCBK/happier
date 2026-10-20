@@ -97,6 +97,15 @@ afterEach(async () => {
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
   it('keeps reverse registrations stable across fresh current-UI snapshots and retires replaced commands', async () => {
+    const insertionUpdates: Error[] = [];
+    const originalConsoleError = console.error;
+    const diagnostics = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      if (args[0] === 'useInsertionEffect must not schedule updates.') {
+        insertionUpdates.push(new Error('Current-UI subscription scheduled an insertion-phase update'));
+      }
+      originalConsoleError(...args);
+    });
+    releases.push(() => diagnostics.mockRestore());
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
     const { useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
@@ -176,6 +185,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       await runtime.unmount();
     }
     expect(registered.size).toBe(0);
+    expect(insertionUpdates.map(error => error.stack)).toEqual([]);
   });
   it('routes current UI context through its mounted app instead of another generic app socket', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
