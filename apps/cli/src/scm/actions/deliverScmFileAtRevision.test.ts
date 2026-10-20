@@ -20,7 +20,7 @@ describe('revision file delivery', () => {
                 const source = input.payloadSource;
                 if (!source || source.kind !== 'file') throw new Error('File-backed publication required');
                 capturedPath = source.filePath; dispose = source.dispose;
-                expect(await readFile(source.filePath)).toEqual(bytes);
+                expect((await readFile(source.filePath)).equals(bytes)).toBe(true);
                 return { transferId: input.transferId, transferToken: 'token', endpointCandidates: [], expiresAt: Date.now() + 60_000 };
             } } });
         expect(ScmFileReadResponseSchema.parse(delivered)).toMatchObject({ success: true, sizeBytes: bytes.length, sha256: response.sha256,

@@ -101,12 +101,14 @@ export async function readPullRequestComparison(input: Readonly<{
       freshness = facts.freshness === 'unverified' ? 'unknown' : facts.freshness;
       if (facts.freshness !== 'current') { reasons.push('Pull-request source endpoints are not current'); break; }
       reasons.push(...facts.reasons.filter((reason) => reason !== 'pages_pending' || !page.continuation));
+      let repeatedPath = false;
       for (const row of page.rows) {
         deliveredCount++;
-        if (paths.has(row.path)) { reasons.push(`Duplicate pull-request path: ${row.path}`); continue; }
+        if (paths.has(row.path)) { reasons.push(`Duplicate pull-request path: ${row.path}`); repeatedPath = true; continue; }
         paths.add(row.path); const file = projectRow(row); files.push(file);
         if (file.unavailableReason) reasons.push(`${file.path}: ${file.unavailableReason}`);
       }
+      if (repeatedPath) break;
       if (page.omittedRowCount || page.projectionTruncated) reasons.push('Pull-request source omitted comparison rows');
       if (facts.enumeratedFileCount !== deliveredCount) reasons.push('Pull-request source enumerated count does not match delivered rows');
       if (facts.failure) reasons.push('Pull-request source reported a transport failure');
