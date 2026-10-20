@@ -1,14 +1,9 @@
 import type { JsonValue } from '../json/strictJsonValue.js';
-import {
-  cloneStrictPluginJsonValue,
-  measureSerializedValidatedStrictPluginJsonUtf8Bytes,
-} from './contributions/strictJsonValue.js';
+import { cloneStrictPluginJsonValue } from './contributions/strictJsonValue.js';
 import type {
   PluginSettingFieldIdV2,
   PluginSettingsActionDeclarationV2,
 } from './contributions/settings.js';
-
-const MAX_PATCH_BYTES = 64 * 1024;
 
 type SettingsSnapshot = Readonly<{
   values: Readonly<Record<string, JsonValue>>;
@@ -94,15 +89,7 @@ function normalizePatch(
     }
     normalized[fieldId] = clonePatchJsonValue(plainDataProperty(patch, fieldId, createError), createError);
   }
-  const snapshot = Object.freeze(normalized);
-  if (measureSerializedValidatedStrictPluginJsonUtf8Bytes(
-    snapshot,
-    'Plugin settings action patch',
-    MAX_PATCH_BYTES,
-  ) > MAX_PATCH_BYTES) {
-    throw createError('plugin_settings_action_patch_bounded', 'Plugin settings action patch exceeds the JSON byte limit');
-  }
-  return snapshot;
+  return Object.freeze(normalized);
 }
 
 /** Host-only lifecycle coordinator. Persistence/schema authority stays in the host adapter. */

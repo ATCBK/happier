@@ -141,11 +141,9 @@ describe('host-internal plugin settings action invoker', () => {
     }, undefined, expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
-  it('rejects undeclared or oversized patches before the persistence port', async () => {
+  it('rejects undeclared patches before the persistence port', async () => {
     const applyPatch = vi.fn();
-    const execute = vi.fn()
-      .mockResolvedValueOnce({ patch: { hidden: 'not declared' } })
-      .mockResolvedValueOnce({ patch: { endpoint: 'x'.repeat(65_536) } });
+    const execute = async () => ({ patch: { hidden: 'not declared' } });
     const invoker = createHostPluginSettingsActionInvoker({
       createError,
       confirm: async () => true,
@@ -157,10 +155,6 @@ describe('host-internal plugin settings action invoker', () => {
       key: 'one', declaration, userGesture: true,
       signal: new AbortController().signal, isCurrent: () => true,
     })).rejects.toMatchObject({ code: 'plugin_settings_action_patch_field_forbidden' });
-    await expect(invoker.invoke({
-      key: 'two', declaration, userGesture: true,
-      signal: new AbortController().signal, isCurrent: () => true,
-    })).rejects.toMatchObject({ code: 'plugin_settings_action_patch_bounded' });
     expect(applyPatch).not.toHaveBeenCalled();
   });
 
