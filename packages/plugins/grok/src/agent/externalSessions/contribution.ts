@@ -46,7 +46,7 @@ export function createGrokExternalSessionsContribution(env: () => NodeJS.Process
       }
       return { source, accountingSource: { rootPath: root, resourceKey: `grok:transcripts:${fingerprint(root)}`,
         changeObservation: 'watch_file_changes' as const,
-        watchFileChanges: { files: [...files].sort(), topologyDirectories: inventory.topologyDirectories } } };
+        watchFileChanges: { files: [...files].sort(), topologyDirectories: [...inventory.topologyDirectories] } } };
     }),
     listCandidates: request => guarded(request, async () => { validateMaxItems(request.maxItems); return listGrokCandidates(grokSessionsRoot(request.source, env()), request); }),
     resolveLinkIdentity: identity,
@@ -66,7 +66,7 @@ export function createGrokExternalSessionsContribution(env: () => NodeJS.Process
         const index = request.direction === 'older' ? position - 1 : position;
         const nextItems = request.direction === 'older' ? [projection.rows[index]!.item, ...items] : [...items, projection.rows[index]!.item];
         const nextPosition = position + (request.direction === 'older' ? -1 : 1);
-        const trial = { ok: true, value: { items: nextItems, nextCursor: encode({ ...base, position: nextPosition }), tailCursor: encode(base), hasMore: true, truncated: projection.partial } };
+        const trial = { ok: true as const, value: { items: nextItems, nextCursor: encode({ ...base, position: nextPosition }), tailCursor: encode(base), hasMore: true, truncated: projection.partial } };
         if (!isAgentExternalSessionsResultWithinByteBudget(trial, request.maxSerializedBytes)) {
           if (!items.length) throw new GrokSourceError('agent_error'); break;
         }

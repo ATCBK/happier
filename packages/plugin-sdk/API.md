@@ -2437,6 +2437,7 @@
 | `./sessions/external` | `AgentExternalSessionsManagedEndpointReadRequest` | type | daemon |
 | `./sessions/external` | `AgentExternalSessionsManagedEndpointReadResponse` | type | daemon |
 | `./sessions/external` | `AgentExternalSessionsManagedEndpointServiceRequest` | type | daemon |
+| `./sessions/external` | `ManagedServiceSpec` | type | daemon |
 | `./sessions/external` | `AgentExternalSessionsPageTranscriptRequest` | type | daemon |
 | `./sessions/external` | `AgentExternalSessionsReadAccountingRequest` | type | daemon |
 | `./sessions/external` | `AgentExternalSessionsReadAccountingResult` | type | daemon |

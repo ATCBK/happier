@@ -67,7 +67,8 @@ export async function grokFile(root: string, session: GrokSession, name: 'summar
   return confinedPath(root, path);
 }
 export async function readGrokSummary(root: string, session: GrokSession) {
-  const bytes = await readFile(await grokFile(root, session, 'summary.json'));
+  const summaryPath = await grokFile(root, session, 'summary.json');
+  const bytes = await readFile(summaryPath);
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(bytes)); } catch { throw new GrokSourceError('unsupported'); }
   // The pinned Orca evidence is an unversioned dialect. An explicit future
@@ -78,7 +79,8 @@ export async function readGrokSummary(root: string, session: GrokSession) {
     || value.info.id !== session.id || typeof value.info.cwd !== 'string'
     || Object.keys(value.info).some(key => key !== 'id' && key !== 'cwd')) throw new GrokSourceError('unsupported');
   const createdAtMs = parseTimestampMs(value.created_at);
-  const updatedAtMs = parseTimestampMs(value.last_active_at) ?? parseTimestampMs(value.updated_at) ?? createdAtMs;
+  const updatedAtMs = parseTimestampMs(value.last_active_at) ?? parseTimestampMs(value.updated_at) ?? createdAtMs
+    ?? Math.trunc((await lstat(summaryPath)).mtimeMs);
   return { cwd: value.info.cwd, createdAtMs, updatedAtMs,
     title: typeof value.generated_title === 'string' ? value.generated_title
       : typeof value.session_summary === 'string' ? value.session_summary : undefined };

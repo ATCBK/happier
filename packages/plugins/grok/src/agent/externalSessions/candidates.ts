@@ -90,10 +90,9 @@ export async function listGrokCandidates(root: string, request: AgentExternalSes
     const continuation = () => encode({ v: 1, root, query, target, after, pending: session.id, progress: content });
     try {
       const summary = await readGrokSummary(root, session);
-      const candidate: AgentExternalSessionCandidate = { remoteSessionId: session.id, cwd: summary.cwd,
+      const candidate: AgentExternalSessionCandidate = { remoteSessionId: session.id, cwd: summary.cwd, updatedAtMs: summary.updatedAtMs,
         ...(summary.title ? { title: summary.title } : {}),
-        ...(summary.createdAtMs === null ? {} : { createdAtMs: summary.createdAtMs }),
-        ...(summary.updatedAtMs === null ? {} : { updatedAtMs: summary.updatedAtMs }) };
+        ...(summary.createdAtMs === null ? {} : { createdAtMs: summary.createdAtMs }) };
       if (target === 'content') {
         const found = await searchSession(root, session, request, content, query);
         partial ||= found.partial;
