@@ -12,6 +12,34 @@ describe('captured SCM comparison storage', () => {
   const directories: string[] = [];
   afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
+  it('preserves legacy occurrence ids byte for byte on real Git multi-hunk and metadata evidence', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-hunk-id-vectors-' });
+    directories.push(fixture.rootPath);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture.rootPath, encoding: 'utf8' });
+    const before = '\ufeff' + Array.from({ length: 35 }, (_, index) => `line ${index + 1}\r\n`).join('');
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), before);
+    await writeFile(join(fixture.rootPath, 'deleted.txt'), 'removed\n');
+    git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'id vectors');
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), before.replace('line 3\r\n', 'first edit\r\n').replace('line 30\r\n', 'last edit\r\n'));
+    await rm(join(fixture.rootPath, 'deleted.txt'));
+    await writeFile(join(fixture.rootPath, 'added.txt'), 'no final newline');
+    await writeFile(join(fixture.rootPath, 'binary.dat'), Buffer.from([0, 1, 2]));
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+    try {
+      expect(captured.comparison.inventory.files.find(file => file.path === fixture.trackedPath)?.occurrences).toHaveLength(2);
+      for (const file of captured.comparison.inventory.files) {
+        // The pre-consolidation capture contract, checked against real Git output.
+        const headers = [...(file.evidence.unifiedDiff ?? '').matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)];
+        expect(file.occurrences.map(occurrence => occurrence.id)).toEqual((headers.length ? headers : [null]).map((header, position) => {
+          const before = { startLine: header ? Number(header[1]) : 0, lineCount: header ? Number(header[2] ?? 1) : 0 };
+          const after = { startLine: header ? Number(header[3]) : 0, lineCount: header ? Number(header[4] ?? 1) : 0 };
+          return `${captured.comparison.id}:${JSON.stringify([file.path, file.previousPath ?? null,
+            file.occurrences[position]!.layer ?? 'combined', header ? 'hunk' : 'metadata', 'available', before, after, position])}`;
+        }));
+      }
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id }); }
+  });
+
   it('captures and materializes the same raw endpoint when replacement refs predate capture', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-raw-capture-' });
     directories.push(fixture.rootPath);

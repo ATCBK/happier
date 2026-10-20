@@ -1,5 +1,6 @@
 import { createGitTemporaryIndex } from '@happier-dev/cli-common/scm/gitTemporaryIndex';
 import { buildScmComparisonIdentity } from '@happier-dev/protocol/scm/comparison';
+import { applyHunks, parseUnifiedDiffHunks, type Hunk, type HunkLine } from '@happier-dev/protocol/diff/hunks';
 import type { ScmChangeOccurrence, ScmComparison } from '@happier-dev/protocol';
 import { runGitCheckpointCommand } from '../checkpoints/gitCheckpointCommands';
 import { readGitCheckpointDiffOutput } from '../checkpoints/gitCheckpointDiffOutput';
@@ -33,7 +34,8 @@ export async function validateScmCommitPlanHookSelections(input: Readonly<{
         for (const hook of hooks) for (const edit of future) {
             const paths = hook.paths.filter((path) => edit.paths.includes(path));
             if (!paths.length || (!hook.wholeFile && !edit.wholeFile
-                && !hook.hunks.some((left) => edit.hunks.some((right) => rangesOverlap(left.before, right.before))))) continue;
+                && !hook.hunks.some((left) => edit.hunks.some((right) => rangesOverlap(
+                    { startLine: left.oldStart, lineCount: left.oldLines }, { startLine: right.oldStart, lineCount: right.oldLines }))))) continue;
             const refs = step.changeRefs.filter((id) => {
                 const ref = occurrences.get(id)!;
                 return paths.includes(ref.path) || (ref.previousPath !== undefined && paths.includes(ref.previousPath));
@@ -45,8 +47,6 @@ export async function validateScmCommitPlanHookSelections(input: Readonly<{
 }
 
 type TreeEntry = Readonly<{ mode: string; oid: string }>;
-type Hunk = Readonly<{ before: ScmChangeOccurrence['before']; after: ScmChangeOccurrence['after']; oldLines: readonly string[]; newLines: readonly string[];
-    body: readonly Readonly<{ kind: ' ' | '-' | '+'; text: string }>[] }>;
 type TextEdit = Readonly<{ beforeOffset: number; afterOffset: number; oldLines: readonly string[]; newLines: readonly string[]; changeRef: string }>;
 type LayerFile = Readonly<{ file: GitComparisonFile; beforeTree: string; afterTree: string;
     layer: 'staged' | 'unstaged' | 'untracked'; occurrences: readonly ScmChangeOccurrence[]; hunks: readonly Hunk[] }>;
@@ -73,7 +73,7 @@ async function treeEdits(cwd: string, before: string, after: string): Promise<re
         if (wholeFile) return { paths, wholeFile, hunks: [] };
         const diff = await readGitCheckpointDiffOutput({ cwd, args: ['--binary', '--full-index', '--unified=0', before, after, '--', ...paths] });
         if (!diff.success) throw new ScmCommitPlanMaterializationConflict('stale_evidence', diff.stderr || 'Exact hook edit coordinates could not be read', file.path);
-        return { paths, wholeFile, hunks: parseHunks(diff.stdout) };
+        return { paths, wholeFile, hunks: parseUnifiedDiffHunks(diff.stdout) };
     }));
 }
 
@@ -123,68 +123,42 @@ async function entry(cwd: string, treeOid: string, path: string): Promise<TreeEn
     return undefined;
 }
 
-function parseHunks(patch: string): Hunk[] {
-    const lines = patch.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-    const hunks: Hunk[] = [];
-    let current: { before: ScmChangeOccurrence['before']; after: ScmChangeOccurrence['after']; oldLines: string[]; newLines: string[];
-        body: Array<{ kind: ' ' | '-' | '+'; text: string }> } | undefined;
-    let previousPrefix = '';
-    for (const line of lines) {
-        const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-        if (header) {
-            current = { before: { startLine: Number(header[1]), lineCount: Number(header[2] ?? 1) },
-                after: { startLine: Number(header[3]), lineCount: Number(header[4] ?? 1) }, oldLines: [], newLines: [], body: [] };
-            hunks.push(current); previousPrefix = ''; continue;
-        }
-        if (!current) continue;
-        const prefix = line[0];
-        if (prefix === '\\') {
-            if (previousPrefix === ' ' || previousPrefix === '-') current.oldLines[current.oldLines.length - 1] = current.oldLines.at(-1)!.replace(/\n$/, '');
-            if (previousPrefix === ' ' || previousPrefix === '+') current.newLines[current.newLines.length - 1] = current.newLines.at(-1)!.replace(/\n$/, '');
-            if (current.body.length) current.body.at(-1)!.text = current.body.at(-1)!.text.replace(/\n$/, '');
-        } else if (prefix === ' ' || prefix === '-' || prefix === '+') {
-            if (prefix !== '+') current.oldLines.push(line.slice(1));
-            if (prefix !== '-') current.newLines.push(line.slice(1));
-            current.body.push({ kind: prefix, text: line.slice(1) });
-            previousPrefix = prefix;
-        }
-    }
-    for (const hunk of hunks) if (hunk.oldLines.length !== hunk.before.lineCount || hunk.newLines.length !== hunk.after.lineCount) {
-        throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Captured hunk counts do not match the exact patch');
-    }
-    return hunks;
-}
-
-function hunkEdits(hunk: Hunk, changeRef: string): TextEdit[] {
-    let beforeOffset = hunk.before.lineCount ? hunk.before.startLine - 1 : hunk.before.startLine;
-    let afterOffset = hunk.after.lineCount ? hunk.after.startLine - 1 : hunk.after.startLine;
+/** Commit-plan lineage maps change runs through staged source coordinates. Parsing and application stay engine-owned. */
+function capturedLineEdits(hunk: Hunk, changeRef: string): TextEdit[] {
+    let beforeOffset = hunk.oldLines ? hunk.oldStart - 1 : hunk.oldStart;
+    let afterOffset = hunk.newLines ? hunk.newStart - 1 : hunk.newStart;
     const edits: TextEdit[] = [];
     let edit: { beforeOffset: number; afterOffset: number; oldLines: string[]; newLines: string[]; changeRef: string } | undefined;
-    for (const line of hunk.body) {
-        if (line.kind === ' ') {
+    for (const line of hunk.lines) {
+        if (line.kind === 'context') {
             edit = undefined; beforeOffset++; afterOffset++; continue;
         }
         if (!edit) { edit = { beforeOffset, afterOffset, oldLines: [], newLines: [], changeRef }; edits.push(edit); }
-        if (line.kind === '-') { edit.oldLines.push(line.text); beforeOffset++; }
-        else { edit.newLines.push(line.text); afterOffset++; }
+        const text = line.text + (line.noEol ? '' : '\n');
+        if (line.kind === 'remove') { edit.oldLines.push(text); beforeOffset++; }
+        else { edit.newLines.push(text); afterOffset++; }
     }
     return edits;
 }
 
-function applyTextEdits(lines: readonly string[], edits: readonly TextEdit[], path: string): string {
-    let previousEnd = 0;
-    const output: string[] = [];
-    for (const edit of [...edits].sort((a, b) => a.beforeOffset - b.beforeOffset)) {
-        const offset = edit.beforeOffset;
-        if (offset < previousEnd) throw new ScmCommitPlanMaterializationConflict('overlapping_selection', 'Selected source edits overlap', path, [edit.changeRef]);
-        if (offset < 0 || offset + edit.oldLines.length > lines.length || lines.slice(offset, offset + edit.oldLines.length).join('') !== edit.oldLines.join('')) {
-            throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Selected edit does not match its exact source coordinates', path, [edit.changeRef]);
-        }
-        output.push(lines.slice(previousEnd, offset).join(''), edit.newLines.join(''));
-        previousEnd = offset + edit.oldLines.length;
-    }
-    output.push(lines.slice(previousEnd).join(''));
-    return output.join('');
+function applyMappedSourceEdits(lines: readonly string[], edits: readonly TextEdit[], path: string): string {
+    const hunks = edits.map((edit, index): Hunk => {
+        const hunkLines = (kind: HunkLine['kind'], values: readonly string[]): HunkLine[] => values.map(text => ({
+            kind, text: text.endsWith('\n') ? text.slice(0, -1) : text, ...(!text.endsWith('\n') ? { noEol: true as const } : {}),
+        }));
+        const body = [...hunkLines('remove', edit.oldLines), ...hunkLines('add', edit.newLines)];
+        return { index, oldStart: edit.beforeOffset + (edit.oldLines.length ? 1 : 0), oldLines: edit.oldLines.length,
+            newStart: edit.afterOffset + (edit.newLines.length ? 1 : 0), newLines: edit.newLines.length,
+            sectionHeading: '', lines: body, firstChange: body.length ? 0 : -1, lastChange: body.length - 1 };
+    });
+    return materializedHunkText(lines.join(''), hunks, path, edits.map(edit => edit.changeRef));
+}
+
+function materializedHunkText(text: string, hunks: readonly Hunk[], path: string, changeRefs: readonly string[]): string {
+    const applied = applyHunks(text, hunks);
+    if (!applied.ok) throw new ScmCommitPlanMaterializationConflict(applied.reason === 'overlap' ? 'overlapping_selection' : 'stale_evidence',
+        'Selected edit does not match its exact source coordinates', path, changeRefs);
+    return applied.text;
 }
 
 async function blobText(cwd: string, oid: string): Promise<string> {
@@ -192,7 +166,8 @@ async function blobText(cwd: string, oid: string): Promise<string> {
     // The existing disk-streaming reader avoids stdout truncation and split UTF-8 chunks.
     const read = await readGitCheckpointDiffOutput({ cwd, args: ['--text', '--unified=0', emptyBlob, oid] });
     if (!read.success) throw new ScmCommitPlanMaterializationConflict('stale_evidence', read.stderr || 'Captured blob could not be read');
-    const text = parseHunks(read.stdout).flatMap((hunk) => hunk.newLines).join('');
+    const text = parseUnifiedDiffHunks(read.stdout).flatMap(hunk => hunk.lines.filter(line => line.kind !== 'remove')
+        .map(line => line.text + (line.noEol ? '' : '\n'))).join('');
     const roundtrip = (await git(cwd, ['hash-object', '--stdin'], { stdin: text })).trim();
     if (roundtrip !== oid) throw new ScmCommitPlanMaterializationConflict('unrepresentable_selection', 'This blob cannot be split as lossless UTF-8 text');
     return text;
@@ -207,9 +182,11 @@ async function selectedEntry(cwd: string, input: LayerFile, selected: ReadonlySe
         || input.file.binary || input.file.previousPath || input.file.changeKind !== 'modified' || !input.hunks.length) {
         throw new ScmCommitPlanMaterializationConflict('unrepresentable_selection', 'This file metadata change requires all of its captured occurrences', input.file.path, refs.map((ref) => ref.id));
     }
-    const lines = (await blobText(cwd, source.oid)).match(/[^\n]*\n|[^\n]+$/g) ?? [];
-    const edits = refs.flatMap((ref) => hunkEdits(input.hunks[ref.position]!, ref.id));
-    const oid = (await git(cwd, ['hash-object', '-w', '--stdin'], { stdin: applyTextEdits(lines, edits, input.file.path) })).trim();
+    const text = await blobText(cwd, source.oid);
+    const selectedHunks = refs.map(ref => input.hunks[ref.position]!);
+    const oid = (await git(cwd, ['hash-object', '-w', '--stdin'], {
+        stdin: materializedHunkText(text, selectedHunks, input.file.path, refs.map(ref => ref.id)),
+    })).trim();
     return { mode: source.mode, oid };
 }
 
@@ -236,7 +213,7 @@ async function selectedUnstagedSubset(cwd: string, input: LayerFile, staged: rea
     const unchanged = (until: number) => {
         for (let i = previousEnd; i < until; i++) { indexLines.push({ text: before[i]!, currentLine: currentLines.length }); currentLines.push(before[i]!); }
     };
-    const stagedEdits = layer.occurrences.flatMap((ref) => hunkEdits(layer.hunks[ref.position]!, ref.id));
+    const stagedEdits = layer.occurrences.flatMap((ref) => capturedLineEdits(layer.hunks[ref.position]!, ref.id));
     for (const edit of stagedEdits) {
         if (edit.beforeOffset < previousEnd || before.slice(edit.beforeOffset, edit.beforeOffset + edit.oldLines.length).join('') !== edit.oldLines.join('')) {
             throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Staged edit no longer matches its immutable original lines', input.file.path, [edit.changeRef]);
@@ -258,7 +235,7 @@ async function selectedUnstagedSubset(cwd: string, input: LayerFile, staged: rea
     }
     const refs = input.occurrences.filter((ref) => selected.has(ref.id));
     const mappedEdits: TextEdit[] = [];
-    for (const edit of refs.flatMap((ref) => hunkEdits(input.hunks[ref.position]!, ref.id))) {
+    for (const edit of refs.flatMap((ref) => capturedLineEdits(input.hunks[ref.position]!, ref.id))) {
         const start = edit.beforeOffset; const end = start + edit.oldLines.length;
         if (start < 0 || end > indexLines.length || indexLines.slice(start, end).map((line) => line.text).join('') !== edit.oldLines.join('')) {
             throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Unstaged edit does not match its immutable index source', input.file.path, [edit.changeRef]);
@@ -281,7 +258,7 @@ async function selectedUnstagedSubset(cwd: string, input: LayerFile, staged: rea
         }
         mappedEdits.push({ ...edit, beforeOffset: offset });
     }
-    const oid = (await git(cwd, ['hash-object', '-w', '--stdin'], { stdin: applyTextEdits(currentLines, mappedEdits, input.file.path) })).trim();
+    const oid = (await git(cwd, ['hash-object', '-w', '--stdin'], { stdin: applyMappedSourceEdits(currentLines, mappedEdits, input.file.path) })).trim();
     return { mode: source.mode, oid };
 }
 
@@ -345,14 +322,14 @@ export async function materializeScmCommitPlan(input: Readonly<{
                 throw new ScmCommitPlanMaterializationConflict('unrepresentable_selection',
                     'Captured file evidence contains multiple file diffs and cannot authorize a single-file selection', file.path, occurrences.map((ref) => ref.id));
             }
-            const hunks = parseHunks(file.unifiedDiff ?? '');
+            const hunks = parseUnifiedDiffHunks(file.unifiedDiff ?? '');
             if (occurrences.length !== Math.max(1, hunks.length)) throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Captured layer occurrences no longer match the immutable diff', file.path);
             for (const [position, occurrence] of occurrences.entries()) {
                 const hunk = hunks[position];
                 if (occurrence.position !== position || occurrence.beforeBlobId !== file.beforeBlobId || occurrence.afterBlobId !== file.afterBlobId
                     || occurrence.previousPath !== file.previousPath || occurrence.evidence?.state === 'unavailable'
-                    || occurrence.before.startLine !== (hunk?.before.startLine ?? 0) || occurrence.before.lineCount !== (hunk?.before.lineCount ?? 0)
-                    || occurrence.after.startLine !== (hunk?.after.startLine ?? 0) || occurrence.after.lineCount !== (hunk?.after.lineCount ?? 0)) {
+                    || occurrence.before.startLine !== (hunk?.oldStart ?? 0) || occurrence.before.lineCount !== (hunk?.oldLines ?? 0)
+                    || occurrence.after.startLine !== (hunk?.newStart ?? 0) || occurrence.after.lineCount !== (hunk?.newLines ?? 0)) {
                     throw new ScmCommitPlanMaterializationConflict('stale_evidence', 'Occurrence does not match its captured layer, blob and range', file.path, [occurrence.id]);
                 }
             }

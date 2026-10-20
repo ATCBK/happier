@@ -26,6 +26,7 @@ import type { ScmDiffSummaryPromptFile } from '@/agent/runtime/bridges/execution
 import { materializeGitRepositoryCheckpoint } from '../checkpoints/materializeGitRepositoryCheckpoint';
 import { createGitTemporaryIndex } from '@happier-dev/cli-common/scm/gitTemporaryIndex';
 import { splitUnifiedDiffByFile } from '@happier-dev/protocol/diff/splitUnifiedDiffByFile';
+import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 
 export type CapturedScmComparison = Readonly<{
   metadata: ScmDiffSummaryMetadata;
@@ -214,16 +215,16 @@ function inventoryFiles(id: string, files: readonly ComparisonFileEvidence[]): S
   let alias = 0;
   const positions = new Map<string, number>();
   const layeredFiles = files.map((file) => {
-    const matches = [...(file.unifiedDiff ?? '').matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)];
+    const hunks = parseUnifiedDiffHunks(file.unifiedDiff ?? '');
     const occurrenceScope = JSON.stringify([file.path, file.previousPath ?? null, file.layer ?? 'combined']);
-    const occurrences = (matches.length ? matches : [null]).map((match) => {
+    const occurrences = (hunks.length ? hunks : [null]).map((hunk) => {
       const position = positions.get(occurrenceScope) ?? 0;
       positions.set(occurrenceScope, position + 1);
-      const before = { startLine: match ? Number(match[1]) : 0, lineCount: match ? Number(match[2] ?? 1) : 0 };
-      const after = { startLine: match ? Number(match[3]) : 0, lineCount: match ? Number(match[4] ?? 1) : 0 };
+      const before = { startLine: hunk?.oldStart ?? 0, lineCount: hunk?.oldLines ?? 0 };
+      const after = { startLine: hunk?.newStart ?? 0, lineCount: hunk?.newLines ?? 0 };
       return {
       id: `${id}:${JSON.stringify([file.path, file.previousPath ?? null, file.layer ?? 'combined',
-        match ? 'hunk' : 'metadata', file.unavailableReason ? 'unavailable' : 'available', before, after, position])}`,
+        hunk ? 'hunk' : 'metadata', file.unavailableReason ? 'unavailable' : 'available', before, after, position])}`,
       alias: `c${++alias}`, path: file.path,
       ...(file.previousPath ? { previousPath: file.previousPath } : {}),
       ...(file.beforeBlobId ? { beforeBlobId: file.beforeBlobId } : {}),

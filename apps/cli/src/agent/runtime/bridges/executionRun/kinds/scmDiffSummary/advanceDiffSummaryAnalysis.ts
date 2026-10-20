@@ -1,6 +1,7 @@
 import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { z } from 'zod/mini';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
+import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { ScmDiffSummaryMetadataSchema, ScmDiffSummaryModelOutputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryOutputLanguageSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmComparison, ScmDiffSummaryModelOutput, ScmDiffSummaryOutputs } from '@happier-dev/protocol';
 import type { ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
@@ -62,6 +63,25 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
 function allRefs(comparison: ScmComparison): string[] {
   return comparison.inventory.files.flatMap((file) => file.occurrences.map((change) => change.id));
 }
+
+/** Preserve original fragment offsets; only the engine decides which headers represent hunks. */
+function hunkSourceOffsets(diff: string): readonly number[] {
+  const lines = diff.split('\n');
+  const lineOffsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineOffsets.push(offset);
+    offset += line.length + 1;
+  }
+  const headers: number[] = [];
+  let sourceIndex = 0;
+  for (const hunk of parseUnifiedDiffHunks(diff)) {
+    while (sourceIndex < lines.length && !lines[sourceIndex]!.trimStart().startsWith('@@ ')) sourceIndex += 1;
+    headers[hunk.index] = lineOffsets[sourceIndex]!;
+    sourceIndex += 1 + hunk.lines.reduce((count, line) => count + (line.noEol ? 2 : 1), 0);
+  }
+  return headers;
+}
 function availableRefs(comparison: ScmComparison): string[] {
   return comparison.inventory.files.flatMap((file) => file.occurrences.filter((change) =>
     change.evidence?.state === 'available' || (!change.evidence && file.evidence.state === 'available')).map((change) => change.id));
@@ -118,7 +138,7 @@ function splitCurrent(comparison: ScmComparison, state: AnalysisState): boolean 
   const source = file.evidence.unifiedDiff ?? '';
   const available = file.occurrences.filter(change => change.evidence?.state === 'available'
     || (!change.evidence && file.evidence.state === 'available'));
-  const starts = [...source.matchAll(/^@@ /gm)].map(match => match.index);
+  const starts = hunkSourceOffsets(source);
   const index = available.findIndex(change => change.id === state.current[0]);
   if (!state.currentFragment && (index < 0 || starts.length !== available.length)) return false;
   const start = state.currentFragment?.startOffset ?? starts[index]!;
@@ -190,7 +210,7 @@ function partComparison(comparison: ScmComparison, refs: readonly string[]): Scm
     if (!occurrences.length) return [];
     if (occurrences.length === file.occurrences.length) return [file];
     const diff = file.evidence.unifiedDiff ?? '';
-    const starts = [...diff.matchAll(/^@@ /gm)].map((match) => match.index);
+    const starts = hunkSourceOffsets(diff);
     const available = file.occurrences.filter((change) => change.evidence?.state === 'available'
       || (!change.evidence && file.evidence.state === 'available'));
     // Do not manufacture an extraction when the capture did not associate each readable hunk.
