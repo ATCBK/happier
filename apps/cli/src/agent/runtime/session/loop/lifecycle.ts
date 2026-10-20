@@ -1080,6 +1080,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         shouldExit = true;
         try {
           await abortAndDisposeRunnerRuntime({
+            retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
             abortActiveTurn: handleAbort,
             disposeRuntime: disposeRuntimeOnce,
             reason: runtimeDisposeReason,
@@ -1116,6 +1117,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const requestRuntimeStop = async () => {
     logger.debug(`${params.config.uiLogPrefix} Kill session requested`);
     await requestExplicitRunnerStop({
+      retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
       abortActiveTurn: handleAbort,
       disposeRuntime: disposeRuntimeOnce,
       requestTermination: terminationHandlers.requestTermination,

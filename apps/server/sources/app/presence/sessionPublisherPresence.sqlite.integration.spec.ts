@@ -528,6 +528,41 @@ describe("session publisher presence on SQLite", () => {
         expect(await db.sessionMessage.count({ where: { sessionId: request.sessionId, localId: request.localId } })).toBe(1);
     });
 
+    it("keeps handing a proven undispatched prompt back through repeated planned replacements and delivers it once", async () => {
+        const seeded = await seed();
+        let tick = 10;
+        const presence = createSessionPublisherPresence({ now: () => new Date(seeded.fence.getTime() + tick++) });
+        const localId = `initial-prompt-${randomUUID()}`;
+        const identity = { actorUserId: seeded.binding.accountId, sessionId: seeded.binding.sessionId, localId };
+        expect(await enqueuePendingMessage({ ...identity, authentication, ciphertext: "repeated-marker",
+            requestedAction: { v: 1, kind: "enqueue" } })).toMatchObject({ ok: true });
+        const claim = async (committedFence: Date) => await materializeNextPendingMessage({
+            actorUserId: identity.actorUserId, sessionId: identity.sessionId,
+            publisherAuthority: { ...seeded.binding, committedFence }, deliveryState: "provider",
+            deliveryTiming: "after_foreground_ready", foregroundState: "ready" });
+        // Each retiring runner claims the prompt, is replaced before native dispatch and hands it back.
+        for (let replacement = 0; replacement < 2; replacement++) {
+            const socket = {};
+            const registered = await presence.registerPublisher({ socket, binding: seeded.binding,
+                completeActivitySnapshot: { state: "idle", activeCount: 0 } });
+            if (registered.status !== "registered") throw new Error("expected registration");
+            expect(await claim(registered.committedFence)).toMatchObject({ ok: true, didMaterialize: true,
+                message: { localId } });
+            expect(await blockPendingDelivery({ ...identity, reason: "host_retired_before_dispatch" }))
+                .toMatchObject({ ok: true, didUpdate: true });
+            await presence.closePublisher({ socket });
+        }
+        const finalSocket = {};
+        const final = await presence.registerPublisher({ socket: finalSocket, binding: seeded.binding,
+            completeActivitySnapshot: { state: "idle", activeCount: 0 } });
+        if (final.status !== "registered") throw new Error("expected final registration");
+        expect(await claim(final.committedFence)).toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        expect(await resolveAcceptedPendingDelivery({ ...identity,
+            publisherAuthority: { ...seeded.binding, committedFence: final.committedFence } }))
+            .toMatchObject({ ok: true, pendingCount: 0, pendingBlockedCount: 0 });
+        expect(await db.sessionMessage.count({ where: { sessionId: identity.sessionId, localId } })).toBe(1);
+    });
+
     it("contracts inherited provider delivery before successor publisher authority becomes usable", async () => {
         const seeded = await seed();
         await db.sessionPendingMessage.createMany({

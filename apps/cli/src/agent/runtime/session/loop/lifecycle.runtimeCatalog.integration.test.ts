@@ -778,6 +778,57 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
     }
   });
 
+  it('fences claimed Pending input before a planned replacement disposes its runtime', async () => {
+    const baseParams = createLifecycleParams({ policyAgentId: 'claude' });
+    const termination = {
+      onTerminate: null as ((event: RunnerTerminationEvent, outcome: RunnerTerminationOutcome) => void | Promise<void>) | null,
+    };
+    let releaseDisposal!: () => void;
+    const disposalReleased = new Promise<void>((resolve) => { releaseDisposal = resolve; });
+    const runtime = baseParams.runtime as unknown as { resetOrDisposeRuntime: ReturnType<typeof vi.fn> };
+    runtime.resetOrDisposeRuntime.mockImplementation(async () => { await disposalReleased; });
+    let releasePromptLoop!: () => void;
+    const promptLoopReleased = new Promise<void>((resolve) => { releasePromptLoop = resolve; });
+    const params: SessionLoopLifecycleParams = {
+      ...baseParams,
+      deps: {
+        ...baseParams.deps,
+        registerRunnerTerminationHandlersFn: vi.fn((registration) => {
+          termination.onTerminate = registration.onTerminate;
+          return {
+            dispose: vi.fn(),
+            requestTermination: vi.fn(),
+            whenTerminated: new Promise<Readonly<{
+              event: RunnerTerminationEvent;
+              outcome: RunnerTerminationOutcome;
+            }>>(() => undefined),
+          };
+        }),
+        runPermissionModePromptLoopFn: vi.fn(async () => { await promptLoopReleased; }),
+      },
+    };
+
+    const runPromise = runSessionLoopLifecycle(params);
+    await vi.waitFor(() => expect(termination.onTerminate).not.toBeNull());
+    const onTerminate = termination.onTerminate;
+    if (!onTerminate) throw new Error('Expected runner termination handler registration');
+
+    const stopping = onTerminate(
+      { kind: 'signal', signal: 'SIGTERM' },
+      computeRunnerTerminationOutcome({ kind: 'signal', signal: 'SIGTERM' }),
+    );
+    try {
+      await vi.waitFor(() => expect(runtime.resetOrDisposeRuntime).toHaveBeenCalledWith('host_shutdown'));
+      // Disposal is still pending: the prompt loop must already be unable to cross its effect boundary.
+      expect(baseParams.session.retireUndispatchedProviderInput).toHaveBeenCalledOnce();
+    } finally {
+      releaseDisposal();
+      await stopping;
+      releasePromptLoop();
+      await runPromise;
+    }
+  });
+
   it('durably ends the active API session before daemon-started SIGTERM cleanup completes', async () => {
     const baseParams = createLifecycleParams({ policyAgentId: 'grok' });
     const termination = {

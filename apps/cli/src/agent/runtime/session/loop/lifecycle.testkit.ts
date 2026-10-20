@@ -65,6 +65,7 @@ export function createLifecycleParams(overrides?: Readonly<{
       else signal?.addEventListener('abort', () => resolve(false), { once: true });
     })),
     keepAlive: vi.fn(),
+    retireUndispatchedProviderInput: vi.fn(),
     enqueueSessionEventCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
     enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
     enqueueSessionTurnMutation: vi.fn(async () => undefined),

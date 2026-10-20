@@ -165,6 +165,31 @@ describe('ApiSessionClient provider-input settlement', () => {
     expect(resolveAcceptedMock).not.toHaveBeenCalled();
   });
 
+  it('fences claimed inputs at the start of retirement so a slow runtime disposal cannot cross the effect boundary', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    blockDeliveryMock.mockResolvedValue({ didUpdate: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'claimed-in-preparation');
+    markMaterializedProviderInput(client, 'already-dispatched');
+    client.markPendingProviderInputDispatched(['already-dispatched']);
+
+    // Planned replacement: the runner is signalled, then spends time disposing its native runtime
+    // before it closes the Session. The claim must be fenced and handed back at the signal.
+    client.retireUndispatchedProviderInput();
+    expect(() => client.markPendingProviderInputDispatched(['claimed-in-preparation']))
+      .toThrow('retired before native dispatch');
+    await vi.waitFor(() => expect(blockDeliveryMock).toHaveBeenCalledTimes(1));
+    expect(blockDeliveryMock.mock.calls.map(([request]) => ({ localId: request.localId, reason: request.reason })))
+      .toEqual([{ localId: 'claimed-in-preparation', reason: 'host_retired_before_dispatch' }]);
+
+    // Close later repeats neither the fence nor the hand-back.
+    client.prepareForClose();
+    await client.close();
+    expect(blockDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(resolveAcceptedMock).not.toHaveBeenCalled();
+  });
+
   it('branches on the exact protected admission result instead of a generic send code', async () => {
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
