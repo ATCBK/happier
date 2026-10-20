@@ -7,6 +7,7 @@ import {
 } from '@/sync/domains/terminal/stream/replay';
 import type { TerminalStreamCursor } from '@/sync/domains/terminal/stream/model';
 import type { TerminalFindSnapshot } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export type TerminalSurfaceState = Readonly<{
     terminalId: string | null;
@@ -14,6 +15,8 @@ export type TerminalSurfaceState = Readonly<{
     cursorMode: TerminalStreamCursor['mode'];
     output: string;
     detectedUrl: DaemonTerminalStreamEventUrl | null;
+    /** Observed native termination, retained with this process's output across view remounts. */
+    exit?: Readonly<{ exitCode: number | null; signal: number | null; scope: ServerAccountScope | null }>;
     /** Ephemeral same-surface renderer handoff; matching/counts belong to the new renderer. */
     find?: Pick<TerminalFindSnapshot, 'open' | 'query' | 'options'>;
 }>;

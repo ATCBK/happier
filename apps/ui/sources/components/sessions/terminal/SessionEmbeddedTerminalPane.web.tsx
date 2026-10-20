@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { EmbeddedTerminalPane } from '@/components/terminal/embedded/EmbeddedTerminalPane.web';
+import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 
 import { SESSION_PRIMARY_TERMINAL_INSTANCE_ID } from './embeddedTerminalDocking';
 import { useSessionTerminalIdentity, type SessionTerminalIdentity } from './sessionTerminalMode';
@@ -21,6 +22,10 @@ export const SessionEmbeddedTerminalPane = React.memo(function SessionEmbeddedTe
 
 const SessionEmbeddedTerminalPaneContent = React.memo(function SessionEmbeddedTerminalPaneContent(props: SessionEmbeddedTerminalPaneProps & Readonly<{ terminalIdentity: SessionTerminalIdentity }>) {
     const model = useSessionEmbeddedTerminalPaneModel(props);
+    const workspaceScope = useWorkspaceScopeForSession(props.sessionId, props.terminalIdentity.serverId);
+    const askSelection = React.useMemo(() => workspaceScope
+        ? { scopeId: props.scopeId, workspaceScope, sessionId: props.sessionId } : null,
+    [props.scopeId, props.sessionId, workspaceScope]);
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <EmbeddedTerminalPane
@@ -35,6 +40,7 @@ const SessionEmbeddedTerminalPaneContent = React.memo(function SessionEmbeddedTe
                 testIdPrefix={model.testIdPrefix}
                 nativeSurfaceKey={model.terminalKey}
                 toolbarActionsStart={model.toolbarActionsStart}
+                askSelection={askSelection}
             />
         </View>
     );

@@ -81,6 +81,12 @@ export const embeddedTerminalPaneStyles = StyleSheet.create((theme) => ({
         minHeight: 0,
         minWidth: 0,
     },
+    // A terminal that hugs its output: it takes the output's height, no more, and yields to its parent's bound.
+    hugging: {
+        flexGrow: 0,
+        flexShrink: 1,
+        flexBasis: 'auto',
+    },
     rendererCovered: {
         flex: 1,
         minHeight: 0,

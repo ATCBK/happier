@@ -3,7 +3,7 @@ import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { TERMINAL_STREAM_MAX_READ_BYTES } from '@happier-dev/protocol/terminal/stream';
 import type { DaemonTerminalLaunchIntent } from '@happier-dev/protocol/daemon/terminal';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { EmbeddedTerminalPaneStatus } from '@/components/terminal/embedded/types';
 
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
@@ -114,10 +114,14 @@ export function useMachineTerminalSession(params: Readonly<{
         [params.terminalKey],
     );
 
-    const [status, setStatus] = React.useState<TerminalStatus>(() => params.attachedTerminalId !== undefined || initialSurfaceState.terminalId ? 'connecting' : 'not-open');
+    const retainedExit = params.readOnly && params.attachedTerminalId === initialSurfaceState.terminalId
+        && admission.lifetime?.isCurrent() && areServerAccountScopesEqual(initialSurfaceState.exit?.scope, admission.lifetime.scope)
+        ? initialSurfaceState.exit : undefined;
+    const [status, setStatus] = React.useState<TerminalStatus>(() => retainedExit ? 'exited'
+        : params.attachedTerminalId !== undefined || initialSurfaceState.terminalId ? 'connecting' : 'not-open');
     const [error, setError] = React.useState<string | null>(null);
-    const [exitCode, setExitCode] = React.useState<number | null>(null);
-    const [exitSignal, setExitSignal] = React.useState<number | null>(null);
+    const [exitCode, setExitCode] = React.useState<number | null>(retainedExit?.exitCode ?? null);
+    const [exitSignal, setExitSignal] = React.useState<number | null>(retainedExit?.signal ?? null);
     // A terminal that streamed once and then failed lost its connection; it did not fail to start.
     const everConnectedRef = React.useRef(false);
     const [terminalTitle, setTerminalTitle] = React.useState<string | null>(null);
@@ -227,6 +231,15 @@ export function useMachineTerminalSession(params: Readonly<{
         clearNonceRef,
         hydrateOnRender: false,
     });
+    const recordTerminalExit = React.useCallback((exit?: Readonly<{ exitCode: number | null; signal: number | null }>) => {
+        const state = updateSurfaceState(current => ({
+            ...current,
+            exit: { ...(exit ?? current.exit ?? { exitCode: null, signal: null }), scope: attachmentScopeRef.current },
+        }));
+        setExitCode(state.exit?.exitCode ?? null);
+        setExitSignal(state.exit?.signal ?? null);
+        setStatus('exited');
+    }, [updateSurfaceState]);
     const clearWithdrawnTerminal = React.useCallback((code: string) => {
         resetAutoRetryState();
         clearActiveTerminalStream();
@@ -397,7 +410,11 @@ export function useMachineTerminalSession(params: Readonly<{
         let retirement = admissionRef.current.lifetime?.onRetire(retire);
 
         const start = async () => {
-            const cachedSurfaceState = readTerminalSurfaceState(params.terminalKey) ?? createEmptyTerminalSurfaceState();
+            let cachedSurfaceState = readTerminalSurfaceState(params.terminalKey) ?? createEmptyTerminalSurfaceState();
+            let retainedExit = params.readOnly && params.attachedTerminalId === cachedSurfaceState.terminalId
+                && admissionRef.current.lifetime?.isCurrent()
+                && areServerAccountScopesEqual(cachedSurfaceState.exit?.scope, admissionRef.current.lifetime.scope)
+                ? cachedSurfaceState.exit : undefined;
 
             setError(null);
             if (admissionRef.current.openCancelled && !connectionAttempt.explicitRetry && !restartRequestedRef.current) {
@@ -406,7 +423,7 @@ export function useMachineTerminalSession(params: Readonly<{
             }
             // Process admission (including consent) precedes a connection.
             const waitingForConnection = params.attachedTerminalId !== undefined || Boolean(cachedSurfaceState.terminalId);
-            setStatus(waitingForConnection ? 'connecting' : 'not-open');
+            setStatus(retainedExit ? 'exited' : waitingForConnection ? 'connecting' : 'not-open');
 
             if (!params.machineId || (!params.cwd && !params.launch && params.attachedTerminalId === undefined)) {
                 setStatus('error');
@@ -433,6 +450,14 @@ export function useMachineTerminalSession(params: Readonly<{
             attachmentScopeRef.current = authority.scope;
             if (!retirement) retirement = authority.onRetire(retire);
             if (canceled) return;
+            // A retained exit enables pre-replay hydration only for its original
+            // Home/Account. Another Account must obtain its own authorized bytes.
+            if (cachedSurfaceState.exit && !areServerAccountScopesEqual(cachedSurfaceState.exit.scope, authority.scope)) {
+                cachedSurfaceState = createEmptyTerminalSurfaceState();
+                replaceSurfaceState(cachedSurfaceState);
+            }
+            retainedExit = params.readOnly && params.attachedTerminalId === cachedSurfaceState.terminalId
+                ? cachedSurfaceState.exit : undefined;
 
             const request = {
                 ...buildMachineTerminalSessionRequest({
@@ -518,12 +543,15 @@ export function useMachineTerminalSession(params: Readonly<{
                     terminalId: ensured.terminalId,
                     cursor: replayPlan.initialCursor.value,
                     cursorMode: replayPlan.initialCursor.mode,
+                    exit: retainedExit,
                 });
                 hydrateTerminalRendererIfNeeded();
             }
-            setStatus('connected');
-            setExitCode(null);
-            setExitSignal(null);
+            // A borrowed process's observed termination remains true while its
+            // retained output is reattached; transport readiness is not a new run.
+            setStatus(retainedExit ? 'exited' : 'connected');
+            setExitCode(retainedExit?.exitCode ?? null);
+            setExitSignal(retainedExit?.signal ?? null);
             everConnectedRef.current = true;
 
             const carrier = createMachineRpcTerminalStreamCarrier({
@@ -605,9 +633,7 @@ export function useMachineTerminalSession(params: Readonly<{
                 onExit: (event) => {
                     writeDecodedStreamProjection(terminalPreviewDecoderRef.current.flush());
                     terminalStreamDoneRef.current = true;
-                    setExitCode(event.exitCode);
-                    setExitSignal(event.signal);
-                    setStatus('exited');
+                    recordTerminalExit({ exitCode: event.exitCode, signal: event.signal });
                 },
             });
             terminalStreamRuntimeRef.current = runtime;
@@ -670,7 +696,7 @@ export function useMachineTerminalSession(params: Readonly<{
                     }
                     if (read.frames.some((event) => event.t === 'exit') || read.done) {
                         terminalStreamDoneRef.current = true;
-                        setStatus('exited');
+                        recordTerminalExit();
                         return;
                     }
                     idleCount = 0;
@@ -754,13 +780,13 @@ export function useMachineTerminalSession(params: Readonly<{
 
                 if (applied.status === 'exited') {
                     terminalStreamDoneRef.current = true;
-                    setStatus('exited');
+                    recordTerminalExit();
                     return;
                 }
 
                 if (read.done) {
                     terminalStreamDoneRef.current = true;
-                    setStatus('exited');
+                    recordTerminalExit();
                     return;
                 }
             }
@@ -814,6 +840,7 @@ export function useMachineTerminalSession(params: Readonly<{
         params.terminalRef,
         replaceSurfaceState,
         recordTerminalPreviewOutput,
+        recordTerminalExit,
         replaceCachedPreviewWithReplay,
         resetAutoRetryState,
         scheduleAutoRetry,
@@ -961,11 +988,12 @@ export function useMachineTerminalSession(params: Readonly<{
         }
         if (applied.status === 'exited' || pendingWrite.responseDone) {
             terminalStreamDoneRef.current = true;
-            setStatus('exited');
+            recordTerminalExit();
         }
     }, [
         acknowledgeAcceptedBytes,
         recordTerminalPreviewOutput,
+        recordTerminalExit,
         replaceCachedPreviewWithReplay,
         updateSurfaceState,
     ]);

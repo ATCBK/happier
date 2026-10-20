@@ -164,6 +164,23 @@ describe('EmbeddedTerminalPaneFrame states (terminal lab ST)', () => {
         expect(screen.findByTestId('term-state-line-action')).toBeFalsy();
     });
 
+    it('leaves its exited line to an owner that already states how the run ended, and still speaks for other states', async () => {
+        const render = (controller: Partial<EmbeddedTerminalPaneController>) => renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
+            title: 'test',
+            chrome: 'none',
+            ownerStatesExit: true,
+            controller: makeController({ readOnly: true, ...controller }),
+            surface: React.createElement('TerminalSurface'),
+            testIdPrefix: 'term',
+            platformOS: 'web',
+        }));
+        const exited = await render({ status: 'exited', exitCode: 17 });
+        expect(exited.findByTestId('term-state-line')).toBeFalsy();
+        expect(exited.findByTestId('term-surface')).toBeTruthy();
+        const offline = await render({ status: 'error', error: 'terminal_machine_unreachable' });
+        expect(offline.findByTestId('term-state-line')).toBeTruthy();
+    });
+
     it('keeps the output when the machine goes offline, with one line and Check again', async () => {
         const retryConnect = vi.fn();
         const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {

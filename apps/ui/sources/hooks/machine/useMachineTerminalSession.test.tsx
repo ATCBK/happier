@@ -270,19 +270,60 @@ describe('useMachineTerminalSession', () => {
             { t: 'exit', terminalId, byteOffset: 9, exitCode, signal },
         ], nextByteOffset: 9, availableByteOffset: 9, droppedBeforeByteOffset: 0, done: true }));
         const { ProjectCommandOutputPane } = await import('@/components/inbox/actionOperations/ProjectCommandOutputPane');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const React = await import('react');
-        const screen = await renderScreen(React.createElement(ProjectCommandOutputPane, {
+        const renderOutput = () => renderScreen(React.createElement(AppPaneProvider, null, React.createElement(ProjectCommandOutputPane, {
             operation: { serverId: homeIds.primary, observation: 'available', isUnavailableProjection: false, snapshot }, title: 'Script',
-        }));
+        })));
+        const screen = await renderOutput();
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('QA_FAIL'));
         expect(screen.findByTestId('workspace-embedded-terminal-state-card')).toBeNull();
         if (outcome) expect(screen.getTextContent()).toContain(outcome);
         if (exitCode === null || signal) expect(screen.getTextContent()).not.toContain('Exit code:');
         expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId }), expect.objectContaining({ serverId: homeIds.primary }));
         await screen.unmount();
+        // Returning from phone width remounts the inline pane. Its retained bytes
+        // and native outcome must be visible before the daemon answers the new read.
+        const replay = createDeferred<ReturnType<typeof TerminalStreamReadResponseSchema.parse>>();
+        terminalOps.streamReadBytes.mockImplementation(() => replay.promise);
+        const returned = await renderOutput();
+        const { EmbeddedTerminalPane } = await import('@/components/terminal/embedded/EmbeddedTerminalPane');
+        expect(returned.findByType(EmbeddedTerminalPane).props.controller).toMatchObject({
+            status: 'exited', exitCode, exitSignal: signal,
+        });
+        expect(returned.getTextContent()).toContain('QA_FAIL');
+        expect(returned.findByTestId('workspace-embedded-terminal-state-card')).toBeNull();
+        if (outcome) expect(returned.getTextContent()).toContain(outcome);
+        await act(async () => replay.resolve(TerminalStreamReadResponseSchema.parse({ ok: true, terminalId, frames: [
+            { t: 'exit', terminalId, byteOffset: 9, exitCode, signal },
+        ], nextByteOffset: 9, availableByteOffset: 9, droppedBeforeByteOffset: 0, done: true })));
+        expect(returned.getTextContent().match(/QA_FAIL/g)).toHaveLength(1);
+        await returned.unmount();
         expect(terminalOps.ensure).not.toHaveBeenCalled();
         expect(terminalOps.restart).not.toHaveBeenCalled();
         expect(terminalOps.close).not.toHaveBeenCalled();
+    });
+
+    it('does not restore a finished borrowed surface before its Account scope is proven', async () => {
+        const terminalKey = 'borrowed-other-account';
+        replaceTerminalSurfaceState(terminalKey, {
+            terminalId: 'borrowed-other-account-pty', cursor: 7, output: 'private', detectedUrl: null,
+            exit: { exitCode: 17, signal: null, scope: { serverId: homeIds.primary, accountId: 'another-account' } },
+        });
+        const read = createDeferred<unknown>();
+        terminalOps.streamReadBytes.mockImplementation(() => read.promise);
+        const terminalRef = { current: { write: vi.fn(), clear: vi.fn() } };
+        const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+        const firstStates: Array<Readonly<{ status: string; exitCode: number | null }>> = [];
+        const hook = await renderHook(() => {
+            const controller = useMachineTerminalSession({ machineId: 'machine', serverId: homeIds.primary, cwd: '/repo',
+                terminalKey, terminalRef, attachedTerminalId: 'borrowed-other-account-pty', readOnly: true });
+            firstStates.push({ status: controller.status, exitCode: controller.exitCode });
+            return controller;
+        }, { flushOptions: { cycles: 1, turns: 1 } });
+        expect(firstStates[0]).toEqual({ status: 'connecting', exitCode: null });
+        expect(terminalRef.current.write).not.toHaveBeenCalledWith('private', expect.anything());
+        await hook.unmount();
     });
 
     it('reads borrowed output with independent credit identities while refusing all process mutations', async () => {

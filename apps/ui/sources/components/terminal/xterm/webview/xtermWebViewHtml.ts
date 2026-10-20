@@ -364,7 +364,6 @@ export function buildXtermWebViewHtml(params: Readonly<{
         currentTheme = theme;
         try {
           const cursor = resolveXtermCursorAppearance(readOnly, theme.cursorColor);
-          Object.assign(term.options, cursor.options);
           term.options.theme = {
             background: theme.backgroundColor,
             foreground: theme.textColor,
@@ -525,7 +524,9 @@ export function buildXtermWebViewHtml(params: Readonly<{
           return;
         }
         if (message.type === 'setReadOnly' && typeof payload.readOnly === 'boolean') {
+          if (payload.readOnly === readOnly) return;
           readOnly = payload.readOnly;
+          if (term) Object.assign(term.options, resolveXtermCursorAppearance(readOnly, currentTheme.cursorColor).options);
           applyTheme(currentTheme);
           return;
         }

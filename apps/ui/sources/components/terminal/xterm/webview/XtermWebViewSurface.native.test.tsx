@@ -179,6 +179,14 @@ describe('XtermWebViewSurface (native)', () => {
             await Promise.all(parsed);
             expect(active.options.cursorStyle).toBe('underline');
             expect(cursorColorChanges).toEqual([{ kind: 'set', color: 'green' }, { kind: 'reset' }]);
+            send(JSON.stringify({ v: 1, type: 'setTheme', payload: {
+                backgroundColor: '#000', textColor: '#fff', cursorColor: '#fff', selectionBackgroundColor: '#333',
+            } }));
+            expect(active.options).toMatchObject({ cursorStyle: 'underline', cursorBlink: false });
+            send(JSON.stringify({ v: 1, type: 'setFontSize', payload: { fontSizePx: 16, lineHeight: 1.35 } }));
+            expect(active.options.cursorStyle).toBe('underline');
+            send(JSON.stringify({ v: 1, type: 'setReadOnly', payload: { readOnly: false } }));
+            expect(active.options.cursorStyle).toBe('underline');
             await screen.update(render(true));
             expect(active.options).toMatchObject({ cursorBlink: false, cursorInactiveStyle: 'none', disableStdin: true,
                 theme: { cursor: '#00000000' } });

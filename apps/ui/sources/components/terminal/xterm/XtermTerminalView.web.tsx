@@ -46,6 +46,14 @@ export type XtermTerminalHandle = Readonly<{
     focus: () => void;
     hasSelection: () => boolean;
     getSelectionText: () => string;
+    /** The selected buffer rows and the selection's on-screen box (window coordinates), or null. */
+    getSelectionRange?: () => XtermSelectionRange | null;
+}>;
+
+export type XtermSelectionRange = Readonly<{
+    startRow: number;
+    endRow: number;
+    rect: Readonly<{ x: number; y: number; width: number; height: number }>;
 }>;
 
 export type XtermTerminalViewProps = Readonly<{
@@ -53,12 +61,15 @@ export type XtermTerminalViewProps = Readonly<{
     onInput: (data: string) => void;
     onPaste?: (data: string) => void | Promise<unknown>;
     onCopySelection?: (text: string) => void;
+    onSelectionChange?: () => void;
     onLink?: (url: string) => void;
     onResize: (cols: number, rows: number) => void;
     onReady: (cols: number, rows: number) => void;
     onWriteComplete?: (event: XtermWriteCompleteEvent) => void;
     onWriteRejected?: (event: XtermRejectedWrite) => void;
     onCursorRowChange?: (row: EmbeddedTerminalCursorRow | null) => void;
+    /** Height in px the retained output needs: down to its last non-empty line or the cursor row, whichever is lower. */
+    onContentHeightChange?: (height: number) => void;
     maxPendingWriteBytes?: number;
     fontSize: number;
     readOnly?: boolean;
@@ -142,6 +153,8 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
     const onInputRef = React.useRef(props.onInput);
     const onPasteRef = React.useRef(props.onPaste);
     const onCopySelectionRef = React.useRef(props.onCopySelection);
+    const onSelectionChangeRef = React.useRef(props.onSelectionChange);
+    onSelectionChangeRef.current = props.onSelectionChange;
     const onLinkRef = React.useRef(props.onLink);
     const onResizeRef = React.useRef(props.onResize);
     const onReadyRef = React.useRef(props.onReady);
@@ -149,6 +162,8 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
     const onWriteRejectedRef = React.useRef(props.onWriteRejected);
     const onCursorRowChangeRef = React.useRef(props.onCursorRowChange);
     onCursorRowChangeRef.current = props.onCursorRowChange;
+    const onContentHeightChangeRef = React.useRef(props.onContentHeightChange);
+    onContentHeightChangeRef.current = props.onContentHeightChange;
     const maxPendingWriteBytesRef = React.useRef(props.maxPendingWriteBytes ?? DEFAULT_XTERM_MAX_PENDING_WRITE_BYTES);
     onInputRef.current = props.onInput;
     onPasteRef.current = props.onPaste;
@@ -339,6 +354,27 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
         get find() { return findRef.current ?? undefined; },
         hasSelection: () => terminalRef.current?.hasSelection() ?? false,
         getSelectionText: () => terminalRef.current?.getSelection() ?? '',
+        getSelectionRange: () => {
+            const term = terminalRef.current;
+            const position = term?.hasSelection() ? term.getSelectionPosition() : undefined;
+            const screen = term?.element?.querySelector('.xterm-screen');
+            if (!term || !position || !screen) return null;
+            const box = screen.getBoundingClientRect();
+            const rowHeight = box.height / term.rows;
+            const cellWidth = box.width / term.cols;
+            const top = position.start.y - term.buffer.active.viewportY;
+            const left = Math.min(position.start.x, position.end.x);
+            return {
+                startRow: position.start.y + 1,
+                endRow: position.end.y + 1,
+                rect: {
+                    x: box.left + left * cellWidth,
+                    y: box.top + Math.max(0, top) * rowHeight,
+                    width: Math.max(cellWidth, Math.abs(position.end.x - position.start.x) * cellWidth),
+                    height: rowHeight * (position.end.y - position.start.y + 1),
+                },
+            };
+        },
     }), [enqueueWrite, enqueueWriteBytes, resetWriteState]);
 
     React.useEffect(() => {
@@ -392,7 +428,23 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
                 ? { top: rect.top - container.getBoundingClientRect().top + row * height, height }
                 : null);
         };
+        const reportContentHeight = () => {
+            if (!onContentHeightChangeRef.current) return;
+            const buffer = term.buffer.active;
+            let lastRow = buffer.baseY + buffer.cursorY;
+            for (let row = buffer.length - 1; row > lastRow; row -= 1) {
+                if (buffer.getLine(row)?.translateToString(true)) {
+                    lastRow = row;
+                    break;
+                }
+            }
+            const screen = term.element?.querySelector('.xterm-screen') ?? container;
+            const rowHeight = screen.getBoundingClientRect().height / term.rows;
+            if (rowHeight > 0) onContentHeightChangeRef.current((lastRow + 1) * rowHeight);
+        };
+        const writeParsedDisposable = term.onWriteParsed(reportContentHeight);
         const cursorDisposable = term.onCursorMove(reportCursorRow);
+        const selectionDisposable = term.onSelectionChange(() => onSelectionChangeRef.current?.());
         const scrollDisposable = term.onScroll(reportCursorRow);
         const sizeDisposable = term.onResize(reportCursorRow);
 
@@ -540,6 +592,8 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
             findRef.current = null;
             dataDisposable.dispose();
             cursorDisposable.dispose();
+            writeParsedDisposable.dispose();
+            selectionDisposable.dispose();
             scrollDisposable.dispose();
             sizeDisposable.dispose();
             osc52Disposable.dispose();
@@ -593,7 +647,11 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
 
         try {
             const cursor = resolveXtermCursorAppearance(props.readOnly === true, theme.colors.text.primary);
-            Object.assign(term.options, cursor.options);
+            // Application cursor commands remain authoritative while writable. Only a change
+            // in host input eligibility replaces them with the hidden/default cursor options.
+            if (term.options.disableStdin !== (props.readOnly === true)) {
+                Object.assign(term.options, cursor.options);
+            }
             term.options.fontSize = Math.max(8, Math.round(props.fontSize));
             term.options.lineHeight = props.lineHeight ?? 1.35;
             term.options.theme = {

@@ -69,15 +69,21 @@ class MockTerminal {
     textarea: HTMLTextAreaElement | null = null;
     disposed = false;
     buffer = {
-        active: { cursorY: 20, baseY: 0, viewportY: 0, length: 24, type: 'normal' },
+        active: {
+            cursorY: 20, baseY: 0, viewportY: 0, length: 24, type: 'normal',
+            getLine: (row: number) => ({ translateToString: () => this.printedRows[row] ?? '' }),
+        },
         onBufferChange: (_callback: () => void) => ({ dispose: vi.fn() }),
     };
     cursorMoved: (() => void) | null = null;
     scrolled: (() => void) | null = null;
+    writeParsed: (() => void) | null = null;
+    printedRows: Record<number, string> = {};
     onCursorMove(callback: () => void) { this.cursorMoved = callback; return { dispose: () => { this.cursorMoved = null; } }; }
     onScroll(callback: () => void) { this.scrolled = callback; return { dispose: () => { this.scrolled = null; } }; }
     onResize(_callback: () => void) { return { dispose: vi.fn() }; }
-    onWriteParsed(_callback: () => void) { return { dispose: vi.fn() }; }
+    onSelectionChange(_callback: () => void) { return { dispose: vi.fn() }; }
+    onWriteParsed(callback: () => void) { this.writeParsed = callback; return { dispose: () => { this.writeParsed = null; } }; }
     parser = {
         registerCsiHandler: vi.fn(() => ({ dispose: vi.fn() })),
         registerOscHandler: registerOscHandlerSpy,
@@ -336,6 +342,14 @@ describe('XtermTerminalView.web', () => {
             chrome="none" showQuickKeys={false} focused testIdPrefix="loaded-terminal" />));
         expect(terminal.options).toMatchObject({ cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline', disableStdin: false,
             theme: { cursor: '#000000' } });
+        // The external xterm SDK changes these options when an application emits DECSCUSR.
+        terminal.options.cursorStyle = 'underline';
+        terminal.options.cursorBlink = false;
+        appearance.light = false;
+        await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
+            controller={{ ...controller, status: 'connected', onInput: nextInput }} terminalRef={ref}
+            chrome="none" showQuickKeys={false} focused testIdPrefix="loaded-terminal" />));
+        expect(terminal.options).toMatchObject({ cursorStyle: 'underline', cursorBlink: false });
         onDataSpy('continued input');
         expect(nextInput).toHaveBeenCalledWith('continued input');
         expect(onInput).not.toHaveBeenCalled();
@@ -445,6 +459,23 @@ describe('XtermTerminalView.web', () => {
         terminal.buffer.active.viewportY = 30;
         await act(async () => { terminal.scrolled?.(); });
         expect(cursor).toHaveBeenLastCalledWith(null);
+    });
+
+    it('reports the height its output needs: down to the last printed line or the cursor row, whichever is lower', async () => {
+        const { XtermTerminalView } = await import('./XtermTerminalView.web');
+        const content = vi.fn();
+        await act(async () => { root.render(<XtermTerminalView fontSize={14} onInput={() => {}} onResize={() => {}} onReady={() => {}} onContentHeightChange={content} />); });
+        const terminal = terminalInstances[0]!;
+        const row = 320 / 24;
+        // "QA_FAIL\n": one printed row and the cursor on the empty row below it.
+        terminal.printedRows = { 0: 'QA_FAIL' };
+        terminal.buffer.active.cursorY = 1;
+        await act(async () => { terminal.writeParsed?.(); });
+        expect(content).toHaveBeenLastCalledWith(2 * row);
+        // Output that stops short of a cursor which moved back up still counts to its last printed row.
+        terminal.printedRows = { 0: 'QA_FAIL', 5: 'later' };
+        await act(async () => { terminal.writeParsed?.(); });
+        expect(content).toHaveBeenLastCalledWith(6 * row);
     });
 
     it('refocuses the terminal when the web container receives mouse down', async () => {

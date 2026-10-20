@@ -36,6 +36,16 @@ export type EmbeddedTerminalPaneFrameProps = Readonly<{
     chrome?: 'toolbar' | 'none';
     /** The machine the terminal runs on, so an offline line can name it. */
     machineName?: string | null;
+    /**
+     * The owner already states how the process ended (a run's status line), so the frame leaves its
+     * own "exited" line out; every other state line still shows.
+     */
+    ownerStatesExit?: boolean;
+    /**
+     * Height in px the retained output needs. When given, the terminal hugs it (and gives way to its
+     * parent's bound) instead of filling the parent; the renderer reports it.
+     */
+    contentHeight?: number | null;
 }>;
 
 const MACHINE_UNREACHABLE_ERROR = 'terminal_machine_unreachable';
@@ -159,6 +169,8 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
     const surfaceCovered = frameState.kind === 'failed' || frameState.kind === 'not-open';
     const showsOwnChrome = props.chrome !== 'none';
     const readOnly = props.controller.readOnly === true;
+    const hidesExitLine = props.ownerStatesExit === true && props.controller.status === 'exited';
+    const hugsContent = typeof props.contentHeight === 'number';
 
     return (
         <View testID={testId('root')} style={styles.container}>
@@ -273,7 +285,7 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
                 </View>
             ) : null}
 
-            {frameState.kind === 'line' ? (
+            {frameState.kind === 'line' && !hidesExitLine ? (
                 <SurfaceFreshnessLine
                     testID={testId('state-line')}
                     reason={frameState.reason}
@@ -283,10 +295,12 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
                 />
             ) : null}
 
-            <View testID={testId('surface')} style={terminalSurfaceStyle}>
+            <View testID={testId('surface')} style={hugsContent ? [terminalSurfaceStyle, styles.hugging] : terminalSurfaceStyle}>
                 <View testID={testId('renderer')} pointerEvents={surfaceCovered ? 'none' : 'auto'}
                     accessibilityElementsHidden={surfaceCovered} importantForAccessibility={surfaceCovered ? 'no-hide-descendants' : 'auto'}
-                    style={surfaceCovered ? styles.rendererCovered : styles.renderer}>
+                    style={hugsContent
+                        ? [surfaceCovered ? styles.rendererCovered : styles.renderer, styles.hugging, { flexBasis: props.contentHeight }]
+                        : surfaceCovered ? styles.rendererCovered : styles.renderer}>
                     {props.surface}
                 </View>
                 {surfaceCovered ? (

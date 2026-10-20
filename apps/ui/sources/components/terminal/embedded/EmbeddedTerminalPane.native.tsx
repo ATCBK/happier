@@ -35,6 +35,7 @@ import { TerminalKeysSurface } from './keys/TerminalKeysSurface';
 import { useTerminalKeys } from './keys/useTerminalKeys';
 import type { EmbeddedTerminalPaneController } from './types';
 import { useTerminalFind } from './useTerminalFind';
+import type { TerminalAskSelectionTarget } from './TerminalAskSelectionControls';
 
 export type EmbeddedTerminalPaneProps = Readonly<{
     title: string;
@@ -46,12 +47,18 @@ export type EmbeddedTerminalPaneProps = Readonly<{
     /** See `EmbeddedTerminalPaneFrame` `chrome`. */
     chrome?: 'toolbar' | 'none';
     machineName?: string | null;
+    /** See `EmbeddedTerminalPaneFrame` `ownerStatesExit`. */
+    ownerStatesExit?: boolean;
+    /** Web-only: a native renderer does not report its output height, so it always fills. */
+    sizing?: 'fill' | 'content';
     testIdPrefix?: string | null;
     nativeSurfaceKey?: string | null;
     showQuickKeys?: boolean;
     focused?: boolean;
     findSurfaceId?: string;
     enableNativeRendererQaCrashControl?: boolean;
+    /** Web-only (Ask about a terminal selection); native terminals ask through their own selection menu. */
+    askSelection?: TerminalAskSelectionTarget | null;
 }>;
 
 export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNative(props: EmbeddedTerminalPaneProps) {
@@ -185,6 +192,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
         <EmbeddedTerminalPaneFrame
             chrome={props.chrome}
             machineName={props.machineName}
+            ownerStatesExit={props.ownerStatesExit}
             title={props.title}
             controller={props.controller}
             onRequestClose={props.onRequestClose}
