@@ -38,10 +38,22 @@ export type PluginExecutionOriginActionInputById = {
                     } | {
                         kind: 'pinned_runner_snapshot';
                         snapshotId: string;
+                    } | {
+                        kind: 'app_bundle';
+                        bundleId: string;
+                    } | {
+                        kind: 'source_declaration';
+                        packageName: string;
+                        declarationDigest: string;
                     };
                 } | {
                     kind: 'development';
                     registeredRootId: string;
+                } | {
+                    kind: 'account_release';
+                    pluginId: string;
+                    version: string;
+                    archiveDigestSha256: string;
                 };
             };
         };
@@ -87,10 +99,22 @@ export type PluginExecutionOriginActionResultById = {
                     } | {
                         kind: 'pinned_runner_snapshot';
                         snapshotId: string;
+                    } | {
+                        kind: 'app_bundle';
+                        bundleId: string;
+                    } | {
+                        kind: 'source_declaration';
+                        packageName: string;
+                        declarationDigest: string;
                     };
                 } | {
                     kind: 'development';
                     registeredRootId: string;
+                } | {
+                    kind: 'account_release';
+                    pluginId: string;
+                    version: string;
+                    archiveDigestSha256: string;
                 };
             };
         } | null;
@@ -118,10 +142,22 @@ export type PluginExecutionOriginActionResultById = {
                     } | {
                         kind: 'pinned_runner_snapshot';
                         snapshotId: string;
+                    } | {
+                        kind: 'app_bundle';
+                        bundleId: string;
+                    } | {
+                        kind: 'source_declaration';
+                        packageName: string;
+                        declarationDigest: string;
                     };
                 } | {
                     kind: 'development';
                     registeredRootId: string;
+                } | {
+                    kind: 'account_release';
+                    pluginId: string;
+                    version: string;
+                    archiveDigestSha256: string;
                 };
             };
         } | null;
@@ -151,10 +187,22 @@ export type PluginExecutionOriginActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                 };
             };

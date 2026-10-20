@@ -482,9 +482,7 @@ export type InventoryActionInputById = {
     };
 };
 export type InventoryActionResultById = {
-    readonly "paths.list_recent": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "paths.list_recent": JsonValue;
     readonly "projects.context.update": {
         ok: true;
         row: {
@@ -669,9 +667,7 @@ export type InventoryActionResultById = {
         ok: true;
         workspaceId: string;
     };
-    readonly "projects.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "projects.list": JsonValue;
     readonly "projects.open": {
         kind: 'opened';
         workspace: {
@@ -729,21 +725,11 @@ export type InventoryActionResultById = {
         kind: 'outcomeUnknown';
         operationId?: string | undefined;
     };
-    readonly "prompts.invocations.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "prompts.invocation.resolve": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "machines.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "servers.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "review.engines.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "prompts.invocations.list": JsonValue;
+    readonly "prompts.invocation.resolve": JsonValue;
+    readonly "machines.list": JsonValue;
+    readonly "servers.list": JsonValue;
+    readonly "review.engines.list": JsonValue;
     readonly "agents.backends.list": {
         items: {
             targetKey: string;
@@ -817,22 +803,10 @@ export type InventoryActionResultById = {
             reason: string;
         } | undefined;
     };
-    readonly "agents.models.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "agents.config_options.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "agents.session_modes.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "sessions.spawn.profiles.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "sessions.spawn.connected_services.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "sessions.spawn.mcp_servers.preview": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "agents.models.list": JsonValue;
+    readonly "agents.config_options.list": JsonValue;
+    readonly "agents.session_modes.list": JsonValue;
+    readonly "sessions.spawn.profiles.list": JsonValue;
+    readonly "sessions.spawn.connected_services.list": JsonValue;
+    readonly "sessions.spawn.mcp_servers.preview": JsonValue;
 };

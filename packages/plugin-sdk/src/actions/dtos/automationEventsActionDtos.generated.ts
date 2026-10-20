@@ -174,7 +174,5 @@ export type AutomationEventsActionResultById = {
             checkpointSafe: false;
         })[];
     };
-    readonly "automation.event.source.status.report": {
-        [x: string]: never;
-    };
+    readonly "automation.event.source.status.report": Record<string, never>;
 };

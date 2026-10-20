@@ -167,6 +167,19 @@ export type SkillsActionInputById = {
         } | {
             kind: 'link';
             url: string;
+            refs?: ({
+                kind: 'gitTree';
+                repo: string;
+                path: string;
+                commit: string;
+                treeSha: string;
+            } | {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
+            })[] | undefined;
         } | {
             kind: 'upload';
             files: {
@@ -315,6 +328,12 @@ export type SkillsActionResultById = {
                 bodyTokens: number;
             };
             provenance: {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
+            } | {
                 kind: 'registry';
                 registry: {
                     sourceId: string;
@@ -327,6 +346,12 @@ export type SkillsActionResultById = {
                         path: string;
                         commit: string;
                         treeSha: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | {
                         kind: 'version';
                         version: string;
@@ -342,6 +367,12 @@ export type SkillsActionResultById = {
                     path: string;
                     commit: string;
                     treeSha: string;
+                } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
                 } | {
                     kind: 'version';
                     version: string;
@@ -379,6 +410,12 @@ export type SkillsActionResultById = {
                     commit: string;
                     treeSha: string;
                 } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
+                } | {
                     kind: 'version';
                     version: string;
                 } | undefined;
@@ -399,6 +436,12 @@ export type SkillsActionResultById = {
         skillMd: string;
         revision: string;
         provenance: {
+            kind: 'wellKnown';
+            indexUrl: string;
+            name: string;
+            digest: string;
+            publishedDigest?: string | undefined;
+        } | {
             kind: 'registry';
             registry: {
                 sourceId: string;
@@ -411,6 +454,12 @@ export type SkillsActionResultById = {
                     path: string;
                     commit: string;
                     treeSha: string;
+                } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
                 } | {
                     kind: 'version';
                     version: string;
@@ -426,6 +475,12 @@ export type SkillsActionResultById = {
                 path: string;
                 commit: string;
                 treeSha: string;
+            } | {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
             } | {
                 kind: 'version';
                 version: string;
@@ -488,6 +543,12 @@ export type SkillsActionResultById = {
                 path: string;
                 commit: string;
                 treeSha: string;
+            } | {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
             } | {
                 kind: 'version';
                 version: string;
@@ -552,6 +613,12 @@ export type SkillsActionResultById = {
                 bodyTokens: number;
             };
             provenance: {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
+            } | {
                 kind: 'registry';
                 registry: {
                     sourceId: string;
@@ -564,6 +631,12 @@ export type SkillsActionResultById = {
                         path: string;
                         commit: string;
                         treeSha: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | {
                         kind: 'version';
                         version: string;
@@ -579,6 +652,12 @@ export type SkillsActionResultById = {
                     path: string;
                     commit: string;
                     treeSha: string;
+                } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
                 } | {
                     kind: 'version';
                     version: string;
@@ -644,6 +723,12 @@ export type SkillsActionResultById = {
     readonly "skills.updates.apply": {
         revision: string;
         provenance: {
+            kind: 'wellKnown';
+            indexUrl: string;
+            name: string;
+            digest: string;
+            publishedDigest?: string | undefined;
+        } | {
             kind: 'registry';
             registry: {
                 sourceId: string;
@@ -656,6 +741,12 @@ export type SkillsActionResultById = {
                     path: string;
                     commit: string;
                     treeSha: string;
+                } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
                 } | {
                     kind: 'version';
                     version: string;
@@ -671,6 +762,12 @@ export type SkillsActionResultById = {
                 path: string;
                 commit: string;
                 treeSha: string;
+            } | {
+                kind: 'wellKnown';
+                indexUrl: string;
+                name: string;
+                digest: string;
+                publishedDigest?: string | undefined;
             } | {
                 kind: 'version';
                 version: string;

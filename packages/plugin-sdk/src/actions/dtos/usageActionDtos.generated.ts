@@ -5,12 +5,8 @@ import type { JsonValue } from '../../identity.js';
 import type { PluginActionWorkflowBlockV1 } from './pluginActionDtoSupport.generated.js';
 
 export type UsageActionInputById = {
-    readonly "usage.prices.get": {
-        [x: string]: never;
-    };
-    readonly "usage.prices.refresh": {
-        [x: string]: never;
-    };
+    readonly "usage.prices.get": Record<string, never>;
+    readonly "usage.prices.refresh": Record<string, never>;
     readonly "usage.calendar.export": {
         query: {
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;

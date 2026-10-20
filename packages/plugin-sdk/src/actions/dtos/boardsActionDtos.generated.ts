@@ -5,9 +5,7 @@ import type { JsonValue } from '../../identity.js';
 import type { BoardItemRefV1, InputPredicate, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type BoardsActionInputById = {
-    readonly "boards.list": {
-        [x: string]: never;
-    };
+    readonly "boards.list": Record<string, never>;
     readonly "boards.apply": {
         intent: {
             kind: 'widget_add';

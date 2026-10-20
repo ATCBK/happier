@@ -1282,6 +1282,128 @@ export type WidgetsActionInputById = {
                     artifactId?: string | undefined;
                 };
                 items: ({
+                    kind: 'widget';
+                    instance: {
+                        v: 1;
+                        id: string;
+                        definition: {
+                            kind: 'installed';
+                            surface: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                        } | {
+                            kind: 'builtin';
+                            id: string;
+                        } | {
+                            kind: 'artifact';
+                            artifactId: string;
+                        } | {
+                            kind: 'inline';
+                            definition: {
+                                provenance: {
+                                    source: {
+                                        kind: 'authored';
+                                    } | {
+                                        kind: 'session';
+                                        serverId: string;
+                                        sessionId: string;
+                                        itemId: string;
+                                    };
+                                    authorAccountId?: string | undefined;
+                                    author?: {
+                                        kind: 'person' | 'agent' | 'plugin';
+                                    } | undefined;
+                                    createdAt?: number | undefined;
+                                };
+                                sizeDeclaration: {
+                                    sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
+                                    defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
+                                };
+                                name: string;
+                                body: WidgetDefinitionBodyV1Input<true>;
+                                inputs: {
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    submitLabel?: string | undefined;
+                                    fields?: readonly {
+                                        path: string;
+                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                        title: string;
+                                        inputType?: {
+                                            pluginId: string;
+                                            localId: string;
+                                        } | {
+                                            hostType: 'usageQuery';
+                                            field?: 'period' | 'session' | undefined;
+                                        } | {
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
+                                        } | undefined;
+                                        contextMode?: 'follow' | 'own' | undefined;
+                                        required?: boolean | undefined;
+                                        requireExplicitSelection?: boolean | undefined;
+                                        listSeparator?: 'comma' | 'newline' | undefined;
+                                        maxSelections?: number | undefined;
+                                        defaultValue?: unknown;
+                                        visibleWhen?: unknown;
+                                        visibleWhenContextSlot?: string | undefined;
+                                        requiredWhen?: unknown;
+                                        disabledWhen?: unknown;
+                                        optionsSourceId?: string | undefined;
+                                        connectedAccountOptions?: true | undefined;
+                                        resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
+                                        description?: string | undefined;
+                                        placeholder?: string | undefined;
+                                        options?: readonly {
+                                            value: unknown;
+                                            label: string;
+                                            labelKey?: string | undefined;
+                                            description?: string | undefined;
+                                            disabled?: boolean | undefined;
+                                        }[] | undefined;
+                                    }[] | undefined;
+                                };
+                                inputSchema: unknown;
+                                v: 1;
+                                id: string;
+                                description?: string | undefined;
+                                sessionInputPath?: string | undefined;
+                                connectedAccountPurposeBindings?: {
+                                    path: string;
+                                    purpose: string;
+                                    consumer: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    nativeServicePath?: string | undefined;
+                                }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
+                            };
+                        };
+                        bindings: Record<string, {
+                            kind: 'value';
+                            value: unknown;
+                        } | {
+                            kind: 'context';
+                            slot: string;
+                        } | {
+                            kind: 'viewer';
+                            purpose: string;
+                        }>;
+                        displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
+                    };
+                    size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
+                    frameStyle?: 'card' | 'plain' | undefined;
+                    area?: 'main' | 'aside' | undefined;
+                } | {
                     kind: 'group';
                     id: string;
                     children: {
@@ -1422,128 +1544,6 @@ export type WidgetsActionInputById = {
                         kind: 'viewer';
                         purpose: string;
                     }> | undefined;
-                    area?: 'main' | 'aside' | undefined;
-                } | {
-                    kind: 'widget';
-                    instance: {
-                        v: 1;
-                        id: string;
-                        definition: {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        } | {
-                            kind: 'builtin';
-                            id: string;
-                        } | {
-                            kind: 'artifact';
-                            artifactId: string;
-                        } | {
-                            kind: 'inline';
-                            definition: {
-                                provenance: {
-                                    source: {
-                                        kind: 'authored';
-                                    } | {
-                                        kind: 'session';
-                                        serverId: string;
-                                        sessionId: string;
-                                        itemId: string;
-                                    };
-                                    authorAccountId?: string | undefined;
-                                    author?: {
-                                        kind: 'person' | 'agent' | 'plugin';
-                                    } | undefined;
-                                    createdAt?: number | undefined;
-                                };
-                                sizeDeclaration: {
-                                    sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
-                                    defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
-                                };
-                                name: string;
-                                body: WidgetDefinitionBodyV1Input<true>;
-                                inputs: {
-                                    title?: string | undefined;
-                                    description?: string | undefined;
-                                    submitLabel?: string | undefined;
-                                    fields?: readonly {
-                                        path: string;
-                                        widget: 'number' | 'boolean' | 'url' | 'text' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
-                                        title: string;
-                                        inputType?: {
-                                            pluginId: string;
-                                            localId: string;
-                                        } | {
-                                            hostType: 'usageQuery';
-                                            field?: 'period' | 'session' | undefined;
-                                        } | {
-                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
-                                        } | undefined;
-                                        contextMode?: 'follow' | 'own' | undefined;
-                                        required?: boolean | undefined;
-                                        requireExplicitSelection?: boolean | undefined;
-                                        listSeparator?: 'comma' | 'newline' | undefined;
-                                        maxSelections?: number | undefined;
-                                        defaultValue?: unknown;
-                                        visibleWhen?: unknown;
-                                        visibleWhenContextSlot?: string | undefined;
-                                        requiredWhen?: unknown;
-                                        disabledWhen?: unknown;
-                                        optionsSourceId?: string | undefined;
-                                        connectedAccountOptions?: true | undefined;
-                                        resolvedEmptyConnectedAccountOptions?: true | undefined;
-                                        prompt?: string | undefined;
-                                        description?: string | undefined;
-                                        placeholder?: string | undefined;
-                                        options?: readonly {
-                                            value: unknown;
-                                            label: string;
-                                            labelKey?: string | undefined;
-                                            description?: string | undefined;
-                                            disabled?: boolean | undefined;
-                                        }[] | undefined;
-                                    }[] | undefined;
-                                };
-                                inputSchema: unknown;
-                                v: 1;
-                                id: string;
-                                description?: string | undefined;
-                                sessionInputPath?: string | undefined;
-                                connectedAccountPurposeBindings?: {
-                                    path: string;
-                                    purpose: string;
-                                    consumer: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                    nativeServicePath?: string | undefined;
-                                }[] | undefined;
-                                networkOverride?: {
-                                    networkOrigins?: string[] | undefined;
-                                    network?: 'none' | 'open' | undefined;
-                                } | undefined;
-                            };
-                        };
-                        bindings: Record<string, {
-                            kind: 'value';
-                            value: unknown;
-                        } | {
-                            kind: 'context';
-                            slot: string;
-                        } | {
-                            kind: 'viewer';
-                            purpose: string;
-                        }>;
-                        displayName?: string | undefined;
-                        networkOverride?: {
-                            networkOrigins?: string[] | undefined;
-                            network?: 'none' | 'open' | undefined;
-                        } | undefined;
-                    };
-                    size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
-                    frameStyle?: 'card' | 'plain' | undefined;
                     area?: 'main' | 'aside' | undefined;
                 })[];
                 name?: string | undefined;

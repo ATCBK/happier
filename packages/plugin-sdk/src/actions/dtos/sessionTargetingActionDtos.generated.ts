@@ -32,7 +32,7 @@ export type SessionTargetingActionInputById = {
             v: 1;
             storage: 'active' | 'archived';
             includeInactive: boolean;
-            scope: 'following' | 'my_work' | 'assigned_to_me' | 'involving_me' | 'all_accessible';
+            scope: 'my_work' | 'assigned_to_me' | 'following' | 'involving_me' | 'all_accessible';
             attention: 'any' | 'needs_my_attention';
             audiences: ({
                 kind: 'outside_teams';
@@ -90,9 +90,7 @@ export type SessionTargetingActionResultById = {
         error: string | null;
         cause?: string | undefined;
     };
-    readonly "session.target.primary.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.target.primary.set": JsonValue;
     readonly "session.target.tracked.set": {
         sessionIds: string[];
         sessionAddresses: {
@@ -621,7 +619,5 @@ export type SessionTargetingActionResultById = {
         pendingPermissionRequestCount: number;
         pendingUserActionRequestCount: number;
     };
-    readonly "session.messages.recent.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.messages.recent.get": JsonValue;
 };

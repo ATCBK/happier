@@ -873,7 +873,5 @@ export type DiscoveryActionResultById = {
             } | null;
         } | undefined;
     };
-    readonly "action.invoke": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "action.invoke": JsonValue;
 };

@@ -77,6 +77,12 @@ export type RegistriesActionResultById = {
                 } | {
                     kind: 'version';
                     version: string;
+                } | {
+                    kind: 'wellKnown';
+                    indexUrl: string;
+                    name: string;
+                    digest: string;
+                    publishedDigest?: string | undefined;
                 } | undefined;
             } | {
                 state: 'unchecked';
@@ -347,6 +353,12 @@ export type RegistriesActionResultById = {
                         path: string;
                         commit: string;
                         treeSha: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     skillMarkdown: string;
                     files: {

@@ -33,10 +33,22 @@ export type WorkflowEventCatalogActionResultById = {
                     } | {
                         kind: 'pinned_runner_snapshot';
                         snapshotId: string;
+                    } | {
+                        kind: 'app_bundle';
+                        bundleId: string;
+                    } | {
+                        kind: 'source_declaration';
+                        packageName: string;
+                        declarationDigest: string;
                     };
                 } | {
                     kind: 'development';
                     registeredRootId: string;
+                } | {
+                    kind: 'account_release';
+                    pluginId: string;
+                    version: string;
+                    archiveDigestSha256: string;
                 };
                 title: string;
                 description: string | null;

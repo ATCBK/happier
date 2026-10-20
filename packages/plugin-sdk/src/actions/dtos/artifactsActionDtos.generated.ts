@@ -89,9 +89,7 @@ export type ArtifactsActionInputById = {
             bodyVersion: number;
         };
     };
-    readonly "artifact.storage.usage": {
-        [x: string]: never;
-    };
+    readonly "artifact.storage.usage": Record<string, never>;
     readonly "artifact.public_link.create": {
         artifactId: string;
         expiresAt?: number | undefined;

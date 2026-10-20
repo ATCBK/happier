@@ -208,9 +208,7 @@ export type ScmDiffSummaryActionInputById = {
         } | undefined;
         outputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
     };
-    readonly "scm.diffSummary.result.list": {
-        [x: string]: never;
-    };
+    readonly "scm.diffSummary.result.list": Record<string, never>;
     readonly "scm.diffSummary.result.clear": {
         results: {
             cwd: string;

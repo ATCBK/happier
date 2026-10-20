@@ -15745,10 +15745,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -16657,10 +16669,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -17571,10 +17595,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -18485,10 +18521,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -19564,10 +19612,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -20488,10 +20548,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -21402,10 +21474,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;
@@ -22316,10 +22400,22 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
+                        } | {
+                            kind: 'app_bundle';
+                            bundleId: string;
+                        } | {
+                            kind: 'source_declaration';
+                            packageName: string;
+                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
                         registeredRootId: string;
+                    } | {
+                        kind: 'account_release';
+                        pluginId: string;
+                        version: string;
+                        archiveDigestSha256: string;
                     };
                     state: 'attention' | 'uninitialized' | 'baselined' | 'observing' | 'backingOff';
                     code: 'credentialMissing' | 'credentialRevoked' | 'rateLimited' | 'historyGap' | 'capacityBlocked' | 'definitionStale' | 'sourceContractIncompatible' | 'admissionUnavailable' | null;

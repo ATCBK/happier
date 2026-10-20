@@ -5567,10 +5567,22 @@ export type PluginMachineExecutionOriginV1 = {
             } | {
                 kind: 'pinned_runner_snapshot';
                 snapshotId: string;
+            } | {
+                kind: 'app_bundle';
+                bundleId: string;
+            } | {
+                kind: 'source_declaration';
+                packageName: string;
+                declarationDigest: string;
             };
         } | {
             kind: 'development';
             registeredRootId: string;
+        } | {
+            kind: 'account_release';
+            pluginId: string;
+            version: string;
+            archiveDigestSha256: string;
         };
     };
 };
@@ -5584,6 +5596,12 @@ export type PluginActionContributionV2 = {
     surfaces: ('agent' | 'mcp' | 'cli' | 'ui' | 'plugin' | 'voice')[];
     execution: {
         target: 'daemon';
+    } | {
+        target: 'account';
+        account: {
+            artifactId: string;
+            exportName: string;
+        };
     } | {
         target: 'client';
         client: {

@@ -171,10 +171,22 @@ export type IntentStartActionInputById = {
             } | {
                 kind: 'pinned_runner_snapshot';
                 snapshotId: string;
+            } | {
+                kind: 'app_bundle';
+                bundleId: string;
+            } | {
+                kind: 'source_declaration';
+                packageName: string;
+                declarationDigest: string;
             };
         } | {
             kind: 'development';
             registeredRootId: string;
+        } | {
+            kind: 'account_release';
+            pluginId: string;
+            version: string;
+            archiveDigestSha256: string;
         } | undefined;
         connectedServices?: unknown;
         connectedServicesByBackendTargetKey?: Record<string, unknown> | undefined;
@@ -422,22 +434,10 @@ export type IntentStartActionInputById = {
     };
 };
 export type IntentStartActionResultById = {
-    readonly "review.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "review.walkthrough": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "review.explain_findings": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "subagents.plan.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "subagents.delegate.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "voice_agent.start": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "review.start": JsonValue;
+    readonly "review.walkthrough": JsonValue;
+    readonly "review.explain_findings": JsonValue;
+    readonly "subagents.plan.start": JsonValue;
+    readonly "subagents.delegate.start": JsonValue;
+    readonly "voice_agent.start": JsonValue;
 };

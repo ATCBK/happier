@@ -4,15 +4,11 @@
 import type { SystemTaskJsonValue } from './pluginActionDtoSupport.generated.js';
 
 export type RemoteHostsActionInputById = {
-    readonly "remote_hosts.list": {
-        [x: string]: never;
-    };
+    readonly "remote_hosts.list": Record<string, never>;
     readonly "remote_hosts.read": {
         hostId: string;
     };
-    readonly "remote_hosts.add": {
-        [x: string]: never;
-    };
+    readonly "remote_hosts.add": Record<string, never>;
     readonly "remote_hosts.edit": {
         hostId: string;
         expectedRevision: number | 'absent';
@@ -200,9 +196,7 @@ export type RemoteHostsActionInputById = {
         hostId: string;
         expectedRevision: number | 'absent';
     };
-    readonly "remote_hosts.trusted_keys.list": {
-        [x: string]: never;
-    };
+    readonly "remote_hosts.trusted_keys.list": Record<string, never>;
     readonly "remote_hosts.trusted_keys.remove": {
         key: {
             host: string;
@@ -228,9 +222,7 @@ export type RemoteHostsActionInputById = {
             tunnelKey: string;
         };
     };
-    readonly "remote_hosts.tunnel.list": {
-        [x: string]: never;
-    };
+    readonly "remote_hosts.tunnel.list": Record<string, never>;
 };
 export type RemoteHostsActionResultById = {
     readonly "remote_hosts.list": {

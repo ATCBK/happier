@@ -66,7 +66,7 @@ export type SessionFollowActionInputById = {
                     serverId: string;
                     tagId: string;
                 }>[];
-                source: 'all' | 'persisted' | 'direct';
+                source: 'direct' | 'all' | 'persisted';
             }>;
             v: 1;
             enabled: boolean;
@@ -142,9 +142,7 @@ export type SessionFollowActionInputById = {
             ruleId: string;
         };
     };
-    readonly "follow.preferences.get": {
-        [x: string]: never;
-    };
+    readonly "follow.preferences.get": Record<string, never>;
     readonly "follow.preferences.set": {
         assigned: boolean;
         direct: boolean;
@@ -218,7 +216,7 @@ export type SessionFollowActionInputById = {
                 serverId: string;
                 tagId: string;
             }>[];
-            source: 'all' | 'persisted' | 'direct';
+            source: 'direct' | 'all' | 'persisted';
         }>;
     };
     readonly "session.delivery.mute.set": {
@@ -415,7 +413,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'all' | 'persisted' | 'direct';
+                    source: 'direct' | 'all' | 'persisted';
                 }>;
                 policy: FollowPolicyV1;
             };
@@ -558,7 +556,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'all' | 'persisted' | 'direct';
+                    source: 'direct' | 'all' | 'persisted';
                 }>;
                 policy: FollowPolicyV1;
             };
@@ -717,7 +715,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'all' | 'persisted' | 'direct';
+                    source: 'direct' | 'all' | 'persisted';
                 }>;
                 policy: FollowPolicyV1;
             };

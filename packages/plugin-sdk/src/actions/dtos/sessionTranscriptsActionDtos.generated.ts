@@ -138,9 +138,7 @@ export type SessionTranscriptsActionResultById = {
         projection: 'externalShareableV1';
         nextCursor?: string | undefined;
     };
-    readonly "session.events.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.events.get": JsonValue;
     readonly "session.log.tail": {
         [x: string]: unknown;
         success?: boolean | undefined;

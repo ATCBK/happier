@@ -126,6 +126,8 @@ export type MessagingActionResultById = {
         status: 'replied';
         localId: string;
         outcome: {
+            kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+        } | {
             kind: 'answer';
             text: string;
             messageRef: {
@@ -153,8 +155,6 @@ export type MessagingActionResultById = {
                 };
                 messageId: string;
             };
-        } | {
-            kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
         };
         inputMessageRef?: {
             kind: 'session';
@@ -210,6 +210,8 @@ export type MessagingActionResultById = {
                     status: 'replied';
                     localId: string;
                     outcome: {
+                        kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                    } | {
                         kind: 'answer';
                         text: string;
                         messageRef: {
@@ -237,8 +239,6 @@ export type MessagingActionResultById = {
                             };
                             messageId: string;
                         };
-                    } | {
-                        kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
                     };
                     inputMessageRef?: {
                         kind: 'session';

@@ -1926,18 +1926,10 @@ export type SessionLifecycleActionInputById = {
     };
 };
 export type SessionLifecycleActionResultById = {
-    readonly "session.open": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.fork": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.continue_with_replay": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.rollback": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.open": JsonValue;
+    readonly "session.fork": JsonValue;
+    readonly "session.continue_with_replay": JsonValue;
+    readonly "session.rollback": JsonValue;
     readonly "session.checkpoint_code_rollback": {
         status: 'conversation_only' | 'unavailable' | 'applied' | 'conflict' | 'aborted';
         changedPaths: readonly string[];
@@ -2594,9 +2586,7 @@ export type SessionLifecycleActionResultById = {
             message: string;
         } | undefined;
     };
-    readonly "session.handoff.status.get": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "session.handoff.status.get": JsonValue;
     readonly "workspace.sync.conflict.resolve": {
         endpoints: readonly ({
             workspaceRefId: string;
@@ -2826,12 +2816,8 @@ export type SessionLifecycleActionResultById = {
         };
         discoveryAvailable: boolean;
     };
-    readonly "workspace.sync.conflicts.list": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "workspace.sync.conflict.inspect": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "workspace.sync.conflicts.list": JsonValue;
+    readonly "workspace.sync.conflict.inspect": JsonValue;
     readonly "session.spawn_new": {
         type: 'error';
         code: 'cancelled' | 'invalid_request' | 'invalid_input' | 'target_required' | 'target_unavailable' | 'machine_offline' | 'incompatible_target' | 'organization_unavailable' | 'organization_invalid' | 'creation_conflict' | 'permission_denied' | 'session_access_request_failed' | 'session_data_key_unavailable' | 'spawn_failed' | 'agent_cli_missing' | 'agent_signed_out' | 'session_access_forbidden' | 'session_access_session_not_found' | 'session_access_subject_not_found' | 'session_access_subject_ineligible' | 'session_access_owner_grant_invalid' | 'session_access_self_grant_invalid' | 'session_access_permission_delegation_forbidden' | 'session_access_permission_delegation_requires_edit' | 'session_access_team_policy_required' | 'session_initial_access_creator_mismatch' | 'session_access_authentication_required' | 'session_access_authentication_unavailable' | 'session_access_external_sharing_requires_team_admin' | 'session_access_external_sharing_disabled' | 'session_access_sharing_unavailable' | 'session_access_invalid_recipient_envelope' | 'session_responsibility_assignee_unavailable' | 'invalid_cursor' | 'data_key_not_required' | 'recipient_envelope_required' | 'recipient_key_unavailable';

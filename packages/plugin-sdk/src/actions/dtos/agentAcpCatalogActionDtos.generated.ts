@@ -109,6 +109,12 @@ export type AgentAcpCatalogActionInputById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     importedAt: number;
                 };
@@ -128,6 +134,12 @@ export type AgentAcpCatalogActionInputById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | undefined;
                 } | undefined;
             } | undefined;
@@ -335,6 +347,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     importedAt: number;
                 };
@@ -354,6 +372,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | undefined;
                 } | undefined;
             } | undefined;
@@ -526,6 +550,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     importedAt: number;
                 };
@@ -545,6 +575,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | undefined;
                 } | undefined;
             } | undefined;
@@ -714,6 +750,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     importedAt: number;
                 };
@@ -733,6 +775,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | undefined;
                 } | undefined;
             } | undefined;
@@ -908,6 +956,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     };
                     importedAt: number;
                 };
@@ -927,6 +981,12 @@ export type AgentAcpCatalogActionResultById = {
                     } | {
                         kind: 'version';
                         version: string;
+                    } | {
+                        kind: 'wellKnown';
+                        indexUrl: string;
+                        name: string;
+                        digest: string;
+                        publishedDigest?: string | undefined;
                     } | undefined;
                 } | undefined;
             } | undefined;

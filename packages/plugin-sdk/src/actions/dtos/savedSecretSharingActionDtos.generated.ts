@@ -4,9 +4,7 @@
 import type { ProviderCatalogParserV1 } from './pluginActionDtoSupport.generated.js';
 
 export type SavedSecretSharingActionInputById = {
-    readonly "secrets.shared.list": {
-        [x: string]: never;
-    };
+    readonly "secrets.shared.list": Record<string, never>;
     readonly "secrets.shared.create": {
         resourceId: string;
         displayName: string;
@@ -447,6 +445,12 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         kind: 'version';
                                         version: string;
+                                    } | {
+                                        kind: 'wellKnown';
+                                        indexUrl: string;
+                                        name: string;
+                                        digest: string;
+                                        publishedDigest?: string | undefined;
                                     };
                                     importedAt: number;
                                 };
@@ -461,6 +465,12 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         kind: 'version';
                                         version: string;
+                                    } | {
+                                        kind: 'wellKnown';
+                                        indexUrl: string;
+                                        name: string;
+                                        digest: string;
+                                        publishedDigest?: string | undefined;
                                     } | undefined;
                                 } | undefined;
                             } | {
@@ -631,6 +641,12 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         kind: 'version';
                                         version: string;
+                                    } | {
+                                        kind: 'wellKnown';
+                                        indexUrl: string;
+                                        name: string;
+                                        digest: string;
+                                        publishedDigest?: string | undefined;
                                     };
                                     importedAt: number;
                                 };
@@ -650,6 +666,12 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         kind: 'version';
                                         version: string;
+                                    } | {
+                                        kind: 'wellKnown';
+                                        indexUrl: string;
+                                        name: string;
+                                        digest: string;
+                                        publishedDigest?: string | undefined;
                                     } | undefined;
                                 } | undefined;
                             } | undefined;

@@ -328,7 +328,5 @@ export type MachineGuardActionResultById = {
         };
         asOf: number;
     };
-    readonly "machines.guard.activity.undo": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "machines.guard.activity.undo": JsonValue;
 };
