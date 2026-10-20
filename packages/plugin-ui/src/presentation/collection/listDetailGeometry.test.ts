@@ -10,6 +10,12 @@ const readingMeasures = {
 };
 
 describe('list/detail readable geometry', () => {
+  it('clamps a remembered pixel width without changing the stacking threshold', () => {
+    expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 1012, listWidthPx: 350 })).toEqual({ mode: 'split', listRatio: 0.35, detailWidthPx: 650 });
+    expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 1012, listWidthPx: 50 })).toEqual({ mode: 'split', listRatio: 0.3, detailWidthPx: 700 });
+    expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 1012, listWidthPx: 900 })).toEqual({ mode: 'split', listRatio: 0.6, detailWidthPx: 400 });
+    expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 711, listWidthPx: 350 })).toEqual({ mode: 'stacked' });
+  });
   it('includes the gutter when deciding whether the panes fit', () => {
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 711 })).toEqual({ mode: 'stacked' });
     expect(resolveHappierListDetailGeometry({ ...readingMeasures, availableWidth: 712 })).toEqual({

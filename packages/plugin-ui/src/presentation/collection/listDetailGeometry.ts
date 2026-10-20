@@ -9,6 +9,8 @@ export function resolveHappierListDetailGeometry(input: Readonly<{
   minListWidth: number;
   minDetailWidth: number;
   preferredListRatio: number;
+  /** Remembered device-local width; the pane minima still decide whether the split fits. */
+  listWidthPx?: number;
   gap: number;
 }>): HappierListDetailLayoutState {
   const paneWidth = input.availableWidth - input.gap;
@@ -18,7 +20,7 @@ export function resolveHappierListDetailGeometry(input: Readonly<{
   }
 
   const listWidth = Math.min(
-    Math.max(input.preferredListRatio * paneWidth, input.minListWidth),
+    Math.max(input.listWidthPx ?? input.preferredListRatio * paneWidth, input.minListWidth),
     paneWidth - input.minDetailWidth,
   );
   return { mode: 'split', listRatio: listWidth / paneWidth, detailWidthPx: paneWidth - listWidth };

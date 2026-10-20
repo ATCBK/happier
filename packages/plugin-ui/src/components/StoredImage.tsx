@@ -10,11 +10,15 @@ export type StoredImageProps = Readonly<{
   /** File-backed native Session-image reference, admitted under declared Sessions READ scope. */
   image: StoredImageRefV1;
   accessibilityLabel: string;
+  /** Opens the host's shared stage when available. Defaults to true. */
+  expandable?: boolean;
+  /** Used when expansion is disabled or this host has no Media stage. */
+  onPress?: () => void;
   testID?: string;
 }>;
 
 /** Read a native Session image under the plugin's declared Sessions READ scope. */
-export function StoredImage({ image, accessibilityLabel, testID }: StoredImageProps): ReactElement {
+export function StoredImage({ image, accessibilityLabel, testID, expandable = true, onPress }: StoredImageProps): ReactElement {
   const hostApi = usePluginHostApi();
   const presentationHost = useOptionalPluginUiPresentationHost();
   const theme = usePluginTheme();
@@ -39,9 +43,15 @@ export function StoredImage({ image, accessibilityLabel, testID }: StoredImagePr
     return () => controller.abort();
   }, [hostApi, identity, mediaId, width, height, sizeBytes, sessionId, storage, path, sha256, mimeType]);
   const current: typeof preview = preview.identity === identity ? preview : { identity, status: 'loading' };
+  const stage = presentationHost?.mediaStage;
+  const uri = current.uri;
+  const activate = expandable && stage && current.status === 'loaded' && uri
+    ? () => stage.open([{ kind: 'image', uri, title: accessibilityLabel }], 0)
+    : onPress;
   return <HappierStoredImage identity={identity} status={current.status} uri={current.uri}
     dimensions={current.image} accessibilityLabel={accessibilityLabel} testID={testID}
     borderColor={theme.colors.border} backgroundColor={theme.colors.control}
     host={presentationHost?.storedImageHost}
+    onPress={activate}
     placeholder={<Icon name={current.status === 'error' ? 'warning' : 'preview'} />} />;
 }
