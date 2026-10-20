@@ -127,7 +127,6 @@ function requireTarget(targets, rawName, command) {
 function formatSyncStatus(target, status) {
   const detail = status.lastError || status.error;
   return `[dev-targets] ${target.name}\t${status.state}${detail ? `\t${detail}` : ''}`
-    + (status.warnings?.length ? `\t${status.warnings.join('; ')}` : '')
     + (status.recovery === 'rescan' ? '\twill rescan at the next dispatch barrier' : '');
 }
 

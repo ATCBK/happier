@@ -146,17 +146,18 @@ unconfirmed with a target-specific warning; cleanup does not execute stale helpe
 code from that mirror. A reachable helper failure still prevents stop finalization,
 and both JSON and console output retain its sanitized cause.
 
-In 0.3 development source, scan or transition problems on `.project/` data and
-capture files are named warnings only when the local source path is a regular,
-non-symlink file and its extension is `.json`, `.md`, `.txt`,
-`.csv`, `.html`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.webp` or `.gif`. These files may
-be stale on the mirror. Other extensions (including script and configuration
-extensions), extensionless paths and paths outside `.project/` remain blocking,
-including a list that mixes captures with command inputs. Directories, symlinks,
-missing files and paths whose local file type cannot be established stay blocking.
-Excluded or malformed problem evidence, conflicts, disconnected endpoints and
-incomplete synchronization cycles also remain blocking. Status and dispatch use
-the same policy; no ignore-list change or session recreation is needed.
+Scan and transition problems block remote dispatch, including `.project/` data
+and captures. Refusals name the problem paths. Known transient races use the
+existing fresh-scan recovery and require a clean result before dispatch; file
+extensions and local file types cannot establish what a failed transition left
+on the mirror. Excluded or malformed problem evidence, conflicts, disconnected
+endpoints and incomplete synchronization cycles also remain blocking.
+
+Write live or repeatedly rewritten captures to `.project/tmp/**`, a scratch
+directory, or a Mutagen-ignored suffix under `plans/` (for example `.ndjson`,
+`.jsonl`, `.png`, `.webm`, `.log`, `.trace` or `.har`). The existing ignore policy
+also excludes `browser-diagnostics.json` under `plans/`. Status and dispatch
+share one readiness policy.
 
 Use `local` placement for services on the controller. A separate mirror on the
 same host must remain outside the authoritative checkout: the synchronization

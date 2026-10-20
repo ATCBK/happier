@@ -38,7 +38,6 @@ async function defaultStopProcess(child, signal) {
 }
 
 function assertReadySyncStatus(status, { allowSynchronizing = false, allowRescan = false, allowNeedsFlush = false } = {}) {
-  for (const warning of status.warnings ?? []) console.error(`[dev-targets] ${status.sessionName} synchronization warning: ${warning}`);
   if (status.state === 'ready' || (allowSynchronizing && status.state === 'synchronizing')) return;
   if (allowNeedsFlush && status.state === 'needs-flush') return;
   if (allowRescan && status.recovery === 'rescan') return;

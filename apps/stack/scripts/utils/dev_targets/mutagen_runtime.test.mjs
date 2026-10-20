@@ -258,68 +258,38 @@ test('Mutagen list parsing rejects nonterminal scan and transition problems incl
   assert.equal(excludedAlone.recovery, undefined);
 });
 
-test('Mutagen evidence problems warn only for approved project data paths', async t => {
-  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-data-' });
-  await mkdir(join(root, '.project/plans/qa/lanes/live'), { recursive: true });
-  await writeFile(join(root, '.project/plans/qa/lanes/live/browser-diagnostics.json'), '{}');
-  const base = {
-    name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 7,
-    alpha: { connected: true, scanned: true, path: root }, beta: { connected: true, scanned: true },
-  };
-  const inspect = (problems, extra = {}, kind = 'transitionProblems') => parseMutagenSyncList(JSON.stringify([{
-    ...base, ...extra, beta: { ...base.beta, [kind]: problems, ...extra.beta },
-  }]), base.name);
-  const capture = { path: '.project/plans/qa/lanes/live/browser-diagnostics.json', error: 'apply failed' };
-  for (const kind of ['scanProblems', 'transitionProblems']) {
-    for (const extension of ['json', 'md', 'txt', 'csv', 'html', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'gif']) {
-      const problem = { ...capture, path: `.project/plans/qa/capture.${extension}` };
-      await writeFile(join(root, problem.path), 'capture');
-      const result = inspect([problem], {}, kind);
-      assert.equal(result.state, 'ready', problem.path);
-      assert.ok(result.warnings.some(warning => warning.includes(problem.path)), problem.path);
-    }
-    for (const path of ['apps/stack/config.json',
-      ...['mjs', 'mts', 'cjs', 'js', 'ts', 'tsx', 'sh', 'ps1', 'yaml', 'yml', 'toml'].map(extension => `.project/input.${extension}`),
-      '.project/script', '.project/../source.json', '.project//capture.json', '.project/capture.json/child',
-      '.project/a|b.json', '.project/a\nb.json', '', null]) {
-      const problem = { ...capture, path };
-      for (const problems of [[problem], [capture, problem]]) {
-        assert.equal(inspect(problems, {}, kind).state, 'unhealthy', JSON.stringify(problems));
-      }
-    }
-    assert.equal(inspect([capture, { path: capture.path }], {}, kind).state, 'unhealthy');
-  }
-  assert.equal(inspect([capture], { beta: { excludedTransitionProblems: 1 } }).state, 'unhealthy');
-  assert.equal(inspect([capture], { conflicts: [{ root: '.project/data.json' }] }).state, 'unhealthy');
-  assert.equal(inspect([capture], { beta: { connected: false } }).state, 'unhealthy');
-  assert.equal(inspect([capture], { successfulCycles: 0 }).state, 'synchronizing');
-});
-
-test('Mutagen capture warnings require a proven regular non-symlink source file', async t => {
+test('Mutagen project scan and transition problems block and name changing data and stale executable paths', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-sync-file-kind-' });
+  await mkdir(join(root, '.project/plans/qa'), { recursive: true });
+  await writeFile(join(root, '.project/plans/qa/x.json'), '{"revision":1}');
+  await writeFile(join(root, '.project/plans/qa/x.json'), '{"revision":2}');
   await mkdir(join(root, '.project/directory.json'), { recursive: true });
   await writeFile(join(root, '.project/directory.json/index.js'), 'console.log("command")');
   await writeFile(join(root, '.project/command.mjs'), 'console.log("command")');
   await symlink('command.mjs', join(root, '.project/link.json'));
   await writeFile(join(root, '.project/capture.json'), '{}');
+  await mkdir(join(root, 'mirror/.project'), { recursive: true });
+  await writeFile(join(root, 'mirror/.project/command.mjs'), 'console.log("stale command")');
+  await symlink('command.mjs', join(root, 'mirror/.project/capture.json'));
+  await mkdir(join(root, 'commands'));
+  await writeFile(join(root, 'commands/direct.json'), 'console.log("command through parent")');
+  await symlink('../commands', join(root, '.project/parent'));
   const session = {
     name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 7,
-    alpha: { connected: true, scanned: true, path: root }, beta: { connected: true, scanned: true },
+    alpha: { connected: true, scanned: true, path: root },
+    beta: { connected: true, scanned: true, path: join(root, 'mirror') },
   };
   for (const kind of ['scanProblems', 'transitionProblems']) {
-    for (const path of ['.project/link.json', '.project/directory.json', '.project/missing.json']) {
+    for (const path of ['.project/plans/qa/x.json', '.project/link.json', '.project/capture.json',
+      '.project/parent/direct.json', '.project/directory.json', '.project/missing.json']) {
+      const error = kind === 'transitionProblems'
+        ? 'unable to validate existing file: modification detected' : 'hashed size mismatch: 847308 != 28672';
       const result = parseMutagenSyncList(JSON.stringify([{ ...session,
-        beta: { ...session.beta, [kind]: [{ path, error: 'apply failed' }] },
+        beta: { ...session.beta, [kind]: [{ path, error }] },
       }]), session.name);
       assert.equal(result.state, 'unhealthy', `${kind}: ${path}`);
-      assert.deepEqual(result.warnings, [], path);
-    }
-    for (const source of [undefined, '', 'relative-root']) {
-      const result = parseMutagenSyncList(JSON.stringify([{ ...session,
-        alpha: { ...session.alpha, path: source },
-        beta: { ...session.beta, [kind]: [{ path: '.project/capture.json', error: 'apply failed' }] },
-      }]), session.name);
-      assert.equal(result.state, 'unhealthy', `unproven source: ${source}`);
+      assert.ok(result.lastError.includes(path), result.lastError);
+      assert.equal(result.recovery, 'rescan', 'existing race recovery must still require a fresh clean scan');
     }
   }
 });

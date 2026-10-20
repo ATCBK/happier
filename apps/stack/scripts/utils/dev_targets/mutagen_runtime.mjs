@@ -1,5 +1,5 @@
-import { existsSync, lstatSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { DEV_TARGET_DISPOSABLE_REPLICA_ARTIFACT_ROOTS, DEV_TARGET_SYNC_EXECUTOR_REPO, isExecutionHostCandidateSyncOwner, resolveMutagenRepositoryKey } from './mutagen_project.mjs';
 import { resolveRepoStackIdentity, resolveStacksStorageRoot } from '../stack/repo_stack_identity.mjs';
@@ -36,28 +36,6 @@ const transientTransitionError = new RegExp(TRANSIENT_TRANSITION_ERRORS.join('|'
 const TRANSIENT_SCAN_ERRORS = ['^hashed size mismatch: [0-9]+ != [0-9]+$'];
 const transientScanError = new RegExp(TRANSIENT_SCAN_ERRORS.join('|'), 'i');
 
-// Dev-target policy permits stale regular, non-symlink project data/captures.
-// An allowed suffix alone cannot prove that a path is data (e.g. a command link).
-const PROJECT_DATA_PROBLEM_PATH = '^\\.project/([^/]+/)*[^/]+\\.(json|md|txt|csv|html|svg|png|jpg|jpeg|webp|gif)$';
-const invalidProblemSegments = /(^|\/)([.]|[.][.]|)(\/|$)/;
-const projectDataProblemPath = new RegExp(PROJECT_DATA_PROBLEM_PATH);
-
-function isProjectDataProblem(problem, sourceDir) {
-  if (!(typeof problem?.path === 'string'
-    && typeof problem?.error === 'string'
-    && problem.error.length > 0
-    && !/[\x00-\x1f\x7f\\|]/.test(problem.path)
-    && !/[\x00-\x1f\x7f|]/.test(problem.error)
-    && !invalidProblemSegments.test(problem.path)
-    && projectDataProblemPath.test(problem.path)
-    && typeof sourceDir === 'string' && isAbsolute(sourceDir))) return false;
-  try {
-    return lstatSync(join(sourceDir, problem.path)).isFile();
-  } catch {
-    return false;
-  }
-}
-
 export function classifyCleanMutagenReadiness(facts) {
   return SYNC_READINESS_RULES.find(({ when }) => (
     Object.entries(when).every(([fact, value]) => facts[fact] === value)
@@ -79,14 +57,6 @@ export function renderNativeSyncReadinessPolicy() {
     'classify_transient_mutagen_transition_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_TRANSITION_ERRORS.join('|')}' >/dev/null`,
     '  case "$?" in 1) return 0 ;; *) return 1 ;; esac',
-    '}',
-    'is_mutagen_project_data_path() {',
-    "  case \"$1\" in *'|'*|*'\\'*) return 1 ;; esac",
-    "  if printf '%s\\n' \"$1\" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then return 1; fi",
-    `  if printf '%s\\n' "$1" | grep -Eq '${invalidProblemSegments.source}'; then return 1; fi`,
-    `  printf '%s\\n' "$1" | grep -Eq '${PROJECT_DATA_PROBLEM_PATH}' || return 1`,
-    '  case "$2" in /*) ;; *) return 1 ;; esac',
-    '  [ -f "$2/$1" ] && [ ! -L "$2/$1" ]',
     '}',
     'classify_transient_mutagen_scan_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_SCAN_ERRORS.join('|')}' >/dev/null`,
@@ -264,7 +234,6 @@ export function parseMutagenSyncList(raw, sessionName) {
   }
   const scanDetails = [];
   const transitionDetails = [];
-  const warnings = [];
   let transientTransitions = true;
   let transientScans = true;
   for (const [endpointName, endpoint] of [['alpha', alpha], ['beta', beta]]) {
@@ -289,20 +258,16 @@ export function parseMutagenSyncList(raw, sessionName) {
         session,
       };
     }
-    const blockingProblems = (problems, kind) => problems.filter(problem => {
-      if (!isProjectDataProblem(problem, alpha.path)) return true;
-      warnings.push(`${endpointName} ${kind} warning: ${problem.path}: ${problem.error}`);
-      return false;
-    });
-    const scanProblems = blockingProblems(rawScanProblems, 'scan');
-    const transitionProblems = blockingProblems(rawTransitionProblems, 'transition');
+    const scanProblems = rawScanProblems;
+    const transitionProblems = rawTransitionProblems;
     const hasExcludedScan = excludedScan > 0;
     const hasExcludedTransition = excludedTransition > 0;
     if (transitionProblems.length > 0 || hasExcludedTransition) {
       const parts = [];
       if (scanProblems.length > 0 || hasExcludedScan) parts.push(`${scanProblems.length + (hasExcludedScan ? excludedScan : 0)} scan problems`);
       if (transitionProblems.length > 0 || hasExcludedTransition) parts.push(`${transitionProblems.length + (hasExcludedTransition ? excludedTransition : 0)} transition problems`);
-      transitionDetails.push(`${endpointName} has ${parts.join(' and ')}`);
+      const detail = transitionProblems.map(problem => `${String(problem?.path ?? '')}: ${String(problem?.error ?? '')}`).join('; ');
+      transitionDetails.push(`${endpointName} has ${parts.join(' and ')}${detail ? ` (${detail})` : ''}`);
       transientTransitions &&= !hasExcludedTransition && transitionProblems.every(problem => (
         typeof problem?.error === 'string' && transientTransitionError.test(problem.error)
       ));
@@ -328,15 +293,15 @@ export function parseMutagenSyncList(raw, sessionName) {
   });
   if (transitionDetails.length) {
     return { state: 'unhealthy', sessionName: expectedName, lastError: transitionDetails.join('; '),
-      ...(transientTransitions && readiness === 'rescan' ? { recovery: 'rescan' } : {}), warnings, session };
+      ...(transientTransitions && readiness === 'rescan' ? { recovery: 'rescan' } : {}), session };
   }
   if (scanDetails.length) {
     return {
       state: 'unhealthy', sessionName: expectedName, lastError: scanDetails.join('; '),
-      ...(readiness === 'rescan' ? { recovery: 'rescan' } : {}), warnings, session,
+      ...(readiness === 'rescan' ? { recovery: 'rescan' } : {}), session,
     };
   }
-  return { state: readiness, sessionName: expectedName, warnings, session };
+  return { state: readiness, sessionName: expectedName, session };
 }
 
 function isSafeRelativeConflictRoot(value) {

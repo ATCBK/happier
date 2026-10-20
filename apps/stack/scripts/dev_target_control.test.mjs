@@ -196,7 +196,7 @@ test('the causal barrier retries known transient transition problems once and re
   assert.equal(await readFile(marker, 'utf8'), 'cyclecycle', 'a race during the admitted flush gets one fresh cycle');
 });
 
-test('native barrier admits project capture warnings but rejects command inputs and mixed problems', {
+test('native barrier blocks and names project data, stale mirror links and symlinked parents', {
   skip: process.platform === 'win32',
 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-sync-evidence-'));
@@ -208,33 +208,42 @@ test('native barrier admits project capture warnings but rejects command inputs 
     '[ "$2" != list ] && exit 0',
     'scan=0; transition=1',
     '[ "$PROBLEM_KIND" != scan ] || { scan=1; transition=0; }',
-    'printf "%s|Watching|false|true|1|%s/0|0/0|true|1|%s/0|%s/%s|active|%s|ok|%s|0|||%s\\n" "$3" "$SCAN_COUNT" "$scan" "$transition" "$EXCLUDED" "$CYCLES" "$CONFLICTS" "$SOURCE_ROOT"',
-    'case "$5" in *".Path"*) printf "%s|apply failed\\n" "$PROBLEM_PATH" ;; *) printf "apply failed\\n" ;; esac',
+    'printf "%s|Watching|false|true|1|%s/0|0/0|true|1|%s/0|%s/%s|active|%s|ok|%s|0||\\n" "$3" "$SCAN_COUNT" "$scan" "$transition" "$EXCLUDED" "$CYCLES" "$CONFLICTS"',
+    'case "$5" in *".Path"*) printf "%s|%s\\n" "$PROBLEM_PATH" "$PROBLEM_ERROR" ;; *) printf "%s\\n" "$PROBLEM_ERROR" ;; esac',
     '[ "$SCAN_COUNT" = 0 ] || printf "source.ts|unreadable\\n"',
   ].join('\n'));
-  const capture = '.project/plans/qa/lanes/live/browser-diagnostics.json';
+  const capture = '.project/plans/qa/x.json';
   await mkdir(join(root, dirname(capture)), { recursive: true });
-  await writeFile(join(root, capture), '{}');
+  await writeFile(join(root, capture), '{"revision":1}');
+  await writeFile(join(root, capture), '{"revision":2}');
   await writeFile(join(root, '.project/command.mjs'), 'console.log("command")');
   await symlink('command.mjs', join(root, '.project/link.json'));
   await mkdir(join(root, '.project/directory.json'));
   await writeFile(join(root, '.project/directory.json/index.js'), 'console.log("command")');
+  await writeFile(join(root, '.project/capture.json'), '{}');
+  await mkdir(join(root, 'mirror/.project'), { recursive: true });
+  await writeFile(join(root, 'mirror/.project/command.mjs'), 'console.log("stale command")');
+  await symlink('command.mjs', join(root, 'mirror/.project/capture.json'));
+  await mkdir(join(root, 'commands'));
+  await writeFile(join(root, 'commands/direct.json'), 'console.log("command through parent")');
+  await symlink('../commands', join(root, '.project/parent'));
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
     MUTAGEN_DATA_DIRECTORY: join(root, 'mutagen', 'data'), DBUS_SESSION_BUS_ADDRESS: '',
-    SCAN_COUNT: '0', EXCLUDED: '0', CYCLES: '7', CONFLICTS: '0', PROBLEM_PATH: capture, SOURCE_ROOT: root };
+    SCAN_COUNT: '0', EXCLUDED: '0', CYCLES: '7', CONFLICTS: '0', PROBLEM_PATH: capture,
+    PROBLEM_ERROR: 'apply failed' };
   const run = extra => spawnSync(controlExecutable, ['--sync-check', 'happier-linux'], {
     env: { ...env, ...extra }, encoding: 'utf8',
   });
   for (const PROBLEM_KIND of ['scan', 'transition']) {
-    const result = run({ PROBLEM_KIND });
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stderr.includes(capture), result.stderr);
-    for (const PROBLEM_PATH of ['.project/link.json', '.project/directory.json', '.project/missing.json']) {
-      const blocked = run({ PROBLEM_KIND, PROBLEM_PATH });
-      assert.notEqual(blocked.status, 0, `${PROBLEM_KIND}: ${PROBLEM_PATH}`);
-      assert.doesNotMatch(blocked.stderr, /synchronization warning:/);
+    for (const PROBLEM_ERROR of ['apply failed', PROBLEM_KIND === 'scan'
+      ? 'hashed size mismatch: 847308 != 28672' : 'unable to validate existing file: modification detected']) {
+      for (const PROBLEM_PATH of [capture, '.project/link.json', '.project/capture.json',
+        '.project/parent/direct.json', '.project/directory.json', '.project/missing.json']) {
+        const blocked = run({ PROBLEM_KIND, PROBLEM_PATH, PROBLEM_ERROR });
+        assert.notEqual(blocked.status, 0, `${PROBLEM_KIND}: ${PROBLEM_PATH}`);
+        assert.ok(blocked.stderr.includes(PROBLEM_PATH), blocked.stderr);
+      }
     }
-    assert.notEqual(run({ PROBLEM_KIND, SOURCE_ROOT: '' }).status, 0, 'missing local source evidence');
   }
   for (const extra of [{ PROBLEM_PATH: '.project/helper.mjs' }, { PROBLEM_PATH: 'source.json' },
     { SCAN_COUNT: '1' }, { EXCLUDED: '1' }, { CYCLES: '0' }, { CONFLICTS: '1' },
