@@ -41,6 +41,12 @@ including destination-owned details not represented in the reducer. A narrow sin
 keeps its usable main surface. The hidden main remains mounted through `RetainedPanelSurface`;
 composer drafts, editor state, scroll and embedded browser identity survive hide/show.
 
+`AgentInput` owns the shared composer-focus request used by keyboard commands, registered composer
+targets and review handoffs. A request reveals hidden main through these published controls, then
+focuses the retained field after the visible layout commits. An unpresented composer refuses the
+request. Review handoffs separately close panes and select mobile Chat without sending or clearing
+the review tabs; they do not own another visibility setter.
+
 The visible main header owns the hide button. Once hidden, a restore chip in the neighbouring
 column retains the destination's identity and current lifecycle presentation. The old route-bound
 pane focus mode and its details-header controls are retired. Protocol presentation vocabulary stays
