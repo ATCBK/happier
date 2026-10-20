@@ -217,6 +217,21 @@ describe('actionToolExposure', () => {
     expect(isActionDiscoverableOnToolSurface(spec, 'mcp')).toBe(true);
   });
 
+  it('directly exposes the primary Discussion reply while retaining explicit exposure and disable policy', () => {
+    const spec = getActionSpec('discussion.reply');
+    expect(isActionDirectToolExposedOn(spec, 'agent')).toBe(true);
+    expect(isActionDirectToolExposedOn(spec, 'mcp')).toBe(true);
+    const discoverable = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'discussion.reply': { toolExposureModes: { agent: 'discoverable_only' } },
+    } });
+    expect(isActionDirectToolExposedOn(spec, 'agent', { settings: discoverable })).toBe(false);
+    expect(isActionDiscoverableOnToolSurface(spec, 'agent', { settings: discoverable })).toBe(true);
+    const disabled = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'discussion.reply': { enabled: false },
+    } });
+    expect(isActionDiscoverableOnToolSurface(spec, 'agent', { settings: disabled })).toBe(false);
+  });
+
   it('directly exposes the Session Board Action family to Agents and MCP', () => {
     for (const id of [
       'session.board.get',
