@@ -31,7 +31,7 @@ import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScro
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import { PIERRE_FIND_HIGHLIGHT_CSS, pierreCodeLineSelector, registerPierreFindHighlights } from './pierreFindHighlights.web';
 import { bindPierreIntelligence, PIERRE_DIAGNOSTIC_HIGHLIGHT_NAMES } from './pierreIntelligence.web';
-import { formatCodeEditorDiagnosticCss } from '@/components/ui/code/editor/editorTheme';
+import { formatCodeEditorDiagnosticCss, resolveCodeSelectionColor } from '@/components/ui/code/editor/editorTheme';
 import { HappierUnifiedDiffViewer } from '../happier/HappierUnifiedDiffViewer';
 import { HappierTextDiffViewer } from '../happier/HappierTextDiffViewer';
 import { HAPPIER_UI_FONT_SCALE_CSS_VAR } from '@/components/ui/text/webUnistylesFontOverrides';
@@ -892,9 +892,12 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         }, (severity) => `::highlight(${PIERRE_DIAGNOSTIC_HIGHLIGHT_NAMES[severity]})`)
         : '', [props.intelligence !== undefined, theme.colors.state.danger.foreground, theme.colors.state.warning.foreground]);
 
+    // A text selection in the diff takes the editors' selection wash (ade-shell ask A1), not the browser's highlight.
+    const textSelectionUnsafeCSS = `::selection { background-color: ${resolveCodeSelectionColor(theme.colors.accent.blue)}; }`;
+
     const composedUnsafeCSS = React.useMemo(() => {
-        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, diagnosticUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
-    }, [diagnosticUnsafeCSS, highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
+        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, textSelectionUnsafeCSS, diagnosticUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
+    }, [textSelectionUnsafeCSS, diagnosticUnsafeCSS, highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
 
     const options = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return {

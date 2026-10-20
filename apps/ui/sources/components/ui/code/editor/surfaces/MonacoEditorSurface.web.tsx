@@ -240,12 +240,10 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const canvas = props.presentation === 'canvas';
     // A canvas editor sits on the page's own surface (the page's colour), a framed one on the inset well.
     const backgroundColor = useGlassSurfaceColor(canvas ? theme.colors.surface.base : theme.colors.surface.inset, 'content');
-    const selectionColor = useGlassSurfaceColor(theme.colors.accent.blue, 'content', false);
     const editorTheme = React.useMemo(
-        () => resolveCodeEditorTheme(theme, { backgroundColor, selectionColor }),
+        () => resolveCodeEditorTheme(theme, { backgroundColor }),
         [
             backgroundColor,
-            selectionColor,
             theme.dark,
             theme.colors.accent.blue,
             theme.colors.border.default,

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
 import { FlatList, Platform, View } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 
@@ -17,6 +18,8 @@ import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 import { readCodeTextPointer } from '../interactions/codeTextDom';
+import { resolveCodeSelectionColor } from '../editor/editorTheme';
+import { useCodeTextSelectionPaint } from './useCodeTextSelectionPaint';
 
 export type CodeLinesExternalScrollView = Readonly<{
     scrollRef: React.RefObject<{ scrollTo: (options: { y: number; animated: boolean }) => void } | null>;
@@ -61,6 +64,8 @@ export type CodeLinesViewProps = {
     showInactiveCommentAffordance?: boolean;
     contentPaddingHorizontal?: number;
     contentPaddingVertical?: number;
+    /** Extra room under the last line (a phone sheet over the code), so any line can scroll above it. */
+    contentPaddingBottom?: number;
     wrapLines?: boolean;
     virtualized?: boolean;
     showLineNumbers?: boolean;
@@ -150,6 +155,8 @@ export function CodeLinesViewCore(
         advancedTokensRevision?: number;
     }>
 ) {
+    const { theme } = useUnistyles();
+    useCodeTextSelectionPaint(resolveCodeSelectionColor(theme.colors.accent.blue));
     const lineRefs = React.useRef(new Map<string, View>());
     const externalRowLayouts = React.useRef(new Map<string, { y: number; height: number }>());
     const measureExternalRow = React.useCallback((id: string) => {
@@ -194,6 +201,7 @@ export function CodeLinesViewCore(
     const selected = props.selectedLineIds ?? EMPTY_LINE_ID_SET;
     const paddingHorizontal = props.contentPaddingHorizontal ?? 0;
     const paddingVertical = props.contentPaddingVertical ?? 0;
+    const paddingBottom = paddingVertical + (props.contentPaddingBottom ?? 0);
     const wrapLines = props.wrapLines ?? true;
     const virtualized = props.virtualized ?? true;
     const showLineNumbers = props.showLineNumbers ?? true;
@@ -428,8 +436,9 @@ export function CodeLinesViewCore(
 
     const contentContainerStyle = React.useMemo(() => ({
         paddingHorizontal,
-        paddingVertical,
-    }), [paddingHorizontal, paddingVertical]);
+        paddingTop: paddingVertical,
+        paddingBottom,
+    }), [paddingHorizontal, paddingVertical, paddingBottom]);
 
     const listFooterComponent = React.useMemo(() => <View style={LIST_FOOTER_STYLE} />, []);
 
@@ -474,7 +483,12 @@ export function CodeLinesViewCore(
             if (!el) return false;
             if (typeof el.scrollIntoView !== 'function') return false;
             try {
+                // A sheet over the bottom of the page (`contentPaddingBottom`) is not a place to land: the
+                // covered strip counts as the row's margin, so the row centres in the part still visible.
+                const covered = props.contentPaddingBottom ?? 0;
+                if (covered > 0) el.style.scrollMarginBottom = `${covered}px`;
                 el.scrollIntoView({ block: 'center' });
+                if (covered > 0) el.style.scrollMarginBottom = '';
                 return true;
             } catch {
                 return false;
@@ -695,7 +709,7 @@ export function CodeLinesViewCore(
 
     if (!virtualized) {
         return preserveReadingAnchor(
-            <View ref={contentRef} style={{ paddingHorizontal, paddingVertical }} {...intelligenceEvents}>
+            <View ref={contentRef} style={{ paddingHorizontal, paddingTop: paddingVertical, paddingBottom }} {...intelligenceEvents}>
                 {props.lines.map((line, index) => (
                     <React.Fragment key={line.id}>
                         {renderLine(line, index)}

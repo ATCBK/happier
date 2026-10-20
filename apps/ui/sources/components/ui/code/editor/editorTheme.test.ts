@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
-import { buildMonacoEditorThemeData, resolveCodeEditorTheme } from './editorTheme';
+import { buildMonacoEditorThemeData, resolveCodeEditorTheme, resolveCodeSelectionColor } from './editorTheme';
 
 const colors = {
     accent: { blue: '#0a84ff' },
@@ -21,5 +21,12 @@ describe('buildMonacoEditorThemeData', () => {
         expect(theme.colors['editorIndentGuide.background1']).toBe('#00000014');
         expect(theme.colors['editorLineNumber.foreground']).toBe('#3c3c4399');
         for (const value of Object.values(theme.colors)) expect(value).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/u);
+    });
+
+    it('paints the selection as a light wash of the focus blue, not the solid accent (ask A1)', () => {
+        const editorTheme = resolveCodeEditorTheme(createThemeFixture({ dark: false, colors }));
+
+        expect(editorTheme.selectionColor).toBe(resolveCodeSelectionColor('#0a84ff'));
+        expect(buildMonacoEditorThemeData(editorTheme).colors['editor.selectionBackground']).toBe('#0a84ff1f');
     });
 });

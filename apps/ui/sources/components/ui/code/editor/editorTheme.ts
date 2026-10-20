@@ -53,12 +53,19 @@ type CodeEditorThemeSource = Readonly<{
 
 /** Share of the focus blue in the current-line fill. */
 const ACTIVE_LINE_TINT = 0.07;
+/** Share of the focus blue in a selection: a light wash with ink text, never the browser's solid highlight (ade-shell ask A1). */
+const SELECTION_TINT = 0.12;
+
+/** The one code selection colour, shared by the read view, Monaco and CodeMirror. */
+export function resolveCodeSelectionColor(accentBlue: string): string {
+    return parseThemeColor(accentBlue)?.alpha(SELECTION_TINT).rgb().string() ?? accentBlue;
+}
 
 function withoutHash(value: string): string {
     return value.startsWith('#') ? value.slice(1) : value;
 }
 
-export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Partial<Pick<CodeEditorTheme, 'backgroundColor' | 'activeLineColor' | 'selectionColor'>> = {}): CodeEditorTheme {
+export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Partial<Pick<CodeEditorTheme, 'backgroundColor' | 'activeLineColor'>> = {}): CodeEditorTheme {
     const colors = theme.colors;
     return {
         monacoThemeName: theme.dark ? 'happier-editor-dark' : 'happier-editor-light',
@@ -69,7 +76,7 @@ export function resolveCodeEditorTheme(theme: CodeEditorThemeSource, paint: Part
         lineNumberColor: colors.text.tertiary,
         // The caret's line: a breath of the focus blue across numbers and text (files lab ED1, `.ln.cur`).
         activeLineColor: paint.activeLineColor ?? parseThemeColor(colors.accent.blue)?.alpha(ACTIVE_LINE_TINT).rgb().string() ?? colors.surface.elevated,
-        selectionColor: paint.selectionColor ?? colors.accent.blue,
+        selectionColor: resolveCodeSelectionColor(colors.accent.blue),
         findMatchColor: colors.find?.matchAll,
         findCurrentMatchColor: colors.find?.matchCurrent,
         findCurrentMatchForeground: colors.find?.matchCurrentForeground,
