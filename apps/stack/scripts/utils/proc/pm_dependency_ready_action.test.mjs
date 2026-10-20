@@ -5,6 +5,8 @@ import { delimiter, join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { ensureMinimalMonorepoLayout } from '../../testkit/core/minimal_monorepo_layout.mjs';
+import { withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
 import { ensureDepsInstalled } from './pm.mjs';
 
 async function writeYarnInstallStub(binDir) {
@@ -117,4 +119,51 @@ test('ensureDepsInstalled serializes dependency-ready actions inside the existin
     new Set(['cli']),
     'Stack-managed dependency refresh must not run shared-package or server build postinstalls',
   );
+});
+
+// A long-lived finite consumer (for example a source Web export) holds shared
+// read custody. Startup verifies a current tree and prepares first-party outputs
+// without mutating dependencies, so it must not queue as a writer behind it.
+for (const [mode, options, env] of [
+  ['refresh disabled by the caller', { refreshExisting: false }, {}],
+  ['refresh disabled by the environment', {}, { HAPPIER_STACK_SKIP_REFRESH_DEPS: '1' }],
+]) test(`ensureDepsInstalled admits a current tree under live read custody and waits for a stale one (${mode})`, { timeout: 15_000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-current-tree-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { uiDir } = await ensureMinimalMonorepoLayout(root);
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"private":true,"workspaces":["apps/*"]}\n'),
+    writeFile(join(root, 'yarn.lock'), '# fixture\n'),
+    writeFile(join(uiDir, 'package.json'), '{"name":"@happier-dev/app"}\n'),
+    mkdir(join(root, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web'), { recursive: true }),
+    writeYarnInstallStub(join(root, 'bin')),
+  ]);
+  await writeFile(join(root, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js'), 'export {};');
+  const baseEnv = {
+    ...process.env,
+    PATH: [join(root, 'bin'), String(process.env.PATH ?? '')].filter(Boolean).join(delimiter),
+    CI: '1',
+    HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'cache'),
+  };
+  delete baseEnv.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  // Publish the admission through the owner, then hold live read custody.
+  await withDependencyRefresh({ installDir: root, env: baseEnv }, async () => {});
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let entered;
+  const readerEntered = new Promise(resolve => { entered = resolve; });
+  const reader = withDependencyConsumption({ installDir: root, env: baseEnv, signal: t.signal }, async () => { entered(); await held; });
+  t.after(async () => { release(); await reader.catch(() => {}); });
+  await readerEntered;
+
+  const ensure = () => ensureDepsInstalled(uiDir, 'fixture', { quiet: true, env: { ...baseEnv, ...env }, ...options });
+  const settled = async (promise, ms) => await Promise.race([promise.then(() => 'done'), delay(ms).then(() => 'waiting')]);
+  assert.equal(await settled(ensure(), 5_000), 'done', 'a current tree must be verified without waiting for the reader');
+
+  await writeFile(join(root, 'yarn.lock'), '# changed\n');
+  const stale = ensure();
+  assert.equal(await settled(stale, 400), 'waiting', 'a stale tree still waits for live read custody');
+  release();
+  await Promise.all([reader, stale]);
 });
