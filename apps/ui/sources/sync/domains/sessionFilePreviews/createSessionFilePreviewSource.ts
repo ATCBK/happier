@@ -1,19 +1,13 @@
 import { Platform } from 'react-native';
-import { isSupportedVideoMimeType } from '@/scm/utils/filePresentation';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type { ComposerContentHandleV1, SessionAttachmentHandleV1 } from '@happier-dev/protocol';
-import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
-import {
-    downloadDaemonWorkspaceFileToDestination,
-    inspectComposerContent,
-    downloadDaemonSessionAttachmentToDestination,
-} from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { createNativeCacheFileSink, type NativeCacheFileSink } from '@/sync/runtime/files/nativeCacheFileSink';
+import type { NativeCacheFileSink } from '@/sync/runtime/files/nativeCacheFileSink';
 import { resolveWebFileBufferMaxBytes } from '@/sync/runtime/files/webFileBufferBudget';
 
 const PREVIEW_CACHE_DIRECTORY_NAME = 'happier-session-file-previews';
-const PREVIEW_TOO_LARGE_ERROR = 'File exceeds the preview size limit';
+export const PREVIEW_TOO_LARGE_ERROR = 'File exceeds the preview size limit';
 
 export type SessionFilePreviewSource =
     | Readonly<{
@@ -47,15 +41,6 @@ type PreviewByteLoader = (input: Readonly<{
     signal: AbortSignal | null;
 }>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: string }>>;
 
-function isSupportedPreviewMimeType(mimeType: string): boolean {
-    const normalized = mimeType.trim().toLowerCase();
-    return normalized === 'image/png'
-        || normalized === 'image/jpeg'
-        || normalized === 'image/webp'
-        || normalized === 'image/gif'
-        || isSupportedVideoMimeType(normalized);
-}
-
 async function createPreviewSource(input: Readonly<{
     filePath: string;
     mimeType: string;
@@ -64,8 +49,9 @@ async function createPreviewSource(input: Readonly<{
     signal?: AbortSignal | null;
     load: PreviewByteLoader;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
-    const mimeType = input.mimeType.trim();
-    if (!isSupportedPreviewMimeType(mimeType)) {
+    const viewer = resolveFileViewerKind({ path: input.filePath, mimeType: input.mimeType });
+    const mimeType = viewer.mimeType;
+    if (!viewer.previewable) {
         return { ok: false, error: 'Unsupported preview type' };
     }
 
@@ -125,6 +111,7 @@ async function createPreviewSource(input: Readonly<{
     };
 
     if (Platform.OS !== 'web') {
+        const { createNativeCacheFileSink } = await import('@/sync/runtime/files/nativeCacheFileSink');
         const sink = await createNativeCacheFileSink({
             directoryName: PREVIEW_CACHE_DIRECTORY_NAME,
             fileName: input.filePath.split(/[\\/]/).filter(Boolean).at(-1) ?? 'preview',
@@ -202,17 +189,11 @@ export async function createSessionFilePreviewSource(input: Readonly<{
     expectedSizeBytes?: number | null;
     signal?: AbortSignal | null;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
-    // Native workspace video uses transfer-owned admission; web previews also use the shared buffering budget.
-    // Image/attachment/staged consumers retain their own limits.
-    const maxBytes = input.maxBytes === null && isSupportedVideoMimeType(input.mimeType)
-        ? null
-        : typeof input.maxBytes === 'number' && Number.isFinite(input.maxBytes)
-            ? Math.max(0, Math.floor(input.maxBytes))
-            : 0;
+    // Callers own their preview budget; every source also shares the web buffering budget.
     return await createPreviewSource({
         ...input,
-        maxBytes,
         load: async ({ destination, signal, maxBytes }) => {
+            const { downloadDaemonWorkspaceFileToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime');
             const download = await downloadDaemonWorkspaceFileToDestination({
                 machineId: input.scope.machineId,
                 serverId: input.scope.serverId,
@@ -236,7 +217,7 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
     handle: SessionAttachmentHandleV1;
     fileName: string;
     mimeType: string;
-    maxBytes: number;
+    maxBytes: number | null;
     expectedSizeBytes?: number | null;
     signal?: AbortSignal | null;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
@@ -247,6 +228,7 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
         expectedSizeBytes: input.expectedSizeBytes,
         signal: input.signal,
         load: async ({ destination, signal, maxBytes }) => {
+            const { downloadDaemonSessionAttachmentToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime');
             const context = (await import('@/sync/sync')).sync.getSessionAttachmentTransferContext(input.handle.sessionId, { purpose: 'attachmentPreview' });
             if (!context) return { ok: false, error: 'Session attachment scope is unavailable' };
             const download = await downloadDaemonSessionAttachmentToDestination({
@@ -270,10 +252,10 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
  */
 export async function createComposerStagedMediaPreviewSource(input: Readonly<{
     handle: ComposerContentHandleV1;
-    maxBytes: number;
+    maxBytes: number | null;
     signal?: AbortSignal | null;
 }>): Promise<CreateSessionFilePreviewSourceResult> {
-    const requestedMaxBytes = Number.isFinite(input.maxBytes)
+    const requestedMaxBytes = input.maxBytes === null ? null : Number.isFinite(input.maxBytes)
         ? Math.max(0, Math.floor(input.maxBytes))
         : 0;
     // `inspectComposerContent` is the canonical protocol-owned upper bound;
@@ -286,6 +268,7 @@ export async function createComposerStagedMediaPreviewSource(input: Readonly<{
         expectedSizeBytes: input.handle.sizeBytes,
         signal: input.signal ?? null,
         load: async ({ destination, signal, maxBytes }) => {
+            const { inspectComposerContent } = await import('@/sync/domains/transfers/runtime/transferRuntime');
             const inspection = await inspectComposerContent(
                 input.handle,
                 {
@@ -299,11 +282,35 @@ export async function createComposerStagedMediaPreviewSource(input: Readonly<{
                 return { ok: false, error: 'Composer media inspection returned an incomplete preview' };
             }
 
+            const { decodeBase64 } = await import('@happier-dev/protocol/crypto/base64');
             const bytes = decodeBase64(inspection.result.bytesBase64, 'base64');
             if (bytes.byteLength !== input.handle.sizeBytes) {
                 return { ok: false, error: 'Composer media inspection returned an invalid preview size' };
             }
             await destination.writeBytes(bytes);
+            await destination.close();
+            return { ok: true };
+        },
+    });
+}
+
+/** Already-opened Artifact and revision bytes use the same admission, sink and cleanup owner. */
+export async function createBytesPreviewSource(input: Readonly<{
+    bytes: Uint8Array;
+    fileName: string;
+    mimeType: string;
+    maxBytes: number | null;
+    signal?: AbortSignal | null;
+}>): Promise<CreateSessionFilePreviewSourceResult> {
+    return createPreviewSource({
+        filePath: input.fileName,
+        mimeType: input.mimeType,
+        maxBytes: input.maxBytes,
+        expectedSizeBytes: input.bytes.byteLength,
+        signal: input.signal,
+        load: async ({ destination, signal }) => {
+            if (signal?.aborted) return { ok: false, error: 'Preview request cancelled' };
+            await destination.writeBytes(input.bytes);
             await destination.close();
             return { ok: true };
         },

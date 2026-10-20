@@ -10,7 +10,8 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { useWorkspaceVideoPreview } from './useWorkspaceVideoPreview';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
+import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
 
 export function FileVideoPreview(props: Readonly<{
     workspaceScope: WorkspaceScopeBase;
@@ -28,7 +29,12 @@ export function FileVideoPreview(props: Readonly<{
     React.useEffect(() => {
         if (!props.isActive || !focused) setIsFullscreen(false);
     }, [props.isActive, focused]);
-    const { state, retry } = useWorkspaceVideoPreview({ ...props, enabled });
+    const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
+    const state = useFilePreviewSource({
+        source: { kind: 'workspace', scope: props.workspaceScope, filePath: props.filePath },
+        enabled, mimeType: props.mimeType, maxBytes: null,
+        ...buildWorkspacePreviewIdentity(props.workspaceScope, props.filePath, null, JSON.stringify([props.revision ?? null, attempt])),
+    });
     const { height } = useWindowDimensions();
 
     if (!enabled) return null;

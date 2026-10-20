@@ -29,7 +29,7 @@ describe('workspace file image preview', () => {
         const screen = await renderScreen(<FileBinaryState
             theme={createThemeFixture()}
             filePath="design/layout.png"
-            imagePreviewUri="data:image/png;base64,AQ=="
+            imagePreviewUri="blob:preview"
             workspaceScope={workspaceScope}
         />);
         await screen.pressByTestIdAsync('file-image-preview');
@@ -37,7 +37,7 @@ describe('workspace file image preview', () => {
         const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
         expect(Modal.show).toHaveBeenCalledWith({
             component: AttachmentImagePreviewModal,
-            props: { images: [{ kind: 'session-image', sessionId: '', workspaceScope, filePath: 'design/layout.png', title: 'layout.png' }] },
+            props: { images: [{ kind: 'direct', uri: 'blob:preview', title: 'layout.png' }] },
         });
     });
 });

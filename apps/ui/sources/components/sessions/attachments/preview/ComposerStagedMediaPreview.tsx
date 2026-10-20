@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { useUnistyles } from 'react-native-unistyles';
 import type { ComposerContentHandleV1 } from '@happier-dev/protocol';
 
-import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
 import { SessionMediaVideoPreview } from '@/components/sessions/media/SessionMediaVideoPreview';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -26,14 +26,12 @@ export const ComposerStagedMediaPreview = React.memo(function ComposerStagedMedi
     contentFit?: 'contain' | 'cover';
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const preview = useSessionImagePreview({
-        sessionId: '',
-        filePath: props.handle.name,
+    const preview = useFilePreviewSource({
+        source: { kind: 'composerStage', handle: props.handle },
         enabled: true,
         cacheKey: props.handle.sha256,
         mimeType: props.handle.mimeType,
         sizeBytes: props.handle.sizeBytes,
-        composerStagedMedia: props.handle,
     });
 
     if (preview.status === 'loaded') {

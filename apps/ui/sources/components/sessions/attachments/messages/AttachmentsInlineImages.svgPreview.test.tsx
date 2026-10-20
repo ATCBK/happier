@@ -25,10 +25,6 @@ vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal',
     AttachmentImagePreviewModal: () => null,
 }));
 
-vi.mock('@/components/sessions/files/content/imagePreview/useSessionImagePreview', () => ({
-    useSessionImagePreview: vi.fn(),
-}));
-
 describe('AttachmentsInlineImages (svg previews)', () => {
     it('does not render svg attachments as inline transcript images in the V1 media policy', async () => {
         const { AttachmentsInlineImages } = await import('./AttachmentsInlineImages');

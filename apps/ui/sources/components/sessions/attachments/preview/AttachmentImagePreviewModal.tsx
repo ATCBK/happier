@@ -4,7 +4,7 @@ import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -105,16 +105,16 @@ function AttachmentImagePreviewCurrentImage(props: Readonly<{
     const styles = stylesheet;
     const sessionImage = props.image.kind === 'session-image' ? props.image : null;
     const composerStagedImage = props.image.kind === 'composer-staged-image' ? props.image : null;
-    const preview = useSessionImagePreview({
-        sessionId: sessionImage?.sessionId ?? '',
-        filePath: sessionImage?.filePath ?? composerStagedImage?.handle.name ?? '',
+    const preview = useFilePreviewSource({
+        source: props.image.kind === 'direct' ? { kind: 'uri', uri: props.image.uri }
+            : composerStagedImage ? { kind: 'composerStage', handle: composerStagedImage.handle }
+            : sessionImage?.attachmentHandle ? { kind: 'attachment', handle: sessionImage.attachmentHandle, fileName: sessionImage.filePath }
+            : sessionImage?.workspaceScope ? { kind: 'workspace', scope: sessionImage.workspaceScope, filePath: sessionImage.filePath }
+            : { kind: 'session', sessionId: sessionImage!.sessionId, filePath: sessionImage!.filePath },
         enabled: sessionImage !== null || composerStagedImage !== null,
         cacheKey: sessionImage?.cacheKey ?? composerStagedImage?.handle.sha256 ?? null,
         mimeType: sessionImage?.mimeType ?? composerStagedImage?.handle.mimeType ?? null,
         sizeBytes: sessionImage?.sizeBytes ?? composerStagedImage?.handle.sizeBytes ?? null,
-        composerStagedMedia: composerStagedImage?.handle ?? null,
-        attachmentHandle: sessionImage?.attachmentHandle,
-        workspaceScope: sessionImage?.workspaceScope ?? null,
     });
 
     if (props.image.kind === 'direct') {

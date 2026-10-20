@@ -4,7 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
 import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createComposerStagedMediaPreviewSource, createSessionFilePreviewSource } from './createSessionFilePreviewSource';
+import { createBytesPreviewSource, createComposerStagedMediaPreviewSource, createSessionFilePreviewSource } from './createSessionFilePreviewSource';
 
 const nativeFiles = vi.hoisted(() => ({
     current: null as ReturnType<typeof import('@/dev/testkit/mocks/expoFileSystem').createExpoFileSystemFileMock> | null,
@@ -142,13 +142,45 @@ describe('createSessionFilePreviewSource', () => {
         expect(nativeFiles.current!.files.size).toBe(0);
     });
 
-    it('rejects svg previews under the V1 session-media image policy', async () => {
-        harness = await createWorkspaceFileDownloadHarness({ name: 'icon.svg' });
+    it.each([
+        ['icon.svg', 'image/svg+xml'], ['document.pdf', 'application/pdf'], ['voice.mp3', 'audio/mpeg'],
+    ])('admits %s through the shared file classifier', async (filePath, mimeType) => {
+        harness = await createWorkspaceFileDownloadHarness({ name: filePath, bytes: new Uint8Array([1, 2, 3]) });
         const source = await createSessionFilePreviewSource({
-            scope: harness.scope, filePath: '.happier/uploads/messages/m1/icon.svg', mimeType: 'image/svg+xml', maxBytes: 16,
+            scope: harness.scope, filePath, mimeType, maxBytes: 16,
+        });
+        expect(source).toMatchObject({ ok: true, source: { mimeType, byteLength: 3 } });
+        if (source.ok && source.source.kind === 'object-url') source.source.revoke();
+    });
+
+    it('rejects non-previewable files before reading bytes', async () => {
+        harness = await createWorkspaceFileDownloadHarness({ name: 'archive.zip' });
+        const source = await createSessionFilePreviewSource({
+            scope: harness.scope, filePath: 'archive.zip', mimeType: 'application/zip', maxBytes: 16,
         });
         expect(source).toEqual({ ok: false, error: 'Unsupported preview type' });
         expect(harness.rpcRequests).toEqual([]);
+    });
+
+    it('materializes bytes through the shared budget and destination', async () => {
+        vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:bytes');
+        const bytes = new Uint8Array([1, 2, 3]);
+        expect(await createBytesPreviewSource({ bytes, fileName: 'icon.svg', mimeType: 'image/svg+xml', maxBytes: 2 }))
+            .toEqual({ ok: false, error: 'File exceeds the preview size limit' });
+        expect(await createBytesPreviewSource({ bytes, fileName: 'icon.svg', mimeType: 'image/svg+xml', maxBytes: 3 }))
+            .toMatchObject({ ok: true, source: { uri: 'blob:bytes', byteLength: 3, mimeType: 'image/svg+xml' } });
+    });
+
+    it('deletes a native bytes destination cancelled while writing', async () => {
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+        const controller = new AbortController();
+        nativeFiles.current!.writes.mockImplementationOnce(() => controller.abort());
+        const result = await createBytesPreviewSource({
+            bytes: new Uint8Array([1, 2, 3]), fileName: 'cancelled.svg', mimeType: 'image/svg+xml', maxBytes: 3,
+            signal: controller.signal,
+        });
+        expect(result).toEqual({ ok: false, error: 'Preview request cancelled' });
+        expect(nativeFiles.current!.files.size).toBe(0);
     });
 
     it('materializes an Android MP4 through the encrypted prepared workspace carrier without an image/text limit', async () => {

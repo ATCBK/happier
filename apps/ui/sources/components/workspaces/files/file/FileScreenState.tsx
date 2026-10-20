@@ -86,7 +86,7 @@ export function FileBinaryState({
                         const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
                         Modal.show({
                             component: AttachmentImagePreviewModal,
-                            props: { images: [{ kind: 'session-image', sessionId: '', workspaceScope, filePath, title: getBasename(filePath) }] },
+                            props: { images: [{ kind: 'direct', uri: imagePreviewUri, title: getBasename(filePath) }] },
                         });
                     }}
                     style={{

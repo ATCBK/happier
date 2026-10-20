@@ -7,7 +7,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
-import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
     AttachmentImagePreviewModal,
@@ -113,12 +113,12 @@ function SessionMediaInlineVideoTile(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const preview = useSessionImagePreview({
-        sessionId: props.sessionId,
-        filePath: props.media.path,
+    const preview = useFilePreviewSource({
+        source: props.media.attachmentHandle
+            ? { kind: 'attachment', handle: props.media.attachmentHandle, fileName: props.media.path }
+            : { kind: 'session', sessionId: props.sessionId, filePath: props.media.path },
         enabled: true,
         cacheKey: props.media.sha256 ?? null,
-        attachmentHandle: props.media.attachmentHandle,
         mimeType: props.media.mimeType,
         sizeBytes: props.media.sizeBytes,
     });
@@ -168,13 +168,14 @@ function SessionMediaInlineImageTile(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
 
-    const preview = useSessionImagePreview({
-        sessionId: props.sessionId,
-        workspaceScope: props.workspaceScope ?? null,
-        filePath: props.media.path,
+    const preview = useFilePreviewSource({
+        source: props.media.attachmentHandle
+            ? { kind: 'attachment', handle: props.media.attachmentHandle, fileName: props.media.path }
+            : props.workspaceScope
+                ? { kind: 'workspace', scope: props.workspaceScope, filePath: props.media.path }
+                : { kind: 'session', sessionId: props.sessionId, filePath: props.media.path },
         enabled: true,
         cacheKey: props.media.sha256 ?? null,
-        attachmentHandle: props.media.attachmentHandle,
         mimeType: props.media.mimeType,
         sizeBytes: props.media.sizeBytes,
     });

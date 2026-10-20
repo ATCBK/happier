@@ -154,9 +154,9 @@ describe('FileContentPanel', () => {
 
         expect(typeof diffViewerPropsState.current?.onPressLineRange).toBe('function');
         diffViewerPropsState.current.onPressLineRange([
-            { id: 'a:1', sourceIndex: 1, kind: 'add', oldLine: null, newLine: 1, renderPrefixText: '+', renderCodeText: 'const a = 1;', renderIsHeaderLine: false, selectable: true },
-            { id: 'a:2', sourceIndex: 2, kind: 'add', oldLine: null, newLine: 2, renderPrefixText: '+', renderCodeText: 'const b = 2;', renderIsHeaderLine: false, selectable: true },
-            { id: 'ctx:3', sourceIndex: 3, kind: 'context', oldLine: 3, newLine: 3, renderPrefixText: ' ', renderCodeText: 'const c = 3;', renderIsHeaderLine: false, selectable: false },
+            { id: 'a:1', sourceIndex: 1, hunkIndex: null, kind: 'add', oldLine: null, newLine: 1, renderPrefixText: '+', renderCodeText: 'const a = 1;', renderIsHeaderLine: false, selectable: true },
+            { id: 'a:2', sourceIndex: 2, hunkIndex: null, kind: 'add', oldLine: null, newLine: 2, renderPrefixText: '+', renderCodeText: 'const b = 2;', renderIsHeaderLine: false, selectable: true },
+            { id: 'ctx:3', sourceIndex: 3, hunkIndex: null, kind: 'context', oldLine: 3, newLine: 3, renderPrefixText: ' ', renderCodeText: 'const c = 3;', renderIsHeaderLine: false, selectable: false },
         ]);
 
         expect(onToggleLine.mock.calls.map((call) => call[0])).toEqual(['additions:1', 'additions:2']);

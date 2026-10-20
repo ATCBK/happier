@@ -1,28 +1,19 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { StyleSheet } from 'react-native';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
+import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { SessionMediaInlineImages } from './SessionMediaInlineImages';
 
-type TestImagePreviewState =
-    | Readonly<{ status: 'loaded'; uri: string; error: null }>
-    | Readonly<{ status: 'error'; uri: null; error: string }>;
-
-const previewState = vi.hoisted((): { current: TestImagePreviewState } => ({
-    current: {
-        status: 'loaded',
-        uri: 'blob:preview',
-        error: null,
-    },
-}));
-const useSessionImagePreviewSpy = vi.hoisted(() => vi.fn(() => previewState.current));
-
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeNativeMock({ platformOS: 'ios' });
 });
+vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -42,22 +33,22 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal', () => ({
-    AttachmentImagePreviewModal: () => null,
-}));
+let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
+let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+let rejectDownloads = false;
+beforeAll(prepareSessionFilesViewTestkit);
+beforeEach(async () => {
+    rejectDownloads = false;
+    transfer = createSessionFileNativeTransferBoundary();
+    fixture = await createSessionFilesViewFixture({ sessionId: 's1', rootPath: '/repo', machineCarrierOrigin: transfer.origin,
+        rpc: request => rejectDownloads && request.method === getActionSpec('daemon.filesystem.download').bindings?.rpcMethod
+            ? { success: false, error: 'not_found' } : transfer.rpc(request), request: transfer.request });
+    fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0, filesImagePreviewMaxBytes: 1_000_000 });
+});
 
-vi.mock('@/components/sessions/files/content/imagePreview/useSessionImagePreview', () => ({
-    useSessionImagePreview: useSessionImagePreviewSpy,
-}));
-
-afterEach(() => {
-    useSessionImagePreviewSpy.mockClear();
-    previewState.current = {
-        status: 'loaded',
-        uri: 'blob:preview',
-        error: null,
-    };
+afterEach(async () => {
     standardCleanup();
+    await fixture.dispose();
 });
 
 describe('SessionMediaInlineImages', () => {
@@ -87,7 +78,7 @@ describe('SessionMediaInlineImages', () => {
         const tile = screen.findByTestId(`message-session-media-inline-image:${path}`);
         expect(tile?.type).toBe('View');
         expect(tile?.props.onPress).toBeUndefined();
-        expect(useSessionImagePreviewSpy).not.toHaveBeenCalled();
+        expect(transfer.prepares).toEqual([]);
     });
 
     it('renders available video references as accessible file-opening media tiles', async () => {
@@ -198,6 +189,7 @@ describe('SessionMediaInlineImages', () => {
             />,
         );
 
+        await vi.waitFor(() => expect(screen.findByTestId(`message-session-media-inline-image-preview:${path}`)?.type).toBe('ExpoImage'));
         const preview = screen.findByTestId(`message-session-media-inline-image-preview:${path}`);
         expect(preview?.type).toBe('ExpoImage');
         expect(preview?.props.contentFit).toBe('contain');
@@ -272,11 +264,7 @@ describe('SessionMediaInlineImages', () => {
     });
 
     it('exposes a translated unavailable hint when an inline image preview is missing', async () => {
-        previewState.current = {
-            status: 'error',
-            uri: null,
-            error: 'not found',
-        };
+        rejectDownloads = true;
 
         const { t } = await import('@/text');
 
@@ -298,6 +286,8 @@ describe('SessionMediaInlineImages', () => {
             />,
         );
 
+        await vi.waitFor(() => expect(screen.findByTestId('message-session-media-inline-image:.happier/uploads/attachments/session-1/message-1/input.png')?.props.accessibilityHint)
+            .toBe(t('files.sessionMedia.previewUnavailableA11y')));
         const tile = screen.findByTestId('message-session-media-inline-image:.happier/uploads/attachments/session-1/message-1/input.png');
 
         expect(tile?.props.accessibilityRole).toBe('button');
@@ -306,11 +296,7 @@ describe('SessionMediaInlineImages', () => {
     });
 
     it('does not announce an unavailable image as actionable when file opening is unavailable', async () => {
-        previewState.current = {
-            status: 'error',
-            uri: null,
-            error: 'not found',
-        };
+        rejectDownloads = true;
 
         const path = '.happier/uploads/generated/session-1/message-1/missing.png';
         const screen = await renderScreen(
@@ -333,6 +319,7 @@ describe('SessionMediaInlineImages', () => {
             />,
         );
 
+        await vi.waitFor(() => expect(screen.findByTestId(`message-session-media-inline-image:${path}`)?.props.accessibilityRole).toBe('image'));
         const tile = screen.findByTestId(`message-session-media-inline-image:${path}`);
         expect(tile?.props.accessibilityRole).toBe('image');
         expect(tile?.props.onPress).toBeUndefined();
