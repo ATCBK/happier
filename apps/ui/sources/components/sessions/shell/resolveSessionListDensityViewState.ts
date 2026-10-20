@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { HAPPIER_SPACE_STEPS } from '@happier-dev/plugin-ui/environment';
 import { resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation/typeScale';
 import {
     SESSION_LIST_ROW_HEIGHT_COMPACT,
@@ -46,6 +47,18 @@ export const SESSION_LIST_ROW_IDENTITY_METRICS = {
     compact: { slotSize: 30, agentLogoSize: 23 },
     minimal: { slotSize: 18, agentLogoSize: 14 },
     minimalNativePhone: { slotSize: 20, agentLogoSize: 16 },
+} as const;
+
+/** Fixed horizontal anatomy shared by row paint and the shell's content-derived width floor. */
+export const SESSION_LIST_ROW_WIDTH_METRICS = {
+    borderPx: 2,
+    default: { paddingPx: 15, contentMarginPx: 14, trailingMaxShare: 0.4 },
+    compact: { paddingPx: HAPPIER_SPACE_STEPS.s12, contentMarginPx: HAPPIER_SPACE_STEPS.s12, trailingMaxShare: 0.4 },
+    minimal: { paddingPx: HAPPIER_SPACE_STEPS.s8, contentMarginPx: HAPPIER_SPACE_STEPS.s8, trailingMaxShare: 0.4 },
+    trailingMarginPx: HAPPIER_SPACE_STEPS.s8,
+    // A status mark remains distinguishable when its word yields to the title.
+    trailingMinPx: HAPPIER_SPACE_STEPS.s16,
+    titleMinCharacters: 16,
 } as const;
 
 /** The shared list `Item` density a session-list row of this density uses (Drafts, Scheduled). */

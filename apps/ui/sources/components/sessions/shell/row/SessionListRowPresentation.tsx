@@ -10,6 +10,7 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     SESSION_LIST_ROW_IDENTITY_METRICS,
+    SESSION_LIST_ROW_WIDTH_METRICS,
     SESSION_LIST_ROW_SELECTION_RADIUS,
     resolveSessionListRowStatusTextMetrics,
     resolveSessionListRowTitleTextMetrics,
@@ -35,10 +36,10 @@ const styles = StyleSheet.create((theme) => ({
         height: SESSION_LIST_ROW_HEIGHT_DEFAULT,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 15,
+        paddingHorizontal: SESSION_LIST_ROW_WIDTH_METRICS.default.paddingPx,
         backgroundColor: theme.colors.surface.base,
-        borderLeftWidth: 2,
-        borderRightWidth: 2,
+        borderLeftWidth: SESSION_LIST_ROW_WIDTH_METRICS.borderPx,
+        borderRightWidth: SESSION_LIST_ROW_WIDTH_METRICS.borderPx,
         borderColor: theme.colors.surface.base,
     },
     first: {
@@ -80,7 +81,7 @@ const styles = StyleSheet.create((theme) => ({
         width: SESSION_LIST_ROW_IDENTITY_METRICS.minimalNativePhone.slotSize,
         height: SESSION_LIST_ROW_IDENTITY_METRICS.minimalNativePhone.slotSize,
     },
-    content: { flex: 1, marginLeft: 14, justifyContent: 'center' },
+    content: { flex: 1, marginLeft: SESSION_LIST_ROW_WIDTH_METRICS.default.contentMarginPx, justifyContent: 'center' },
     contentCompact: { marginLeft: theme.space.s12 },
     contentMinimal: { marginLeft: 0 },
     contentMinimalWithIdentity: { marginLeft: theme.space.s8 },
@@ -100,7 +101,7 @@ const styles = StyleSheet.create((theme) => ({
     subtitleMinimal: resolveSessionListRowStatusTextMetrics('minimal'),
     // The slot yields before the title does: a long status word truncates at two fifths of the row so two Runs or
     // Sessions with different names never collapse to the same clipped title.
-    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 1, minWidth: 0, maxWidth: '40%' },
+    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 1, minWidth: 0, maxWidth: `${SESSION_LIST_ROW_WIDTH_METRICS.default.trailingMaxShare * 100}%` },
     // The row's press target: everything left of the trailing slot, the row's full height.
     pressTarget: { flex: 1, minWidth: 0, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' },
 }));
