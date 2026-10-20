@@ -76,6 +76,12 @@ projection reads persisted tab state, so other-group and unmounted tabs count.
 The compact draft module has no second module cache; tab-move/remount continuity
 must be verified against the existing pane-state persistence owner.
 
+Project-manifest authoring has a separate edit-session lifecycle: Back unmounts
+its editor, so `projectManifestEditorModel.ts` retains its dirty draft and known
+base in memory, qualified by Account and checkout. It consumes the compact draft
+reader only for its optional persisted input and never persists original bytes.
+It does not cache or decide file-pane draft state.
+
 A held complete text read, or a restored draft with its original hash, remains
 editable while the Machine is unreachable. With neither, there is no offline
 file content to edit. Saving still attempts the Machine write and keeps the

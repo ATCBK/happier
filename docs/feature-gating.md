@@ -143,9 +143,10 @@ canonical decision. The gate controls availability only; existing authorization,
 machine assignment, definition validation, runtime currentness, and permission checks still apply.
 
 Workflow Actions keep a failed feature observation distinct from unreadable saved content.
-A failed or missing live observation refuses execution with `storage_unavailable`; it does not
-grant availability or report `content_unavailable`. A settled disabled/unsupported decision
-still fails closed. Currentness HTTP failures likewise retain their host-local cause for the
+A transient failed or missing live observation refuses execution with `storage_unavailable`;
+it does not grant availability or report `content_unavailable`. Permanent probe refusals and
+settled disabled/unsupported decisions still fail closed without a storage-retry claim.
+Currentness HTTP failures likewise retain their host-local cause for the
 Workflow failure classifier; invalid content and unavailable encryption material remain separate.
 
 The shared V3 Automation API remains available for one-shot recipes; its canonical Run admission
