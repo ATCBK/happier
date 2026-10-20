@@ -1,4 +1,4 @@
-import { archiveSessionReports, confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
+import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -917,6 +917,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
               await executeSessionAction({
                 actionId: actionId as any,
                 target: sessionActionTarget,
+                ...(actionId === SESSION_ACTION_ARCHIVE_ID ? { input: { alsoArchiveReports } } : {}),
                 ...(actionId === 'ui.session.follow'
                   ? { context: { operations: { openFollowEditor: followEditor.openEditor } } }
                   : {}),
@@ -932,9 +933,6 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
                     }
                   : {}),
               });
-              if (alsoArchiveReports) {
-                await archiveSessionReports({ leadSessionId: props.sessionId, serverId: sessionServerId ?? null });
-              }
             } catch (error) {
               showSessionHeaderActionError(error);
             }

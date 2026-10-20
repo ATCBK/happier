@@ -1,5 +1,6 @@
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
+import type { SessionArchiveActionResultV1 } from '@happier-dev/protocol/sessions/control/contract';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -12,14 +13,10 @@ import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { getStorage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
 import { selectSessionReportSubtree } from '@/components/sessions/work/reportSubtree';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
-
-import { SESSION_ACTION_ARCHIVE_ID } from './sessionActionIds';
-import { createSessionActionTarget } from './sessionActionContext';
-import { executeSessionAction } from './sessionActionExecution';
-import type { SessionActionExecutionContext } from './sessionActionTypes';
 
 /**
  * The archive scope choice for a Session (ORC R-04, §3.1 "Archiving a lead").
@@ -123,9 +120,8 @@ export function SessionArchiveConfirmModal(props: SessionArchiveConfirmModalProp
 type SessionArchiveLead = Readonly<{ leadSessionId: string; serverId: string | null }>;
 
 /**
- * The direct reports archiving a lead can still change: the one set the confirmation counts and the
- * cascade archives. An already archived report is history, not something Archive would do to it, so it is
- * neither offered nor counted.
+ * A display-only estimate for the existing confirmation. The Action resolves current scope at execution;
+ * this cached projection never selects mutation targets.
  */
 function selectArchivableSessionReports(params: SessionArchiveLead): readonly Session[] {
     const state = getStorage().getState();
@@ -148,29 +144,19 @@ export async function confirmSessionArchive(params: SessionArchiveLead): Promise
 }
 
 /**
- * Archives a lead's direct reports after the person ticked "Also archive N sub-sessions": the existing
- * archive Action once per report, in order. A report that cannot be archived (no archive right, a
- * refused stop) does not stop the others; the reports left unarchived are named afterwards.
+ * Presents partial outcomes returned by the canonical archive Action. Scope selection and every
+ * report's mutation/approval belong to that owner, including reports this UI has never loaded.
  */
-export async function archiveSessionReports(params: Readonly<{
-    leadSessionId: string;
-    serverId: string | null;
-    context?: SessionActionExecutionContext;
-}>): Promise<void> {
-    const reports = selectArchivableSessionReports(params);
-    const notArchived: string[] = [];
-    for (const report of reports) {
-        const serverId = params.serverId;
-        try {
-            await executeSessionAction({
-                actionId: SESSION_ACTION_ARCHIVE_ID,
-                target: createSessionActionTarget({ session: report, serverId }),
-                ...(params.context ? { context: params.context } : {}),
-            });
-        } catch {
-            notArchived.push(getSessionName(report, serverId));
-        }
-    }
+export async function archiveSessionReports(params: Pick<SessionArchiveActionResultV1, 'reports' | 'reportsError'> & Readonly<{ serverId?: string | null }>): Promise<void> {
+    const state = getStorage().getState();
+    const notArchived = (params.reports ?? []).filter(report => report.status !== 'archived')
+        .map(report => {
+            const known = params.serverId ? findSessionListLookupSession(state, {
+                serverId: params.serverId, sessionId: report.sessionId,
+            })?.session : null;
+            return known ? getSessionName(known, params.serverId) : report.title || report.sessionId;
+        });
+    if (params.reportsError) notArchived.push(t('sessionInfo.failedToArchiveSession'));
     if (notArchived.length > 0) {
         Modal.alert(
             t('sessionWork.archive.someNotArchivedTitle', { count: notArchived.length }),

@@ -53,6 +53,15 @@ function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
 }
 
 describe('executeSessionAction', () => {
+    it('forwards the direct-report choice in the one archive request', async () => {
+        const requests: unknown[] = [];
+        await executeSessionAction({ actionId: SESSION_ACTION_ARCHIVE_ID, target: createTarget(),
+            input: { alsoArchiveReports: true }, context: { operations: {
+                archiveSession: async (sessionId, options) => { requests.push({ sessionId, options }); return { success: true }; },
+                clearSessionVisibleWhenInactive: () => {},
+            } } });
+        expect(requests).toEqual([{ sessionId: 'session_1', options: { serverId: 'server_1', alsoArchiveReports: true } }]);
+    });
     it('forwards the exact completed host confirmation to Delete only', async () => {
         const deleteSession = vi.fn(async () => ({ success: true as const }));
 

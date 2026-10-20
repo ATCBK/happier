@@ -709,6 +709,31 @@ export const SessionArchiveResultSchema = lazyZodSchema(() => z.looseObject({
 }));
 export type SessionArchiveResult = z.infer<typeof SessionArchiveResultSchema>;
 
+/** Action-owned direct-report scope; omission keeps the incumbent parent-only operation. */
+export const SessionArchiveActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  alsoArchiveReports: z.optional(z.boolean()),
+}));
+
+const SessionArchiveReportIdentityV1 = {
+  sessionId: z.string().check(z.minLength(1)),
+  title: z.optional(z.string()),
+};
+export const SessionArchiveReportOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('archived') }),
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('failed'), errorCode: z.string(), error: z.string() }),
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('approval_pending'), artifactId: z.string().check(z.minLength(1)) }),
+]));
+export type SessionArchiveReportOutcomeV1 = z.infer<typeof SessionArchiveReportOutcomeV1Schema>;
+export const SessionArchiveActionResultV1Schema = lazyZodSchema(() => z.strictObject({
+  success: z.literal(true),
+  sessionId: z.string().check(z.minLength(1)),
+  archivedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  reports: z.optional(z.array(SessionArchiveReportOutcomeV1Schema)),
+  reportsError: z.optional(z.strictObject({ errorCode: z.string(), error: z.string() })),
+}));
+export type SessionArchiveActionResultV1 = z.infer<typeof SessionArchiveActionResultV1Schema>;
+
 export const SessionUnarchiveResultSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.string().check(z.minLength(1)),
   archivedAt: z.null(),
