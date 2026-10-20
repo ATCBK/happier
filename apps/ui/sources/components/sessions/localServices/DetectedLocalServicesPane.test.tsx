@@ -411,6 +411,25 @@ describe('DetectedLocalServicesPane', () => {
         }
     });
 
+    it('an empty workspace scope says nothing runs in this workspace, never on the whole machine', async () => {
+        // A preview of this Machine can be open while the workspace has no service of its own.
+        for (const [scope, expected] of [['workspace', 'Nothing running in this workspace'], ['machine', 'Nothing running on MacBook Pro']] as const) {
+            const screen = await renderScreen(inHeaderHost(
+                <DetectedLocalServicesPane
+                    inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+                    launcherState={launcherStateWith([])}
+                    machine={MACBOOK_ONLINE}
+                    scope={scope}
+                    testID="local-services-pane"
+                />,
+            ));
+            const header = screen.findByTestId('probe-header.subtitle');
+            if (!header) throw new Error('Expected the Local Services header');
+            expect(collectText(header)).toContain(expected);
+            await screen.unmount();
+        }
+    });
+
     it('renders the empty state when a valid scan has no launcher targets', async () => {
         const screen = await renderScreen(
             <DetectedLocalServicesPane
