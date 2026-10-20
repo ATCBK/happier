@@ -1,5 +1,7 @@
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentExecutionRunOpenRequest, AgentExecutionRunRuntimeContextV1 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GEMINI_ACP_RUNTIME_DEFINITION } from './agent/acp/definition.js';
@@ -32,6 +34,41 @@ async function createGeminiRuntime() {
 }
 
 describe('Gemini native runtime migration', () => {
+  it.each([true, false])('applies normalized no-tools restrictions before ACP launch (restricted=%s)', async restricted => {
+    const runtime = await createGeminiRuntime();
+    const run = vi.fn(async () => ({
+      termination: { observed: { kind: 'exit' as const, exitCode: 0 }, requestedBy: { kind: 'none' as const } },
+      stdout: new TextEncoder().encode('--acp'), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false,
+    }));
+    const open = vi.fn(async (_request: AgentExecutionRunOpenRequest) => ({
+      send: vi.fn(), stop: vi.fn(), watch: () => ({ dispose() {} }), dispose: vi.fn(),
+    }));
+    const session = await runtime.sessions.executionRunContextV1!.open({
+      kind: 'create', runId: 'gemini-tools', cwd: '/workspace', input: { text: 'answer' },
+      profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
+      configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {},
+        ...(restricted ? { allowedTools: [], unlistedTools: 'deny' as const } : {}) },
+      mcpServers: { docs: { command: 'docs-server' } },
+      launchEnvironment: { values: { GEMINI_API_KEY: 'fixture-key' }, unset: [] },
+    }, { signal: new AbortController().signal, services: { exec: { run }, connectedAccounts: disconnectedConnectedAccounts() },
+      protocols: { acp: { openExecutionRunV1: open } } } as unknown as AgentExecutionRunRuntimeContextV1);
+    const prepared = open.mock.calls[0]![0];
+    const systemSettingsPath = prepared.launchEnvironment?.values.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+    try {
+      if (restricted) {
+        expect(prepared.mcpServers).toEqual({});
+        expect(systemSettingsPath).toEqual(expect.any(String));
+        expect(JSON.parse(readFileSync(systemSettingsPath!, 'utf8'))).toMatchObject({
+          tools: { core: [] }, admin: { mcp: { enabled: false }, extensions: { enabled: false } },
+        });
+      } else {
+        expect(prepared.mcpServers).toEqual({ docs: { command: 'docs-server' } });
+        expect(systemSettingsPath).toBeUndefined();
+      }
+    } finally { await session.dispose(); }
+    if (systemSettingsPath) expect(existsSync(systemSettingsPath)).toBe(false);
+  });
   it('reexports the activation compiled by its canonical public plugin definition', async () => {
     expect(Object.keys(PLUGIN_MANIFEST.contributes).sort()).toEqual([
       'agents',

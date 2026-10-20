@@ -121,7 +121,8 @@ export function buildCodexAppServerConfigOverrides(
         mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
     }> & CodexToolRestrictionConfiguration = {},
 ): string[] {
-    const serverNames = Object.keys(mcpServers);
+    const serverNames = options.unlistedTools === 'deny' && options.allowedTools?.length === 0
+        ? [] : Object.keys(mcpServers);
     const injectedKeys = assignInjectedServerKeys(serverNames);
     const overrides = buildCodexUnlistedToolConfigOverrides(options);
     if (options.skills?.nativeDisables.length) {

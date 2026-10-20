@@ -4,6 +4,19 @@ import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/
 import { buildCodexAppServerConfigOverrides } from './overrides';
 
 describe('buildCodexAppServerConfigOverrides', () => {
+    it.each(['no_tools', 'read_only'] as const)('projects normalized %s Run configuration into native launch restrictions', (permissionMode) => {
+        const configuration = permissionMode === 'no_tools'
+            ? { allowedTools: [], unlistedTools: 'deny' as const }
+            : { allowedTools: ['WebSearch', 'mcp__docs__*'] };
+        const overrides = buildCodexAppServerConfigOverrides({ docs: { command: 'docs-server', enabledTools: ['read'] } }, configuration);
+        if (permissionMode === 'no_tools') {
+            expect(overrides).toEqual(expect.arrayContaining(['features.shell_tool=false', 'features.view_image=false', 'web_search="disabled"']));
+            expect(overrides.some(value => value.startsWith('mcp_servers.'))).toBe(false);
+        } else {
+            expect(overrides).toContain('mcp_servers.happier__docs.command="docs-server"');
+            expect(overrides).not.toContain('features.shell_tool=false');
+        }
+    });
     it('projects Off and deny through native filters and mediates Allow as prompt', () => {
         const overrides = buildCodexAppServerConfigOverrides({
             'linear__team': { command: 'bridge', enabledTools: ['read', 'write', 'inspect'] },

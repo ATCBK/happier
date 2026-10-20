@@ -88,7 +88,8 @@ async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void |
   );
   const auth = resolveGeminiAuthConfig(sourceEnv, resolveGeminiApiKeyFromEnv(sourceEnv));
   const authControlEnv = ignoredGeminiAcpAuthControlEnv(sourceEnv);
-  const shaping = await prepareGeminiNativeMcpShaping(sourceEnv);
+  const noTools = request.configuration?.unlistedTools === 'deny' && request.configuration.allowedTools?.length === 0;
+  const shaping = await prepareGeminiNativeMcpShaping(sourceEnv, request.configuration);
   try {
     const launchEnvironmentOverrides = {
       ...shaping.env,
@@ -111,7 +112,7 @@ async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void |
         (key) => !Object.prototype.hasOwnProperty.call(launchEnvironmentOverrides, key),
       ),
     };
-    const session = await open({ ...request, launchEnvironment }, {
+    const session = await open({ ...request, launchEnvironment, ...(noTools ? { mcpServers: {} } : {}) }, {
       transport: {
         kind: 'stdio',
         executable: { kind: 'systemTool', id: 'gemini-cli' },

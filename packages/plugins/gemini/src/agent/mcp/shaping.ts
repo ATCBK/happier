@@ -2,6 +2,7 @@ import { createSecureTempDirectorySync, linkDirectoryChildren } from '@happier-d
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { resolveGeminiConfigPaths } from '../utils/configPaths.js';
+import type { AgentSessionConfigurationSnapshot } from '@happier-dev/plugin-sdk/agents/runtime';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 type JsonObject = Record<string, unknown>;
@@ -129,6 +130,7 @@ function scrubCopiedGeminiSettingsMcpServers(targetEnv: EnvLike): void {
 /** Native sessions own this temporary home for exactly their composer lifetime. */
 export async function prepareGeminiNativeMcpShaping(
   sourceEnv: EnvLike = process.env,
+  configuration?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>,
 ) {
   const tempDirectory = createSecureTempDirectorySync({ prefix: 'happier-gemini-mcp-home' });
   const cliHomeDir = tempDirectory.path;
@@ -137,10 +139,21 @@ export async function prepareGeminiNativeMcpShaping(
     HOME: cliHomeDir,
     XDG_CONFIG_HOME: join(cliHomeDir, '.config'),
   };
+  const noTools = configuration?.unlistedTools === 'deny' && configuration.allowedTools?.length === 0;
+  const toolSettingsPath = join(cliHomeDir, 'no-tools-settings.json');
 
   try {
     copyKnownGeminiConfigFiles({ sourceEnv, targetEnv: baseEnv });
     scrubCopiedGeminiSettingsMcpServers(baseEnv);
+    if (noTools) {
+      // Gemini's system settings override workspace/user settings. An empty
+      // core allowlist removes built-ins; admin controls also stop ambient MCP
+      // and extension discovery rather than denying a later model tool call.
+      writeFileSync(toolSettingsPath, JSON.stringify({
+        tools: { core: [] },
+        admin: { mcp: { enabled: false }, extensions: { enabled: false } },
+      }), 'utf8');
+    }
     const sourceHome = resolveGeminiConfigPaths(sourceEnv).cliHomeDir;
     await Promise.all([
       ['.gemini', 'skills'],
@@ -157,7 +170,7 @@ export async function prepareGeminiNativeMcpShaping(
 
   let cleaned = false;
   return {
-    env: baseEnv,
+    env: { ...baseEnv, ...(noTools ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: toolSettingsPath } : {}) },
     async cleanup() {
       if (cleaned) return;
       cleaned = true;

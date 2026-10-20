@@ -144,12 +144,6 @@ import type {
     ClaudeRemoteAdvancedOptions,
 } from '../../../../protocol/remoteSettings.js';
 
-export type ClaudeAgentSdkToolPermissionPolicy =
-    | 'no_tools'
-    | 'read_only'
-    | 'workspace_write'
-    | 'parent_session_prompt';
-
 function readAgentToolInputRecord(value: unknown): Readonly<Record<string, JsonValue>> | null {
     const parsed = AgentRuntimeJsonValueSchema.safeParse(value);
     return parsed.success && parsed.data !== null && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
@@ -464,14 +458,6 @@ function readRuntimeConfigString(value: unknown): string | null {
 const readEffortFromRuntimeConfigUpdate = readClaudeRuntimeConfigEffortUpdate;
 const readUltracodeFromRuntimeConfigUpdate = readClaudeRuntimeConfigUltracodeUpdate;
 
-function resolvePromptInput(
-    prompt: SDKUserMessage['message']['content'],
-    _policy: ClaudeAgentSdkToolPermissionPolicy | null,
-    uuid: string,
-): AsyncIterable<SDKUserMessage> {
-    return createPromptStream(prompt, uuid);
-}
-
 async function* createPromptStream(prompt: SDKUserMessage['message']['content'], uuid: string): AsyncIterable<SDKUserMessage> {
     yield {
         type: 'user',
@@ -747,7 +733,6 @@ export type ClaudeAgentSdkTurnOperationsParams = Readonly<{
     workspaceWrites?: 'allow' | 'deny';
     happierSessionId?: string | null;
     executionRunId?: string;
-    toolPermissionPolicy?: ClaudeAgentSdkToolPermissionPolicy | null;
     abortSignal?: AbortSignal;
     initialModelId?: string | null;
     supportsEffort?: boolean;
@@ -841,7 +826,11 @@ export function createClaudeAgentSdkTurnOperations(
     let currentEffort: string | null = supportsEffort ? readString(params.initialEffort) : null;
     let currentUltracode = supportsEffort && params.initialUltracode === true;
     let contextUsageRefreshPromise: Promise<boolean> | null = null;
-    const toolPermissionPolicy = params.toolPermissionPolicy ?? null;
+    const noTools = params.unlistedTools === 'deny' && params.allowedTools?.length === 0;
+    const noToolsLaunchOptions = noTools
+        ? { tools: [], allowedTools: [], unlistedTools: 'deny' as const, strictMcpConfig: true }
+        : null;
+    const mcpServers = noTools ? undefined : params.mcpServers;
     // Claude Code's non-interactive SDK omits interaction tools such as AskUserQuestion unless
     // the process has a native permission host. Ordinary Sessions therefore use the SDK callback;
     // confined launches retain the hook bridge because its PreToolUse owner enforces scoped rules.
@@ -1351,7 +1340,7 @@ export function createClaudeAgentSdkTurnOperations(
                     ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
                     ...buildClaudePluginDirArgs({ hookPluginDir, skills: currentSkills }),
                     ...(hookPluginDir ? ['--include-hook-events'] : []),
-                    ...buildClaudeMcpConfigArgs(params.mcpServers),
+                    ...buildClaudeMcpConfigArgs(mcpServers),
                 ],
                 ...params.advancedOptions,
                 settingSources: params.settingSources,
@@ -1377,6 +1366,8 @@ export function createClaudeAgentSdkTurnOperations(
         if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
         const turnQuery = queryWithContext(params.queryContext ?? params.ctx.agentRuntime.exec, {
             ...config,
+            // Apply the Run ceiling after advanced/native options, including idle control queries.
+            ...(noToolsLaunchOptions ? { options: { ...config.options, ...noToolsLaunchOptions } } : {}),
             onMessageReceived(message) {
                 if (!isReplayClaudeAgentSdkMessage(message)) {
                     for (const block of extractToolUseBlocksFromSdkMessage(message)) {
@@ -1645,17 +1636,8 @@ export function createClaudeAgentSdkTurnOperations(
         input: unknown,
         options: Parameters<ClaudePermissionEngine['canCallTool']>[2] = {},
     ): Promise<PermissionResult> {
-        if (toolPermissionPolicy === 'no_tools') {
+        if (noTools) {
             return { behavior: 'deny', message: 'Tools are disabled for this execution run.', interrupt: true };
-        }
-        // Run workspace-write is a built-in execution profile, not an external
-        // MCP grant. Resolve exact admitted server keys through the host parser.
-        if (toolPermissionPolicy === 'workspace_write' && params.unlistedTools !== 'deny'
-            && !parseMcpToolWireNameV1(toolName, mcpServerKeys)) {
-            return {
-                behavior: 'allow',
-                updatedInput: readAgentToolInputRecord(input) ?? {},
-            };
         }
         return permissionEngine.canCallTool(toolName, input, options);
     }
@@ -2204,7 +2186,7 @@ export function createClaudeAgentSdkTurnOperations(
                 const resumeId = readCurrentResumeProviderSessionId();
                 terminalStartupInstructions ??= params.startupInstructions
                     ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
-                terminalMcpConfig ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
+                terminalMcpConfig ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(mcpServers), message => params.ctx.logger.warn(message));
                 const plan: LocalTerminalHookBinding['plan'] = {
                     argv: resolveClaudeLaunchSettingsOverlayArgs({
                         args: [
@@ -2217,6 +2199,7 @@ export function createClaudeAgentSdkTurnOperations(
                                 ...(currentProviderModel ? { providerModel: currentProviderModel } : {}) }),
                             ...buildClaudePermissionModeArgs(currentPermissionMode),
                             ...terminalMcpConfig.args,
+                            ...(noToolsLaunchOptions ? ['--strict-mcp-config'] : []),
                         ],
                         interactionKind: 'interactive_terminal',
                         skillOverrides,
@@ -2226,8 +2209,8 @@ export function createClaudeAgentSdkTurnOperations(
                             ? { ultracode: true } : {},
                         workspaceWrites: currentWorkspaceWrites,
                         helperModelEnv: params.helperModelEnv,
-                        allowedTools: params.allowedTools,
-                        unlistedTools: params.unlistedTools,
+                        allowedTools: noToolsLaunchOptions?.allowedTools ?? params.allowedTools,
+                        unlistedTools: noToolsLaunchOptions?.unlistedTools ?? params.unlistedTools,
                     }),
                     environment: { values: params.launchEnv, unset: [] },
                     process: { stdio: 'inherit', windowsHide: true },
@@ -2444,7 +2427,7 @@ export function createClaudeAgentSdkTurnOperations(
                     return outcome;
                 }
                 const launchSettings = {
-                    ...(toolPermissionPolicy === null ? buildClaudeHookSettingsOverlay() : {}),
+                    ...buildClaudeHookSettingsOverlay(),
                     ...(currentUltracode && isClaudeUltracodeSupportedModelId(currentModelId, currentProviderModel)
                         ? { ultracode: true } : {}),
                 };
@@ -2463,20 +2446,16 @@ export function createClaudeAgentSdkTurnOperations(
                     ? denySettingsArgs[denySettingsArgs.indexOf('--settings') + 1]
                     : Object.keys(launchSettings).length > 0 ? JSON.stringify(launchSettings) : undefined;
                 const turnQuery = createOwnedQuery({
-                    prompt: resolvePromptInput(promptContent, toolPermissionPolicy, nativeUserMessageId),
+                    prompt: createPromptStream(promptContent, nativeUserMessageId),
                     options: {
                         cwd: params.directory,
                         env: params.launchEnv,
                         skills: currentSkills,
                         abort: params.abortSignal,
-                        ...(toolPermissionPolicy
-                            ? {}
-                            : {
-                                allowDangerouslySkipPermissions: true,
-                                permissionMode: resolveClaudePermissionModeFromRuntimeMode({
-                                    permissionMode: currentPermissionMode,
-                                }),
-                            }),
+                        allowDangerouslySkipPermissions: true,
+                        permissionMode: resolveClaudePermissionModeFromRuntimeMode({
+                            permissionMode: currentPermissionMode,
+                        }),
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...(currentFallbackModel ? { fallbackModel: currentFallbackModel } : {}),
                         ...(currentEffort ? { effort: currentEffort } : {}),
@@ -2485,21 +2464,15 @@ export function createClaudeAgentSdkTurnOperations(
                             ...(params.publishTranscriptMessages === true || params.publishSdkMessages === true
                                 ? ['--include-partial-messages'] : []),
                             ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
-                            // Execution-run policy remains owned by Happier's admitted mode and
-                            // canCallTool. Pin the Claude process away from any ambient bypass mode.
-                            ...(toolPermissionPolicy ? ['--permission-mode', 'default'] : []),
                             ...buildClaudePluginDirArgs({ hookPluginDir, skills: currentSkills }),
                             ...(hookPluginDir ? ['--include-hook-events'] : []),
-                            ...buildClaudeMcpConfigArgs(params.mcpServers),
+                            ...buildClaudeMcpConfigArgs(mcpServers),
                         ],
                         // Ultracode rides the single inline --settings overlay; an unhonorable
                         // request resolves to OFF (gate = xhigh capability, [1m]-tolerant).
                         ...(settingsJson ? { settingsJson } : {}),
-                        ...(toolPermissionPolicy === 'read_only'
-                            ? {}
-                            : params.unlistedTools !== 'deny' || !hookPluginDir
-                                ? { canCallTool: resolvePermission }
-                                : {}),
+                        ...(params.unlistedTools !== 'deny' || !hookPluginDir
+                            ? { canCallTool: resolvePermission } : {}),
                         ...(getClaudeSdkOAuthToken ? { getOAuthToken: getClaudeSdkOAuthToken } : {}),
                         ...params.advancedOptions,
                         allowedTools: params.allowedTools,
@@ -2679,20 +2652,18 @@ export function createClaudeAgentSdkTurnOperations(
             const permissionMode = readString(update.permissionMode);
             if (permissionMode) {
                 const updatePermissionMode = permissionModeUpdate.then(async (): ReturnType<ClaudeRuntimeTurnOperations['updateProviderConfiguration']> => {
-                    if (toolPermissionPolicy === null) {
-                        const liveQueries = new Set([
-                            activeQuery,
-                            retainedInterruptedQuery,
-                            ...backgroundQueries,
-                        ].filter((query): query is ClaudeSdkQuery => query !== null));
-                        try {
-                            await Promise.all([...liveQueries].map(query =>
-                                query.setPermissionMode(params.unlistedTools === 'deny'
-                                    ? 'dontAsk' : mapToClaudePermissionMode(permissionMode))));
-                        } catch (error) {
-                            params.ctx.logger.warn('[ClaudeAgentSdk] Live permission mode update failed', { error });
-                            return { status: 'failed' as const, reason: 'permission_mode_update_failed' };
-                        }
+                    const liveQueries = new Set([
+                        activeQuery,
+                        retainedInterruptedQuery,
+                        ...backgroundQueries,
+                    ].filter((query): query is ClaudeSdkQuery => query !== null));
+                    try {
+                        await Promise.all([...liveQueries].map(query =>
+                            query.setPermissionMode(params.unlistedTools === 'deny'
+                                ? 'dontAsk' : mapToClaudePermissionMode(permissionMode))));
+                    } catch (error) {
+                        params.ctx.logger.warn('[ClaudeAgentSdk] Live permission mode update failed', { error });
+                        return { status: 'failed' as const, reason: 'permission_mode_update_failed' };
                     }
                     currentPermissionMode = permissionMode;
                 });
